@@ -16,6 +16,10 @@ LIBS = \
   $(DEPTH)/media/webrtc/trunk/testing/gtest_gtest/$(LIB_PREFIX)gtest.$(LIB_SUFFIX) \
   $(DEPTH)/media/libyuv/libyuv_libyuv/$(LIB_PREFIX)yuv.$(LIB_SUFFIX) \
   $(DEPTH)/netwerk/srtp/src/$(LIB_PREFIX)nksrtp_s.$(LIB_SUFFIX) \
+  $(DEPTH)/../openh264/$(LIB_PREFIX)decoder.$(LIB_SUFFIX) \
+  $(DEPTH)/../openh264/$(LIB_PREFIX)encoder.$(LIB_SUFFIX) \
+  $(DEPTH)/../openh264/$(LIB_PREFIX)processing.$(LIB_SUFFIX) \
+  $(DEPTH)/../openh264/$(LIB_PREFIX)common.$(LIB_SUFFIX) \
   $(NULL)
 
 ifdef BUILD_ARM_NEON

@@ -15,6 +15,8 @@ using namespace std;
 #include <MediaConduitInterface.h>
 #include "nsIEventTarget.h"
 #include "FakeMediaStreamsImpl.h"
+#include "FakeVideoCodec.h"
+#include "OpenH264VideoCodec.h"
 
 #define GTEST_HAS_RTTI 0
 #include "gtest/gtest.h"
@@ -22,6 +24,12 @@ using namespace std;
 
 #include "mtransport_test_utils.h"
 MtransportTestUtils *test_utils;
+
+enum TestCodec {
+    CodecVP8,
+    CodecDummy,
+    CodecOpenH264
+};
 
 //Video Frame Color
 const int COLOR = 0x80; //Gray
@@ -59,14 +67,23 @@ class VideoSendAndReceive
 {
 public:
   VideoSendAndReceive():width(640),
-                        height(480)
+                        height(480),
+			rate(30)
   {
   }
 
   ~VideoSendAndReceive()
   {
   }
-
+ 
+  void SetDimensions(int w, int h)
+  {
+    width = w;
+    height = h;
+  }
+  void SetRate(int r) {
+    rate = r;
+  }
   void Init(mozilla::RefPtr<mozilla::VideoSessionConduit> aSession)
   {
         mSession = aSession;
@@ -87,7 +104,7 @@ public:
                                 height,
                                 mozilla::kVideoI420,
                                 0);
-      PR_Sleep(PR_MillisecondsToInterval(33));
+      PR_Sleep(PR_MillisecondsToInterval(1000/rate));
       vidStatsGlobal.numRawFramesInserted++;
       numFrames--;
     } while(numFrames >= 0);
@@ -97,6 +114,7 @@ public:
 private:
 mozilla::RefPtr<mozilla::VideoSessionConduit> mSession;
 int width, height;
+int rate;
 };
 
 
@@ -544,7 +562,7 @@ class TransportConduitTest : public ::testing::Test
   }
 
   //2. Dump audio samples to dummy external transport
-  void TestDummyVideoAndTransport()
+  void TestDummyVideoAndTransport(TestCodec codec = CodecVP8)
   {
     int err = 0;
     //get pointer to VideoSessionConduit
@@ -556,6 +574,17 @@ class TransportConduitTest : public ::testing::Test
     mVideoSession2 = mozilla::VideoSessionConduit::Create(nullptr);
     if( !mVideoSession2 )
       ASSERT_NE(mVideoSession2,(void*)nullptr);
+
+    switch (codec) {
+      case CodecVP8:
+        break;
+      case CodecDummy:
+        SetFakeCodecs();
+        break;
+      case CodecOpenH264:
+        SetOpenH264Codecs();
+        break;
+    }
 
     mVideoRenderer = new DummyVideoTarget();
     ASSERT_NE(mVideoRenderer, (void*)nullptr);
@@ -582,7 +611,8 @@ class TransportConduitTest : public ::testing::Test
     rcvCodecList.push_back(&cinst1);
     rcvCodecList.push_back(&cinst2);
 
-    err = mVideoSession->ConfigureSendMediaCodec(&cinst1);
+    err = mVideoSession->ConfigureSendMediaCodec(
+        (codec == CodecVP8) ? &cinst1 : &cinst2);
     ASSERT_EQ(mozilla::kMediaConduitNoError, err);
 
     err = mVideoSession2->ConfigureRecvMediaCodecs(rcvCodecList);
@@ -860,7 +890,23 @@ class TransportConduitTest : public ::testing::Test
     cerr << endl;
  }
 
-private:
+  void SetFakeCodecs() {
+    mExternalEncoder = mozilla::FakeVideoCodec::CreateEncoder();
+    mExternalDecoder = mozilla::FakeVideoCodec::CreateDecoder();
+
+    mVideoSession->SetExternalSendCodec(124, mExternalEncoder);
+    mVideoSession2->SetExternalRecvCodec(124, mExternalDecoder);
+  }
+
+  void SetOpenH264Codecs() {
+    mExternalEncoder = mozilla::OpenH264VideoCodec::CreateEncoder();
+    mExternalDecoder = mozilla::OpenH264VideoCodec::CreateDecoder();
+
+    mVideoSession->SetExternalSendCodec(124, mExternalEncoder);
+    mVideoSession2->SetExternalRecvCodec(124, mExternalDecoder);
+  }
+
+ private:
   //Audio Conduit Test Objects
   mozilla::RefPtr<mozilla::AudioSessionConduit> mAudioSession;
   mozilla::RefPtr<mozilla::AudioSessionConduit> mAudioSession2;
@@ -873,6 +919,9 @@ private:
   mozilla::RefPtr<mozilla::VideoRenderer> mVideoRenderer;
   mozilla::RefPtr<mozilla::TransportInterface> mVideoTransport;
   VideoSendAndReceive videoTester;
+
+  nsRefPtr<mozilla::VideoEncoder> mExternalEncoder;
+  nsRefPtr<mozilla::VideoDecoder> mExternalDecoder;
 
   std::string fileToPlay;
   std::string fileToRecord;
@@ -891,6 +940,14 @@ TEST_F(TransportConduitTest, TestDummyVideoWithTransport) {
   TestDummyVideoAndTransport();
  }
 
+TEST_F(TransportConduitTest, TestVideoConduitExternalCodec) {
+  TestDummyVideoAndTransport(CodecDummy);
+}
+
+TEST_F(TransportConduitTest, TestVideoConduitOpenH264Codec) {
+  TestDummyVideoAndTransport(CodecOpenH264);
+}
+
 TEST_F(TransportConduitTest, TestVideoConduitCodecAPI) {
   TestVideoConduitCodecAPI();
  }
@@ -905,6 +962,11 @@ int main(int argc, char **argv)
 {
   // This test can cause intermittent oranges on the builders
   CHECK_ENVIRONMENT_FLAG("MOZ_WEBRTC_MEDIACONDUIT_TESTS")
+
+#ifdef __APPLE__
+  void WelsStderrSetTraceLevel (int);
+  WelsStderrSetTraceLevel(9);
+#endif
 
   test_utils = new MtransportTestUtils();
   ::testing::InitGoogleTest(&argc, argv);
