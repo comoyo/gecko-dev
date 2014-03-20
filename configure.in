@@ -4325,7 +4325,7 @@ cairo-gtk2|cairo-gtk2-x11)
     USE_FC_FREETYPE=1
 
     TK_CFLAGS='$(MOZ_GTK2_CFLAGS)'
-    TK_LIBS='$(MOZ_GTK2_LIBS)'
+    TK_LIBS='$(MOZ_GTK2_LIBS) -L$(DEPTH)/../openh264/ -ldecoder -lencoder -lprocessing -lcommon'
     AC_DEFINE(MOZ_WIDGET_GTK2)
     MOZ_WIDGET_GTK=2
     AC_DEFINE_UNQUOTED(MOZ_WIDGET_GTK,$MOZ_WIDGET_GTK)
@@ -4357,7 +4357,7 @@ cairo-cocoa)
     MOZ_WIDGET_TOOLKIT=cocoa
     AC_DEFINE(MOZ_WIDGET_COCOA)
     LDFLAGS="$LDFLAGS -framework Cocoa -lobjc"
-    TK_LIBS='-framework CoreLocation -framework QuartzCore -framework Carbon -framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework AddressBook -framework OpenGL'
+    TK_LIBS='-framework CoreLocation -framework QuartzCore -framework Carbon -framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework AddressBook -framework OpenGL -L$(DEPTH)/../openh264/ -ldecoder -lencoder -lprocessing -lcommon'
     TK_CFLAGS="-DNO_X11"
     CFLAGS="$CFLAGS $TK_CFLAGS"
     CXXFLAGS="$CXXFLAGS $TK_CFLAGS"
@@ -4479,6 +4479,8 @@ then
 
     TK_LIBS="$TK_LIBS $MOZ_STARTUP_NOTIFICATION_LIBS"
 fi
+
+TK_LIBS += -L$(DEPTH)/../openh264/ -ldecoder -lcommon
 AC_SUBST(MOZ_ENABLE_STARTUP_NOTIFICATION)
 AC_SUBST(MOZ_STARTUP_NOTIFICATION_CFLAGS)
 AC_SUBST(MOZ_STARTUP_NOTIFICATION_LIBS)
