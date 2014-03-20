@@ -20,6 +20,7 @@ ID
 /config.log
 /.clang_complete
 /mach.ini
+/openh264
 
 # Empty marker file that's generated when we check out NSS
 security/manager/.nss.checkout
