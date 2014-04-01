@@ -1076,7 +1076,8 @@ WebrtcVideoConduit::DeliverFrame(unsigned char* buffer,
 
   if(mRenderer)
   {
-    mRenderer->RenderVideoFrame(buffer, buffer_size, time_stamp, render_time);
+    mRenderer->RenderVideoFrame(buffer, buffer_size, time_stamp, render_time,
+                                handle);
     return 0;
   }
 

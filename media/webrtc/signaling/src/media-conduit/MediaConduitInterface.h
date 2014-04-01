@@ -84,7 +84,8 @@ class VideoRenderer
   virtual void RenderVideoFrame(const unsigned char* buffer,
                                 unsigned int buffer_size,
                                 uint32_t time_stamp,
-                                int64_t render_time) = 0;
+                                int64_t render_time,
+                                void* handle) = 0;
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VideoRenderer)
 };

@@ -23,7 +23,7 @@
 #include "ImageTypes.h"
 #include "ImageContainer.h"
 #include "VideoUtils.h"
-#ifdef MOZ_WIDGET_GONK
+#ifdef WEBRTC_GONK
 #include "GrallocImages.h"
 #endif
 #endif
@@ -42,6 +42,7 @@
 #include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Types.h"
 
+#include "webrtc/common_video/interface/native_handle.h"
 #include "webrtc/modules/interface/module_common_types.h"
 #include "webrtc/modules/rtp_rtcp/interface/rtp_header_parser.h"
 
@@ -1109,7 +1110,7 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
   last_img_ = serial;
 
   ImageFormat format = img->GetFormat();
-#ifdef MOZ_WIDGET_GONK
+#ifdef WEBRTC_GONK
   if (format == ImageFormat::GRALLOC_PLANAR_YCBCR) {
     layers::GrallocImage *nativeImage = static_cast<layers::GrallocImage*>(img);
     layers::SurfaceDescriptor handle = nativeImage->GetSurfaceDescriptor();
@@ -1406,40 +1407,50 @@ void MediaPipelineReceiveVideo::PipelineListener::RenderVideoFrame(
     const unsigned char* buffer,
     unsigned int buffer_size,
     uint32_t time_stamp,
-    int64_t render_time) {
+    int64_t render_time,
+    void* handle) {
+  if (!buffer && !handle) {
+    // Nothing to render.
+    MOZ_MTLOG(ML_ERROR, "Empty video frame");
+    return;
+  }
 #ifdef MOZILLA_INTERNAL_API
   ReentrantMonitorAutoEnter enter(monitor_);
 
-  // Create a video frame and append it to the track.
-#ifdef MOZ_WIDGET_GONK
-  ImageFormat format = ImageFormat::GRALLOC_PLANAR_YCBCR;
-#else
-  ImageFormat format = ImageFormat::PLANAR_YCBCR;
-#endif
-  nsRefPtr<layers::Image> image = image_container_->CreateImage(format);
+  if (buffer) {
+    // Create a video frame using |buffer| and append it to the track.
+    nsRefPtr<layers::Image> image = image_container_->CreateImage(ImageFormat::PLANAR_YCBCR);
+    layers::PlanarYCbCrImage* yuvImage = static_cast<layers::PlanarYCbCrImage*>(image.get());
+    uint8_t* frame = const_cast<uint8_t*>(static_cast<const uint8_t*> (buffer));
+    const uint8_t lumaBpp = 8;
+    const uint8_t chromaBpp = 4;
 
-  layers::PlanarYCbCrImage* videoImage = static_cast<layers::PlanarYCbCrImage*>(image.get());
-  uint8_t* frame = const_cast<uint8_t*>(static_cast<const uint8_t*> (buffer));
-  const uint8_t lumaBpp = 8;
-  const uint8_t chromaBpp = 4;
+    layers::PlanarYCbCrData yuvData;
+    yuvData.mYChannel = frame;
+    yuvData.mYSize = IntSize(width_, height_);
+    yuvData.mYStride = width_ * lumaBpp/ 8;
+    yuvData.mCbCrStride = width_ * chromaBpp / 8;
+    yuvData.mCbChannel = frame + height_ * yuvData.mYStride;
+    yuvData.mCrChannel = yuvData.mCbChannel + height_ * yuvData.mCbCrStride / 2;
+    yuvData.mCbCrSize = IntSize(width_/ 2, height_/ 2);
+    yuvData.mPicX = 0;
+    yuvData.mPicY = 0;
+    yuvData.mPicSize = IntSize(width_, height_);
+    yuvData.mStereoMode = StereoMode::MONO;
 
-  layers::PlanarYCbCrData data;
-  data.mYChannel = frame;
-  data.mYSize = IntSize(width_, height_);
-  data.mYStride = width_ * lumaBpp/ 8;
-  data.mCbCrStride = width_ * chromaBpp / 8;
-  data.mCbChannel = frame + height_ * data.mYStride;
-  data.mCrChannel = data.mCbChannel + height_ * data.mCbCrStride / 2;
-  data.mCbCrSize = IntSize(width_/ 2, height_/ 2);
-  data.mPicX = 0;
-  data.mPicY = 0;
-  data.mPicSize = IntSize(width_, height_);
-  data.mStereoMode = StereoMode::MONO;
+    yuvImage->SetData(yuvData);
 
-  videoImage->SetData(data);
-
-  image_ = image.forget();
-#endif
+    image_ = image.forget();
+  }
+#ifdef WEBRTC_GONK
+  else {
+    MOZ_ASSERT(handle);
+    // There should be a layers::Image* in |handle|
+    webrtc::NativeHandle* h = static_cast<webrtc::NativeHandle*>(handle);
+    image_ = static_cast<layers::Image*>(h->GetHandle());
+  }
+#endif // WEBRTC_GONK
+#endif // MOZILLA_INTERNAL_API
 }
 
 void MediaPipelineReceiveVideo::PipelineListener::
