@@ -13,10 +13,14 @@
 
 namespace android {
 
-// Generate decoder config descriptor (defined in ISO/IEC 14496-15 5.2.4.1.1)
-// for AVC/H.264 using codec config blob from encoder.
+// Generate decoder config blob using data provided by encoder. It supports 2
+// formats: if aNAL is true, the generated blob will be in a NAL unit format
+// needed by WebRTC for constructing RTP packets; otherwise it will be in
+// decoder config descriptor format (defined in ISO/IEC 14496-15 5.2.4.1.1) for
+// AVC/H.264 data in MP4 file.
 status_t GenerateAVCDescriptorBlob(ABuffer* aData,
-                                   nsTArray<uint8_t>* aOutputBuf);
+                                   nsTArray<uint8_t>* aOutputBuf,
+                                   bool aNAL);
 
 }
 

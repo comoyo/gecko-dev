@@ -117,7 +117,8 @@ protected:
   /**
    * Construct codec specific configuration blob with given data aData generated
    * by media codec and append it into aOutputBuf. Needed by MP4 container
-   * writer for generating decoder config box. Returns OK if succeed.
+   * writer for generating decoder config box, or WebRTC for generating RTP
+   * packets. Returns OK if succeed.
    */
   virtual status_t AppendDecoderConfig(nsTArray<uint8_t>* aOutputBuf,
                                        ABuffer* aData) = 0;
@@ -244,8 +245,10 @@ public:
   /**
    * Configure video codec parameters and start media codec. It must be called
    * before calling Encode() and GetNextEncodedFrame().
+   * aNAL specifies whether the encoder should provide output blob in NAL unit
+   * format (used by WebRTC) or MP4 format.
    */
-  nsresult Configure(int aWidth, int aHeight, int aFrameRate);
+  nsresult Configure(int aWidth, int aHeight, int aFrameRate, bool aNAL = false);
 
   /**
    * Encode a aWidth pixels wide and aHeight pixels tall video frame of
@@ -255,6 +258,9 @@ public:
    */
   nsresult Encode(const mozilla::layers::Image* aImage, int aWidth, int aHeight,
                   int64_t aTimestamp, int aInputFlags = 0);
+
+  /** Set encoding bitrate (in kbps). */
+  nsresult SetBitrate(int32_t aBitrate);
 
 protected:
   virtual status_t AppendDecoderConfig(nsTArray<uint8_t>* aOutputBuf,
@@ -276,13 +282,18 @@ private:
    * CODEC_AVC_ENC.
    */
   OMXVideoEncoder(CodecType aCodecType)
-    : OMXCodecWrapper(aCodecType), mWidth(0), mHeight(0) {}
+    : OMXCodecWrapper(aCodecType)
+    , mWidth(0)
+    , mHeight(0)
+    , mNAL(false)
+  {}
 
   // For creator function to access hidden constructor.
   friend class OMXCodecWrapper;
 
   int mWidth;
   int mHeight;
+  bool mNAL;
 };
 
 } // namespace android
