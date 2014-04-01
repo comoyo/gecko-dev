@@ -87,7 +87,9 @@ class PeerConnectionCtx : public CSF::CC_Observer {
   std::map<const std::string, PeerConnectionImpl *> mPeerConnections;
 
   PeerConnectionCtx() :  mSipccState(mozilla::dom::PCImplSipccState::Idle),
-                         mCCM(nullptr), mDevice(nullptr) {}
+                         mCCM(nullptr), mDevice(nullptr) {
+                            printf_stderr("PeerConnectionCtx::PeerConnectionCtx\n");
+                         }
   // This is a singleton, so don't copy construct it, etc.
   PeerConnectionCtx(const PeerConnectionCtx& other) MOZ_DELETE;
   void operator=(const PeerConnectionCtx& other) MOZ_DELETE;

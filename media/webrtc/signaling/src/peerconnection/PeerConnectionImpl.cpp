@@ -486,6 +486,7 @@ PeerConnectionImpl::PeerConnectionImpl(const GlobalObject* aGlobal)
   , mHaveDataStream(false)
   , mTrickle(true) // TODO(ekr@rtfm.com): Use pref
 {
+  printf_stderr("PeerConnectionImpl::PeerConnectionImpl\n");
 #ifdef MOZILLA_INTERNAL_API
   MOZ_ASSERT(NS_IsMainThread());
   if (aGlobal) {
@@ -1676,6 +1677,9 @@ PeerConnectionImpl::onCallEvent(const OnCallEventArgs& args)
 {
   const ccapi_call_event_e &aCallEvent = args.mCallEvent;
   const CSF::CC_CallInfoPtr &aInfo = args.mInfo;
+
+  std::string sdp = aInfo->getSDP();
+  printf_stderr("TAL:SDP: %s\n", sdp.c_str());
 
   PC_AUTO_ENTER_API_CALL_NO_CHECK();
   MOZ_ASSERT(aInfo.get());

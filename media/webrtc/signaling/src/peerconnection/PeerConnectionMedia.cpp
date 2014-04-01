@@ -141,7 +141,9 @@ PeerConnectionMedia::PeerConnectionMedia(PeerConnectionImpl *parent)
       mIceCtx(nullptr),
       mDNSResolver(new mozilla::NrIceResolver()),
       mMainThread(mParent->GetMainThread()),
-      mSTSThread(mParent->GetSTSThread()) {}
+      mSTSThread(mParent->GetSTSThread()) {
+        printf_stderr("PeerConnectionMedia::PeerConnectionMedia\n");
+      }
 
 nsresult PeerConnectionMedia::Init(const std::vector<NrIceStunServer>& stun_servers,
                                    const std::vector<NrIceTurnServer>& turn_servers)

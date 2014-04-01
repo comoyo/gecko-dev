@@ -42,6 +42,7 @@ const unsigned int WebrtcAudioConduit::CODEC_PLNAME_SIZE = 32;
  */
 mozilla::RefPtr<AudioSessionConduit> AudioSessionConduit::Create(AudioSessionConduit *aOther)
 {
+    printf_stderr("AudioSessionConduit::Create\n");
   CSFLogDebug(logTag,  "%s ", __FUNCTION__);
 #ifdef MOZILLA_INTERNAL_API
   // unit tests create their own "main thread"
