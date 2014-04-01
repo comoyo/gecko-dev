@@ -279,7 +279,7 @@ nsresult PeerConnectionCtx::Initialize() {
   }
 #endif
 
-  codecMask |= VCM_CODEC_RESOURCE_VP8;
+  //codecMask |= VCM_CODEC_RESOURCE_VP8;
   //codecMask |= VCM_CODEC_RESOURCE_I420;
   mCCM->setVideoCodecs(codecMask);
 
