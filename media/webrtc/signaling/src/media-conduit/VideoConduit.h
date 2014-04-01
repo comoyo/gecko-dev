@@ -12,9 +12,11 @@
 
 // Video Engine Includes
 #include "webrtc/common_types.h"
+#include "webrtc/modules/video_coding/codecs/interface/video_codec_interface.h"
 #include "webrtc/video_engine/include/vie_base.h"
 #include "webrtc/video_engine/include/vie_capture.h"
 #include "webrtc/video_engine/include/vie_codec.h"
+#include "webrtc/video_engine/include/vie_external_codec.h"
 #include "webrtc/video_engine/include/vie_render.h"
 #include "webrtc/video_engine/include/vie_network.h"
 #include "webrtc/video_engine/include/vie_rtp_rtcp.h"
@@ -29,11 +31,23 @@
  using  webrtc::ViECapture;
  using  webrtc::ViERender;
  using  webrtc::ViEExternalCapture;
-
+ using  webrtc::ViEExternalCodec;
 
 namespace mozilla {
 
 class WebrtcAudioConduit;
+
+// Interface of external video encoder for WebRTC.
+class WebrtcVideoEncoder
+  : public VideoEncoder
+  , public webrtc::VideoEncoder
+{};
+
+// Interface of external video decoder for WebRTC.
+class WebrtcVideoDecoder
+  : public VideoDecoder
+  , public webrtc::VideoDecoder
+{};
 
 /**
  * Concrete class for Video session. Hooks up
@@ -127,6 +141,19 @@ public:
                                                 VideoType video_type,
                                                 uint64_t capture_time);
 
+  /**
+   * Set an external encoder object |encoder| to the payload type |pltype|
+   * for sender side codec.
+   */
+  virtual MediaConduitErrorCode SetExternalSendCodec(int pltype,
+                VideoEncoder* encoder);
+
+  /**
+   * Set an external decoder object |decoder| to the payload type |pltype|
+   * for receiver side codec.
+   */
+  virtual MediaConduitErrorCode SetExternalRecvCodec(int pltype,
+                VideoDecoder* decoder);
 
 
   /**
@@ -187,6 +214,7 @@ public:
                       mTransport(nullptr),
                       mRenderer(nullptr),
                       mPtrExtCapture(nullptr),
+                      mPtrExtCodec(nullptr),
                       mEngineTransmitting(false),
                       mEngineReceiving(false),
                       mChannel(-1),
@@ -267,6 +295,7 @@ private:
   ScopedCustomReleasePtr<webrtc::ViERTP_RTCP> mPtrRTP;
 
   webrtc::ViEExternalCapture* mPtrExtCapture; // shared
+  webrtc::ViEExternalCodec*  mPtrExtCodec;
 
   // Engine state we are concerned with.
   bool mEngineTransmitting; //If true ==> Transmit Sub-system is up and running
