@@ -78,6 +78,11 @@ struct VideoCodecConfig
                                      mMaxFrameRate(0),
                                      mLoadManager(load_manager)
   {
+    // Replace codec name here because  WebRTC.org code has a whitelist of
+    // supported video codec in |webrtc::ViECodecImpl::CodecValid()| and will
+    // reject registration of those not in it.
+    if (mName == "H264_P0")
+      mName = "I420";
   }
 
   VideoCodecConfig(int type,
@@ -93,6 +98,11 @@ struct VideoCodecConfig
                                          mMaxFrameRate(max_fr),
                                          mLoadManager(load_manager)
   {
+    // Replace codec name here because  WebRTC.org code has a whitelist of
+    // supported video codec in |webrtc::ViECodecImpl::CodecValid()| and will
+    // reject registration of those not in it.
+    if (mName == "H264_P0")
+      mName = "I420";
   }
 
 
