@@ -19,6 +19,13 @@
         'defines' : [
           'WEBRTC_GONK',
        ],
+        'cflags_mozilla': [
+          '-I$(ANDROID_SOURCE)/frameworks/av/include/media/stagefright',
+          '-I$(ANDROID_SOURCE)/frameworks/av/include',
+          '-I$(ANDROID_SOURCE)/frameworks/native/include/media/openmax',
+          '-I$(ANDROID_SOURCE)/frameworks/native/include',
+          '-I$(ANDROID_SOURCE)/frameworks/native/opengl/include',
+       ],
       }],
     ],
   },
@@ -57,6 +64,7 @@
         '../../../content/media',
         '../../../media/mtransport',
         '../trunk',
+        '../trunk/webrtc',
         '../trunk/webrtc/video_engine/include',
         '../trunk/webrtc/voice_engine/include',
         '../trunk/webrtc/modules/interface',
@@ -65,6 +73,9 @@
         '../../../netwerk/srtp/src/include',
         '../../../netwerk/srtp/src/crypto/include',
         '../../../ipc/chromium/src',
+        '../../../openh264/codec/common',
+        '../../../openh264/codec/api/svc',
+        '../../../openh264/codec/encoder/core/inc',
       ],
 
       #
@@ -86,6 +97,14 @@
         './src/media-conduit/AudioConduit.cpp',
         './src/media-conduit/VideoConduit.h',
         './src/media-conduit/VideoConduit.cpp',
+        './src/media-conduit/OpenH264VideoCodec.h',
+        './src/media-conduit/OpenH264VideoCodec.cpp',
+        './src/media-conduit/WebrtcOpenH264VideoCodec.h',
+        './src/media-conduit/WebrtcOpenH264VideoCodec.cpp',
+        './src/media-conduit/FakeVideoCodec.h',
+        './src/media-conduit/FakeVideoCodec.cpp',
+        './src/media-conduit/WebrtcFakeVideoCodec.h',
+        './src/media-conduit/WebrtcFakeVideoCodec.cpp',
         # Common
         './src/common/CommonTypes.h',
         './src/common/csf_common.h',
@@ -191,6 +210,13 @@
       # Conditionals
       #
       'conditions': [
+        ['moz_widget_toolkit_gonk==1', {
+          'sources': [
+            './src/media-conduit/WebrtcExtVideoCodec.cpp',
+            './src/media-conduit/ExtVideoCodec.cpp',
+            './src/media-conduit/OpenH264VideoCodec.cpp',
+          ],
+        }],
         ['build_for_test==0', {
           'defines' : [
             'MOZILLA_INTERNAL_API'
