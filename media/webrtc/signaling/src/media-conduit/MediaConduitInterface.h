@@ -84,7 +84,8 @@ class VideoRenderer
   virtual void RenderVideoFrame(const unsigned char* buffer,
                                 unsigned int buffer_size,
                                 uint32_t time_stamp,
-                                int64_t render_time) = 0;
+                                int64_t render_time,
+                                void* handle) = 0;
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VideoRenderer)
 };
@@ -162,6 +163,22 @@ public:
 
 };
 
+// Abstract base classes for external encoder/decoder.
+class VideoEncoder
+{
+public:
+  virtual ~VideoEncoder() {};
+
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VideoEncoder);
+};
+
+class VideoDecoder
+{
+public:
+  virtual ~VideoDecoder() {};
+
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VideoDecoder);
+};
 
 /**
  * MediaSessionConduit for video
@@ -241,6 +258,21 @@ public:
   virtual MediaConduitErrorCode ConfigureRecvMediaCodecs(
                                 const std::vector<VideoCodecConfig* >& recvCodecConfigList) = 0;
 
+  /**
+   * Set an external encoder
+   * @param encoder
+   * @result: on success, we will use the specified encoder
+   */
+  virtual MediaConduitErrorCode SetExternalSendCodec(int pltype,
+                                VideoEncoder* encoder) = 0;
+
+  /**
+   * Set an external decoder
+   * @param decoder
+   * @result: on success, we will use the specified decoder
+   */
+  virtual MediaConduitErrorCode SetExternalRecvCodec(int pltype,
+                                VideoDecoder* decoder) = 0;
 
   /**
    * These methods allow unit tests to double-check that the
@@ -361,7 +393,3 @@ public:
 };
 }
 #endif
-
-
-
-

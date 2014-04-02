@@ -137,7 +137,7 @@ bool IsRunningOnEmulator()
 }
 
 nsresult
-OMXVideoEncoder::Configure(int aWidth, int aHeight, int aFrameRate)
+OMXVideoEncoder::Configure(int aWidth, int aHeight, int aFrameRate, bool aNAL)
 {
   MOZ_ASSERT(!mStarted, "Configure() was called already.");
 
@@ -184,6 +184,7 @@ OMXVideoEncoder::Configure(int aWidth, int aHeight, int aFrameRate)
 
   mWidth = aWidth;
   mHeight = aHeight;
+  mNAL = aNAL;
 
   result = Start();
 
@@ -374,9 +375,10 @@ status_t
 OMXVideoEncoder::AppendDecoderConfig(nsTArray<uint8_t>* aOutputBuf,
                                      ABuffer* aData)
 {
-  // AVC/H.264 decoder config descriptor is needed to construct MP4 'avcC' box
-  // (defined in ISO/IEC 14496-15 5.2.4.1.1).
-  return GenerateAVCDescriptorBlob(aData, aOutputBuf);
+  // NAL unit format is needed by WebRTC for RTP packets; AVC/H.264 decoder
+  // config descriptor is needed to construct MP4 'avcC' box (defined in
+  // ISO/IEC 14496-15 5.2.4.1.1).
+  return GenerateAVCDescriptorBlob(aData, aOutputBuf, mNAL);
 }
 
 // Override to replace NAL unit start code with 4-bytes unit length.
@@ -384,15 +386,32 @@ OMXVideoEncoder::AppendDecoderConfig(nsTArray<uint8_t>* aOutputBuf,
 void OMXVideoEncoder::AppendFrame(nsTArray<uint8_t>* aOutputBuf,
                                   const uint8_t* aData, size_t aSize)
 {
+  aOutputBuf->SetCapacity(aSize);
+
+  if (mNAL) {
+    // Append NAL format data without modification.
+    aOutputBuf->AppendElements(aData, aSize);
+    return;
+  }
+  // Replace start code with data length.
   uint8_t length[] = {
     (aSize >> 24) & 0xFF,
     (aSize >> 16) & 0xFF,
     (aSize >> 8) & 0xFF,
     aSize & 0xFF,
   };
-  aOutputBuf->SetCapacity(aSize);
   aOutputBuf->AppendElements(length, sizeof(length));
   aOutputBuf->AppendElements(aData + sizeof(length), aSize);
+}
+
+nsresult
+OMXVideoEncoder::SetBitrate(int32_t aBitrate)
+{
+  sp<AMessage> msg = new AMessage();
+  msg->setInt32("videoBitrate", aBitrate * 1000 /* kbps -> bps */);
+  status_t result = mCodec->setParameters(msg);
+  MOZ_ASSERT(result == OK);
+  return result == OK ? NS_OK : NS_ERROR_FAILURE;
 }
 
 nsresult

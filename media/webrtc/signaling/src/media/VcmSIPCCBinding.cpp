@@ -11,7 +11,6 @@
 #include "CSFVideoTermination.h"
 #include "MediaConduitErrors.h"
 #include "MediaConduitInterface.h"
-#include "OpenH264VideoCodec.h"
 #include "MediaPipeline.h"
 #include "MediaPipelineFilter.h"
 #include "VcmSIPCCBinding.h"
@@ -38,6 +37,12 @@
 #include <sslproto.h>
 #include <algorithm>
 
+#ifdef MOZ_WIDGET_GONK
+#include "ExtVideoCodec.h"
+#else
+#include "OpenH264VideoCodec.h"
+#endif
+
 extern "C" {
 #include "ccsdp.h"
 #include "vcm.h"
@@ -56,9 +61,9 @@ extern void lsm_stop_multipart_tone_timer(void);
 extern void lsm_stop_continuous_tone_timer(void);
 
 static int vcmEnsureExternalCodec(
-  const mozilla::RefPtr<mozilla::VideoSessionConduit>& conduit,
-  mozilla::VideoCodecConfig* config,
-  bool send);
+    const mozilla::RefPtr<mozilla::VideoSessionConduit>& conduit,
+    mozilla::VideoCodecConfig* config,
+    bool send);
 
 }//end extern "C"
 
@@ -1699,7 +1704,6 @@ static int vcmRxStartICE_m(cc_mcapid_t mcap_id,
         ccsdpCodecName(payloads[i].codec_type),
         payloads[i].video.rtcp_fb_types,
         pc.impl()->load_manager());
-
       if (vcmEnsureExternalCodec(conduit, config_raw, false)) {
         return VCM_ERROR;
       }
@@ -2110,6 +2114,47 @@ short vcmTxOpen(cc_mcapid_t mcap_id,
     return 0;
 }
 
+/*
+ * Add external H.264 video codec.
+ */
+static int vcmEnsureExternalCodec(
+    const mozilla::RefPtr<mozilla::VideoSessionConduit>& conduit,
+    mozilla::VideoCodecConfig* config,
+    bool send)
+{
+  MediaConduitErrorCode err = kMediaConduitNoError;
+  // Here we use "I420" to register H.264 because WebRTC.org code has a
+  // whitelist of supported video codec in |webrtc::ViECodecImpl::CodecValid()|
+  // and will reject registration of those not in it.
+  if (config->mName != "I420") {
+    return 0;
+  }
+  // Register H.264 codec.
+  if (send) {
+#ifdef WEBRTC_GONK
+    VideoEncoder* encoder = ExtVideoCodec::CreateEncoder(ExtVideoCodec::CodecType::CODEC_H264);
+#else
+    VideoEncoder* encoder = OpenH264VideoCodec::CreateEncoder();
+#endif
+    if (encoder) {
+      conduit->SetExternalSendCodec(config->mType, encoder);
+    }
+  } else {
+#ifdef WEBRTC_GONK
+    VideoDecoder* decoder = ExtVideoCodec::CreateDecoder(ExtVideoCodec::CodecType::CODEC_H264);
+#else
+    VideoDecoder* decoder = OpenH264VideoCodec::CreateDecoder();
+#endif
+    if (decoder) {
+      conduit->SetExternalRecvCodec(config->mType, decoder);
+    }
+  }
+  if (err != kMediaConduitNoError) {
+    return VCM_ERROR;
+  }
+  return 0;
+}
+
 /**
  *  start tx stream
  *  Note: For video calls, for a given call_handle there will be
@@ -2223,33 +2268,6 @@ int vcmTxStart(cc_mcapid_t mcap_id,
     return VCM_ERROR;
 }
 
-
-/*
- * Add an external encoder, maybe...
- */
-static int vcmEnsureExternalCodec(
-    const mozilla::RefPtr<mozilla::VideoSessionConduit>& conduit,
-    mozilla::VideoCodecConfig* config,
-    bool send)
-{
-  MediaConduitErrorCode err = kMediaConduitNoError;
-
-  if (config->mName == "I420") {
-    if (send) {
-      conduit->SetExternalSendCodec(config->mType,
-                                    mozilla::OpenH264VideoCodec::CreateEncoder());
-    } else {
-      conduit->SetExternalRecvCodec(config->mType,
-                                    mozilla::OpenH264VideoCodec::CreateDecoder());
-    }
-  }
-
-  if (err != kMediaConduitNoError) {
-    return VCM_ERROR;
-  }
-
-  return 0;
-}
 
 /**
  *  start tx stream
@@ -3261,4 +3279,3 @@ short vcmGetVideoMaxFr(uint16_t codec,
                         &ret));
   return ret;
 }
-

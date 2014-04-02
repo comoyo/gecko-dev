@@ -643,9 +643,10 @@ class MediaPipelineReceiveVideo : public MediaPipelineReceive {
     virtual void RenderVideoFrame(const unsigned char* buffer,
                                   unsigned int buffer_size,
                                   uint32_t time_stamp,
-                                  int64_t render_time) {
+                                  int64_t render_time,
+                                  void* handle) {
       pipeline_->listener_->RenderVideoFrame(buffer, buffer_size, time_stamp,
-                                            render_time);
+                                            render_time, handle);
     }
 
    private:
@@ -678,8 +679,8 @@ class MediaPipelineReceiveVideo : public MediaPipelineReceive {
     void RenderVideoFrame(const unsigned char* buffer,
                           unsigned int buffer_size,
                           uint32_t time_stamp,
-                          int64_t render_time);
-
+                          int64_t render_time,
+                          void* handle);
 
    private:
     int width_;

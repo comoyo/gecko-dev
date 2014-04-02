@@ -40,12 +40,17 @@ namespace mozilla {
 
 class WebrtcAudioConduit;
 
-// Marker interfaces.
-class WebrtcVideoEncoder : public VideoEncoder, public webrtc::VideoEncoder {
-};
+// Interface of external video encoder for WebRTC.
+class WebrtcVideoEncoder
+  : public VideoEncoder
+  , public webrtc::VideoEncoder
+{};
 
-class WebrtcVideoDecoder : public VideoDecoder, public webrtc::VideoDecoder {
-};
+// Interface of external video decoder for WebRTC.
+class WebrtcVideoDecoder
+  : public VideoDecoder
+  , public webrtc::VideoDecoder
+{};
 
 /**
  * Concrete class for Video session. Hooks up
@@ -139,8 +144,17 @@ public:
                                                 VideoType video_type,
                                                 uint64_t capture_time);
 
+  /**
+   * Set an external encoder object |encoder| to the payload type |pltype|
+   * for sender side codec.
+   */
   virtual MediaConduitErrorCode SetExternalSendCodec(int pltype,
                 VideoEncoder* encoder);
+
+  /**
+   * Set an external decoder object |decoder| to the payload type |pltype|
+   * for receiver side codec.
+   */
   virtual MediaConduitErrorCode SetExternalRecvCodec(int pltype,
                 VideoDecoder* decoder);
 
@@ -170,9 +184,16 @@ public:
   /**
    * Does DeliverFrame() support a null buffer and non-null handle
    * (video texture)?
-   * XXX Investigate!  Especially for Android/B2G
+   * B2G support it (when using HW video decoder with graphic buffer output).
+   * XXX Investigate!  Especially for Android
    */
-  virtual bool IsTextureSupported() { return false; }
+  virtual bool IsTextureSupported() {
+#ifdef WEBRTC_GONK
+    return true;
+#else
+    return false;
+#endif
+  }
 
   unsigned short SendingWidth() {
     return mSendingWidth;
@@ -203,9 +224,6 @@ public:
                       mTransport(nullptr),
                       mRenderer(nullptr),
                       mPtrExtCapture(nullptr),
-#ifdef WEBRTC_GONK
-                      mExtDecoder(nullptr),
-#endif
                       mPtrExtCodec(nullptr),
                       mEngineTransmitting(false),
                       mEngineReceiving(false),

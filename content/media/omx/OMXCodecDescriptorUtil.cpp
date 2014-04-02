@@ -9,6 +9,8 @@ namespace android {
 
 // NAL unit start code.
 static const uint8_t kNALUnitStartCode[] = { 0x00, 0x00, 0x00, 0x01 };
+// Config descriptor header length.
+static const size_t kDescBlobHeaderLength = 5;
 
 // This class is used to generate AVC/H.264 decoder config descriptor blob from
 // the sequence parameter set(SPS) + picture parameter set(PPS) data.
@@ -238,13 +240,66 @@ private:
   nsTArray<AVCParamSet> mPPS;
 };
 
+static
+size_t
+GetNALSize(uint8_t* aLength, size_t aLengthSize)
+{
+  MOZ_ASSERT(aLength);
+
+  switch (aLengthSize) {
+    case 1:
+      return aLength[0];
+    case 2:
+      return aLength[0] << 8 | aLength[1];
+    case 3:
+      return aLength[0] << 16 | aLength[1] << 8 | aLength[2];
+    case 4:
+      return aLength[0] << 24 | aLength[1] << 16 | aLength[2] << 8 | aLength[3];
+    default:
+      return 0;
+  }
+}
+
+// Convert decoder config descriptor blob to SPS + PPS blob.
+static
+void
+ConvertDescriptorBlobToParameterSets(ABuffer* aDescriptor,
+                                     nsTArray<uint8_t>* aOutputBuf)
+{
+  // 2 bits NAL length type value at the end of header.
+  size_t nalLengthSize = 1 + (aDescriptor->data()[kDescBlobHeaderLength - 1] & 0x3);
+  uint8_t* param = aDescriptor->data() + kDescBlobHeaderLength;
+  size_t numParam = param[0] & 0x1F; // Number of SPS.
+  param++; // Start of SPS NAL units.
+  for (int i = 0; i < numParam; i++) {
+    aOutputBuf->AppendElements(kNALUnitStartCode, sizeof(kNALUnitStartCode));
+    size_t nalLen = GetNALSize(param, nalLengthSize);
+    MOZ_ASSERT(nalLen > 0, "Parameter set length should > 0");
+    param += nalLengthSize;
+    aOutputBuf->AppendElements(param, nalLen);
+    param += nalLen;
+  }
+
+  numParam = param[0]; // Number of PPS.
+  param++; // Start of PSS NAL units.
+  for (int i = 0; i < numParam; i++) {
+    aOutputBuf->AppendElements(kNALUnitStartCode, sizeof(kNALUnitStartCode));
+    size_t nalLen = GetNALSize(param, nalLengthSize);
+    param += nalLengthSize;
+    aOutputBuf->AppendElements(param, nalLen);
+    param += nalLen;
+  }
+  MOZ_ASSERT(param == aDescriptor->data() + aDescriptor->size());
+}
+
 // Blob from OMX encoder could be in descriptor format already, or sequence
 // parameter set(SPS) + picture parameter set(PPS). If later, it needs to be
 // parsed and converted into descriptor format.
 // See MPEG4Writer::Track::makeAVCCodecSpecificData() and
 // MPEG4Writer::Track::writeAvccBox() implementation in libstagefright.
 status_t
-GenerateAVCDescriptorBlob(ABuffer* aData, nsTArray<uint8_t>* aOutputBuf)
+GenerateAVCDescriptorBlob(ABuffer* aData, nsTArray<uint8_t>* aOutputBuf,
+                          bool aNAL)
 {
   const size_t csdSize = aData->size();
   const uint8_t* csd = aData->data();
@@ -256,15 +311,23 @@ GenerateAVCDescriptorBlob(ABuffer* aData, nsTArray<uint8_t>* aOutputBuf)
   NS_ENSURE_TRUE(csdSize > sizeof(kNALUnitStartCode), ERROR_MALFORMED);
 
   if (memcmp(csd, kNALUnitStartCode, sizeof(kNALUnitStartCode))) {
-    // Already in descriptor format. It should has at least 13 bytes.
+    // In descriptor format. It should has at least 13 bytes.
     NS_ENSURE_TRUE(csdSize >= 13, ERROR_MALFORMED);
-
-    aOutputBuf->AppendElements(aData->data(), csdSize);
+    if (!aNAL) {
+      aOutputBuf->AppendElements(aData->data(), csdSize);
+    } else {
+      ConvertDescriptorBlobToParameterSets(aData, aOutputBuf);
+    }
   } else {
-    // In SPS + PPS format. Generate descriptor blob from parameters sets.
-    AVCDecodeConfigDescMaker maker;
-    status_t result = maker.ConvertParamSetsToDescriptorBlob(aData, aOutputBuf);
-    NS_ENSURE_TRUE(result == OK, result);
+    // In SPS + PPS format.
+    if (aNAL) {
+      aOutputBuf->AppendElements(aData->data(), csdSize);
+    } else {
+      // Generate descriptor blob from parameters sets.
+      AVCDecodeConfigDescMaker maker;
+      status_t result = maker.ConvertParamSetsToDescriptorBlob(aData, aOutputBuf);
+      NS_ENSURE_TRUE(result == OK, result);
+    }
   }
 
   return OK;
