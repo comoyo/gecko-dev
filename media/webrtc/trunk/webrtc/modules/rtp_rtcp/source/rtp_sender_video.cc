@@ -92,6 +92,8 @@ int32_t RTPSenderVideo::RegisterVideoPayload(
   RtpVideoCodecTypes videoType = kRtpVideoGeneric;
   if (ModuleRTPUtility::StringCompare(payloadName, "VP8",3)) {
     videoType = kRtpVideoVp8;
+  } else if (ModuleRTPUtility::StringCompare(payloadName, "H261", 4)) {
+      videoType = kRtpVideoH261;
   } else if (ModuleRTPUtility::StringCompare(payloadName, "I420", 4)) {
     videoType = kRtpVideoGeneric;
   } else {
@@ -302,6 +304,7 @@ RTPSenderVideo::SendVideo(const RtpVideoCodecTypes videoType,
     int32_t retVal = -1;
     switch(videoType)
     {
+    case kRtpVideoH261:
     case kRtpVideoGeneric:
         retVal = SendGeneric(frameType, payloadType, captureTimeStamp,
                              capture_time_ms, payloadData, payloadSize);

@@ -2787,6 +2787,9 @@ cc_boolean vcmCheckAttribs(cc_uint32_t media_type, void *sdp_p, int level, void 
     {
     case RTP_VP8:
     	return TRUE;
+            
+    case RTP_H261:
+        return TRUE;
 
     case RTP_H264_P0:
     case RTP_H264_P1:

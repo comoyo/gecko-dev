@@ -36,6 +36,7 @@ namespace webrtc {
 #define VCM_ERROR_REQUEST_SLI   -12
 #define VCM_NOT_IMPLEMENTED     -20
 
+#define VCM_H261_PAYLOAD_TYPE       31
 #define VCM_RED_PAYLOAD_TYPE        96
 #define VCM_ULPFEC_PAYLOAD_TYPE     97
 #define VCM_VP8_PAYLOAD_TYPE       100

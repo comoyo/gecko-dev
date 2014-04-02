@@ -120,6 +120,7 @@ int32_t RTPReceiverVideo::ParseVideoCodecSpecific(
 
   switch (rtp_header->type.Video.codec) {
     case kRtpVideoGeneric:
+    case kRtpVideoH261:
       rtp_header->type.Video.isFirstPacket = is_first_packet;
       return ReceiveGenericCodec(rtp_header, payload_data, payload_data_length);
     case kRtpVideoVp8:

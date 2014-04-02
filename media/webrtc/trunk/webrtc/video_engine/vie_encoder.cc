@@ -217,6 +217,8 @@ bool ViEEncoder::Init() {
   qm_callback_ = new QMVideoSettingsCallback(&vpm_);
 
 #ifdef VIDEOCODEC_VP8
+    // XXX Should support both VP8 and H261
+#if 0
   VideoCodec video_codec;
   if (vcm_.Codec(webrtc::kVideoCodecVP8, &video_codec) != VCM_OK) {
     WEBRTC_TRACE(webrtc::kTraceError, webrtc::kTraceVideo,
@@ -238,6 +240,7 @@ bool ViEEncoder::Init() {
                  "%s RegisterSendPayload failure", __FUNCTION__);
     return false;
   }
+#endif
 #else
   VideoCodec video_codec;
   if (vcm_.Codec(webrtc::kVideoCodecI420, &video_codec) == VCM_OK) {
@@ -249,6 +252,18 @@ bool ViEEncoder::Init() {
     return false;
   }
 #endif
+  {
+    VideoCodec video_codec;
+    if (vcm_.Codec(webrtc::kVideoCodecH261, &video_codec) != VCM_OK) {
+      return false;
+    }
+    send_padding_ = video_codec.numberOfSimulcastStreams > 1;
+    vcm_.RegisterSendCodec(&video_codec, number_of_cores_,
+                           default_rtp_rtcp_->MaxDataPayloadLength());
+    if (default_rtp_rtcp_->RegisterSendPayload(video_codec) != 0) {
+      return false;
+    }
+  }
 
   if (vcm_.RegisterTransportCallback(this) != 0) {
     WEBRTC_TRACE(webrtc::kTraceError, webrtc::kTraceVideo,
@@ -699,6 +714,8 @@ void ViEEncoder::DeliverFrame(int id,
     return;
   }
 #endif
+  if (vcm_.SendCodec() == webrtc::kVideoCodecH261) {
+  }
   if (vcm_.AddVideoFrame(*decimated_frame) != VCM_OK) {
     WEBRTC_TRACE(webrtc::kTraceError,
                  webrtc::kTraceVideo,

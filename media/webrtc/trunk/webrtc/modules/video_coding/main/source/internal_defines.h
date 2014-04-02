@@ -44,7 +44,8 @@ inline uint32_t MaskWord64ToUWord32(int64_t w64)
 #else
   #define VCM_I420_IDX VCM_VP8_IDX
 #endif
-#define VCM_NUM_VIDEO_CODECS_AVAILABLE VCM_I420_IDX + 1
+#define VCM_H261_IDX VCM_I420_IDX + 1
+#define VCM_NUM_VIDEO_CODECS_AVAILABLE VCM_H261_IDX + 1
 
 #define VCM_NO_RECEIVER_ID 0
 

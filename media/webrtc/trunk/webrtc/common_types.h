@@ -505,6 +505,11 @@ struct VideoCodecVP8
     int                  keyFrameInterval;
 };
 
+// H261 specific
+struct VideoCodecH261
+{
+};
+
 // Unknown specific
 struct VideoCodecGeneric
 {
@@ -513,6 +518,8 @@ struct VideoCodecGeneric
 // Video codec types
 enum VideoCodecType
 {
+    kVideoCodecH261,
+    kVideoCodecH264,
     kVideoCodecVP8,
     kVideoCodecI420,
     kVideoCodecRED,
@@ -523,6 +530,7 @@ enum VideoCodecType
 
 union VideoCodecUnion
 {
+    VideoCodecH261      H261;
     VideoCodecVP8       VP8;
     VideoCodecGeneric   Generic;
 };

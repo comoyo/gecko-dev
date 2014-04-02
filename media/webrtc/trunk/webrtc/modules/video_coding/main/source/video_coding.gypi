@@ -17,6 +17,7 @@
         '<(webrtc_root)/modules/video_coding/utility/video_coding_utility.gyp:video_coding_utility',
         '<(webrtc_root)/system_wrappers/source/system_wrappers.gyp:system_wrappers',
         '<(webrtc_vp8_dir)/vp8.gyp:webrtc_vp8',
+        '<(webrtc_h261_dir)/h261.gyp:webrtc_h261',
       ],
       'include_dirs': [
         '../interface',

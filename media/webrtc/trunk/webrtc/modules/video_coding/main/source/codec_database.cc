@@ -19,6 +19,7 @@
 #ifdef VIDEOCODEC_VP8
 #include "webrtc/modules/video_coding/codecs/vp8/include/vp8.h"
 #endif
+#include "webrtc/modules/video_coding/codecs/h261/include/h261.h"
 #include "webrtc/modules/video_coding/main/source/internal_defines.h"
 #include "webrtc/system_wrappers/interface/trace.h"
 
@@ -123,6 +124,19 @@ bool VCMCodecDataBase::Codec(int list_id,
       return true;
     }
 #endif
+    case VCM_H261_IDX: {
+      strncpy(settings->plName, "H261", 5);
+      settings->codecType = kVideoCodecH261;
+      settings->plType = VCM_H261_PAYLOAD_TYPE;
+      settings->minBitrate = 64;
+      settings->startBitrate = 128;
+      settings->maxBitrate = 1920;
+      settings->maxFramerate = 30;
+      settings->width = 352;
+      settings->height = 288;
+      settings->numberOfSimulcastStreams = 0;
+      return true;
+    }
     default: {
       return false;
     }
@@ -343,6 +357,14 @@ bool VCMCodecDataBase::RequiresEncoderReset(const VideoCodec& new_send_codec) {
                  sizeof(new_send_codec.codecSpecific.Generic)) !=
           0) {
         return true;
+      }
+      break;
+    case kVideoCodecH261:
+      if (memcmp(&new_send_codec.codecSpecific.H261,
+                 &send_codec_.codecSpecific.H261,
+                 sizeof(new_send_codec.codecSpecific.H261)) !=
+          0) {
+          return true;
       }
       break;
     // Known codecs without payload-specifics
@@ -616,6 +638,8 @@ VCMGenericEncoder* VCMCodecDataBase::CreateEncoder(
     case kVideoCodecI420:
       return new VCMGenericEncoder(*(new I420Encoder));
 #endif
+    case kVideoCodecH261:
+      return new VCMGenericEncoder(*(H261Encoder::Create()));
     default:
       return NULL;
   }
@@ -642,6 +666,8 @@ VCMGenericDecoder* VCMCodecDataBase::CreateDecoder(VideoCodecType type) const {
     case kVideoCodecI420:
       return new VCMGenericDecoder(*(new I420Decoder), id_);
 #endif
+    case kVideoCodecH261:
+      return new VCMGenericDecoder(*(H261Decoder::Create()), id_);
     default:
       return NULL;
   }

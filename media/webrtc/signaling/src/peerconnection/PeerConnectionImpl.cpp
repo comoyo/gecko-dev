@@ -330,6 +330,7 @@ public:
         // there was not a failure, it is possible that the SDP parse generated
         // warnings. The WebRTC spec does not currently have a mechanism for
         // providing non-fatal warnings.
+        CSFLogError(logTag, mSdpStr.c_str());
         mPC->ClearSdpParseErrorMessages();
         mObserver->OnSetLocalDescriptionSuccess(rv);
         break;
@@ -340,6 +341,7 @@ public:
         // there was not a failure, it is possible that the SDP parse generated
         // warnings. The WebRTC spec does not currently have a mechanism for
         // providing non-fatal warnings.
+        CSFLogError(logTag, mSdpStr.c_str());
         mPC->ClearSdpParseErrorMessages();
         mObserver->OnSetRemoteDescriptionSuccess(rv);
 #ifdef MOZILLA_INTERNAL_API
@@ -2413,3 +2415,4 @@ PeerConnectionImpl::GetRemoteStreams(nsTArray<nsRefPtr<DOMMediaStream > >& resul
 }
 
 }  // end sipcc namespace
+

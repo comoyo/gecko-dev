@@ -1142,6 +1142,7 @@ gsmsdp_set_video_media_attributes (uint32_t media_type, void *cc_sdp_p, uint16_t
     int max_fr = 0;
 
     switch (media_type) {
+        case RTP_H261:
         case RTP_H263:
         case RTP_H264_P0:
         case RTP_H264_P1:
@@ -1158,6 +1159,22 @@ gsmsdp_set_video_media_attributes (uint32_t media_type, void *cc_sdp_p, uint16_t
                                                 payload_number);
 
         switch (media_type) {
+        case RTP_H261:
+            (void) sdp_attr_set_rtpmap_encname(sdp_p, level, 0, a_inst,
+                                               SIPSDP_ATTR_ENCNAME_H261);
+            (void) sdp_attr_set_rtpmap_clockrate(sdp_p, level, 0, a_inst,
+                                             RTPMAP_VIDEO_CLOCKRATE);
+
+            if (sdp_add_new_attr(sdp_p, level, 0, SDP_ATTR_FMTP, &a_inst)
+                != SDP_SUCCESS) {
+                GSM_ERR_MSG("Failed to add attribute");
+                return;
+            }
+            (void) sdp_attr_set_fmtp_payload_type(sdp_p, level, 0, a_inst,
+                                                  payload_number);
+            (void) sdp_attr_set_fmtp_qcif(sdp_p, level, 0, a_inst, 1);
+            (void) sdp_attr_set_fmtp_cif(sdp_p, level, 0, a_inst, 1);
+            break;
         case RTP_H263:
             (void) sdp_attr_set_rtpmap_encname(sdp_p, level, 0, a_inst,
                                                SIPSDP_ATTR_ENCNAME_H263v2);

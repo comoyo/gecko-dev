@@ -452,6 +452,8 @@ class RTPPayloadVideoStrategy : public RTPPayloadStrategy {
       videoType = kRtpVideoGeneric;
     } else if (ModuleRTPUtility::StringCompare(payloadName, "ULPFEC", 6)) {
       videoType = kRtpVideoNone;
+    } else if (ModuleRTPUtility::StringCompare(payloadName, "H261", 4)) {
+      videoType = kRtpVideoH261;
     } else {
       videoType = kRtpVideoGeneric;
     }

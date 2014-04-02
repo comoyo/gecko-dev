@@ -742,6 +742,7 @@ WebrtcVideoConduit::SelectSendResolution(unsigned short width,
 {
   // XXX This will do bandwidth-resolution adaptation as well - bug 877954
 
+
   // Limit resolution to max-fs while keeping same aspect ratio as the
   // incoming image.
   if (mCurSendCodecConfig && mCurSendCodecConfig->mMaxFrameSize)

@@ -198,6 +198,22 @@ int32_t ViEChannel::Init() {
                  "%s: VCM::RegisterModule(vcm) failure", __FUNCTION__);
     return -1;
   }
+
+  {
+    VideoCodec video_codec;
+    if (vcm_.Codec(kVideoCodecH261, &video_codec) != VCM_OK) {
+        assert(false);
+    }
+    rtp_rtcp_->RegisterSendPayload(video_codec);
+    // TODO(holmer): Can we call SetReceiveCodec() here instead?
+    if (!vie_receiver_.RegisterPayload(video_codec)) {
+      return -1;
+    }
+    vcm_.RegisterReceiveCodec(&video_codec, number_of_cores_);
+    vcm_.RegisterSendCodec(&video_codec, number_of_cores_,
+                           rtp_rtcp_->MaxDataPayloadLength());
+    return 0;
+  }
 #ifdef VIDEOCODEC_VP8
   VideoCodec video_codec;
   if (vcm_.Codec(kVideoCodecVP8, &video_codec) == VCM_OK) {

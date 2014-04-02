@@ -58,6 +58,7 @@ PMH_EXTERN void sipsdp_free(cc_sdp_t **sip_sdp);
 #define SIPSDP_ATTR_ENCNAME_CN        "CN"
 #define SIPSDP_ATTR_ENCNAME_G722      "G722"
 #define SIPSDP_ATTR_ENCNAME_ILBC      "iLBC"
+#define SIPSDP_ATTR_ENCNAME_H261      "H261"
 #define SIPSDP_ATTR_ENCNAME_H263v2    "H263-1998"
 #define SIPSDP_ATTR_ENCNAME_H264      "H264"
 #define SIPSDP_ATTR_ENCNAME_VP8       "VP8"
