@@ -176,6 +176,8 @@ namespace ModuleRTPUtility
     private:
         bool ParseGeneric(RTPPayload& parsedPacket) const;
 
+        bool ParseH261(RTPPayload& parsedPacket) const;
+
         bool ParseVP8(RTPPayload& parsedPacket) const;
 
         int ParseVP8Extension(RTPPayloadVP8 *vp8,

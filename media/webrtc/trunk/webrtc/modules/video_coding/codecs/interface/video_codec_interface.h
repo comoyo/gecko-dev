@@ -43,6 +43,12 @@ struct CodecSpecificInfoVP8
     int8_t     keyIdx;            // negative value to skip keyIdx
 };
 
+struct CodecSpecificInfoH261
+{
+    bool lastPacket;
+    uint8_t simulcastIdx;
+};
+
 struct CodecSpecificInfoGeneric {
   uint8_t simulcast_idx;
 };
@@ -51,6 +57,7 @@ union CodecSpecificInfoUnion
 {
     CodecSpecificInfoGeneric   generic;
     CodecSpecificInfoVP8       VP8;
+    CodecSpecificInfoH261      H261;
 };
 
 // Note: if any pointers are added to this struct or its sub-structs, it

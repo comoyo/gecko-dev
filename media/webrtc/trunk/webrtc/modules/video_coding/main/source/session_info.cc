@@ -298,6 +298,51 @@ int VCMSessionInfo::BuildVP8FragmentationHeader(
   return new_length;
 }
 
+int VCMSessionInfo::BuildH261FragmentationHeader(
+    uint8_t* frame_buffer,
+    int frame_buffer_length,
+    RTPFragmentationHeader* fragmentation) {
+  int new_length = 0;
+  // Allocate space for max number of partitions
+  fragmentation->VerifyAndAllocateFragmentationHeader(kMaxVP8Partitions);
+  fragmentation->fragmentationVectorSize = 0;
+  memset(fragmentation->fragmentationLength, 0,
+         kMaxVP8Partitions * sizeof(uint32_t));
+  if (packets_.empty())
+      return new_length;
+  int fragment_id = 0;
+  PacketIterator it = packets_.begin();
+  while (it != packets_.end()) {
+    fragmentation->fragmentationOffset[fragment_id] =
+        (*it).dataPtr - frame_buffer;
+    assert(fragmentation->fragmentationOffset[fragment_id] <
+           static_cast<uint32_t>(frame_buffer_length));
+    fragmentation->fragmentationLength[fragment_id] =
+        (*it).sizeBytes;
+    assert(fragmentation->fragmentationLength[fragment_id] <=
+           static_cast<uint32_t>(frame_buffer_length));
+    new_length += fragmentation->fragmentationLength[fragment_id];
+    ++it;
+    if (++fragment_id > fragmentation->fragmentationVectorSize)
+      fragmentation->fragmentationVectorSize = fragment_id;
+  }
+  // Set all empty fragments to start where the previous fragment ends,
+  // and have zero length.
+  if (fragmentation->fragmentationLength[0] == 0)
+      fragmentation->fragmentationOffset[0] = 0;
+  for (int i = 1; i < fragmentation->fragmentationVectorSize; ++i) {
+    if (fragmentation->fragmentationLength[i] == 0)
+      fragmentation->fragmentationOffset[i] =
+          fragmentation->fragmentationOffset[i - 1] +
+          fragmentation->fragmentationLength[i - 1];
+    assert(i == 0 ||
+           fragmentation->fragmentationOffset[i] >=
+           fragmentation->fragmentationOffset[i - 1]);
+  }
+  assert(new_length <= frame_buffer_length);
+  return new_length;
+}
+
 VCMSessionInfo::PacketIterator VCMSessionInfo::FindNextPartitionBeginning(
     PacketIterator it) const {
   while (it != packets_.end()) {

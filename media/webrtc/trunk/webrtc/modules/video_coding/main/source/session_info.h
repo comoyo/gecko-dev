@@ -60,6 +60,13 @@ class VCMSessionInfo {
                                   int frame_buffer_length,
                                   RTPFragmentationHeader* fragmentation);
 
+  // Builds fragmentation headers for H261, each fragment being a decodable
+  // H261 packet. Returns the total number of bytes which are decodable. Is
+  // used instead of MakeDecodable for H261.
+  int BuildH261FragmentationHeader(uint8_t* frame_buffer,
+                                   int frame_buffer_length,
+                                   RTPFragmentationHeader* fragmentation);
+
   // Makes the frame decodable. I.e., only contain decodable NALUs. All
   // non-decodable NALUs will be deleted and packets will be moved to in
   // memory to remove any empty space.

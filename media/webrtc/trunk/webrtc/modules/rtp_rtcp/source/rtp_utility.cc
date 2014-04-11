@@ -579,6 +579,8 @@ bool RTPPayloadParser::Parse(RTPPayload& parsedPacket) const {
       return ParseGeneric(parsedPacket);
     case kRtpVideoVp8:
       return ParseVP8(parsedPacket);
+    case kRtpVideoH261:
+      return ParseH261(parsedPacket);
     default:
       return false;
   }
@@ -586,6 +588,10 @@ bool RTPPayloadParser::Parse(RTPPayload& parsedPacket) const {
 
 bool RTPPayloadParser::ParseGeneric(RTPPayload& /*parsedPacket*/) const {
   return false;
+}
+
+bool RTPPayloadParser::ParseH261(RTPPayload& parsedPacket) const {
+    return false;
 }
 
 //

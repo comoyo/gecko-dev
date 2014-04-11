@@ -28,8 +28,8 @@ H261EncoderImpl::H261EncoderImpl()
     : encoded_complete_callback_(NULL),
       encoder_(NULL),
       inited_(false),
-      temp_buffer_(NULL),
-      encoding_size_changed_(false) {
+      encoding_size_changed_(false),
+      temp_buffer_(NULL) {
   memset(&codec_, 0, sizeof(codec_));
 }
 
@@ -216,19 +216,45 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
   }
 
   if (frame_type == kKeyFrame || encoding_size_changed_) {
+    frame_type = kKeyFrame;
     encoder_->FastUpdatePicture();
   }
 
-
   encoder_->PreProcessOneFrame();
 
-  EncodeAndSendNextFrame(input_image.timestamp(),
-                         5, //input_image.render_time_ms());
-                         frame_type);
+  while (encoder_->MoreToIncEncode()) {
+    // We want to send all packets with a size, and eventually
+    // one that is empty to mark that is the last packet for this frame
+    encoder_->IncEncodeAndGetPacket(encoded_image_._buffer,
+                                    encoded_image_._length);
+    if (encoder_->MoreToIncEncode()) {
+      encoded_image_info_.codecSpecific.H261.lastPacket = false;
+    } else {
+      encoded_image_info_.codecSpecific.H261.lastPacket = true;
+    }
+    SendPacket(input_image.timestamp(),
+               5, //input_image.render_time_ms());
+               frame_type);
+  }
 
   encoding_size_changed_ = false;
 
   return WEBRTC_VIDEO_CODEC_OK;
+}
+
+void H261EncoderImpl::SendPacket(uint32_t timestamp,
+                                 uint16_t capture_time_ms,
+                                 VideoFrameType& frame_type) {
+    encoded_image_._frameType = frame_type;
+    encoded_image_._timeStamp = timestamp;
+    encoded_image_.capture_time_ms_ = capture_time_ms;
+    encoded_image_._encodedWidth = frame_width_;
+    encoded_image_._encodedHeight = frame_height_;
+    encoded_image_._completeFrame = true;//frame_type == kKeyFrame;
+
+    encoded_image_info_.codecType = kVideoCodecH261;
+
+    encoded_complete_callback_->Encoded(encoded_image_, &encoded_image_info_);
 }
 
 int H261EncoderImpl::RegisterEncodeCompleteCallback(EncodedImageCallback* callback) {
@@ -313,6 +339,8 @@ int H261EncoderImpl::SetCIFSize() {
 int H261EncoderImpl::SetRates(uint32_t new_bitrate_kbit, uint32_t frame_rate) {
   double new_bits_per_frame = new_bitrate_kbit / (double) frame_rate;
 
+  std::cerr << "H261 Encoder !! Current framerate = " << frame_rate << std::endl;
+
   int retVal;
   if (new_bits_per_frame < 20) {
     video_quality_ = GetQCIFLevel(new_bits_per_frame);
@@ -377,24 +405,17 @@ int H261DecoderImpl::InitDecode(const VideoCodec* inst, int number_of_cores) {
 
   decoder_ = new FullP64Decoder();
   frame_width_ = frame_height_ = 0;
+  last_timestamp_ = 0;
 
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
-int H261DecoderImpl::Decode(const EncodedImage& input_image,
-           bool missing_frames,
-           const RTPFragmentationHeader* fragmentation,
-           const CodecSpecificInfo* codec_specific_info,
-           int64_t render_time_ms) {
-
-  if (decoded_complete_callback_ == NULL) {
-    return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
-  }
-
-  if (!decoder_->decode(input_image._buffer,
-                        input_image._length,
-                        missing_frames)) {
-    return WEBRTC_VIDEO_CODEC_ERROR;
+int H261DecoderImpl::ReportDecodedFrame() {
+  ++num_frames_prev_second_render_;
+  if (decoded_image_.render_time_ms() / 1000 > prev_second_render_time_ms_ / 1000) {
+    std::cerr << "H261 Decoder !! Current framerate = " << num_frames_prev_second_render_ << std::endl;
+    num_frames_prev_second_render_ = 0;
+    prev_second_render_time_ms_ = decoded_image_.render_time_ms();
   }
 
   //Check for a resize - can change at any time!
@@ -405,43 +426,68 @@ int H261DecoderImpl::Decode(const EncodedImage& input_image,
     frame_height_ = decoder_->height();
   }
 
+  uint8_t* y_src = decoder_->GetFramePtr();
+  assert(y_src && "H261 FramePtr null check");
+  int y_stride = frame_width_;
+  int y_size = y_stride * frame_height_;
+
+  uint8_t* u_src = y_src + y_size;
+  int u_stride = frame_width_ / 2;
+  int u_size = u_stride * frame_height_ / 2;
+
+  uint8_t* v_src = u_src + u_size;
+  int v_stride = u_stride;
+  int v_size = u_size;
+
   decoder_->sync();
+  decoder_->resetndblk();
 
-  {
-    uint8_t* y_src = decoder_->GetFramePtr();
-    assert(y_src && "H261 FramePtr null check");
-    int y_stride = frame_width_;
-    int y_size = y_stride * frame_height_;
-
-    uint8_t* u_src = y_src + y_size;
-    int u_stride = frame_width_ / 2;
-    int u_size = u_stride * frame_height_ / 2;
-
-    uint8_t* v_src = u_src + u_size;
-    int v_stride = u_stride;
-    int v_size = u_size;
-
-    if (decoded_image_.CreateFrame(y_size, y_src,
-                                   u_size, u_src,
-                                   v_size, v_src,
-                                   frame_width_, frame_height_,
-                                   y_stride,
-                                   u_stride,
-                                   v_stride) != 0) {
-      return WEBRTC_VIDEO_CODEC_ERROR;
-    }
-
-    decoded_image_.set_timestamp(input_image._timeStamp);
-    decoded_image_.set_render_time_ms(render_time_ms);
+  if (decoded_image_.CreateFrame(y_size, y_src,
+                                 u_size, u_src,
+                                 v_size, v_src,
+                                 decoder_->width(), decoder_->height(),
+                                 y_stride,
+                                 u_stride,
+                                 v_stride) != 0) {
+    return WEBRTC_VIDEO_CODEC_ERROR;
   }
 
   if (decoded_complete_callback_->Decoded(decoded_image_) != 0) {
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
-
-  decoder_->resetndblk();
-
   return WEBRTC_VIDEO_CODEC_OK;
+}
+
+int H261DecoderImpl::Decode(const EncodedImage& input_image,
+           bool missing_frames,
+           const RTPFragmentationHeader* fragmentation,
+           const CodecSpecificInfo* codec_specific_info,
+           int64_t render_time_ms) {
+  if (decoded_complete_callback_ == NULL) {
+    return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
+  }
+
+  for (int fragment_id = 0; fragment_id < fragmentation->fragmentationVectorSize; ++fragment_id) {
+    uint8_t* fragment_buffer = input_image._buffer + fragmentation->fragmentationOffset[fragment_id];
+    uint32_t fragment_length = fragmentation->fragmentationLength[fragment_id];
+
+    if (!decoder_->decode(fragment_buffer,
+                          fragment_length,
+                          !input_image._completeFrame)) {
+      std::cerr << "DECODE FAILED, hdr: " << std::showbase <<
+                   std::hex << (int) ((uint32_t*)fragment_buffer)[0] << std::dec << std::endl;
+      return WEBRTC_VIDEO_CODEC_ERROR;
+    }
+  }
+
+  decoded_image_.set_timestamp(input_image._timeStamp);
+  decoded_image_.set_render_time_ms(render_time_ms);
+  return ReportDecodedFrame();
+}
+
+int H261DecoderImpl::DecodePartitions(const EncodedImage& input_image,
+                                      const RTPFragmentationHeader* fragmentation) {
+  return WEBRTC_VIDEO_CODEC_ERROR;
 }
 
 int H261DecoderImpl::RegisterDecodeCompleteCallback(DecodedImageCallback* callback) {

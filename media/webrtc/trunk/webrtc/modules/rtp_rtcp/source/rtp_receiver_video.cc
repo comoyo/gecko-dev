@@ -120,9 +120,10 @@ int32_t RTPReceiverVideo::ParseVideoCodecSpecific(
 
   switch (rtp_header->type.Video.codec) {
     case kRtpVideoGeneric:
-    case kRtpVideoH261:
       rtp_header->type.Video.isFirstPacket = is_first_packet;
       return ReceiveGenericCodec(rtp_header, payload_data, payload_data_length);
+    case kRtpVideoH261:
+      return ReceiveH261Codec(rtp_header, payload_data, payload_data_length);
     case kRtpVideoVp8:
       return ReceiveVp8Codec(rtp_header, payload_data, payload_data_length);
     case kRtpVideoNone:
@@ -216,6 +217,21 @@ int32_t RTPReceiverVideo::ReceiveVp8Codec(WebRtcRTPHeader* rtp_header,
   if (data_callback_->OnReceivedPayloadData(parsed_packet.info.VP8.data,
                                             parsed_packet.info.VP8.dataLength,
                                             rtp_header) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+int32_t RTPReceiverVideo::ReceiveH261Codec(
+    WebRtcRTPHeader* rtp_header,
+    const uint8_t* payload_data,
+    uint16_t payload_data_length) {
+
+  rtp_header->frameType = kVideoFrameKey;
+  rtp_header->type.Video.codecHeader.H261.lastPacket = rtp_header->header.markerBit;
+
+  if (data_callback_->OnReceivedPayloadData(
+          payload_data, payload_data_length, rtp_header) != 0) {
     return -1;
   }
   return 0;

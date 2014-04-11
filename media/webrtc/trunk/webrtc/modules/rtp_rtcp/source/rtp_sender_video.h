@@ -27,6 +27,7 @@
 namespace webrtc {
 class CriticalSectionWrapper;
 struct RtpPacket;
+struct CodecSpecificInfoH261;
 
 class RTPSenderVideo
 {
@@ -101,6 +102,14 @@ private:
                         const uint32_t capture_timestamp,
                         int64_t capture_time_ms,
                         const uint8_t* payload, const uint32_t size);
+
+    int32_t SendH261(const FrameType frame_type,
+                     const int8_t payload_type,
+                     const uint32_t capture_timestamp,
+                     int64_t capture_time_ms,
+                     const uint8_t* payloadData,
+                     const uint32_t payloadSize,
+                     const RTPVideoTypeHeader* rtpTypeHdr);
 
     int32_t SendVP8(const FrameType frameType,
                     const int8_t payloadType,

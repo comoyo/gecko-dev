@@ -65,6 +65,10 @@ class RTPReceiverVideo : public RTPReceiverStrategy {
                               const uint8_t* payload_data,
                               uint16_t payload_data_length);
 
+  int32_t ReceiveH261Codec(WebRtcRTPHeader* rtp_header,
+                           const uint8_t* payload_data,
+                           uint16_t payload_data_length);
+
   int32_t ReceiveVp8Codec(WebRtcRTPHeader* rtp_header,
                           const uint8_t* payload_data,
                           uint16_t payload_data_length);

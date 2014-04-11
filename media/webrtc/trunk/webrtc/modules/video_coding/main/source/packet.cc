@@ -111,6 +111,12 @@ void VCMPacket::CopyCodecSpecifics(const RTPVideoHeader& videoHeader)
                 codec = kVideoCodecVP8;
                 break;
             }
+        case kRtpVideoH261:
+            {
+                completeNALU = kNaluComplete;
+                codec = kVideoCodecH261;
+                break;
+            }
         default:
             {
                 codec = kVideoCodecUnknown;

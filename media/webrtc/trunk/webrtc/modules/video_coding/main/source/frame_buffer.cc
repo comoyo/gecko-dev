@@ -272,6 +272,17 @@ VCMFrameBuffer::IsRetransmitted() const {
 
 void
 VCMFrameBuffer::PrepareForDecode(bool continuous) {
+    if (_codec == kVideoCodecH261) {
+        _length = _sessionInfo.BuildH261FragmentationHeader(_buffer, _length, &_fragmentation);
+
+        // Transfer frame information to EncodedFrame and create any codec
+        // specific information.
+        _frameType = ConvertFrameType(_sessionInfo.FrameType());
+        _completeFrame = _sessionInfo.complete();
+        _missingFrame = !continuous;
+
+        return;
+    }
 #ifdef INDEPENDENT_PARTITIONS
     if (_codec == kVideoCodecVP8) {
         _length =

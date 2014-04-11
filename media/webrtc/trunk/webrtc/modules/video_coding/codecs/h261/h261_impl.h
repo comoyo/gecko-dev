@@ -90,25 +90,14 @@ class H261EncoderImpl : public H261Encoder {
   int SetQCIFSize();
   int SetCIFSize();
 
-  inline void EncodeAndSendNextFrame(uint32_t timestamp,
-                                     uint16_t capture_time,
-                                     VideoFrameType& frame_type) {
-      encoder_->IncEncodeAndGetPacket(encoded_image_._buffer,
-                                      encoded_image_._length);
-
-      encoded_image_._frameType = frame_type;
-      encoded_image_._timeStamp = timestamp;
-      encoded_image_.capture_time_ms_ = capture_time;
-      encoded_image_._encodedWidth = frame_width_;
-      encoded_image_._encodedHeight = frame_height_;
-      encoded_image_._completeFrame = !encoder_->MoreToIncEncode();
-
-      encoded_complete_callback_->Encoded(encoded_image_);
-  }
+  void SendPacket(uint32_t timestamp,
+                  uint16_t capture_time_ms,
+                  VideoFrameType& frame_type);
 
   const uint8_t* PackI420Frame(const I420VideoFrame& frame);
 
   EncodedImage encoded_image_;
+  CodecSpecificInfo encoded_image_info_;
   EncodedImageCallback* encoded_complete_callback_;
   VideoCodec codec_;
   P64Encoder* encoder_;
@@ -190,12 +179,20 @@ class H261DecoderImpl : public H261Decoder {
   virtual VideoDecoder* Copy();
 
  private:
+  int ReportDecodedFrame();
+  int DecodePartitions(const EncodedImage& input_image,
+                       const RTPFragmentationHeader* fragmentation);
+
   I420VideoFrame decoded_image_;
   DecodedImageCallback* decoded_complete_callback_;
   P64Decoder* decoder_;
   VideoCodec codec_;
   uint16_t frame_width_;
   uint16_t frame_height_;
+  uint32_t last_timestamp_;
+
+  int64_t prev_second_render_time_ms_;
+  int num_frames_prev_second_render_;
 };  // end of H261DecoderImpl class
 }  // namespace webrtc
 

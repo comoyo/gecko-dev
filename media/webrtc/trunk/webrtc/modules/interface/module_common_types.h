@@ -62,6 +62,16 @@ enum {kNoTemporalIdx = -1};
 enum {kNoKeyIdx = -1};
 enum {kNoSimulcastIdx = 0};
 
+struct RTPVideoHeaderH261
+{
+    void InitRTPVideoHeaderH261()
+    {
+      lastPacket = false;
+    }
+
+    bool lastPacket;
+};
+
 struct RTPVideoHeaderVP8
 {
     void InitRTPVideoHeaderVP8()
@@ -92,6 +102,7 @@ struct RTPVideoHeaderVP8
 union RTPVideoTypeHeader
 {
     RTPVideoHeaderVP8       VP8;
+    RTPVideoHeaderH261      H261;
 };
 
 enum RtpVideoCodecTypes

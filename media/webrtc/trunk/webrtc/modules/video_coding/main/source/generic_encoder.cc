@@ -265,6 +265,11 @@ void VCMEncodedFrameCallback::CopyCodecSpecific(const CodecSpecificInfo& info,
       (*rtp)->codec = kRtpVideoGeneric;
       (*rtp)->simulcastIdx = info.codecSpecific.generic.simulcast_idx;
       return;
+    case kVideoCodecH261:
+      (*rtp)->codec = kRtpVideoH261;
+      (*rtp)->codecHeader.H261.lastPacket = info.codecSpecific.H261.lastPacket;
+      (*rtp)->simulcastIdx = info.codecSpecific.H261.simulcastIdx;
+      return;
     default:
       // No codec specific info. Change RTP header pointer to NULL.
       *rtp = NULL;
