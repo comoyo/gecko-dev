@@ -485,11 +485,6 @@ int H261DecoderImpl::Decode(const EncodedImage& input_image,
   return ReportDecodedFrame();
 }
 
-int H261DecoderImpl::DecodePartitions(const EncodedImage& input_image,
-                                      const RTPFragmentationHeader* fragmentation) {
-  return WEBRTC_VIDEO_CODEC_ERROR;
-}
-
 int H261DecoderImpl::RegisterDecodeCompleteCallback(DecodedImageCallback* callback) {
   decoded_complete_callback_ = callback;
   return WEBRTC_VIDEO_CODEC_OK;

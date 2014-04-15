@@ -180,8 +180,6 @@ class H261DecoderImpl : public H261Decoder {
 
  private:
   int ReportDecodedFrame();
-  int DecodePartitions(const EncodedImage& input_image,
-                       const RTPFragmentationHeader* fragmentation);
 
   I420VideoFrame decoded_image_;
   DecodedImageCallback* decoded_complete_callback_;
