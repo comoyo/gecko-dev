@@ -303,11 +303,12 @@ int VCMSessionInfo::BuildH261FragmentationHeader(
     int frame_buffer_length,
     RTPFragmentationHeader* fragmentation) {
   int new_length = 0;
-  // Allocate space for max number of partitions
-  fragmentation->VerifyAndAllocateFragmentationHeader(kMaxVP8Partitions);
+  // Allocate space for all packets
+  int num_packets = packets_.size();
+  fragmentation->VerifyAndAllocateFragmentationHeader(num_packets);
   fragmentation->fragmentationVectorSize = 0;
   memset(fragmentation->fragmentationLength, 0,
-         kMaxVP8Partitions * sizeof(uint32_t));
+         num_packets * sizeof(uint32_t));
   if (packets_.empty())
       return new_length;
   int fragment_id = 0;
