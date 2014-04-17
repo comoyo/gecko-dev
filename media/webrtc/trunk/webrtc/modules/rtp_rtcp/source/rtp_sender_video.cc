@@ -408,16 +408,18 @@ int32_t RTPSenderVideo::SendH261(const FrameType frame_type,
   assert(frame_type == kVideoFrameKey || frame_type == kVideoFrameDelta);
   uint16_t rtp_header_length = _rtpSender.RTPHeaderLength();
   uint16_t max_length = _rtpSender.MaxPayloadLength() - FECPacketOverhead() -
-                        rtp_header_length - (1 /* generic header length */);
+                        rtp_header_length;
 
   // Fragment packets more evenly by splitting the payload up evenly.
   uint32_t num_packets = (size + max_length - 1) / max_length;
+  // For H261 the codec takes care of splitting into RTP packets
   assert(num_packets == 1);
-  uint32_t payload_length = (size + num_packets - 1) / num_packets;
+  uint32_t payload_length = size;
   assert(payload_length <= max_length);
 
   // Fragment packet into packets of max MaxPayloadLength bytes payload.
   uint8_t buffer[IP_PACKET_SIZE];
+  assert(rtp_header_length + payload_length <= IP_PACKET_SIZE);
 
   // MarkerBit is 1 on last packet
   if (_rtpSender.BuildRTPheader(buffer, payload_type, rtpTypeHdr->H261.lastPacket,
@@ -428,11 +430,11 @@ int32_t RTPSenderVideo::SendH261(const FrameType frame_type,
 
   // Put payload in packet
   // H261 codec has already put payload header in place for us
-  memcpy(&buffer[rtp_header_length], payload, payload_length);
+  memcpy(buffer + rtp_header_length, payload, payload_length);
 
-  if (-1 == SendVideoPacket(buffer, payload_length, rtp_header_length,
-                            capture_timestamp, capture_time_ms,
-                            kDontStore, true)) {
+  if (SendVideoPacket(buffer, payload_length, rtp_header_length,
+                      capture_timestamp, capture_time_ms,
+                      kDontStore, true) == -1) {
     return -1;
   }
   return 0;
