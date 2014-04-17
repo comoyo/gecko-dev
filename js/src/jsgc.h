@@ -117,7 +117,7 @@ MapAllocToTraceKind(AllocKind kind)
         JSTRACE_SHAPE,      /* FINALIZE_SHAPE */
         JSTRACE_BASE_SHAPE, /* FINALIZE_BASE_SHAPE */
         JSTRACE_TYPE_OBJECT,/* FINALIZE_TYPE_OBJECT */
-        JSTRACE_STRING,     /* FINALIZE_SHORT_STRING */
+        JSTRACE_STRING,     /* FINALIZE_FAT_INLINE_STRING */
         JSTRACE_STRING,     /* FINALIZE_STRING */
         JSTRACE_STRING,     /* FINALIZE_EXTERNAL_STRING */
         JSTRACE_JITCODE,    /* FINALIZE_JITCODE */
@@ -157,7 +157,7 @@ template <> struct MapTypeToFinalizeKind<LazyScript>        { static const Alloc
 template <> struct MapTypeToFinalizeKind<Shape>             { static const AllocKind kind = FINALIZE_SHAPE; };
 template <> struct MapTypeToFinalizeKind<BaseShape>         { static const AllocKind kind = FINALIZE_BASE_SHAPE; };
 template <> struct MapTypeToFinalizeKind<types::TypeObject> { static const AllocKind kind = FINALIZE_TYPE_OBJECT; };
-template <> struct MapTypeToFinalizeKind<JSShortString>     { static const AllocKind kind = FINALIZE_SHORT_STRING; };
+template <> struct MapTypeToFinalizeKind<JSFatInlineString> { static const AllocKind kind = FINALIZE_FAT_INLINE_STRING; };
 template <> struct MapTypeToFinalizeKind<JSString>          { static const AllocKind kind = FINALIZE_STRING; };
 template <> struct MapTypeToFinalizeKind<JSExternalString>  { static const AllocKind kind = FINALIZE_EXTERNAL_STRING; };
 template <> struct MapTypeToFinalizeKind<jit::JitCode>      { static const AllocKind kind = FINALIZE_JITCODE; };
@@ -185,7 +185,7 @@ IsNurseryAllocable(AllocKind kind)
         false,     /* FINALIZE_SHAPE */
         false,     /* FINALIZE_BASE_SHAPE */
         false,     /* FINALIZE_TYPE_OBJECT */
-        false,     /* FINALIZE_SHORT_STRING */
+        false,     /* FINALIZE_FAT_INLINE_STRING */
         false,     /* FINALIZE_STRING */
         false,     /* FINALIZE_EXTERNAL_STRING */
         false,     /* FINALIZE_JITCODE */
@@ -217,7 +217,7 @@ IsBackgroundFinalized(AllocKind kind)
         true,      /* FINALIZE_SHAPE */
         true,      /* FINALIZE_BASE_SHAPE */
         true,      /* FINALIZE_TYPE_OBJECT */
-        true,      /* FINALIZE_SHORT_STRING */
+        true,      /* FINALIZE_FAT_INLINE_STRING */
         true,      /* FINALIZE_STRING */
         false,     /* FINALIZE_EXTERNAL_STRING */
         false,     /* FINALIZE_JITCODE */
@@ -1008,7 +1008,7 @@ struct MarkStack {
 
     bool push(T item) {
         if (tos_ == end_) {
-            if (!enlarge())
+            if (!enlarge(1))
                 return false;
         }
         JS_ASSERT(tos_ < end_);
@@ -1019,7 +1019,7 @@ struct MarkStack {
     bool push(T item1, T item2, T item3) {
         T *nextTos = tos_ + 3;
         if (nextTos > end_) {
-            if (!enlarge())
+            if (!enlarge(3))
                 return false;
             nextTos = tos_ + 3;
         }
@@ -1057,13 +1057,11 @@ struct MarkStack {
         setStack(newStack, 0, baseCapacity_);
     }
 
-    bool enlarge() {
-        if (capacity() == maxCapacity_)
+    /* Grow the stack, ensuring there is space for at least count elements. */
+    bool enlarge(unsigned count) {
+        size_t newCapacity = Min(maxCapacity_, capacity() * 2);
+        if (newCapacity < capacity() + count)
             return false;
-
-        size_t newCapacity = capacity() * 2;
-        if (newCapacity > maxCapacity_)
-            newCapacity = maxCapacity_;
 
         size_t tosIndex = position();
 

@@ -11,8 +11,6 @@
 #include "mozilla/layers/ISurfaceAllocator.h"
 #include "mozilla/layers/ShadowLayerUtilsGralloc.h"
 #include "gfx2DGlue.h"
-#include "gfxASurface.h"
-#include "gfxImageSurface.h"            // for gfxImageSurface
 
 namespace mozilla {
 namespace layers {
@@ -36,12 +34,7 @@ public:
 
   virtual void DeallocateSharedData(ISurfaceAllocator* allocator) MOZ_OVERRIDE
   {
-    // We just need to wrap the actor in a SurfaceDescriptor because that's what
-    // ISurfaceAllocator uses as input, we don't care about the other parameters.
-    SurfaceDescriptor sd = SurfaceDescriptorGralloc(nullptr, mGrallocActor,
-                                                    IntSize(0, 0),
-                                                    false, false);
-    allocator->DestroySharedSurface(&sd);
+    allocator->DeallocGrallocBuffer(mGrallocActor);
     mGrallocActor = nullptr;
   }
 
@@ -85,16 +78,8 @@ GrallocTextureClientOGL::~GrallocTextureClientOGL()
 {
   MOZ_COUNT_DTOR(GrallocTextureClientOGL);
     if (ShouldDeallocateInDestructor()) {
-    // If the buffer has never been shared we must deallocate it or it would
-    // leak.
-    // We just need to wrap the actor in a SurfaceDescriptor because that's what
-    // ISurfaceAllocator uses as input, we don't care about the other parameters.
-    SurfaceDescriptor sd = SurfaceDescriptorGralloc(nullptr, mGrallocActor,
-                                                    IntSize(0, 0),
-                                                    false, false);
-
     ISurfaceAllocator* allocator = GetAllocator();
-    allocator->DestroySharedSurface(&sd);
+    allocator->DeallocGrallocBuffer(mGrallocActor);
   }
 }
 
@@ -118,24 +103,6 @@ GrallocTextureClientOGL::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
   }
 
   aOutDescriptor = NewSurfaceDescriptorGralloc(nullptr, mGrallocActor, mSize);
-  return true;
-}
-
- bool
-GrallocTextureClientOGL::UpdateSurface(gfxASurface* aSurface)
-{
-  MOZ_ASSERT(aSurface);
-  MOZ_ASSERT(!IsImmutable());
-  MOZ_ASSERT(IsValid());
-  if (!IsValid() || !IsAllocated()) {
-    return false;
-  }
-
-  RefPtr<DrawTarget> dt = GetAsDrawTarget();
-  RefPtr<SourceSurface> source = gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(dt, aSurface);
-
-  dt->CopySurface(source, IntRect(IntPoint(), GetSize()), IntPoint());
-
   return true;
 }
 
@@ -248,23 +215,6 @@ GrallocTextureClientOGL::GetAsDrawTarget()
                                                                     byteStride,
                                                                     mFormat);
   return mDrawTarget;
-}
-
-already_AddRefed<gfxASurface>
-GrallocTextureClientOGL::GetAsSurface()
-{
-  MOZ_ASSERT(IsValid());
-  MOZ_ASSERT(mMappedBuffer, "Calling TextureClient::GetAsSurface without locking :(");
-
-  gfx::SurfaceFormat format = SurfaceFormatForPixelFormat(mGraphicBuffer->getPixelFormat());
-  long pixelStride = mGraphicBuffer->getStride();
-  long byteStride = pixelStride * BytesPerPixel(format);
-  nsRefPtr<gfxImageSurface> surface =
-                     new gfxImageSurface(GetBuffer(),
-                                         gfxIntSize(mSize.width, mSize.height),
-                                         byteStride,
-                                         SurfaceFormatToImageFormat(mFormat));
-  return surface.forget();
 }
 
 bool

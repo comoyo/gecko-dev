@@ -133,7 +133,8 @@ extern JS_FRIEND_API(JSObject *)
 JS_ObjectToOuterObject(JSContext *cx, JS::HandleObject obj);
 
 extern JS_FRIEND_API(JSObject *)
-JS_CloneObject(JSContext *cx, JSObject *obj, JSObject *proto, JSObject *parent);
+JS_CloneObject(JSContext *cx, JS::HandleObject obj, JS::HandleObject proto,
+               JS::HandleObject parent);
 
 extern JS_FRIEND_API(JSString *)
 JS_BasicObjectToString(JSContext *cx, JS::HandleObject obj);
@@ -151,11 +152,15 @@ js_ObjectClassIs(JSContext *cx, JS::HandleObject obj, js::ESClassValue classValu
 JS_FRIEND_API(const char *)
 js_ObjectClassName(JSContext *cx, JS::HandleObject obj);
 
+namespace js {
+
 JS_FRIEND_API(bool)
-js_AddObjectRoot(JSRuntime *rt, JSObject **objp);
+AddRawValueRoot(JSContext *cx, JS::Value *vp, const char *name);
 
 JS_FRIEND_API(void)
-js_RemoveObjectRoot(JSRuntime *rt, JSObject **objp);
+RemoveRawValueRoot(JSContext *cx, JS::Value *vp);
+
+} /* namespace js */
 
 #ifdef JS_DEBUG
 
@@ -1334,6 +1339,14 @@ extern JS_FRIEND_API(uint32_t)
 JS_GetArrayBufferByteLength(JSObject *obj);
 
 /*
+ * Check whether the obj is ArrayBufferObject and memory mapped. Note that this
+ * may return false if a security wrapper is encountered that denies the
+ * unwrapping.
+ */
+extern JS_FRIEND_API(bool)
+JS_IsMappedArrayBufferObject(JSObject *obj);
+
+/*
  * Return the number of elements in a typed array.
  *
  * |obj| must have passed a JS_IsTypedArrayObject/JS_Is*Array test, or somehow
@@ -1416,7 +1429,7 @@ JS_GetFloat64ArrayData(JSObject *obj);
  * as the object is live.
  */
 extern JS_FRIEND_API(uint8_t *)
-JS_GetStableArrayBufferData(JSContext *cx, JSObject *obj);
+JS_GetStableArrayBufferData(JSContext *cx, JS::HandleObject obj);
 
 /*
  * Same as above, but for any kind of ArrayBufferView. Prefer the type-specific
@@ -1431,7 +1444,7 @@ JS_GetArrayBufferViewData(JSObject *obj);
  * object that would return true for JS_IsArrayBufferViewObject().
  */
 extern JS_FRIEND_API(JSObject *)
-JS_GetArrayBufferViewBuffer(JSObject *obj);
+JS_GetArrayBufferViewBuffer(JSContext *cx, JSObject *obj);
 
 /*
  * Set an ArrayBuffer's length to 0 and neuter all of its views.

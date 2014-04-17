@@ -14,7 +14,6 @@
 #include "LayerScope.h"                 // for LayerScope
 #include "gfx2DGlue.h"                  // for ThebesFilter
 #include "gfx3DMatrix.h"                // for gfx3DMatrix
-#include "gfxASurface.h"                // for gfxASurface, etc
 #include "gfxCrashReporterUtils.h"      // for ScopedGfxFeatureReporter
 #include "gfxImageSurface.h"            // for gfxImageSurface
 #include "gfxMatrix.h"                  // for gfxMatrix
@@ -98,7 +97,7 @@ DrawQuads(GLContext *aGLContext,
     aProg->AttribLocation(ShaderProgramOGL::TexCoordAttrib);
   bool texCoords = (texCoordAttribIndex != GLuint(-1));
 
-  GLsizei bytes = aRects.vertCoords().Length() * 2 * sizeof(GLfloat);
+  GLsizei bytes = aRects.elements() * 2 * sizeof(GLfloat);
 
   GLsizei total = bytes;
   if (texCoords) {
@@ -136,7 +135,7 @@ DrawQuads(GLContext *aGLContext,
     aGLContext->fDisableVertexAttribArray(texCoordAttribIndex);
   }
 
-  aGLContext->fDrawArrays(aMode, 0, aRects.vertCoords().Length());
+  aGLContext->fDrawArrays(aMode, 0, aRects.elements());
 
   aGLContext->fBindBuffer(LOCAL_GL_ARRAY_BUFFER, 0);
 }
@@ -572,7 +571,7 @@ CompositorOGL::SetRenderTarget(CompositingRenderTarget *aSurface)
 }
 
 CompositingRenderTarget*
-CompositorOGL::GetCurrentRenderTarget()
+CompositorOGL::GetCurrentRenderTarget() const
 {
   return mCurrentRenderTarget;
 }

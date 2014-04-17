@@ -161,6 +161,7 @@ nsAppStartup::Init()
     return NS_ERROR_FAILURE;
 
   os->AddObserver(this, "quit-application-forced", true);
+  os->AddObserver(this, "sessionstore-init-started", true);
   os->AddObserver(this, "sessionstore-windows-restored", true);
   os->AddObserver(this, "profile-change-teardown", true);
   os->AddObserver(this, "xul-window-registered", true);
@@ -705,6 +706,8 @@ nsAppStartup::Observe(nsISupports *aSubject,
       mPlacesInitCompleteProbe->Trigger();
     }
 #endif //defined(XP_WIN)
+  } else if (!strcmp(aTopic, "sessionstore-init-started")) {
+    StartupTimeline::Record(StartupTimeline::SESSION_RESTORE_INIT);
   } else if (!strcmp(aTopic, "xpcom-shutdown")) {
     Telemetry::EnteringShutdownStage();
 #if defined(XP_WIN)
@@ -763,8 +766,7 @@ nsAppStartup::GetStartupInfo(JSContext* aCx, JS::MutableHandle<JS::Value> aRetva
         PRTime prStamp = ComputeAbsoluteTimestamp(absNow, now, stamp)
           / PR_USEC_PER_MSEC;
         JS::Rooted<JSObject*> date(aCx, JS_NewDateObjectMsec(aCx, prStamp));
-        JS_DefineProperty(aCx, obj, StartupTimeline::Describe(ev),
-          OBJECT_TO_JSVAL(date), nullptr, nullptr, JSPROP_ENUMERATE);
+        JS_DefineProperty(aCx, obj, StartupTimeline::Describe(ev), date, JSPROP_ENUMERATE);
       } else {
         Telemetry::Accumulate(Telemetry::STARTUP_MEASUREMENT_ERRORS, ev);
       }

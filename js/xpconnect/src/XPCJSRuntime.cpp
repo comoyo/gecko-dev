@@ -1058,7 +1058,7 @@ class Watchdog
             AutoLockWatchdog lock(this);
 
             mThread = PR_CreateThread(PR_USER_THREAD, WatchdogMain, this,
-                                      PR_PRIORITY_NORMAL, PR_LOCAL_THREAD,
+                                      PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD,
                                       PR_UNJOINABLE_THREAD, 0);
             if (!mThread)
                 NS_RUNTIMEABORT("PR_CreateThread failed!");
@@ -1397,6 +1397,19 @@ XPCJSRuntime::InterruptCallback(JSContext *cx)
     // running in a non-DOM scope, we have to just let it keep running.
     RootedObject global(cx, JS::CurrentGlobalOrNull(cx));
     nsRefPtr<nsGlobalWindow> win = WindowOrNull(global);
+    if (!win && IsSandbox(global)) {
+        // If this is a sandbox associated with a DOMWindow via a
+        // sandboxPrototype, use that DOMWindow. This supports GreaseMonkey
+        // and JetPack content scripts.
+        JS::Rooted<JSObject*> proto(cx);
+        if (!JS_GetPrototype(cx, global, &proto))
+            return false;
+        if (proto && IsSandboxPrototypeProxy(proto) &&
+            (proto = js::CheckedUnwrap(proto, /* stopAtOuter = */ false)))
+        {
+            win = WindowGlobalOrNull(proto);
+        }
+    }
     if (!win)
         return true;
 
@@ -2146,6 +2159,12 @@ ReportCompartmentStats(const JS::CompartmentStats &cStats,
             KIND_NONHEAP, nonHeapElementsAsmJS,
             "asm.js array buffer elements outside both the malloc heap and "
             "the GC heap.");
+    }
+
+    if (cStats.objectsExtra.nonHeapElementsMapped > 0) {
+        REPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("objects/non-heap/elements/mapped"),
+            KIND_NONHEAP, cStats.objectsExtra.nonHeapElementsMapped,
+            "Memory-mapped array buffer elements.");
     }
 
     REPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("objects/non-heap/code/asm.js"),
@@ -3025,7 +3044,7 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
    mWrappedJSRoots(nullptr),
    mObjectHolderRoots(nullptr),
    mWatchdogManager(new WatchdogManager(MOZ_THIS_IN_INITIALIZER_LIST())),
-   mJunkScope(nullptr),
+   mJunkScope(MOZ_THIS_IN_INITIALIZER_LIST()->Runtime(), nullptr),
    mAsyncSnowWhiteFreer(new AsyncFreeSnowWhite())
 {
     DOM_InitInterfaces();
@@ -3463,7 +3482,6 @@ XPCJSRuntime::GetJunkScope()
         NS_ENSURE_SUCCESS(rv, nullptr);
 
         mJunkScope = js::UncheckedUnwrap(&v.toObject());
-        JS_AddNamedObjectRoot(cx, &mJunkScope, "XPConnect Junk Compartment");
     }
     return mJunkScope;
 }
@@ -3471,10 +3489,5 @@ XPCJSRuntime::GetJunkScope()
 void
 XPCJSRuntime::DeleteJunkScope()
 {
-    if(!mJunkScope)
-        return;
-
-    AutoSafeJSContext cx;
-    JS_RemoveObjectRoot(cx, &mJunkScope);
     mJunkScope = nullptr;
 }

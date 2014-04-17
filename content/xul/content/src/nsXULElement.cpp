@@ -34,7 +34,8 @@
 #include "nsIDOMXULSelectCntrlItemEl.h"
 #include "nsIDocument.h"
 #include "mozilla/EventListenerManager.h"
-#include "nsEventStateManager.h"
+#include "mozilla/EventStateManager.h"
+#include "mozilla/EventStates.h"
 #include "nsFocusManager.h"
 #include "nsHTMLStyleSheet.h"
 #include "nsIJSRuntimeService.h"
@@ -552,7 +553,7 @@ nsXULElement::IsFocusableInternal(int32_t *aTabIndex, bool aWithMouse)
   // the focus.
   if (aWithMouse &&
       IsNonList(mNodeInfo) && 
-      !nsEventStateManager::IsRemoteTarget(this))
+      !EventStateManager::IsRemoteTarget(this))
   {
     return false;
   }
@@ -809,9 +810,10 @@ nsXULElement::RemoveChildAt(uint32_t aIndex, bool aNotify)
       // If it's not, look at our parent
       if (!controlElement)
         GetParentTree(getter_AddRefs(controlElement));
+      nsCOMPtr<nsIDOMXULElement> xulElement(do_QueryInterface(controlElement));
 
       nsCOMPtr<nsIDOMElement> oldKidElem = do_QueryInterface(oldKid);
-      if (controlElement && oldKidElem) {
+      if (xulElement && oldKidElem) {
         // Iterate over all of the items and find out if they are contained inside
         // the removed subtree.
         int32_t length;
@@ -835,7 +837,7 @@ nsXULElement::RemoveChildAt(uint32_t aIndex, bool aNotify)
         if (curNode && nsContentUtils::ContentIsDescendantOf(curNode, oldKid)) {
             // Current item going away
             nsCOMPtr<nsIBoxObject> box;
-            controlElement->GetBoxObject(getter_AddRefs(box));
+            xulElement->GetBoxObject(getter_AddRefs(box));
             listBox = do_QueryInterface(box);
             if (listBox && oldKidElem) {
               listBox->GetIndexOfItem(oldKidElem, &newCurrentIndex);
@@ -1694,10 +1696,10 @@ nsXULElement::AddPopupListener(nsIAtom* aName)
     return NS_OK;
 }
 
-nsEventStates
+EventStates
 nsXULElement::IntrinsicState() const
 {
-    nsEventStates state = nsStyledElement::IntrinsicState();
+    EventStates state = nsStyledElement::IntrinsicState();
 
     if (IsReadWriteTextElement()) {
         state |= NS_EVENT_STATE_MOZ_READWRITE;
@@ -1948,9 +1950,9 @@ nsXULElement::IsEventAttributeName(nsIAtom *aName)
 }
 
 JSObject*
-nsXULElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aScope)
+nsXULElement::WrapNode(JSContext *aCx)
 {
-    return dom::XULElementBinding::Wrap(aCx, aScope, this);
+    return dom::XULElementBinding::Wrap(aCx, this);
 }
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(nsXULPrototypeNode)
@@ -2396,6 +2398,7 @@ nsXULPrototypeScript::Serialize(nsIObjectOutputStream* aStream,
                                 nsXULPrototypeDocument* aProtoDoc,
                                 const nsCOMArray<nsINodeInfo> *aNodeInfos)
 {
+    NS_ENSURE_TRUE(aProtoDoc, NS_ERROR_UNEXPECTED);
     AutoSafeJSContext cx;
     JS::Rooted<JSObject*> global(cx, aProtoDoc->GetCompilationGlobal());
     NS_ENSURE_TRUE(global, NS_ERROR_UNEXPECTED);
@@ -2661,7 +2664,7 @@ nsXULPrototypeScript::Compile(const char16_t* aText,
     }
 
     if (aOffThreadReceiver && JS::CanCompileOffThread(cx, options, aTextLength)) {
-        if (!JS::CompileOffThread(cx, scope, options,
+        if (!JS::CompileOffThread(cx, options,
                                   static_cast<const jschar*>(aText), aTextLength,
                                   OffThreadScriptReceiverCallback,
                                   static_cast<void*>(aOffThreadReceiver))) {

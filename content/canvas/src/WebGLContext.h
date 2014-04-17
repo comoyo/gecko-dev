@@ -23,7 +23,6 @@
 #include "nsLayoutUtils.h"
 
 #include "GLContextProvider.h"
-#include "gfxImageSurface.h"
 
 #include "mozilla/LinkedList.h"
 #include "mozilla/CheckedInt.h"
@@ -152,8 +151,7 @@ public:
     NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(WebGLContext,
                                                            nsIDOMWebGLRenderingContext)
 
-    virtual JSObject* WrapObject(JSContext *cx,
-                                 JS::Handle<JSObject*> scope) = 0;
+    virtual JSObject* WrapObject(JSContext *cx) = 0;
 
     NS_DECL_NSIDOMWEBGLRENDERINGCONTEXT
 

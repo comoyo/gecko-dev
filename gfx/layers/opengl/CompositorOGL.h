@@ -64,12 +64,13 @@ struct EffectChain;
  * This is primarily intended for direct texturing APIs that need to attach
  * shared objects (such as an EGLImage) to a gl texture.
  */
-class CompositorTexturePoolOGL : public RefCounted<CompositorTexturePoolOGL>
+class CompositorTexturePoolOGL
 {
-public:
-  MOZ_DECLARE_REFCOUNTED_TYPENAME(CompositorTexturePoolOGL)
-
+protected:
   virtual ~CompositorTexturePoolOGL() {}
+
+public:
+  NS_INLINE_DECL_REFCOUNTING(CompositorTexturePoolOGL)
 
   virtual void Clear() = 0;
 
@@ -190,7 +191,7 @@ public:
                                const gfx::IntPoint &aSourcePoint) MOZ_OVERRIDE;
 
   virtual void SetRenderTarget(CompositingRenderTarget *aSurface) MOZ_OVERRIDE;
-  virtual CompositingRenderTarget* GetCurrentRenderTarget() MOZ_OVERRIDE;
+  virtual CompositingRenderTarget* GetCurrentRenderTarget() const MOZ_OVERRIDE;
 
   virtual void DrawQuad(const gfx::Rect& aRect,
                         const gfx::Rect& aClipRect,

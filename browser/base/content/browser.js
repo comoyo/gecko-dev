@@ -1289,6 +1289,8 @@ var gBrowserInit = {
     } catch (ex) {
     }
 
+    PlacesToolbarHelper.uninit();
+
     BookmarkingUI.uninit();
 
     TabsInTitlebar.uninit();
@@ -2920,7 +2922,7 @@ const BrowserSearch = {
 #endif
     let openSearchPageIfFieldIsNotActive = function(aSearchBar) {
       if (!aSearchBar || document.activeElement != aSearchBar.textbox.inputField)
-        openUILinkIn(Services.search.defaultEngine.searchForm, "current");
+        openUILinkIn("about:home", "current");
     };
 
     let searchBar = this.searchBar;
@@ -3995,10 +3997,12 @@ var TabsProgressListener = {
     // Collect telemetry data about tab load times.
     if (aWebProgress.isTopLevel) {
       if (aStateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW) {
-        if (aStateFlags & Ci.nsIWebProgressListener.STATE_START)
+        if (aStateFlags & Ci.nsIWebProgressListener.STATE_START) {
           TelemetryStopwatch.start("FX_PAGE_LOAD_MS", aBrowser);
-        else if (aStateFlags & Ci.nsIWebProgressListener.STATE_STOP)
+          Services.telemetry.getHistogramById("FX_TOTAL_TOP_VISITS").add(true);
+        } else if (aStateFlags & Ci.nsIWebProgressListener.STATE_STOP) {
           TelemetryStopwatch.finish("FX_PAGE_LOAD_MS", aBrowser);
+        }
       } else if (aStateFlags & Ci.nsIWebProgressListener.STATE_STOP &&
                  aStatus == Cr.NS_BINDING_ABORTED) {
         TelemetryStopwatch.cancel("FX_PAGE_LOAD_MS", aBrowser);
@@ -4460,6 +4464,9 @@ var TabsInTitlebar = {
     let titlebar = $("titlebar");
     let titlebarContent = $("titlebar-content");
     let menubar = $("toolbar-menubar");
+#ifdef XP_MACOSX
+    let secondaryButtonsWidth = rect($("titlebar-secondary-buttonbox")).width;
+#endif
 
     if (allowed) {
       // We set the tabsintitlebar attribute first so that our CSS for
@@ -4477,7 +4484,6 @@ var TabsInTitlebar = {
       let captionButtonsBoxWidth = rect($("titlebar-buttonbox-container")).width;
 
 #ifdef XP_MACOSX
-      let fullscreenButtonWidth = rect($("titlebar-fullscreen-button")).width;
       // No need to look up the menubar stuff on OS X:
       let menuHeight = 0;
       let fullMenuHeight = 0;
@@ -4552,9 +4558,6 @@ var TabsInTitlebar = {
 
 
       // Finally, size the placeholders:
-#ifdef XP_MACOSX
-      this._sizePlaceholder("fullscreen-button", fullscreenButtonWidth);
-#endif
       this._sizePlaceholder("caption-buttons", captionButtonsBoxWidth);
 
       if (!this._draghandles) {
@@ -4582,6 +4585,10 @@ var TabsInTitlebar = {
       titlebar.style.marginBottom = "";
       menubar.style.paddingBottom = "";
     }
+
+#ifdef XP_MACOSX
+    this._sizePlaceholder("fullscreen-button", secondaryButtonsWidth);
+#endif
   },
 
   _sizePlaceholder: function (type, width) {
@@ -4620,7 +4627,8 @@ function updateTitlebarDisplay() {
     document.documentElement.setAttribute("chromemargin-nonlwtheme", "");
     let isCustomizing = document.documentElement.hasAttribute("customizing");
     let hasLWTheme = document.documentElement.hasAttribute("lwtheme");
-    if (!hasLWTheme || isCustomizing) {
+    let isPrivate = PrivateBrowsingUtils.isWindowPrivate(window);
+    if ((!hasLWTheme || isCustomizing) && !isPrivate) {
       document.documentElement.removeAttribute("chromemargin");
     }
     document.documentElement.setAttribute("drawtitle", "true");
@@ -7116,6 +7124,20 @@ XPCOMUtils.defineLazyGetter(ResponsiveUI, "ResponsiveUIManager", function() {
   let tmp = {};
   Cu.import("resource:///modules/devtools/responsivedesign.jsm", tmp);
   return tmp.ResponsiveUIManager;
+});
+
+function openEyedropper() {
+  var eyedropper = new this.Eyedropper(this);
+  eyedropper.open();
+}
+
+Object.defineProperty(this, "Eyedropper", {
+  get: function() {
+    let devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
+    return devtools.require("devtools/eyedropper/eyedropper").Eyedropper;
+  },
+  configurable: true,
+  enumerable: true
 });
 
 XPCOMUtils.defineLazyGetter(window, "gShowPageResizers", function () {

@@ -23,6 +23,11 @@ let gPage = {
     let button = document.getElementById("newtab-toggle");
     button.addEventListener("click", this, false);
 
+    // Initialize sponsored panel
+    this._sponsoredPanel = document.getElementById("sponsored-panel");
+    let link = this._sponsoredPanel.querySelector(".text-link");
+    link.addEventListener("click", () => this._sponsoredPanel.hidePopup());
+
     // Check if the new tab feature is enabled.
     let enabled = gAllPages.enabled;
     if (enabled)
@@ -81,6 +86,21 @@ let gPage = {
   },
 
   /**
+   * Shows sponsored panel
+   */
+  showSponsoredPanel: function Page_showSponsoredPanel(aTarget) {
+    if (this._sponsoredPanel.state == "closed") {
+      let self = this;
+      this._sponsoredPanel.addEventListener("popuphidden", function onPopupHidden(aEvent) {
+        self._sponsoredPanel.removeEventListener("popuphidden", onPopupHidden, false);
+        aTarget.removeAttribute("panelShown");
+      });
+    }
+    aTarget.setAttribute("panelShown", "true");
+    this._sponsoredPanel.openPopup(aTarget);
+  },
+
+  /**
    * Internally initializes the page. This runs only when/if the feature
    * is/gets enabled.
    */
@@ -124,19 +144,17 @@ let gPage = {
       attributeFilter: ["allow-background-captures"],
     });
 
-    gLinks.populateCache(function () {
-      // Initialize and render the grid.
-      gGrid.init();
+    // Initialize and render the grid.
+    gGrid.init();
 
-      // Initialize the drop target shim.
-      gDropTargetShim.init();
+    // Initialize the drop target shim.
+    gDropTargetShim.init();
 
 #ifdef XP_MACOSX
-      // Workaround to prevent a delay on MacOSX due to a slow drop animation.
-      document.addEventListener("dragover", this, false);
-      document.addEventListener("drop", this, false);
+    // Workaround to prevent a delay on MacOSX due to a slow drop animation.
+    document.addEventListener("dragover", this, false);
+    document.addEventListener("drop", this, false);
 #endif
-    }.bind(this));
   },
 
   /**
