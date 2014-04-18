@@ -138,7 +138,14 @@ int H261EncoderImpl::InitEncode(const VideoCodec* inst,
 }
 
 const uint8_t* H261EncoderImpl::PackI420Frame(const I420VideoFrame& frame) {
+  // If the frame is packed already, don't copy
+  if (frame.buffer(kYPlane) + frame.width() * frame.height() == frame.buffer(kUPlane) &&
+      frame.buffer(kUPlane) + frame.width() * frame.height() / 2 == frame.buffer(kVPlane)) {
+    return frame.buffer(kYPlane);
+  }
+
   const uint8_t* cur_src = frame.buffer(kYPlane);
+
   uint8_t* cur_dest = temp_buffer_;
   assert(frame.stride(kYPlane) == frame.width() && "Dude, the y plane is not packed!");
   int cur_size = frame.width() * frame.height();
