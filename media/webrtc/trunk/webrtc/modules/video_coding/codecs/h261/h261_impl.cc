@@ -83,6 +83,10 @@ int H261EncoderImpl::Release() {
     delete [] temp_buffer_;
     temp_buffer_ = NULL;
   }
+  if (encoded_image_._buffer != NULL) {
+    delete [] encoded_image_._buffer;
+    encoded_image_._buffer = NULL;
+  }
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
@@ -114,16 +118,22 @@ int H261EncoderImpl::InitEncode(const VideoCodec* inst,
     codec_ = *inst;
   }
 
-  encoder_ = new P64Encoder(DEFAULT_ENCODER_QUALITY, DEFAULT_FILL_LEVEL);
-  if ((retVal = SetRates(codec_.startBitrate, 30)) != WEBRTC_VIDEO_CODEC_OK) {
-    return retVal;
-  }
+  // Reserve 100 extra bytes for overhead at small resolutions.
+  uint32_t size = CalcBufferSize(kI420, CIF_WIDTH, CIF_HEIGHT) + 100;
+  encoded_image_._size = size;
+  encoded_image_._buffer = new uint8_t[size];
+
+  frame_width_ = frame_height_ = 0;
   force_iframe_ = false;
   capture_width_ = capture_height_ = 0;
   video_quality_ = DEFAULT_ENCODER_QUALITY;
 
-  inited_ = true;
+  encoder_ = new P64Encoder(DEFAULT_ENCODER_QUALITY, DEFAULT_FILL_LEVEL);
+  if ((retVal = SetRates(codec_.startBitrate, 15)) != WEBRTC_VIDEO_CODEC_OK) {
+    return retVal;
+  }
 
+  inited_ = true;
   return codec_.startBitrate;
 }
 
@@ -304,20 +314,6 @@ int H261EncoderImpl::SetSize(int width, int height) {
   if (frame_width_ == width && frame_height_ == height) {
     return WEBRTC_VIDEO_CODEC_OK;
   }
-
-  // Reserve 100 extra bytes for overhead at small resolutions.
-  uint32_t size = CalcBufferSize(kI420, width, height) + 100;
-
-  // allocate memory for encoded image
-  if (encoded_image_._buffer != NULL) {
-    delete [] encoded_image_._buffer;
-  }
-
-  encoded_image_._size = size;
-  encoded_image_._buffer = new uint8_t[size];
-
-  encoded_image_._encodedWidth = width;
-  encoded_image_._encodedHeight = height;
 
   frame_width_ = width;
   frame_height_ = height;
