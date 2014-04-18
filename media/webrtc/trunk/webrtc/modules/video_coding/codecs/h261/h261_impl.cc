@@ -186,10 +186,9 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
     frame_type = (*frame_types)[0];
   }
 
+  bool capture_size_changed = false;
   if (input_image.width() != capture_width_ ||
-      input_image.height() != capture_height_ ||
-      encoding_size_changed_) {
-
+      input_image.height() != capture_height_) {
     capture_width_ = input_image.width();
     capture_height_ = input_image.height();
 
@@ -197,15 +196,56 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
       delete [] temp_buffer_;
     }
     temp_buffer_ = new uint8_t[capture_width_ * capture_height_ * 3 / 2];
+  }
 
-    double crop_aspect_ratio = (double) CIF_WIDTH / CIF_HEIGHT;
+  if (bitrate_changed_) {
+    double new_bits_per_frame = bitrate_kbit_ / (double) frame_rate_;
+
+    int retVal;
+    if (capture_width_ < CIF_WIDTH ||
+        capture_height_ < CIF_HEIGHT ||
+        new_bits_per_frame < 20) {
+      video_quality_ = GetQCIFLevel(new_bits_per_frame);
+      retVal = SetQCIFSize();
+    } else {
+      video_quality_ = GetCIFLevel(new_bits_per_frame);
+      retVal = SetCIFSize();
+    }
+    if (retVal != WEBRTC_VIDEO_CODEC_OK) {
+      return retVal;
+    }
+    encoder_->SetQualityLevel(video_quality_);
+  }
+
+  if (capture_size_changed ||
+      encoding_size_changed_) {
+    double crop_aspect_ratio = (double) frame_width_ / frame_height_;
     crop_width_ = capture_height_ * crop_aspect_ratio;
     crop_height_ = capture_height_;
 
     if (crop_width_ > capture_width_) {
       // In case input_image is narrower than CIF we crop the height instead
       crop_width_ = capture_width_;
-      crop_height_ = capture_width_ * crop_aspect_ratio;
+      crop_height_ = capture_width_ / crop_aspect_ratio;
+    }
+
+    std::cerr << "Input size is " << capture_width_ << "x" << capture_height_ << std::endl;
+    std::cerr << "Cropping size is " << crop_width_ << "x" << crop_height_ << std::endl;
+    std::cerr << "Target size is " << frame_width_ << "x" << frame_height_ << std::endl;
+
+    if ((double) capture_width_ / capture_height_ == crop_aspect_ratio) {
+      cropping_required_ = false;
+    } else {
+      cropping_required_ = true;
+      std::cerr << "ENCODER, Cropping required. DOH" << std::endl;
+    }
+
+    if (crop_width_ == frame_width_ &&
+        crop_height_ == frame_height_) {
+      scaling_required_ = false;
+    } else {
+      scaling_required_ = true;
+      std::cerr << "ENCODER, Scaling required. Double DOH" << std::endl;
     }
 
     cropped_image_.CreateEmptyFrame(crop_width_, crop_height_,
@@ -225,17 +265,29 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
     }
   }
 
-  // XXX(pehrsons) Copying occurs here
-  const uint8_t* buffer = PackI420Frame(input_image);
-  ConvertToI420(kI420, buffer,
-                (capture_width_ - crop_width_) / 2,
-                (capture_height_ - crop_height_) / 2,
-                capture_width_, capture_height_,
-                capture_width_ * capture_height_ * 3 / 2,
-                kRotateNone, &cropped_image_);
+  const I420VideoFrame* cropped_image;
+  if (cropping_required_) {
+    // XXX(pehrsons) Copying occurs here
+    const uint8_t* buffer = PackI420Frame(input_image);
+    ConvertToI420(kI420, buffer,
+                  (capture_width_ - crop_width_) / 2,
+                  (capture_height_ - crop_height_) / 2,
+                  capture_width_, capture_height_,
+                  capture_width_ * capture_height_ * 3 / 2,
+                  kRotateNone, &cropped_image_);
+    cropped_image = &cropped_image_;
+  } else {
+    cropped_image = &input_image;
+  }
 
-  if (scaler_.Scale(cropped_image_, &scaled_image_) != 0) {
-    return WEBRTC_VIDEO_CODEC_ERROR;
+  const I420VideoFrame* scaled_image;
+  if (scaling_required_) {
+    if (scaler_.Scale(*cropped_image, &scaled_image_) != 0) {
+      return WEBRTC_VIDEO_CODEC_ERROR;
+    }
+    scaled_image = &scaled_image_;
+  } else {
+    scaled_image = cropped_image;
   }
 
   {
@@ -243,7 +295,7 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
     assert(cur_dest && "H261 FramePtr null check");
 
   // XXX(pehrsons) Copying occurs here
-    const uint8_t* packed_buffer = PackI420Frame(scaled_image_);
+    const uint8_t* packed_buffer = PackI420Frame(*scaled_image);
     memcpy(cur_dest, packed_buffer, frame_width_ * frame_height_ * 3 / 2);
   }
 
@@ -287,6 +339,7 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
   }
 
   encoding_size_changed_ = false;
+  bitrate_changed_ = false;
 
   return WEBRTC_VIDEO_CODEC_OK;
 }
@@ -340,24 +393,10 @@ int H261EncoderImpl::SetCIFSize() {
 }
 
 int H261EncoderImpl::SetRates(uint32_t new_bitrate_kbit, uint32_t frame_rate) {
-  double new_bits_per_frame = new_bitrate_kbit / (double) frame_rate;
-
   std::cerr << "H261 Encoder !! Current framerate = " << frame_rate << std::endl;
-
-  int retVal;
-  if (new_bits_per_frame < 20) {
-    video_quality_ = GetQCIFLevel(new_bits_per_frame);
-    retVal = SetQCIFSize();
-  } else {
-    video_quality_ = GetCIFLevel(new_bits_per_frame);
-    retVal = SetCIFSize();
-  }
-
-  if (retVal != WEBRTC_VIDEO_CODEC_OK) {
-    return retVal;
-  }
-
-  encoder_->SetQualityLevel(video_quality_);
+  bitrate_kbit_ = new_bitrate_kbit;
+  frame_rate_ = frame_rate;
+  bitrate_changed_ = true;
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
@@ -448,7 +487,7 @@ int H261DecoderImpl::ReportDecodedFrame() {
   if (decoded_image_.CreateFrame(y_size, y_src,
                                  u_size, u_src,
                                  v_size, v_src,
-                                 decoder_->width(), decoder_->height(),
+                                 frame_width_, frame_height_,
                                  y_stride,
                                  u_stride,
                                  v_stride) != 0) {

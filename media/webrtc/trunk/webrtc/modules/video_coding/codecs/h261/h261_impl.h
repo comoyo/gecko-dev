@@ -112,6 +112,9 @@ class H261EncoderImpl : public H261Encoder {
   I420VideoFrame scaled_image_;
   I420VideoFrame cropped_image_;
   uint8_t* temp_buffer_;
+  bool cropping_required_, scaling_required_;
+  uint32_t bitrate_kbit_, frame_rate_;
+  bool bitrate_changed_;
 };  // end of H261EncoderImpl class
 
 
