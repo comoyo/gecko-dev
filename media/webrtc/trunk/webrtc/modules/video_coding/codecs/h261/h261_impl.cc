@@ -127,6 +127,8 @@ int H261EncoderImpl::InitEncode(const VideoCodec* inst,
   force_iframe_ = false;
   capture_width_ = capture_height_ = 0;
   video_quality_ = DEFAULT_ENCODER_QUALITY;
+  num_frames_prev_second_render_ = 0;
+  prev_second_render_time_ms_ = 0;
 
   encoder_ = new P64Encoder(DEFAULT_ENCODER_QUALITY, DEFAULT_FILL_LEVEL);
   if ((retVal = SetRates(codec_.startBitrate, 15)) != WEBRTC_VIDEO_CODEC_OK) {
@@ -338,6 +340,13 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
                frame_type);
   }
 
+  ++num_frames_prev_second_render_;
+  if (input_image.render_time_ms() / 1000 > prev_second_render_time_ms_ / 1000) {
+    std::cerr << "H261 Encoder !! Current framerate = " << num_frames_prev_second_render_ << std::endl;
+    num_frames_prev_second_render_ = 0;
+    prev_second_render_time_ms_ = input_image.render_time_ms();
+  }
+
   encoding_size_changed_ = false;
   bitrate_changed_ = false;
 
@@ -393,7 +402,6 @@ int H261EncoderImpl::SetCIFSize() {
 }
 
 int H261EncoderImpl::SetRates(uint32_t new_bitrate_kbit, uint32_t frame_rate) {
-  std::cerr << "H261 Encoder !! Current framerate = " << frame_rate << std::endl;
   bitrate_kbit_ = new_bitrate_kbit;
   frame_rate_ = frame_rate;
   bitrate_changed_ = true;

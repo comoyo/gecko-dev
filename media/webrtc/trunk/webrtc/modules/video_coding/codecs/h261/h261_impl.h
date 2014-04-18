@@ -115,6 +115,9 @@ class H261EncoderImpl : public H261Encoder {
   bool cropping_required_, scaling_required_;
   uint32_t bitrate_kbit_, frame_rate_;
   bool bitrate_changed_;
+
+  int64_t prev_second_render_time_ms_;
+  int num_frames_prev_second_render_;
 };  // end of H261EncoderImpl class
 
 
