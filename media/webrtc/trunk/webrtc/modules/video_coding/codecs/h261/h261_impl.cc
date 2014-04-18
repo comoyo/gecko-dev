@@ -20,6 +20,38 @@
 
 namespace webrtc {
 
+static int GetQCIFLevel(uint32_t new_bits_per_frame) {
+  // Based on the following data:
+  // http://www.wolframalpha.com/input/?i=quadratic+fit+%7B%7B1300%2F30%2C+1%7D%2C+%7B1000%2F30%2C+5%7D%2C+%7B640%2F30%2C+10%7D%2C+%7B500%2F30%2C+15%7D%2C+%7B400%2F30%2C+20%7D%2C+%7B320%2F30%2C+25%7D%2C+%7B260%2F30%2C+31%7D%7D
+
+  if (new_bits_per_frame > 67) {
+    return 1;
+  }
+
+  double x = new_bits_per_frame;
+  double level = 0.0304503 * std::pow(x, 2) - 2.3572 * x + 47.1143;
+  int result = round(level);
+  result = std::min(result, 31);
+  result = std::max(result, 1);
+  return result;
+}
+
+static int GetCIFLevel(uint32_t new_bits_per_frame) {
+  // Based on the following data:
+  // http://www.wolframalpha.com/input/?i=quadratic+fit+%7B%7B2000%2F30%2C+1%7D%2C+%7B1600%2F30%2C+5%7D%2C+%7B1300%2F30%2C+10%7D%2C+%7B800%2F30%2C+15%7D%2C+%7B640%2F30%2C+20%7D%2C+%7B480%2F30%2C+25%7D%2C+%7B400%2F30%2C+31%7D%7D
+
+  if (new_bits_per_frame > 67) {
+    return 1;
+  }
+
+  double x = new_bits_per_frame;
+  double level = 0.00802894 * std::pow(x, 2) - 1.13647 * x + 42.0093;
+  int result = round(level);
+  result = std::min(result, 31);
+  result = std::max(result, 1);
+  return result;
+}
+
 H261Encoder* H261Encoder::Create() {
   return new H261EncoderImpl();
 }
@@ -265,38 +297,6 @@ int H261EncoderImpl::RegisterEncodeCompleteCallback(EncodedImageCallback* callba
 
 int H261EncoderImpl::SetChannelParameters(uint32_t packet_loss, int rtt) {
   return WEBRTC_VIDEO_CODEC_OK;
-}
-
-static int GetQCIFLevel(uint32_t new_bits_per_frame) {
-  // Based on the following data:
-  // http://www.wolframalpha.com/input/?i=quadratic+fit+%7B%7B1300%2F30%2C+1%7D%2C+%7B1000%2F30%2C+5%7D%2C+%7B640%2F30%2C+10%7D%2C+%7B500%2F30%2C+15%7D%2C+%7B400%2F30%2C+20%7D%2C+%7B320%2F30%2C+25%7D%2C+%7B260%2F30%2C+31%7D%7D
-
-  if (new_bits_per_frame > 67) {
-    return 1;
-  }
-
-  double x = new_bits_per_frame;
-  double level = 0.0304503 * std::pow(x, 2) - 2.3572 * x + 47.1143;
-  int result = round(level);
-  result = std::min(result, 31);
-  result = std::max(result, 1);
-  return result;
-}
-
-static int GetCIFLevel(uint32_t new_bits_per_frame) {
-  // Based on the following data:
-  // http://www.wolframalpha.com/input/?i=quadratic+fit+%7B%7B2000%2F30%2C+1%7D%2C+%7B1600%2F30%2C+5%7D%2C+%7B1300%2F30%2C+10%7D%2C+%7B800%2F30%2C+15%7D%2C+%7B640%2F30%2C+20%7D%2C+%7B480%2F30%2C+25%7D%2C+%7B400%2F30%2C+31%7D%7D
-
-  if (new_bits_per_frame > 67) {
-    return 1;
-  }
-
-  double x = new_bits_per_frame;
-  double level = 0.00802894 * std::pow(x, 2) - 1.13647 * x + 42.0093;
-  int result = round(level);
-  result = std::min(result, 31);
-  result = std::max(result, 1);
-  return result;
 }
 
 int H261EncoderImpl::SetSize(int width, int height) {
