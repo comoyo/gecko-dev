@@ -13,6 +13,7 @@
 #include "webrtc/system_wrappers/interface/tick_util.h"
 
 #define VD_MIN(a, b) ((a) < (b)) ? (a) : (b)
+#define MAX_FRAME_RATE 1000
 
 namespace webrtc {
 
@@ -23,7 +24,7 @@ _dropCount(0),
 _keepCount(0),
 _targetFrameRate(30),
 _incomingFrameRate(0.0f),
-_maxFrameRate(30),
+_maxFrameRate(MAX_FRAME_RATE),
 _incomingFrameTimes(),
 _enableTemporalDecimation(true)
 {
@@ -43,7 +44,7 @@ VPMVideoDecimator::Reset()
     _keepCount = 0;
     _targetFrameRate = 30;
     _incomingFrameRate = 0.0f;
-    _maxFrameRate = 30;
+    _maxFrameRate = MAX_FRAME_RATE;
     memset(_incomingFrameTimes, 0, sizeof(_incomingFrameTimes));
     _enableTemporalDecimation = true;
 }

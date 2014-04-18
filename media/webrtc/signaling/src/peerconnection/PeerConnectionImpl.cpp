@@ -491,6 +491,7 @@ PeerConnectionImpl::PeerConnectionImpl(const GlobalObject* aGlobal)
   MOZ_ASSERT(NS_IsMainThread());
   if (aGlobal) {
     mWindow = do_QueryInterface(aGlobal->GetAsSupports());
+    printf("\n\n\n\n%s %d window %p\n", __FILE__, __LINE__, mWindow.get());
   }
 #endif
   MOZ_ASSERT(mInternal);
@@ -738,6 +739,7 @@ PeerConnectionImpl::Initialize(PeerConnectionObserver& aObserver,
   mWindow = aWindow;
   NS_ENSURE_STATE(mWindow);
 
+  printf("\n\n\n\n%s %d window %p\n", __FILE__, __LINE__, mWindow.get());
 #endif // MOZILLA_INTERNAL_API
 
   PRTime timestamp = PR_Now();

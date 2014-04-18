@@ -54,6 +54,7 @@
         '../../../ipc/chromium/src/base/third_party/nspr',
         '../../../xpcom/base',
         '../../../dom/base',
+        '../../../dom/media',
         '../../../content/media',
         '../../../media/mtransport',
         '../trunk',

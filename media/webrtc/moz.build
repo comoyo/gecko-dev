@@ -199,18 +199,17 @@ if CONFIG['MOZ_WEBRTC_SIGNALING']:
     GYP_DIRS['signaling'].non_unified_sources += signaling_non_unified_sources
     GYP_DIRS['signaling'].non_unified_sources += signaling_non_unified_sources_2
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'gonk':
-    GYP_DIRS += ['trunk/testing']
-    GYP_DIRS['trunk/testing'].input = 'trunk/testing/gtest.gyp'
-    GYP_DIRS['trunk/testing'].variables = gyp_vars
-    GYP_DIRS['trunk/testing'].non_unified_sources += webrtc_non_unified_sources
+GYP_DIRS += ['trunk/testing']
+GYP_DIRS['trunk/testing'].input = 'trunk/testing/gtest.gyp'
+GYP_DIRS['trunk/testing'].variables = gyp_vars
+GYP_DIRS['trunk/testing'].non_unified_sources += webrtc_non_unified_sources
 
-    if CONFIG['MOZ_WEBRTC_SIGNALING']:
-        GYP_DIRS += ['signalingtest']
-        GYP_DIRS['signalingtest'].input = 'signaling/signaling.gyp'
-        GYP_DIRS['signalingtest'].variables = gyp_vars.copy()
-        GYP_DIRS['signalingtest'].variables.update(
-            build_for_test=1
-        )
-        GYP_DIRS['signalingtest'].non_unified_sources += signaling_non_unified_sources
-        GYP_DIRS['signalingtest'].non_unified_sources += signaling_non_unified_sources_2
+if CONFIG['MOZ_WEBRTC_SIGNALING']:
+    GYP_DIRS += ['signalingtest']
+    GYP_DIRS['signalingtest'].input = 'signaling/signaling.gyp'
+    GYP_DIRS['signalingtest'].variables = gyp_vars.copy()
+    GYP_DIRS['signalingtest'].variables.update(
+        build_for_test=1
+    )
+    GYP_DIRS['signalingtest'].non_unified_sources += signaling_non_unified_sources
+    GYP_DIRS['signalingtest'].non_unified_sources += signaling_non_unified_sources_2

@@ -192,7 +192,7 @@ if CONFIG['ENABLE_TESTS']:
         'testing/modules',
     ])
 
-    if CONFIG['MOZ_WEBRTC'] and CONFIG['MOZ_WIDGET_TOOLKIT'] != 'gonk':
+    if CONFIG['MOZ_WEBRTC']:
             add_tier_dir('platform', [
                 'media/webrtc/signaling/test',
                 'media/mtransport/test',

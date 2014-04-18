@@ -14,6 +14,8 @@
 
 #include "LoadManager.h"
 
+#include "nsIPrefService.h"
+#include "nsServiceManagerUtils.h"
 #include "webrtc/video_engine/include/vie_errors.h"
 
 #ifdef MOZ_WIDGET_ANDROID
@@ -1062,6 +1064,26 @@ WebrtcVideoConduit::CodecConfigToWebRTCCodec(const VideoCodecConfig* codecInfo,
                                               webrtc::VideoCodec& cinst)
 {
   cinst.plType  = codecInfo->mType;
+
+  nsresult rv;
+  nsCOMPtr<nsIPrefService> prefs = do_GetService("@mozilla.org/preferences-service;1", &rv);
+  if (NS_SUCCEEDED(rv)) {
+    nsCOMPtr<nsIPrefBranch> branch = do_QueryInterface(prefs);
+
+    if (branch) {
+      bool enableBenchmark = false;
+
+      branch->GetBoolPref("media.navigator.video.benchmark", &enableBenchmark);
+      if (enableBenchmark) {
+        branch->GetIntPref("media.navigator.video.minBitrate", (int32_t*)&cinst.minBitrate);
+        branch->GetIntPref("media.navigator.video.startBitrate", (int32_t*)&cinst.startBitrate);
+        branch->GetIntPref("media.navigator.video.maxBitrate", (int32_t*)&cinst.maxBitrate);
+        branch->GetIntPref("media.navigator.video.maxFramerate", (int32_t*)&cinst.maxFramerate);
+        return;
+      }
+    }
+  }
+
   // leave width/height alone; they'll be overridden on the first frame
   if (codecInfo->mMaxFrameRate > 0)
   {

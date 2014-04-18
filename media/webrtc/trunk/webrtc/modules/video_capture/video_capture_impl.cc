@@ -12,6 +12,8 @@
 
 #include <stdlib.h>
 
+#include "nsDebug.h"
+
 #include "webrtc/common_video/libyuv/include/webrtc_libyuv.h"
 #include "webrtc/modules/interface/module_common_types.h"
 #include "webrtc/modules/video_capture/video_capture_config.h"
@@ -247,7 +249,7 @@ int32_t VideoCaptureImpl::IncomingFrame(
     if (frameInfo.codecType == kVideoCodecUnknown)
     {
         // Not encoded, convert to I420.
-        const VideoType commonVideoType =
+        VideoType commonVideoType =
                   RawVideoTypeToCommonVideoVideoType(frameInfo.rawType);
 
         if (frameInfo.rawType != kVideoMJPEG &&
@@ -259,15 +261,21 @@ int32_t VideoCaptureImpl::IncomingFrame(
             return -1;
         }
 
-        int stride_y = width;
-        int stride_uv = (width + 1) / 2;
         int target_width = width;
         int target_height = height;
+
+        printf_stderr("change rotate \n");
+        _rotateFrame = kRotate90;
+
+        printf_stderr("change pixel format\n");
+        commonVideoType = kNV21;
         // Rotating resolution when for 90/270 degree rotations.
         if (_rotateFrame == kRotate90 || _rotateFrame == kRotate270)  {
           target_width = abs(height);
           target_height = width;
         }
+        int stride_y = target_width;
+        int stride_uv = (target_width + 1) / 2;
         // TODO(mikhal): Update correct aligned stride values.
         //Calc16ByteAlignedStride(target_width, &stride_y, &stride_uv);
         // Setting absolute height (in case it was negative).

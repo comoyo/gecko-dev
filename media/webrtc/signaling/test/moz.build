@@ -4,12 +4,13 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-if CONFIG['OS_TARGET'] != 'WINNT' and CONFIG['MOZ_WIDGET_TOOLKIT'] != 'gonk':
+if CONFIG['OS_TARGET'] != 'WINNT':
     CPP_UNIT_TESTS += [
         'mediaconduit_unittests.cpp',
         'mediapipeline_unittest.cpp',
         'sdp_unittests.cpp',
         'signaling_unittests.cpp',
+        'video_benchmark.cpp',
     ]
 include('/ipc/chromium/chromium-config.mozbuild')
 

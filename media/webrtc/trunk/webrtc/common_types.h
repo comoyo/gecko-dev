@@ -567,7 +567,7 @@ struct VideoCodec
     unsigned int        startBitrate;  // kilobits/sec.
     unsigned int        maxBitrate;  // kilobits/sec.
     unsigned int        minBitrate;  // kilobits/sec.
-    unsigned char       maxFramerate;
+    unsigned int       maxFramerate;
 
     VideoCodecUnion     codecSpecific;
 
