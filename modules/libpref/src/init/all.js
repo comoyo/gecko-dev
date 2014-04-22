@@ -236,8 +236,8 @@ pref("media.navigator.load_adapt.low_load","0.40");
 pref("media.navigator.video.default_fps",30);
 pref("media.navigator.video.default_minfps",10);
 #ifdef MOZ_WIDGET_GONK
-pref("media.navigator.video.default_width",320);
-pref("media.navigator.video.default_height",240);
+pref("media.navigator.video.default_width",176);
+pref("media.navigator.video.default_height",144);
 pref("media.peerconnection.enabled", true);
 pref("media.peerconnection.video.enabled", true);
 pref("media.navigator.video.max_fs", 1200); // 640x480 == 1200mb
