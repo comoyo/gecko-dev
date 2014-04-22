@@ -259,7 +259,7 @@ nsresult PeerConnectionCtx::Initialize() {
   // FIX - Get this list from MediaEngine instead
   int codecMask = 0;
   codecMask |= VCM_CODEC_RESOURCE_G711;
-  codecMask |= VCM_CODEC_RESOURCE_OPUS;
+  //XXX codecMask |= VCM_CODEC_RESOURCE_OPUS;
   //codecMask |= VCM_CODEC_RESOURCE_LINEAR;
   //codecMask |= VCM_CODEC_RESOURCE_G722;
   //codecMask |= VCM_CODEC_RESOURCE_iLBC;
