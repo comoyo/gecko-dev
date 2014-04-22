@@ -148,7 +148,8 @@
         'enable_android_opensl%': 0,
       }, {
         'include_tests%': 1,
-        'enable_tracing%': 1,
+        # XXX 'enable_tracing%': 1,
+        'enable_tracing%': 0,
         # Switch between Android audio device OpenSL ES implementation
         # and Java Implementation
         'enable_android_opensl%': 0,
