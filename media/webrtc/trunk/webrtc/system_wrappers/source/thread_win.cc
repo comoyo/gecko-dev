@@ -18,6 +18,8 @@
 #include "webrtc/system_wrappers/interface/trace.h"
 #include "webrtc/system_wrappers/source/set_thread_name_win.h"
 
+#include "GeckoProfiler.h"
+
 namespace webrtc {
 
 ThreadWindows::ThreadWindows(ThreadRunFunction func, ThreadObj obj,
@@ -159,10 +161,14 @@ void ThreadWindows::Run() {
   if (set_thread_name_) {
     WEBRTC_TRACE(kTraceStateInfo, kTraceUtility, id_,
                  "Thread with name:%s started ", name_);
+    char aLocal;
+    profiler_register_thread(name_, &aLocal);
     SetThreadName(-1, name_); // -1, set thread name for the calling thread.
   } else {
     WEBRTC_TRACE(kTraceStateInfo, kTraceUtility, id_,
                  "Thread without name started");
+    char aLocal;
+    profiler_register_thread("Unnamed thread", &aLocal);
   }
 
   do {
@@ -182,6 +188,8 @@ void ThreadWindows::Run() {
     WEBRTC_TRACE(kTraceStateInfo, kTraceUtility, id_,
                  "Thread without name stopped");
   }
+
+  profiler_unregister_thread();
 
   critsect_stop_->Enter();
 

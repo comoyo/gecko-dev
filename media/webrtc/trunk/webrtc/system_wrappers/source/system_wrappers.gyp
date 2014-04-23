@@ -16,6 +16,9 @@
         'spreadsortlib',
         '../interface',
       ],
+      'cflags_mozilla': [
+        '$(NSPR_CFLAGS)',
+      ],
       'direct_dependent_settings': {
         'include_dirs': [
           '../interface',

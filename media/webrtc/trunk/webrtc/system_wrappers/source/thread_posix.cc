@@ -74,6 +74,8 @@
 #include "webrtc/system_wrappers/interface/sleep.h"
 #include "webrtc/system_wrappers/interface/trace.h"
 
+#include "GeckoProfiler.h"
+
 namespace webrtc {
 
 int ConvertToSystemPriority(ThreadPriority priority, int min_prio,
@@ -369,9 +371,13 @@ void ThreadPosix::Run() {
 #endif
     WEBRTC_TRACE(kTraceStateInfo, kTraceUtility, -1,
                  "Thread with name:%s started ", name_);
+    char aLocal;
+    profiler_register_thread(name_, &aLocal);
   } else {
     WEBRTC_TRACE(kTraceStateInfo, kTraceUtility, -1,
                  "Thread without name started");
+    char aLocal;
+    profiler_register_thread("Unnamed thread", &aLocal);
   }
   bool alive = true;
   bool run = true;
@@ -396,6 +402,9 @@ void ThreadPosix::Run() {
     WEBRTC_TRACE(kTraceStateInfo, kTraceUtility, -1,
                  "Thread without name stopped");
   }
+
+  profiler_unregister_thread();
+
   {
     CriticalSectionScoped cs(crit_state_);
     dead_ = true;
