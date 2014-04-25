@@ -285,7 +285,8 @@ int64_t AudioStream::GetWritten()
 {
   MOZ_ASSERT(sPreferredSampleRate,
              "sPreferredSampleRate has not been initialized!");
-  return sPreferredSampleRate;
+  return 16000;
+  // XXX return sPreferredSampleRate;
 }
 
 static void SetUint16LE(uint8_t* aDest, uint16_t aValue)
