@@ -938,6 +938,7 @@ void
 nsDisplayListBuilder::MarkFramesForDisplayList(nsIFrame* aDirtyFrame,
                                                const nsFrameList& aFrames,
                                                const nsRect& aDirtyRect) {
+  mFramesMarkedForDisplay.SetCapacity(mFramesMarkedForDisplay.Length() + aFrames.GetLength());
   for (nsFrameList::Enumerator e(aFrames); !e.AtEnd(); e.Next()) {
     mFramesMarkedForDisplay.AppendElement(e.get());
     MarkOutOfFlowFrameForDisplay(aDirtyFrame, e.get(), aDirtyRect);
@@ -2324,18 +2325,26 @@ void nsDisplayBackgroundImage::ComputeInvalidationRegion(nsDisplayListBuilder* a
     // Positioning area changed in a way that could cause everything to change,
     // so invalidate everything (both old and new painting areas).
     aInvalidRegion->Or(bounds, geometry->mBounds);
+
+    if (positioningArea.Size() != geometry->mPositioningArea.Size()) {
+      NotifyRenderingChanged();
+    }
     return;
   }
   if (aBuilder->ShouldSyncDecodeImages()) {
     if (mBackgroundStyle &&
         !nsCSSRendering::IsBackgroundImageDecodedForStyleContextAndLayer(mBackgroundStyle, mLayer)) {
       aInvalidRegion->Or(*aInvalidRegion, bounds);
+
+      NotifyRenderingChanged();
     }
   }
   if (!bounds.IsEqualInterior(geometry->mBounds)) {
     // Positioning area is unchanged, so invalidate just the change in the
     // painting area.
     aInvalidRegion->Xor(bounds, geometry->mBounds);
+
+    NotifyRenderingChanged();
   }
 }
 
@@ -4637,26 +4646,26 @@ nsDisplayTransform::ShouldPrerenderTransformedContent(nsDisplayListBuilder* aBui
   }
 
   nsSize refSize = aBuilder->RootReferenceFrame()->GetSize();
-  // Only prerender if the transformed frame's size is <= the
-  // reference frame size (~viewport), allowing a 1/8th fuzz factor
-  // for shadows, borders, etc.
+  // Only prerender if the transformed frame's size (in the reference
+  // frames coordinate space) is <= the reference frame size (~viewport),
+  // allowing a 1/8th fuzz factor for shadows, borders, etc.
   refSize += nsSize(refSize.width / 8, refSize.height / 8);
-  nsSize frameSize = aFrame->GetVisualOverflowRectRelativeToSelf().Size();
-  if (frameSize <= refSize) {
-    // Bug 717521 - pre-render max 4096 x 4096 device pixels.
-    nscoord max = aFrame->PresContext()->DevPixelsToAppUnits(4096);
-    nsRect visual = aFrame->GetVisualOverflowRect();
-    if (visual.width <= max && visual.height <= max) {
-      return true;
-    }
+  nsRect frameRect = aFrame->GetVisualOverflowRectRelativeToSelf();
+
+  frameRect =
+    nsLayoutUtils::TransformFrameRectToAncestor(aFrame, frameRect,
+                                                aBuilder->RootReferenceFrame());
+
+  if (frameRect.Size() <= refSize) {
+    return true;
   }
 
   if (aLogAnimations) {
     nsCString message;
     message.AppendLiteral("Performance warning: Async animation disabled because frame size (");
-    message.AppendInt(nsPresContext::AppUnitsToIntCSSPixels(frameSize.width));
+    message.AppendInt(nsPresContext::AppUnitsToIntCSSPixels(frameRect.width));
     message.AppendLiteral(", ");
-    message.AppendInt(nsPresContext::AppUnitsToIntCSSPixels(frameSize.height));
+    message.AppendInt(nsPresContext::AppUnitsToIntCSSPixels(frameRect.height));
     message.AppendLiteral(") is bigger than the viewport (");
     message.AppendInt(nsPresContext::AppUnitsToIntCSSPixels(refSize.width));
     message.AppendLiteral(", ");
@@ -5095,6 +5104,36 @@ nsRect nsDisplayTransform::TransformRectOut(const nsRect &aUntransformedBounds,
     (aUntransformedBounds,
      GetResultingTransformMatrix(aFrame, aOrigin, factor, aBoundsOverride),
      factor);
+}
+
+bool nsDisplayTransform::UntransformRect(const nsRect &aTransformedBounds,
+                                         const nsRect &aChildBounds,
+                                         const nsIFrame* aFrame,
+                                         const nsPoint &aOrigin,
+                                         nsRect *aOutRect)
+{
+  NS_PRECONDITION(aFrame, "Can't take the transform based on a null frame!");
+
+  float factor = aFrame->PresContext()->AppUnitsPerDevPixel();
+
+  gfx3DMatrix transform = GetResultingTransformMatrix(aFrame, aOrigin, factor, nullptr);
+  if (transform.IsSingular()) {
+    return false;
+  }
+
+  gfxRect result(NSAppUnitsToFloatPixels(aTransformedBounds.x, factor),
+                 NSAppUnitsToFloatPixels(aTransformedBounds.y, factor),
+                 NSAppUnitsToFloatPixels(aTransformedBounds.width, factor),
+                 NSAppUnitsToFloatPixels(aTransformedBounds.height, factor));
+
+  gfxRect childGfxBounds(NSAppUnitsToFloatPixels(aChildBounds.x, factor),
+                         NSAppUnitsToFloatPixels(aChildBounds.y, factor),
+                         NSAppUnitsToFloatPixels(aChildBounds.width, factor),
+                         NSAppUnitsToFloatPixels(aChildBounds.height, factor));
+
+  result = transform.UntransformBounds(result, childGfxBounds);
+  *aOutRect = nsLayoutUtils::RoundGfxRectToAppRect(result, factor);
+  return true;
 }
 
 bool nsDisplayTransform::UntransformVisibleRect(nsDisplayListBuilder* aBuilder,

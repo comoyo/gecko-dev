@@ -738,7 +738,7 @@ protected:
   bool ParseTextAlignLast(nsCSSValue& aValue);
   bool ParseTextDecoration();
   bool ParseTextDecorationLine(nsCSSValue& aValue);
-  bool ParseTextCombineHorizontal(nsCSSValue& aValue);
+  bool ParseTextCombineUpright(nsCSSValue& aValue);
   bool ParseTextOverflow(nsCSSValue& aValue);
   bool ParseTouchAction(nsCSSValue& aValue);
 
@@ -7487,8 +7487,11 @@ CSSParserImpl::ParseGridTemplateAreasLine(const nsAutoString& aInput,
   nsCSSGridTemplateAreaToken token;
   css::GridNamedArea* currentArea = nullptr;
   uint32_t row = aAreas->NRows();
-  uint32_t column;
-  for (column = 1; scanner.Next(token); column++) {
+  // Column numbers starts at 1, but we might not have any, eg
+  // grid-template-areas:""; which will result in mNColumns == 0.
+  uint32_t column = 0;
+  while (scanner.Next(token)) {
+    ++column;
     if (token.isTrash) {
       return false;
     }
@@ -7540,7 +7543,7 @@ CSSParserImpl::ParseGridTemplateAreasLine(const nsAutoString& aInput,
       }
     }
   }
-  if (currentArea && currentArea->mColumnEnd != column) {
+  if (currentArea && currentArea->mColumnEnd != column + 1) {
     NS_ASSERTION(currentArea->mRowStart != row,
                  "Inconsistent column end for the first row of a named area.");
     // Not a rectangle
@@ -9322,8 +9325,8 @@ CSSParserImpl::ParseSingleValueProperty(nsCSSValue& aValue,
         return ParseTextAlignLast(aValue);
       case eCSSProperty_text_decoration_line:
         return ParseTextDecorationLine(aValue);
-      case eCSSProperty_text_combine_horizontal:
-        return ParseTextCombineHorizontal(aValue);
+      case eCSSProperty_text_combine_upright:
+        return ParseTextCombineUpright(aValue);
       case eCSSProperty_text_overflow:
         return ParseTextOverflow(aValue);
       case eCSSProperty_touch_action:
@@ -12405,8 +12408,10 @@ CSSParserImpl::ParseTextOverflow(nsCSSValue& aValue)
 bool
 CSSParserImpl::ParseTouchAction(nsCSSValue& aValue)
 {
-  if (!ParseVariant(aValue, VARIANT_HK | VARIANT_NONE | VARIANT_AUTO,
-                    nsCSSProps::kTouchActionKTable)) {
+  // Avaliable values of property touch-action:
+  // auto | none | [pan-x || pan-y] | manipulation
+
+  if (!ParseVariant(aValue, VARIANT_HK, nsCSSProps::kTouchActionKTable)) {
     return false;
   }
 
@@ -12426,6 +12431,13 @@ CSSParserImpl::ParseTouchAction(nsCSSValue& aValue)
       return false;
     }
 
+    // Auto and None and Manipulation is not allowed in conjunction with others.
+    if ((intValue | nextIntValue) & (NS_STYLE_TOUCH_ACTION_NONE |
+                                     NS_STYLE_TOUCH_ACTION_AUTO |
+                                     NS_STYLE_TOUCH_ACTION_MANIPULATION)) {
+      return false;
+    }
+
     aValue.SetIntValue(nextIntValue | intValue, eCSSUnit_Enumerated);
   }
 
@@ -12433,16 +12445,16 @@ CSSParserImpl::ParseTouchAction(nsCSSValue& aValue)
 }
 
 bool
-CSSParserImpl::ParseTextCombineHorizontal(nsCSSValue& aValue)
+CSSParserImpl::ParseTextCombineUpright(nsCSSValue& aValue)
 {
   if (!ParseVariant(aValue, VARIANT_HK,
-                    nsCSSProps::kTextCombineHorizontalKTable)) {
+                    nsCSSProps::kTextCombineUprightKTable)) {
     return false;
   }
 
   // if 'digits', need to check for an explicit number [2, 3, 4]
   if (eCSSUnit_Enumerated == aValue.GetUnit() &&
-      aValue.GetIntValue() == NS_STYLE_TEXT_COMBINE_HORIZ_DIGITS_2) {
+      aValue.GetIntValue() == NS_STYLE_TEXT_COMBINE_UPRIGHT_DIGITS_2) {
     if (!GetToken(true)) {
       return true;
     }
@@ -12451,11 +12463,11 @@ CSSParserImpl::ParseTextCombineHorizontal(nsCSSValue& aValue)
         case 2:  // already set, nothing to do
           break;
         case 3:
-          aValue.SetIntValue(NS_STYLE_TEXT_COMBINE_HORIZ_DIGITS_3,
+          aValue.SetIntValue(NS_STYLE_TEXT_COMBINE_UPRIGHT_DIGITS_3,
                              eCSSUnit_Enumerated);
           break;
         case 4:
-          aValue.SetIntValue(NS_STYLE_TEXT_COMBINE_HORIZ_DIGITS_4,
+          aValue.SetIntValue(NS_STYLE_TEXT_COMBINE_UPRIGHT_DIGITS_4,
                              eCSSUnit_Enumerated);
           break;
         default:
@@ -12554,8 +12566,13 @@ CSSParserImpl::ParseFunction(nsCSSKeyword aFunction,
 
   /* Read in a list of values as an array, failing if we can't or if
    * it's out of bounds.
+   *
+   * We reserve 16 entries in the foundValues array in order to avoid
+   * having to resize the array dynamically when parsing some well-formed
+   * functions.  The number 16 is coming from the number of arguments that
+   * matrix3d() accepts.
    */
-  InfallibleTArray<nsCSSValue> foundValues;
+  AutoInfallibleTArray<nsCSSValue, 16> foundValues;
   if (!ParseFunctionInternals(aAllowedTypes, aAllowedTypesAll, aMinElems,
                               aMaxElems, foundValues)) {
     return false;

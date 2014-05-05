@@ -29,6 +29,7 @@
 #include "mozilla/ipc/TestShellChild.h"
 #include "mozilla/layers/CompositorChild.h"
 #include "mozilla/layers/ImageBridgeChild.h"
+#include "mozilla/layers/SharedBufferManagerChild.h"
 #include "mozilla/layers/PCompositorChild.h"
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/Preferences.h"
@@ -51,7 +52,6 @@
 #include "nsIMemoryInfoDumper.h"
 #include "nsIMutable.h"
 #include "nsIObserverService.h"
-#include "nsIObserver.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsServiceManagerUtils.h"
 #include "nsStyleSheetService.h"
@@ -190,7 +190,7 @@ private:
     nsString mDMDDumpIdent;
 };
 
-NS_IMPL_ISUPPORTS1(MemoryReportRequestChild, nsIRunnable)
+NS_IMPL_ISUPPORTS(MemoryReportRequestChild, nsIRunnable)
 
 MemoryReportRequestChild::MemoryReportRequestChild(uint32_t aGeneration, const nsAString& aDMDDumpIdent)
 : mGeneration(aGeneration), mDMDDumpIdent(aDMDDumpIdent)
@@ -252,7 +252,7 @@ private:
     friend class ContentChild;
 };
 
-NS_IMPL_ISUPPORTS1(ConsoleListener, nsIConsoleListener)
+NS_IMPL_ISUPPORTS(ConsoleListener, nsIConsoleListener)
 
 NS_IMETHODIMP
 ConsoleListener::Observe(nsIConsoleMessage* aMessage)
@@ -333,7 +333,7 @@ SystemMessageHandledObserver::Observe(nsISupports* aSubject,
     return NS_OK;
 }
 
-NS_IMPL_ISUPPORTS1(SystemMessageHandledObserver, nsIObserver)
+NS_IMPL_ISUPPORTS(SystemMessageHandledObserver, nsIObserver)
 
 class BackgroundChildPrimer MOZ_FINAL :
   public nsIIPCBackgroundChildCreateCallback
@@ -361,7 +361,7 @@ private:
     }
 };
 
-NS_IMPL_ISUPPORTS1(BackgroundChildPrimer, nsIIPCBackgroundChildCreateCallback)
+NS_IMPL_ISUPPORTS(BackgroundChildPrimer, nsIIPCBackgroundChildCreateCallback)
 
 ContentChild* ContentChild::sSingleton;
 
@@ -603,7 +603,7 @@ public:
 private:
     const nsCString mProcess;
 };
-NS_IMPL_ISUPPORTS1(
+NS_IMPL_ISUPPORTS(
   MemoryReportCallback
 , nsIMemoryReporterCallback
 )
@@ -687,6 +687,13 @@ ContentChild::AllocPCompositorChild(mozilla::ipc::Transport* aTransport,
                                     base::ProcessId aOtherProcess)
 {
     return CompositorChild::Create(aTransport, aOtherProcess);
+}
+
+PSharedBufferManagerChild*
+ContentChild::AllocPSharedBufferManagerChild(mozilla::ipc::Transport* aTransport,
+                                              base::ProcessId aOtherProcess)
+{
+    return SharedBufferManagerChild::StartUpInChildProcess(aTransport, aOtherProcess);
 }
 
 PImageBridgeChild*
@@ -1282,6 +1289,8 @@ ContentChild::ActorDestroy(ActorDestroyReason why)
 
     mAlertObservers.Clear();
 
+    mIdleObservers.Clear();
+
     nsCOMPtr<nsIConsoleService> svc(do_GetService(NS_CONSOLESERVICE_CONTRACTID));
     if (svc) {
         svc->UnregisterListener(mConsoleListener);
@@ -1405,7 +1414,7 @@ ContentChild::RecvAddPermission(const IPC::Permission& permission)
 {
 #if MOZ_PERMISSIONS
   nsCOMPtr<nsIPermissionManager> permissionManagerIface =
-      do_GetService(NS_PERMISSIONMANAGER_CONTRACTID);
+      services::GetPermissionManager();
   nsPermissionManager* permissionManager =
       static_cast<nsPermissionManager*>(permissionManagerIface.get());
   NS_ABORT_IF_FALSE(permissionManager, 
@@ -1660,6 +1669,7 @@ ContentChild::AddIdleObserver(nsIObserver* aObserver, uint32_t aIdleTimeInS)
   // Make sure aObserver isn't released while we wait for the parent
   aObserver->AddRef();
   SendAddIdleObserver(reinterpret_cast<uint64_t>(aObserver), aIdleTimeInS);
+  mIdleObservers.PutEntry(aObserver);
 }
 
 void
@@ -1668,6 +1678,7 @@ ContentChild::RemoveIdleObserver(nsIObserver* aObserver, uint32_t aIdleTimeInS)
   MOZ_ASSERT(aObserver, "null idle observer");
   SendRemoveIdleObserver(reinterpret_cast<uint64_t>(aObserver), aIdleTimeInS);
   aObserver->Release();
+  mIdleObservers.RemoveEntry(aObserver);
 }
 
 bool
@@ -1676,7 +1687,11 @@ ContentChild::RecvNotifyIdleObserver(const uint64_t& aObserver,
                                      const nsString& aTimeStr)
 {
   nsIObserver* observer = reinterpret_cast<nsIObserver*>(aObserver);
-  observer->Observe(nullptr, aTopic.get(), aTimeStr.get());
+  if (mIdleObservers.Contains(observer)) {
+    observer->Observe(nullptr, aTopic.get(), aTimeStr.get());
+  } else {
+    NS_WARNING("Received notification for an idle observer that was removed.");
+  }
   return true;
 }
 

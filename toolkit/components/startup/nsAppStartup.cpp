@@ -43,6 +43,7 @@
 #undef GetStartupInfo
 #endif
 
+#include "mozilla/IOInterposer.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/StartupTimeline.h"
 
@@ -216,12 +217,12 @@ nsAppStartup::Init()
 // nsAppStartup->nsISupports
 //
 
-NS_IMPL_ISUPPORTS5(nsAppStartup,
-                              nsIAppStartup,
-                              nsIWindowCreator,
-                              nsIWindowCreator2,
-                              nsIObserver,
-                              nsISupportsWeakReference)
+NS_IMPL_ISUPPORTS(nsAppStartup,
+                  nsIAppStartup,
+                  nsIWindowCreator,
+                  nsIWindowCreator2,
+                  nsIObserver,
+                  nsISupportsWeakReference)
 
 
 //
@@ -696,7 +697,7 @@ nsAppStartup::Observe(nsISupports *aSubject,
     ExitLastWindowClosingSurvivalArea();
   } else if (!strcmp(aTopic, "sessionstore-windows-restored")) {
     StartupTimeline::Record(StartupTimeline::SESSION_RESTORED);
-    Telemetry::LeavingStartupStage();
+    IOInterposer::EnteringNextStage();
 #if defined(XP_WIN)
     if (mSessionWindowRestoredProbe) {
       mSessionWindowRestoredProbe->Trigger();
@@ -709,7 +710,7 @@ nsAppStartup::Observe(nsISupports *aSubject,
   } else if (!strcmp(aTopic, "sessionstore-init-started")) {
     StartupTimeline::Record(StartupTimeline::SESSION_RESTORE_INIT);
   } else if (!strcmp(aTopic, "xpcom-shutdown")) {
-    Telemetry::EnteringShutdownStage();
+    IOInterposer::EnteringNextStage();
 #if defined(XP_WIN)
     if (mXPCOMShutdownProbe) {
       mXPCOMShutdownProbe->Trigger();

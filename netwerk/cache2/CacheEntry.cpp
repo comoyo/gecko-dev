@@ -40,7 +40,7 @@ static uint32_t const ENTRY_NEEDS_REVALIDATION =
 static uint32_t const ENTRY_NOT_WANTED =
   nsICacheEntryOpenCallback::ENTRY_NOT_WANTED;
 
-NS_IMPL_ISUPPORTS1(CacheEntryHandle, nsICacheEntry)
+NS_IMPL_ISUPPORTS(CacheEntryHandle, nsICacheEntry)
 
 // CacheEntryHandle
 
@@ -149,10 +149,10 @@ nsresult CacheEntry::Callback::OnAvailThread(bool *aOnAvailThread) const
 
 // CacheEntry
 
-NS_IMPL_ISUPPORTS3(CacheEntry,
-                   nsICacheEntry,
-                   nsIRunnable,
-                   CacheFileListener)
+NS_IMPL_ISUPPORTS(CacheEntry,
+                  nsICacheEntry,
+                  nsIRunnable,
+                  CacheFileListener)
 
 CacheEntry::CacheEntry(const nsACString& aStorageID,
                        nsIURI* aURI,
@@ -1165,6 +1165,13 @@ NS_IMETHODIMP CacheEntry::SetMetaDataElement(const char * aKey, const char * aVa
   return mFile->SetElement(aKey, aValue);
 }
 
+NS_IMETHODIMP CacheEntry::VisitMetaData(nsICacheEntryMetaDataVisitor *aVisitor)
+{
+  NS_ENSURE_SUCCESS(mFileStatus, NS_ERROR_NOT_AVAILABLE);
+
+  return mFile->VisitMetaData(aVisitor);
+}
+
 NS_IMETHODIMP CacheEntry::MetaDataReady()
 {
   mozilla::MutexAutoLock lock(mLock);
@@ -1467,7 +1474,7 @@ void CacheEntry::BackgroundOp(uint32_t aOperations, bool aForceAsync)
     #endif
 
     // Half-life is dynamic, in seconds.
-     static double half_life = CacheObserver::HalfLifeSeconds();
+    static double half_life = CacheObserver::HalfLifeSeconds();
     // Must convert from seconds to milliseconds since PR_Now() gives usecs.
     static double const decay = (M_LN2 / half_life) / static_cast<double>(PR_USEC_PER_SEC);
 

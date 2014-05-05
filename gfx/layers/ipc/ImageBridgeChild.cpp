@@ -52,7 +52,6 @@ class Shmem;
 
 namespace layers {
 
-class PGrallocBufferChild;
 typedef std::vector<CompositableOperation> OpVector;
 
 struct CompositableTransaction
@@ -173,7 +172,6 @@ static void StopImageBridgeSync(ReentrantMonitor *aBarrier, bool *aDone)
   NS_ABORT_IF_FALSE(InImageBridgeChildThread(),
                     "Should be in ImageBridgeChild thread.");
   if (sImageBridgeChildSingleton) {
-
     sImageBridgeChildSingleton->SendStop();
   }
   *aDone = true;
@@ -205,44 +203,6 @@ static void CreateImageClientSync(RefPtr<ImageClient>* result,
   barrier->NotifyAll();
 }
 
-
-struct GrallocParam {
-  IntSize size;
-  uint32_t format;
-  uint32_t usage;
-  MaybeMagicGrallocBufferHandle* handle;
-  PGrallocBufferChild** child;
-
-  GrallocParam(const IntSize& aSize,
-               const uint32_t& aFormat,
-               const uint32_t& aUsage,
-               MaybeMagicGrallocBufferHandle* aHandle,
-               PGrallocBufferChild** aChild)
-    : size(aSize)
-    , format(aFormat)
-    , usage(aUsage)
-    , handle(aHandle)
-    , child(aChild)
-  {}
-};
-
-// dispatched function
-static void AllocGrallocBufferSync(const GrallocParam& aParam,
-                                   Monitor* aBarrier,
-                                   bool* aDone)
-{
-  MonitorAutoLock autoMon(*aBarrier);
-
-  sImageBridgeChildSingleton->AllocGrallocBufferNow(aParam.size,
-                                                    aParam.format,
-                                                    aParam.usage,
-                                                    aParam.handle,
-                                                    aParam.child);
-  *aDone = true;
-  aBarrier->NotifyAll();
-}
-
-// dispatched function
 static void ConnectImageBridge(ImageBridgeChild * child, ImageBridgeParent * parent)
 {
   MessageLoop *parentMsgLoop = parent->GetMessageLoop();
@@ -264,26 +224,22 @@ ImageBridgeChild::Connect(CompositableClient* aCompositable)
 {
   MOZ_ASSERT(aCompositable);
   uint64_t id = 0;
-  CompositableChild* child = static_cast<CompositableChild*>(
-    SendPCompositableConstructor(aCompositable->GetTextureInfo(), &id));
+  PCompositableChild* child =
+    SendPCompositableConstructor(aCompositable->GetTextureInfo(), &id);
   MOZ_ASSERT(child);
-  child->SetAsyncID(id);
-  aCompositable->SetIPDLActor(child);
-  MOZ_ASSERT(child->GetAsyncID() == id);
-  child->SetClient(aCompositable);
+  aCompositable->InitIPDLActor(child, id);
 }
 
 PCompositableChild*
 ImageBridgeChild::AllocPCompositableChild(const TextureInfo& aInfo, uint64_t* aID)
 {
-  return new CompositableChild();
+  return CompositableClient::CreateIPDLActor();
 }
 
 bool
 ImageBridgeChild::DeallocPCompositableChild(PCompositableChild* aActor)
 {
-  delete aActor;
-  return true;
+  return CompositableClient::DestroyIPDLActor(aActor);
 }
 
 
@@ -308,6 +264,10 @@ void ImageBridgeChild::StartUp()
   ImageBridgeChild::StartUpOnThread(new Thread("ImageBridgeChild"));
 }
 
+#ifdef MOZ_NUWA_PROCESS
+#include "ipc/Nuwa.h"
+#endif
+
 static void
 ConnectImageBridgeInChildProcess(Transport* aTransport,
                                  ProcessHandle aOtherProcess)
@@ -316,11 +276,16 @@ ConnectImageBridgeInChildProcess(Transport* aTransport,
   sImageBridgeChildSingleton->Open(aTransport, aOtherProcess,
                                    XRE_GetIOMessageLoop(),
                                    ipc::ChildSide);
-}
-
 #ifdef MOZ_NUWA_PROCESS
-#include "ipc/Nuwa.h"
+  if (IsNuwaProcess()) {
+    sImageBridgeChildThread
+      ->message_loop()->PostTask(FROM_HERE,
+                                 NewRunnableFunction(NuwaMarkCurrentThread,
+                                                     (void (*)(void *))nullptr,
+                                                     (void *)nullptr));
+  }
 #endif
+}
 
 static void ReleaseImageClientNow(ImageClient* aClient)
 {
@@ -482,13 +447,12 @@ ImageBridgeChild::EndTransaction()
     case EditReply::TOpTextureSwap: {
       const OpTextureSwap& ots = reply.get_OpTextureSwap();
 
-      CompositableChild* compositableChild =
-          static_cast<CompositableChild*>(ots.compositableChild());
+      CompositableClient* compositable =
+        CompositableClient::FromIPDLActor(ots.compositableChild());
 
-      MOZ_ASSERT(compositableChild);
+      MOZ_ASSERT(compositable);
 
-      compositableChild->GetCompositableClient()
-        ->SetDescriptorFromReply(ots.textureId(), ots.image());
+      compositable->SetDescriptorFromReply(ots.textureId(), ots.image());
       break;
     }
     case EditReply::TReturnReleaseFence: {
@@ -527,16 +491,6 @@ ImageBridgeChild::StartUpInChildProcess(Transport* aTransport,
   if (!sImageBridgeChildThread->Start()) {
     return nullptr;
   }
-
-#ifdef MOZ_NUWA_PROCESS
-  if (IsNuwaProcess()) {
-    sImageBridgeChildThread
-      ->message_loop()->PostTask(FROM_HERE,
-                                 NewRunnableFunction(NuwaMarkCurrentThread,
-                                                     (void (*)(void *))nullptr,
-                                                     (void *)nullptr));
-  }
-#endif
 
   sImageBridgeChildSingleton = new ImageBridgeChild();
   sImageBridgeChildSingleton->GetMessageLoop()->PostTask(
@@ -577,14 +531,13 @@ bool ImageBridgeChild::StartUpOnThread(Thread* aThread)
 
 void ImageBridgeChild::DestroyBridge()
 {
+  if (!IsCreated()) {
+    return;
+  }
   NS_ABORT_IF_FALSE(!InImageBridgeChildThread(),
                     "This method must not be called in this thread.");
   // ...because we are about to dispatch synchronous messages to the
   // ImageBridgeChild thread.
-
-  if (!IsCreated()) {
-    return;
-  }
 
   ReentrantMonitor barrier("ImageBridgeDestroyTask lock");
   ReentrantMonitorAutoEnter autoMon(barrier);
@@ -607,7 +560,8 @@ void ImageBridgeChild::DestroyBridge()
 
 bool InImageBridgeChildThread()
 {
-  return sImageBridgeChildThread->thread_id() == PlatformThread::CurrentId();
+  return ImageBridgeChild::IsCreated() &&
+    sImageBridgeChildThread->thread_id() == PlatformThread::CurrentId();
 }
 
 MessageLoop * ImageBridgeChild::GetMessageLoop() const
@@ -654,36 +608,12 @@ TemporaryRef<ImageClient>
 ImageBridgeChild::CreateImageClientNow(CompositableType aType)
 {
   RefPtr<ImageClient> client
-    = ImageClient::CreateImageClient(aType, this, 0);
+    = ImageClient::CreateImageClient(aType, this, TextureFlags::NO_FLAGS);
   MOZ_ASSERT(client, "failed to create ImageClient");
   if (client) {
     client->Connect();
   }
   return client.forget();
-}
-
-PGrallocBufferChild*
-ImageBridgeChild::AllocPGrallocBufferChild(const IntSize&, const uint32_t&, const uint32_t&,
-                                           MaybeMagicGrallocBufferHandle*)
-{
-#ifdef MOZ_HAVE_SURFACEDESCRIPTORGRALLOC
-  return GrallocBufferActor::Create();
-#else
-  NS_RUNTIMEABORT("No gralloc buffers for you");
-  return nullptr;
-#endif
-}
-
-bool
-ImageBridgeChild::DeallocPGrallocBufferChild(PGrallocBufferChild* actor)
-{
-#ifdef MOZ_HAVE_SURFACEDESCRIPTORGRALLOC
-  delete actor;
-  return true;
-#else
-  NS_RUNTIMEABORT("Um, how did we get here?");
-  return false;
-#endif
 }
 
 bool
@@ -807,99 +737,6 @@ ImageBridgeChild::DeallocShmem(ipc::Shmem& aShmem)
   }
 }
 
-PGrallocBufferChild*
-ImageBridgeChild::AllocGrallocBuffer(const IntSize& aSize,
-                                     uint32_t aFormat,
-                                     uint32_t aUsage,
-                                     MaybeMagicGrallocBufferHandle* aHandle)
-{
-  if (InImageBridgeChildThread()) {
-    PGrallocBufferChild* child = nullptr;
-    ImageBridgeChild::AllocGrallocBufferNow(aSize, aFormat, aUsage, aHandle, &child);
-    return child;
-  }
-
-  Monitor barrier("AllocGrallocBuffer Lock");
-  MonitorAutoLock autoMon(barrier);
-  bool done = false;
-  PGrallocBufferChild* child = nullptr;
-
-  GetMessageLoop()->PostTask(
-    FROM_HERE,
-    NewRunnableFunction(&AllocGrallocBufferSync,
-                        GrallocParam(aSize, aFormat, aUsage, aHandle, &child), &barrier, &done));
-
-  while (!done) {
-    barrier.Wait();
-  }
-
-  return child;
-}
-
-void
-ImageBridgeChild::AllocGrallocBufferNow(const gfx::IntSize& aSize,
-                                        uint32_t aFormat, uint32_t aUsage,
-                                        MaybeMagicGrallocBufferHandle* aHandle,
-                                        PGrallocBufferChild** aChild)
-{
-#ifdef MOZ_WIDGET_GONK
-  *aChild = SendPGrallocBufferConstructor(aSize,
-                                          aFormat,
-                                          aUsage,
-                                          aHandle);
-#else
-  NS_RUNTIMEABORT("not implemented");
-  aChild = nullptr;
-#endif
-}
-
-static void ProxyDeallocGrallocBufferNow(ISurfaceAllocator* aAllocator,
-                                         PGrallocBufferChild* aChild,
-                                         ReentrantMonitor* aBarrier,
-                                         bool* aDone)
-{
-  MOZ_ASSERT(aChild);
-  MOZ_ASSERT(aDone);
-  MOZ_ASSERT(aBarrier);
-
-#ifdef MOZ_WIDGET_GONK
-  PGrallocBufferChild::Send__delete__(aChild);
-#else
-  NS_RUNTIMEABORT("not implemented");
-#endif
-
-  ReentrantMonitorAutoEnter autoMon(*aBarrier);
-  *aDone = true;
-  aBarrier->NotifyAll();
-}
-
-void
-ImageBridgeChild::DeallocGrallocBuffer(PGrallocBufferChild* aChild)
-{
-  MOZ_ASSERT(aChild);
-  if (InImageBridgeChildThread()) {
-#ifdef MOZ_WIDGET_GONK
-    PGrallocBufferChild::Send__delete__(aChild);
-#else
-    NS_RUNTIMEABORT("not implemented");
-#endif
-  } else {
-    ReentrantMonitor barrier("AllocatorProxy Dealloc");
-    ReentrantMonitorAutoEnter autoMon(barrier);
-
-    bool done = false;
-    GetMessageLoop()->PostTask(FROM_HERE,
-                               NewRunnableFunction(&ProxyDeallocGrallocBufferNow,
-                                                   this,
-                                                   aChild,
-                                                   &barrier,
-                                                   &done));
-    while (!done) {
-      barrier.Wait();
-    }
-  }
-}
-
 PTextureChild*
 ImageBridgeChild::AllocPTextureChild(const SurfaceDescriptor&,
                                      const TextureFlags&)
@@ -924,7 +761,7 @@ void
 ImageBridgeChild::RemoveTextureFromCompositable(CompositableClient* aCompositable,
                                                 TextureClient* aTexture)
 {
-  if (aTexture->GetFlags() & TEXTURE_DEALLOCATE_CLIENT) {
+  if (aTexture->GetFlags() & TextureFlags::DEALLOCATE_CLIENT) {
     mTxn->AddEdit(OpRemoveTexture(nullptr, aCompositable->GetIPDLActor(),
                                   nullptr, aTexture->GetIPDLActor()));
   } else {

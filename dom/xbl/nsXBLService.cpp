@@ -11,7 +11,6 @@
 #include "nsXBLWindowKeyHandler.h"
 #include "nsIInputStream.h"
 #include "nsNameSpaceManager.h"
-#include "nsHashtable.h"
 #include "nsIURI.h"
 #include "nsIDOMElement.h"
 #include "nsIURL.h"
@@ -184,10 +183,10 @@ private:
 };
 
 /* Implementation file */
-NS_IMPL_ISUPPORTS3(nsXBLStreamListener,
-                   nsIStreamListener,
-                   nsIRequestObserver,
-                   nsIDOMEventListener)
+NS_IMPL_ISUPPORTS(nsXBLStreamListener,
+                  nsIStreamListener,
+                  nsIRequestObserver,
+                  nsIDOMEventListener)
 
 nsXBLStreamListener::nsXBLStreamListener(nsIDocument* aBoundDocument,
                                          nsIXMLContentSink* aSink,
@@ -369,7 +368,7 @@ nsXBLStreamListener::HandleEvent(nsIDOMEvent* aEvent)
 bool nsXBLService::gAllowDataURIs = false;
 
 // Implement our nsISupports methods
-NS_IMPL_ISUPPORTS1(nsXBLService, nsISupportsWeakReference)
+NS_IMPL_ISUPPORTS(nsXBLService, nsISupportsWeakReference)
 
 void
 nsXBLService::Init()

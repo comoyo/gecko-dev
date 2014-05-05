@@ -25,11 +25,11 @@
 #include "nsXPIDLString.h"
 #include <algorithm>
 
-NS_IMPL_ISUPPORTS4(nsIndexedToHTML,
-                   nsIDirIndexListener,
-                   nsIStreamConverter,
-                   nsIRequestObserver,
-                   nsIStreamListener)
+NS_IMPL_ISUPPORTS(nsIndexedToHTML,
+                  nsIDirIndexListener,
+                  nsIStreamConverter,
+                  nsIRequestObserver,
+                  nsIStreamListener)
 
 static void AppendNonAsciiToNCR(const nsAString& in, nsCString& out)
 {
@@ -246,10 +246,6 @@ nsIndexedToHTML::DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
             if (NS_FAILED(rv)) return rv;
         }
     }
-
-    nsXPIDLCString encoding;
-    rv = uri->GetOriginCharset(encoding);
-    if (NS_FAILED(rv)) return rv;
 
     buffer.AppendLiteral("<style type=\"text/css\">\n"
                          ":root {\n"
@@ -487,6 +483,13 @@ nsIndexedToHTML::DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
     if (!mTextToSubURI) {
         mTextToSubURI = do_GetService(NS_ITEXTTOSUBURI_CONTRACTID, &rv);
         if (NS_FAILED(rv)) return rv;
+    }
+
+    nsXPIDLCString encoding;
+    rv = uri->GetOriginCharset(encoding);
+    if (NS_FAILED(rv)) return rv;
+    if (encoding.IsEmpty()) {
+      encoding.AssignLiteral("UTF-8");
     }
 
     nsXPIDLString unEscapeSpec;

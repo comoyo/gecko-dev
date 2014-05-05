@@ -172,6 +172,22 @@ AudioStream::~AudioStream()
   }
 }
 
+size_t
+AudioStream::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
+{
+  size_t amount = aMallocSizeOf(this);
+
+  // Possibly add in the future:
+  // - mTimeStretcher
+  // - mLatencyLog
+  // - mCubebStream
+
+  amount += mInserts.SizeOfExcludingThis(aMallocSizeOf);
+  amount += mBuffer.SizeOfExcludingThis(aMallocSizeOf);
+
+  return amount;
+}
+
 /*static*/ void AudioStream::InitLibrary()
 {
 #ifdef PR_LOGGING
@@ -503,9 +519,14 @@ AudioStream::CheckForStart()
 NS_IMETHODIMP
 AudioInitTask::Run()
 {
+  MOZ_ASSERT(mThread);
   if (NS_IsMainThread()) {
     mThread->Shutdown(); // can't Shutdown from the thread itself, darn
-    mThread = nullptr;
+    // Don't null out mThread!
+    // See bug 999104.  We must hold a ref to the thread across Dispatch()
+    // since the internal mThread ref could be released while processing
+    // the Dispatch(), and Dispatch/PutEvent itself doesn't hold a ref; it
+    // assumes the caller does.
     return NS_OK;
   }
 

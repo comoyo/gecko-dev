@@ -146,9 +146,10 @@ class JavaPanZoomController
         setState(PanZoomState.NOTHING);
 
         mEventDispatcher = eventDispatcher;
-        registerEventListener(MESSAGE_ZOOM_RECT);
-        registerEventListener(MESSAGE_ZOOM_PAGE);
-        registerEventListener(MESSAGE_TOUCH_LISTENER);
+        mEventDispatcher.registerGeckoThreadListener(this,
+            MESSAGE_ZOOM_RECT,
+            MESSAGE_ZOOM_PAGE,
+            MESSAGE_TOUCH_LISTENER);
 
         mMode = AxisLockMode.STANDARD;
 
@@ -193,9 +194,10 @@ class JavaPanZoomController
 
     @Override
     public void destroy() {
-        unregisterEventListener(MESSAGE_ZOOM_RECT);
-        unregisterEventListener(MESSAGE_ZOOM_PAGE);
-        unregisterEventListener(MESSAGE_TOUCH_LISTENER);
+        mEventDispatcher.unregisterGeckoThreadListener(this,
+            MESSAGE_ZOOM_RECT,
+            MESSAGE_ZOOM_PAGE,
+            MESSAGE_TOUCH_LISTENER);
         mSubscroller.destroy();
         mTouchEventHandler.destroy();
     }
@@ -205,14 +207,6 @@ class JavaPanZoomController
         // -(t-1)^2+1
         t = t-1;
         return -t*t+1;
-    }
-
-    private void registerEventListener(String event) {
-        mEventDispatcher.registerEventListener(event, this);
-    }
-
-    private void unregisterEventListener(String event) {
-        mEventDispatcher.unregisterEventListener(event, this);
     }
 
     private void setState(PanZoomState state) {
@@ -1353,18 +1347,13 @@ class JavaPanZoomController
     }
 
     @Override
-    public boolean onSingleTapUp(final MotionEvent motionEvent) {
+    public boolean onSingleTapUp(MotionEvent motionEvent) {
         // When double-tapping is allowed, we have to wait to see if this is
         // going to be a double-tap.
         // However, if mMediumPress is true then we know there will be no
         // double-tap so we treat this as a click.
         if (mMediumPress || !mTarget.getZoomConstraints().getAllowDoubleTapZoom()) {
-            mTarget.post(new Runnable() {
-                @Override
-                public void run() {
-                    sendPointToGecko("Gesture:SingleTap", motionEvent);
-                }
-            });
+            sendPointToGecko("Gesture:SingleTap", motionEvent);
         }
         // return false because we still want to get the ACTION_UP event that triggers this
         return false;
