@@ -326,24 +326,6 @@ public:
    */
   void AddPath(const nsAString& aPath, const nsAString& aSubstName);
 
-  enum Stage
-  {
-    STAGE_STARTUP = 0,
-    STAGE_NORMAL,
-    STAGE_SHUTDOWN,
-    NUM_STAGES
-  };
-
-  /**
-   * Sets a new stage in the lifecycle of this process.
-   * @param aNewStage One of the STAGE_* enum values.
-   */
-  inline void SetStage(Stage aNewStage)
-  {
-    MOZ_ASSERT(aNewStage != NUM_STAGES);
-    mCurStage = aNewStage;
-  }
-
   /**
    * Get size of hash table with file stats
    */
@@ -364,6 +346,27 @@ public:
   }
 
 private:
+  enum Stage
+  {
+    STAGE_STARTUP = 0,
+    STAGE_NORMAL,
+    STAGE_SHUTDOWN,
+    NUM_STAGES
+  };
+  static inline Stage NextStage(Stage aStage)
+  {
+    switch (aStage) {
+      case STAGE_STARTUP:
+        return STAGE_NORMAL;
+      case STAGE_NORMAL:
+        return STAGE_SHUTDOWN;
+      case STAGE_SHUTDOWN:
+        return STAGE_SHUTDOWN;
+      default:
+        return NUM_STAGES;
+    }
+  }
+
   struct FileStatsByStage
   {
     FileStats mStats[NUM_STAGES];
@@ -412,6 +415,12 @@ void TelemetryIOInterposeObserver::Observe(Observation& aOb)
 {
   // We only report main-thread I/O
   if (!IsMainThread()) {
+    return;
+  }
+
+  if (aOb.ObservedOperation() == OpNextStage) {
+    mCurStage = NextStage(mCurStage);
+    MOZ_ASSERT(mCurStage < NUM_STAGES);
     return;
   }
 
@@ -507,7 +516,7 @@ bool TelemetryIOInterposeObserver::ReflectFileStats(FileIOEntryType* entry,
     stages[s].setObject(*jsStats);
   }
 
-  JS::RootedObject jsEntry(cx, JS_NewArrayObject(cx, stages));
+  JS::Rooted<JSObject*> jsEntry(cx, JS_NewArrayObject(cx, stages));
   if (!jsEntry) {
     return false;
   }
@@ -515,8 +524,7 @@ bool TelemetryIOInterposeObserver::ReflectFileStats(FileIOEntryType* entry,
   // Add jsEntry to top-level dictionary
   const nsAString& key = entry->GetKey();
   return JS_DefineUCProperty(cx, obj, key.Data(), key.Length(),
-                             OBJECT_TO_JSVAL(jsEntry), nullptr, nullptr,
-                             JSPROP_ENUMERATE | JSPROP_READONLY);
+                             jsEntry, JSPROP_ENUMERATE | JSPROP_READONLY);
 }
 
 bool TelemetryIOInterposeObserver::ReflectIntoJS(JSContext *cx,
@@ -535,7 +543,8 @@ ClearIOReporting()
   if (!sTelemetryIOObserver) {
     return;
   }
-  IOInterposer::Unregister(IOInterposeObserver::OpAll, sTelemetryIOObserver);
+  IOInterposer::Unregister(IOInterposeObserver::OpAllWithStaging,
+                           sTelemetryIOObserver);
   sTelemetryIOObserver = nullptr;
 }
 
@@ -796,7 +805,7 @@ FillRanges(JSContext *cx, JS::Handle<JSObject*> array, Histogram *h)
   JS::Rooted<JS::Value> range(cx);
   for (size_t i = 0; i < h->bucket_count(); i++) {
     range = INT_TO_JSVAL(h->ranges(i));
-    if (!JS_DefineElement(cx, array, i, range, nullptr, nullptr, JSPROP_ENUMERATE))
+    if (!JS_DefineElement(cx, array, i, range, JSPROP_ENUMERATE))
       return false;
   }
   return true;
@@ -860,8 +869,7 @@ ReflectHistogramAndSamples(JSContext *cx, JS::Handle<JSObject*> obj, Histogram *
     return REFLECT_FAILURE;
   }
   for (size_t i = 0; i < count; i++) {
-    if (!JS_DefineElement(cx, counts_array, i, INT_TO_JSVAL(ss.counts(i)),
-                          nullptr, nullptr, JSPROP_ENUMERATE)) {
+    if (!JS_DefineElement(cx, counts_array, i, ss.counts(i), JSPROP_ENUMERATE)) {
       return REFLECT_FAILURE;
     }
   }
@@ -2526,7 +2534,7 @@ TelemetryImpl::RecordThreadHangStats(Telemetry::ThreadHangStats& aStats)
   sTelemetry->mThreadHangStats.append(Move(aStats));
 }
 
-NS_IMPL_ISUPPORTS2(TelemetryImpl, nsITelemetry, nsIMemoryReporter)
+NS_IMPL_ISUPPORTS(TelemetryImpl, nsITelemetry, nsIMemoryReporter)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsITelemetry, TelemetryImpl::CreateTelemetryInstance)
 
 #define NS_TELEMETRY_CID \
@@ -2993,7 +3001,8 @@ InitIOReporting(nsIFile* aXreDir)
   }
 
   sTelemetryIOObserver = new TelemetryIOInterposeObserver(aXreDir);
-  IOInterposer::Register(IOInterposeObserver::OpAll, sTelemetryIOObserver);
+  IOInterposer::Register(IOInterposeObserver::OpAllWithStaging,
+                         sTelemetryIOObserver);
 }
 
 void
@@ -3008,24 +3017,6 @@ SetProfileDir(nsIFile* aProfD)
     return;
   }
   sTelemetryIOObserver->AddPath(profDirPath, NS_LITERAL_STRING("{profile}"));
-}
-
-void
-LeavingStartupStage()
-{
-  if (!sTelemetryIOObserver) {
-    return;
-  }
-  sTelemetryIOObserver->SetStage(TelemetryIOInterposeObserver::STAGE_NORMAL);
-}
-
-void
-EnteringShutdownStage()
-{
-  if (!sTelemetryIOObserver) {
-    return;
-  }
-  sTelemetryIOObserver->SetStage(TelemetryIOInterposeObserver::STAGE_SHUTDOWN);
 }
 
 void

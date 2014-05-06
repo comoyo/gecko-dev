@@ -35,6 +35,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
                                   "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "BrowserToolboxProcess",
+                                  "resource:///modules/devtools/ToolboxProcess.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ConsoleAPI",
+                                  "resource://gre/modules/devtools/Console.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this,
                                    "ChromeRegistry",
@@ -1870,6 +1874,14 @@ this.XPIProvider = {
       Services.prefs.addObserver(PREF_EM_MIN_COMPAT_PLATFORM_VERSION, this, false);
       Services.obs.addObserver(this, NOTIFICATION_FLUSH_PERMISSIONS, false);
 
+      try {
+        BrowserToolboxProcess.on("connectionchange",
+                                 this.onDebugConnectionChange.bind(this));
+      }
+      catch (e) {
+        // BrowserToolboxProcess is not available in all applications
+      }
+
       let flushCaches = this.checkForChanges(aAppChanged, aOldAppVersion,
                                              aOldPlatformVersion);
 
@@ -3598,7 +3610,13 @@ this.XPIProvider = {
    *         The AddonInstall to remove
    */
   removeActiveInstall: function XPI_removeActiveInstall(aInstall) {
-    this.installs = this.installs.filter(function installFilter(i) i != aInstall);
+    let where = this.installs.indexOf(aInstall);
+    if (where == -1) {
+      logger.warn("removeActiveInstall: could not find active install for "
+          + aInstall.sourceURI.spec);
+      return;
+    }
+    this.installs.splice(where, 1);
   },
 
   /**
@@ -3855,6 +3873,15 @@ this.XPIProvider = {
     }
   },
 
+  onDebugConnectionChange: function(aEvent, aWhat, aConnection) {
+    if (aWhat != "opened")
+      return;
+
+    for (let id of Object.keys(this.bootstrapScopes)) {
+      aConnection.setAddonOptions(id, { global: this.bootstrapScopes[id] });
+    }
+  },
+
   /**
    * Notified when a preference we're interested in has changed.
    *
@@ -4107,6 +4134,9 @@ this.XPIProvider = {
       for (let feature of features)
         this.bootstrapScopes[aId][feature] = gGlobalScope[feature];
 
+      // Define a console for the add-on
+      this.bootstrapScopes[aId]["console"] = new ConsoleAPI({ consoleID: "addon/" + aId });
+
       // As we don't want our caller to control the JS version used for the
       // bootstrap file, we run loadSubScript within the context of the
       // sandbox with the latest JS version set explicitly.
@@ -4118,6 +4148,13 @@ this.XPIProvider = {
     }
     catch (e) {
       logger.warn("Error loading bootstrap.js for " + aId, e);
+    }
+
+    try {
+      BrowserToolboxProcess.setAddonOptions(aId, { global: this.bootstrapScopes[aId] });
+    }
+    catch (e) {
+      // BrowserToolboxProcess is not available in all applications
     }
   },
 
@@ -4133,6 +4170,13 @@ this.XPIProvider = {
     delete this.bootstrappedAddons[aId];
     this.persistBootstrappedAddons();
     this.addAddonsToCrashReporter();
+
+    try {
+      BrowserToolboxProcess.setAddonOptions(aId, { global: null });
+    }
+    catch (e) {
+      // BrowserToolboxProcess is not available in all applications
+    }
   },
 
   /**

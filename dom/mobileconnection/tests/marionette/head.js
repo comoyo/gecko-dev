@@ -74,6 +74,8 @@ function wrapDomRequestAsPromise(aRequest) {
   return deferred.promise;
 }
 
+let workingFrame;
+
 /**
  * Get mozSettings value specified by @aKey.
  *
@@ -93,7 +95,8 @@ function wrapDomRequestAsPromise(aRequest) {
  * @return A deferred promise.
  */
 function getSettings(aKey, aAllowError) {
-  let request = navigator.mozSettings.createLock().get(aKey);
+  let request =
+    workingFrame.contentWindow.navigator.mozSettings.createLock().get(aKey);
   return wrapDomRequestAsPromise(request)
     .then(function resolve(aEvent) {
       ok(true, "getSettings(" + aKey + ") - success");
@@ -120,7 +123,8 @@ function getSettings(aKey, aAllowError) {
  * @return A deferred promise.
  */
 function setSettings(aSettings, aAllowError) {
-  let request = navigator.mozSettings.createLock().set(aSettings);
+  let request =
+    workingFrame.contentWindow.navigator.mozSettings.createLock().set(aSettings);
   return wrapDomRequestAsPromise(request)
     .then(function resolve() {
       ok(true, "setSettings(" + JSON.stringify(aSettings) + ")");
@@ -195,7 +199,6 @@ function setDataApnSettings(aApnSettings, aAllowError) {
   return setSettings1(SETTINGS_KEY_DATA_APN_SETTINGS, aApnSettings, aAllowError);
 }
 
-let workingFrame;
 let mobileConnection;
 
 /**
@@ -282,7 +285,8 @@ function waitForManagerEvent(aEventName, aServiceId) {
 
   let mobileConn = mobileConnection;
   if (aServiceId !== undefined) {
-    mobileConn = navigator.mozMobileConnections[aServiceId];
+    mobileConn =
+      workingFrame.contentWindow.navigator.mozMobileConnections[aServiceId];
   }
 
   mobileConn.addEventListener(aEventName, function onevent(aEvent) {
@@ -384,6 +388,23 @@ function selectNetworkAutomaticallyAndWait() {
 }
 
 /**
+ * Send a MMI message.
+ *
+ * Fulfill params: An object contains MMI result.
+ * Reject params: A DOMMMIError.
+ *
+ * @param aMmi
+ *        A MMI string.
+ *
+ * @return A deferred promise.
+ */
+function sendMMI(aMmi) {
+  let request = mobileConnection.sendMMI(aMmi);
+  return wrapDomRequestAsPromise(request)
+    .then(() => request.result, () => { throw request.error });
+}
+
+/**
  * Set data connection enabling state and wait for "datachange" event.
  *
  * Resolve if data connection state changed to the expected one.  Never reject.
@@ -407,7 +428,8 @@ function setDataEnabledAndWait(aEnabled, aServiceId) {
   Promise.all(promises).then(function keepWaiting() {
     let mobileConn = mobileConnection;
     if (aServiceId !== undefined) {
-      mobileConn = navigator.mozMobileConnections[aServiceId];
+      mobileConn =
+        workingFrame.contentWindow.navigator.mozMobileConnections[aServiceId];
     }
     // To ignore some transient states, we only resolve that deferred promise
     // when the |connected| state equals to the expected one and never rejects.
@@ -467,7 +489,8 @@ function setEmulatorRoamingAndWait(aRoaming, aServiceId) {
       .then(() => {
         let mobileConn = mobileConnection;
         if (aServiceId !== undefined) {
-          mobileConn = navigator.mozMobileConnections[aServiceId];
+          mobileConn =
+            workingFrame.contentWindow.navigator.mozMobileConnections[aServiceId];
         }
         is(mobileConn[aWhich].roaming, aRoaming,
                      aWhich + ".roaming")
@@ -500,10 +523,7 @@ function getEmulatorGsmLocation() {
       is(aResults[1].substring(0,2), "ci", "ci output");
 
       let lac = parseInt(aResults[0].substring(5));
-      lac = (lac < 0 ? 65535 : lac);
       let cid = parseInt(aResults[1].substring(4));
-      cid = (cid < 0 ? 268435455 : cid);
-
       return { lac: lac, cid: cid };
     });
 }
@@ -522,6 +542,33 @@ function getEmulatorGsmLocation() {
 function setEmulatorGsmLocation(aLac, aCid) {
   let cmd = "gsm location " + aLac + " " + aCid;
   return runEmulatorCmdSafe(cmd);
+}
+
+/**
+ * Set GSM location and wait for voice and/or data state change.
+ *
+ * Fulfill params: (none)
+ *
+ * @param aLac
+ * @param aCid
+ * @param aWaitVoice [optional]
+ *        A boolean value.  Default true.
+ * @param aWaitData [optional]
+ *        A boolean value.  Default false.
+ *
+ * @return A deferred promise.
+ */
+function setEmulatorGsmLocationAndWait(aLac, aCid,
+                                       aWaitVoice = true, aWaitData = false) {
+  let promises = [];
+  if (aWaitVoice) {
+    promises.push(waitForManagerEvent("voicechange"));
+  }
+  if (aWaitData) {
+    promises.push(waitForManagerEvent("datachange"));
+  }
+  promises.push(setEmulatorGsmLocation(aLac, aCid));
+  return Promise.all(promises);
 }
 
 /**
@@ -597,6 +644,43 @@ function setEmulatorOperatorNames(aOperator, aLongName, aShortName, aMcc, aMnc) 
       ok(aResults[index].match(new RegExp(exp)),
          "Long/short name and/or mcc/mnc should be changed.");
     });
+}
+
+/**
+ * Set emulator operators info and wait for voice and/or data state change.
+ *
+ * Fulfill params: (none)
+ *
+ * @param aOperator
+ *        "home" or "roaming".
+ * @param aLongName
+ *        A string.
+ * @param aShortName
+ *        A string.
+ * @param aMcc [optional]
+ *        A string.
+ * @param aMnc [optional]
+ *        A string.
+ * @param aWaitVoice [optional]
+ *        A boolean value.  Default true.
+ * @param aWaitData [optional]
+ *        A boolean value.  Default false.
+ *
+ * @return A deferred promise.
+ */
+function setEmulatorOperatorNamesAndWait(aOperator, aLongName, aShortName,
+                                         aMcc, aMnc,
+                                         aWaitVoice = true, aWaitData = false) {
+  let promises = [];
+  if (aWaitVoice) {
+    promises.push(waitForManagerEvent("voicechange"));
+  }
+  if (aWaitData) {
+    promises.push(waitForManagerEvent("datachange"));
+  }
+  promises.push(setEmulatorOperatorNames(aOperator, aLongName, aShortName,
+                                         aMcc, aMnc));
+  return Promise.all(promises);
 }
 
 let _networkManager;

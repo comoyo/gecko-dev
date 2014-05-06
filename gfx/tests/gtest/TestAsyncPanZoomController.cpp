@@ -34,6 +34,7 @@ class AsyncPanZoomControllerTester : public ::testing::Test {
 protected:
   virtual void SetUp() {
     gfxPrefs::GetSingleton();
+    AsyncPanZoomController::SetThreadAssertionsEnabled(false);
   }
   virtual void TearDown() {
     gfxPrefs::DestroySingleton();
@@ -44,6 +45,7 @@ class APZCTreeManagerTester : public ::testing::Test {
 protected:
   virtual void SetUp() {
     gfxPrefs::GetSingleton();
+    AsyncPanZoomController::SetThreadAssertionsEnabled(false);
   }
   virtual void TearDown() {
     gfxPrefs::DestroySingleton();
@@ -140,9 +142,6 @@ public:
 };
 
 class TestAPZCTreeManager : public APZCTreeManager {
-protected:
-  void AssertOnCompositorThread() MOZ_OVERRIDE { /* no-op */ }
-
 public:
   // Expose this so test code can call it directly.
   void BuildOverscrollHandoffChain(AsyncPanZoomController* aApzc) {
@@ -415,7 +414,7 @@ TEST_F(AsyncPanZoomControllerTester, PinchWithTouchActionNone) {
 
   nsTArray<uint32_t> values;
   values.AppendElement(mozilla::layers::AllowedTouchBehavior::VERTICAL_PAN);
-  values.AppendElement(mozilla::layers::AllowedTouchBehavior::ZOOM);
+  values.AppendElement(mozilla::layers::AllowedTouchBehavior::PINCH_ZOOM);
   apzc->SetTouchActionEnabled(true);
 
   apzc->SetAllowedTouchBehavior(values);
@@ -813,7 +812,8 @@ DoLongPressTest(bool aShouldUseTouchAction, uint32_t aBehavior) {
   apzc->Destroy();
 }
 
-TEST_F(AsyncPanZoomControllerTester, LongPressPreventDefault) {
+void
+DoLongPressPreventDefaultTest(bool aShouldUseTouchAction, uint32_t aBehavior) {
   // We have to initialize both an integer time and TimeStamp time because
   // TimeStamp doesn't have any ToXXX() functions for converting back to
   // primitives.
@@ -830,6 +830,8 @@ TEST_F(AsyncPanZoomControllerTester, LongPressPreventDefault) {
   apzc->NotifyLayersUpdated(TestFrameMetrics(), true);
   apzc->UpdateZoomConstraints(ZoomConstraints(false, false, CSSToScreenScale(1.0), CSSToScreenScale(1.0)));
 
+  apzc->SetTouchActionEnabled(aShouldUseTouchAction);
+
   EXPECT_CALL(*mcc, SendAsyncScrollDOMEvent(_,_,_)).Times(0);
   EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(0);
 
@@ -839,6 +841,11 @@ TEST_F(AsyncPanZoomControllerTester, LongPressPreventDefault) {
 
   nsEventStatus status = ApzcDown(apzc, touchX, touchStartY, time);
   EXPECT_EQ(nsEventStatus_eConsumeNoDefault, status);
+
+  // SetAllowedTouchBehavior() must be called after sending touch-start.
+  nsTArray<uint32_t> allowedTouchBehaviors;
+  allowedTouchBehaviors.AppendElement(aBehavior);
+  apzc->SetAllowedTouchBehavior(allowedTouchBehaviors);
 
   MockFunction<void(std::string checkPointName)> check;
 
@@ -895,12 +902,21 @@ TEST_F(AsyncPanZoomControllerTester, LongPress) {
   DoLongPressTest(false, mozilla::layers::AllowedTouchBehavior::NONE);
 }
 
-TEST_F(AsyncPanZoomControllerTester, LongPressPanAndZoom) {
+TEST_F(AsyncPanZoomControllerTester, LongPressWithTouchAction) {
   DoLongPressTest(true, mozilla::layers::AllowedTouchBehavior::HORIZONTAL_PAN
                       | mozilla::layers::AllowedTouchBehavior::VERTICAL_PAN
-                      | mozilla::layers::AllowedTouchBehavior::ZOOM);
+                      | mozilla::layers::AllowedTouchBehavior::PINCH_ZOOM);
 }
 
+TEST_F(AsyncPanZoomControllerTester, LongPressPreventDefault) {
+  DoLongPressPreventDefaultTest(false, mozilla::layers::AllowedTouchBehavior::NONE);
+}
+
+TEST_F(AsyncPanZoomControllerTester, LongPressPreventDefaultWithTouchAction) {
+  DoLongPressPreventDefaultTest(true, mozilla::layers::AllowedTouchBehavior::HORIZONTAL_PAN
+                                    | mozilla::layers::AllowedTouchBehavior::VERTICAL_PAN
+                                    | mozilla::layers::AllowedTouchBehavior::PINCH_ZOOM);
+}
 
 // Layer tree for HitTesting1
 static already_AddRefed<mozilla::layers::Layer>

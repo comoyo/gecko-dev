@@ -159,7 +159,7 @@ public:
   }
 };
 
-NS_IMPL_ISUPPORTS1(PeerConnectionCtxShutdown, nsIObserver);
+NS_IMPL_ISUPPORTS(PeerConnectionCtxShutdown, nsIObserver);
 }
 
 using namespace mozilla;
@@ -193,23 +193,14 @@ nsresult PeerConnectionCtx::InitializeGlobal(nsIThread *mainThread,
     CSF::VcmSIPCCBinding::setMainThread(gMainThread);
     init_thread_monitor(&thread_ended_dispatcher, &join_waiter);
   } else {
-#ifdef MOZILLA_INTERNAL_API
     MOZ_ASSERT(gMainThread == mainThread);
-#endif
   }
 
   CSF::VcmSIPCCBinding::setSTSThread(stsThread);
 
   nsresult res;
 
-#ifdef MOZILLA_INTERNAL_API
-  // This check fails on the unit tests because they do not
-  // have the right thread behavior.
-  bool on;
-  res = gMainThread->IsOnCurrentThread(&on);
-  NS_ENSURE_SUCCESS(res, res);
-  MOZ_ASSERT(on);
-#endif
+  MOZ_ASSERT(NS_IsMainThread());
 
   if (!gInstance) {
     CSFLogDebug(logTag, "Creating PeerConnectionCtx");
@@ -273,8 +264,13 @@ nsresult PeerConnectionCtx::Initialize() {
   // Only adding codecs supported
   //codecMask |= VCM_CODEC_RESOURCE_H263;
 
-  //codecMask |= VCM_CODEC_RESOURCE_H264;
-  //codecMask |= VCM_CODEC_RESOURCE_VP8;
+#ifdef MOZILLA_INTERNAL_API
+  if (Preferences::GetBool("media.peerconnection.video.h264_enabled")) {
+    // XXX codecMask |= VCM_CODEC_RESOURCE_H264;
+  }
+#endif
+
+  // XXX codecMask |= VCM_CODEC_RESOURCE_VP8;
   //codecMask |= VCM_CODEC_RESOURCE_I420;
   codecMask |= VCM_CODEC_RESOURCE_H261;
   mCCM->setVideoCodecs(codecMask);

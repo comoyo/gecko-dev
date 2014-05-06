@@ -98,9 +98,11 @@ contract @mozilla.org/payment/ui-glue;1 {3c6c9575-f57e-427b-a8aa-57bc3cbff48f}
 component {18a4e042-7c7c-424b-a583-354e68553a7f} FilePicker.js
 contract @mozilla.org/filepicker;1 {18a4e042-7c7c-424b-a583-354e68553a7f}
 
+#ifndef RELEASE_BUILD
 # TabSource.js
 component {5850c76e-b916-4218-b99a-31f004e0a7e7} TabSource.js
 contract @mozilla.org/tab-source-service;1 {5850c76e-b916-4218-b99a-31f004e0a7e7}
+#endif
 
 # Snippets.js
 component {a78d7e59-b558-4321-a3d6-dffe2f1e76dd} Snippets.js
@@ -118,3 +120,7 @@ category update-timer WebappsUpdateTimer @mozilla.org/webapps-update-timer;1,get
 # ColorPicker.js
 component {430b987f-bb9f-46a3-99a5-241749220b29} ColorPicker.js
 contract @mozilla.org/colorpicker;1 {430b987f-bb9f-46a3-99a5-241749220b29}
+
+# ActivitiesGlue.js
+component {e4deb5f6-d5e3-4fce-bc53-901dd9951c48} ActivitiesGlue.js
+contract @mozilla.org/dom/activities/ui-glue;1 {e4deb5f6-d5e3-4fce-bc53-901dd9951c48}

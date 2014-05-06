@@ -11,7 +11,7 @@
 namespace mozilla {
 namespace dom {
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_1(PeriodicWave, mContext)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(PeriodicWave, mContext)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(PeriodicWave, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(PeriodicWave, Release)
@@ -42,6 +42,19 @@ PeriodicWave::PeriodicWave(AudioContext* aContext,
   mCoefficients->SetData(0, buffer, buffer);
   PodCopy(buffer+aLength, aImagData, aLength);
   mCoefficients->SetData(1, nullptr, buffer+aLength);
+}
+
+size_t
+PeriodicWave::SizeOfExcludingThisIfNotShared(MallocSizeOf aMallocSizeOf) const
+{
+  // Not owned:
+  // - mContext
+  size_t amount = 0;
+  if (!mCoefficients->IsShared()) {
+    amount += mCoefficients->SizeOfIncludingThis(aMallocSizeOf);
+  }
+
+  return amount;
 }
 
 JSObject*
