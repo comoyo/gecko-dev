@@ -1802,7 +1802,7 @@ pref("layout.css.masking.enabled", true);
 #endif
 
 // Is support for mix-blend-mode enabled?
-pref("layout.css.mix-blend-mode.enabled", false);
+pref("layout.css.mix-blend-mode.enabled", true);
 
 // Is support for the the @supports rule enabled?
 pref("layout.css.supports-rule.enabled", true);
