@@ -27,6 +27,8 @@
 #include "webrtc/system_wrappers/interface/file_wrapper.h"
 #include "webrtc/system_wrappers/interface/logging.h"
 
+#include "GeckoProfiler.h"
+
 #ifdef WEBRTC_AUDIOPROC_DEBUG_DUMP
 // Files generated at build-time by the protobuf compiler.
 #ifdef WEBRTC_ANDROID_PLATFORM_BUILD
@@ -271,6 +273,7 @@ int AudioProcessingImpl::num_output_channels() const {
 int AudioProcessingImpl::ProcessStream(AudioFrame* frame) {
   CriticalSectionScoped crit_scoped(crit_);
   int err = kNoError;
+  PROFILER_LABEL("AudioProcessingImpl", "ProcessStream");
 
   if (frame == NULL) {
     return kNullPointerError;
@@ -290,6 +293,7 @@ int AudioProcessingImpl::ProcessStream(AudioFrame* frame) {
 
 #ifdef WEBRTC_AUDIOPROC_DEBUG_DUMP
   if (debug_file_->Open()) {
+    PROFILER_LABEL("AudioProcessingImpl", "ProcessStream/DEBUG_DUMP");
     event_msg_->set_type(audioproc::Event::STREAM);
     audioproc::Stream* msg = event_msg_->mutable_stream();
     const size_t data_size = sizeof(int16_t) *

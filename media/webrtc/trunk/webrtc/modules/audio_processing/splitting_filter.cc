@@ -10,6 +10,7 @@
 
 #include "webrtc/common_audio/signal_processing/include/signal_processing_library.h"
 #include "webrtc/modules/audio_processing/splitting_filter.h"
+#include "GeckoProfiler.h"
 
 namespace webrtc {
 
@@ -19,6 +20,7 @@ void SplittingFilterAnalysis(const int16_t* in_data,
                              int32_t* filter_state1,
                              int32_t* filter_state2)
 {
+    PROFILER_LABEL("splitting_filter", "SplittingFilterAnalysis");
     WebRtcSpl_AnalysisQMF(in_data, low_band, high_band, filter_state1, filter_state2);
 }
 
@@ -28,6 +30,7 @@ void SplittingFilterSynthesis(const int16_t* low_band,
                               int32_t* filt_state1,
                               int32_t* filt_state2)
 {
+    PROFILER_LABEL("splitting_filter", "SplittingFilterSynthesis");
     WebRtcSpl_SynthesisQMF(low_band, high_band, out_data, filt_state1, filt_state2);
 }
 }  // namespace webrtc

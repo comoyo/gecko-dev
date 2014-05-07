@@ -10,6 +10,7 @@
 #include "nsMemory.h"
 #include "mtransport/runnable_utils.h"
 #include "MediaTrackConstraints.h"
+#include "GeckoProfiler.h"
 
 #ifdef MOZ_B2G_CAMERA
 #include "GrallocImages.h"
@@ -829,6 +830,7 @@ MediaEngineWebRTCVideoSource::OnTakePictureComplete(uint8_t* aData, uint32_t aLe
 
 void
 MediaEngineWebRTCVideoSource::RotateImage(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight) {
+  PROFILER_LABEL("MediaEngineWebRTCVideoSource", "RotateImage");
   layers::GrallocImage *nativeImage = static_cast<layers::GrallocImage*>(aImage);
   android::sp<android::GraphicBuffer> graphicBuffer = nativeImage->GetGraphicBuffer();
   void *pMem = nullptr;
@@ -889,6 +891,7 @@ MediaEngineWebRTCVideoSource::RotateImage(layers::Image* aImage, uint32_t aWidth
 
 bool
 MediaEngineWebRTCVideoSource::OnNewPreviewFrame(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight) {
+  PROFILER_LABEL("MediaEngineWebRTCVideoSource", "OnNewPreviewFrame");
   {
     ReentrantMonitorAutoEnter sync(mCallbackMonitor);
     if (mState == kStopped) {

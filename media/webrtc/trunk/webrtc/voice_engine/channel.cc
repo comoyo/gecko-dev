@@ -31,6 +31,8 @@
 #include "webrtc/voice_engine/transmit_mixer.h"
 #include "webrtc/voice_engine/utility.h"
 
+#include "GeckoProfiler.h"
+
 #if defined(_WIN32)
 #include <Qos.h>
 #endif
@@ -4357,6 +4359,7 @@ Channel::InsertExtraRTPPacket(unsigned char payloadType,
 uint32_t
 Channel::Demultiplex(const AudioFrame& audioFrame)
 {
+    PROFILER_LABEL("Channel", "Demultiplex");
     WEBRTC_TRACE(kTraceStream, kTraceVoice, VoEId(_instanceId,_channelId),
                  "Channel::Demultiplex()");
     _audioFrame.CopyFrom(audioFrame);
@@ -4424,6 +4427,7 @@ void Channel::Demultiplex(const int16_t* audio_data,
 uint32_t
 Channel::PrepareEncodeAndSend(int mixingFrequency)
 {
+    PROFILER_LABEL("Channel", "PrepareEncodeAndSend");
     WEBRTC_TRACE(kTraceStream, kTraceVoice, VoEId(_instanceId,_channelId),
                  "Channel::PrepareEncodeAndSend()");
 

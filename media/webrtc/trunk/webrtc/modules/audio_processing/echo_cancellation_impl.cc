@@ -21,6 +21,8 @@ extern "C" {
 #include "webrtc/modules/audio_processing/audio_processing_impl.h"
 #include "webrtc/system_wrappers/interface/critical_section_wrapper.h"
 
+#include "GeckoProfiler.h"
+
 namespace webrtc {
 
 typedef void Handle;
@@ -80,6 +82,7 @@ int EchoCancellationImpl::ProcessRenderAudio(const AudioBuffer* audio) {
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
+  PROFILER_LABEL("EchoCancellationImpl", "ProcessRenderAudio");
 
   assert(audio->samples_per_split_channel() <= 160);
   assert(audio->num_channels() == apm_->num_reverse_channels());
@@ -108,6 +111,7 @@ int EchoCancellationImpl::ProcessRenderAudio(const AudioBuffer* audio) {
 }
 
 int EchoCancellationImpl::ProcessCaptureAudio(AudioBuffer* audio) {
+  PROFILER_LABEL("EchoCancellationImpl", "ProcessCaptureAudio");
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
@@ -129,7 +133,9 @@ int EchoCancellationImpl::ProcessCaptureAudio(AudioBuffer* audio) {
   size_t handle_index = 0;
   stream_has_echo_ = false;
   for (int i = 0; i < audio->num_channels(); i++) {
+    PROFILER_LABEL("EchoCancellationImpl", "ProcessCaptureAudio_WebRtcAec_Process_channel");
     for (int j = 0; j < apm_->num_reverse_channels(); j++) {
+      PROFILER_LABEL("EchoCancellationImpl", "ProcessCaptureAudio_WebRtcAec_Process_revchannel");
       Handle* my_handle = handle(handle_index);
       err = WebRtcAec_Process(
           my_handle,

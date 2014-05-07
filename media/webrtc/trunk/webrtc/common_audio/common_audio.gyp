@@ -28,6 +28,9 @@
           'vad/include',
         ],
       },
+      'cflags_mozilla': [
+        '$(NSPR_CFLAGS)',
+      ],
       'sources': [
         'audio_util.cc',
         'include/audio_util.h',

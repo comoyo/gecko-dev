@@ -28,6 +28,9 @@
       'defines': [
         'WEBRTC_EXTERNAL_TRANSPORT',
       ],
+      'cflags_mozilla': [
+        '$(NSPR_CFLAGS)',
+      ],
       'sources': [
         '../common_types.h',
         '../engine_configurations.h',

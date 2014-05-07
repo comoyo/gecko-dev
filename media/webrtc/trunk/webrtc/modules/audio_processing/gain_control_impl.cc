@@ -18,6 +18,8 @@
 #include "webrtc/modules/audio_processing/audio_buffer.h"
 #include "webrtc/modules/audio_processing/audio_processing_impl.h"
 
+#include "GeckoProfiler.h"
+
 namespace webrtc {
 
 typedef void Handle;
@@ -53,6 +55,7 @@ GainControlImpl::GainControlImpl(const AudioProcessingImpl* apm)
 GainControlImpl::~GainControlImpl() {}
 
 int GainControlImpl::ProcessRenderAudio(AudioBuffer* audio) {
+  PROFILER_LABEL("GainControlImpl", "ProcessRenderAudio");
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
@@ -131,6 +134,7 @@ int GainControlImpl::AnalyzeCaptureAudio(AudioBuffer* audio) {
 }
 
 int GainControlImpl::ProcessCaptureAudio(AudioBuffer* audio) {
+  PROFILER_LABEL("GainControlImpl", "ProcessCaptureAudio");
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }

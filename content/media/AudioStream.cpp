@@ -15,6 +15,7 @@
 #include "mozilla/Preferences.h"
 #include "soundtouch/SoundTouch.h"
 #include "Latency.h"
+#include "GeckoProfiler.h"
 
 namespace mozilla {
 
@@ -541,6 +542,7 @@ AudioInitTask::Run()
 nsresult
 AudioStream::Write(const AudioDataValue* aBuf, uint32_t aFrames, TimeStamp *aTime)
 {
+  PROFILER_LABEL("AudioStream", "Write");
   MonitorAutoLock mon(mMonitor);
   if (mState == ERRORED) {
     return NS_ERROR_FAILURE;
@@ -625,6 +627,7 @@ AudioStream::Write(const AudioDataValue* aBuf, uint32_t aFrames, TimeStamp *aTim
 uint32_t
 AudioStream::Available()
 {
+  PROFILER_LABEL("AudioStream", "Available");
   MonitorAutoLock mon(mMonitor);
   NS_ABORT_IF_FALSE(mBuffer.Length() % mBytesPerFrame == 0, "Buffer invariant violated.");
   return BytesToFrames(mBuffer.Available());
@@ -641,6 +644,7 @@ AudioStream::SetVolume(double aVolume)
 void
 AudioStream::Drain()
 {
+  PROFILER_LABEL("AudioStream", "Drain");
   MonitorAutoLock mon(mMonitor);
   LOG(("AudioStream::Drain() for %p, state %d, avail %u", this, mState, mBuffer.Available()));
   if (mState != STARTED && mState != RUNNING) {
@@ -855,6 +859,7 @@ AudioStream::GetUnprocessed(void* aBuffer, long aFrames, int64_t &aTimeMs)
 long
 AudioStream::GetUnprocessedWithSilencePadding(void* aBuffer, long aFrames, int64_t& aTimeMs)
 {
+  PROFILER_LABEL("AudioStream", "GetUnprocessedWithSilencePadding");
   uint32_t toPopBytes = FramesToBytes(aFrames);
   uint32_t available = std::min(toPopBytes, mBuffer.Length());
   uint32_t silenceOffset = toPopBytes - available;

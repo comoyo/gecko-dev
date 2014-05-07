@@ -36,6 +36,9 @@
         'vic/transmitter.cc',
         'vic/vid_coder.cc',
       ],
+      'cflags_mozilla': [
+        '$(NSPR_CFLAGS)',
+      ],
     },
   ], # targets
 }

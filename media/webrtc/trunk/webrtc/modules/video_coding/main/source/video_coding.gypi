@@ -31,6 +31,9 @@
           '../../codecs/interface',
         ],
       },
+      'cflags_mozilla': [
+        '$(NSPR_CFLAGS)',
+      ],
       'sources': [
         # interfaces
         '../interface/video_coding.h',

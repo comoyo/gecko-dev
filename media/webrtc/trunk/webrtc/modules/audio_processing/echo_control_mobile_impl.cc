@@ -19,6 +19,8 @@
 #include "webrtc/system_wrappers/interface/critical_section_wrapper.h"
 #include "webrtc/system_wrappers/interface/logging.h"
 
+#include "GeckoProfiler.h"
+
 namespace webrtc {
 
 typedef void Handle;
@@ -78,6 +80,7 @@ EchoControlMobileImpl::~EchoControlMobileImpl() {
 }
 
 int EchoControlMobileImpl::ProcessRenderAudio(const AudioBuffer* audio) {
+  PROFILER_LABEL("EchoControlMobileImpl", "ProcessRenderAudio");
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
@@ -109,6 +112,7 @@ int EchoControlMobileImpl::ProcessRenderAudio(const AudioBuffer* audio) {
 }
 
 int EchoControlMobileImpl::ProcessCaptureAudio(AudioBuffer* audio) {
+  PROFILER_LABEL("EchoControlMobileImpl", "ProcessCaptureAudio");
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
@@ -125,6 +129,7 @@ int EchoControlMobileImpl::ProcessCaptureAudio(AudioBuffer* audio) {
   // The ordering convention must be followed to pass to the correct AECM.
   size_t handle_index = 0;
   for (int i = 0; i < audio->num_channels(); i++) {
+    PROFILER_LABEL("EchoControlMobileImpl", "ProcessCaptureAudio_WebRtcAecm_Process_channel");
     // TODO(ajm): improve how this works, possibly inside AECM.
     //            This is kind of hacked up.
     int16_t* noisy = audio->low_pass_reference(i);
@@ -134,6 +139,7 @@ int EchoControlMobileImpl::ProcessCaptureAudio(AudioBuffer* audio) {
       clean = NULL;
     }
     for (int j = 0; j < apm_->num_reverse_channels(); j++) {
+      PROFILER_LABEL("EchoControlMobileImpl", "ProcessCaptureAudio_WebRtcAecm_Process_revchannel");
       Handle* my_handle = static_cast<Handle*>(handle(handle_index));
       err = WebRtcAecm_Process(
           my_handle,

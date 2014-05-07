@@ -138,6 +138,7 @@ MediaStreamGraphImpl::ExtractPendingInput(SourceMediaStream* aStream,
                                           GraphTime aDesiredUpToTime,
                                           bool* aEnsureNextIteration)
 {
+  PROFILER_LABEL("MediaStreamGraphImpl", "ExtractPendingInput");
   bool finished;
   {
     MutexAutoLock lock(aStream->mMutex);
@@ -347,6 +348,7 @@ MediaStreamGraphImpl::GetAudioPosition(MediaStream* aStream)
 void
 MediaStreamGraphImpl::UpdateCurrentTime()
 {
+  PROFILER_LABEL("MediaStreamGraphImpl", "UpdateCurrentTime");
   GraphTime prevCurrentTime, nextCurrentTime;
   if (mRealtime) {
     TimeStamp now = TimeStamp::Now();
@@ -648,6 +650,7 @@ MediaStreamGraphImpl::UpdateStreamOrder()
 void
 MediaStreamGraphImpl::RecomputeBlocking(GraphTime aEndBlockingDecisions)
 {
+  PROFILER_LABEL("MediaStreamGraphImpl", "RecomputeBlocking");
   bool blockingDecisionsWillChange = false;
 
   STREAM_LOG(PR_LOG_DEBUG+1, ("Media graph %p computing blocking for time %f",
@@ -872,6 +875,7 @@ TrackTicks
 MediaStreamGraphImpl::PlayAudio(MediaStream* aStream,
                                 GraphTime aFrom, GraphTime aTo)
 {
+  PROFILER_LABEL("MediaStreamGraphImpl", "PlayAudio");
   MOZ_ASSERT(mRealtime, "Should only attempt to play audio in realtime mode");
 
   TrackTicks ticksWritten = 0;
@@ -995,6 +999,7 @@ SetImageToBlackPixel(PlanarYCbCrImage* aImage)
 void
 MediaStreamGraphImpl::PlayVideo(MediaStream* aStream)
 {
+  PROFILER_LABEL("MediaStreamGraphImpl", "PlayVideo");
   MOZ_ASSERT(mRealtime, "Should only attempt to play video in realtime mode");
 
   if (aStream->mVideoOutputs.IsEmpty())
@@ -1169,6 +1174,7 @@ MediaStreamGraphImpl::ProduceDataForStreamsBlockByBlock(uint32_t aStreamIndex,
                                                         GraphTime aFrom,
                                                         GraphTime aTo)
 {
+  PROFILER_LABEL("MediaStreamGraphImpl", "ProduceDataForStreamsBlockByBlock");
   GraphTime t = aFrom;
   while (t < aTo) {
     GraphTime next = RoundUpToNextAudioBlock(aSampleRate, t);
@@ -2274,6 +2280,7 @@ SourceMediaStream::ResampleAudioToGraphSampleRate(TrackData* aTrackData, MediaSe
       aTrackData->mInputRate == GraphImpl()->AudioSampleRate()) {
     return;
   }
+  PROFILER_LABEL("SourceMediaStream", "ResampleAudioToGraphSampleRate");
   AudioSegment* segment = static_cast<AudioSegment*>(aSegment);
   if (!aTrackData->mResampler) {
     int channels = segment->ChannelCount();
@@ -2333,6 +2340,7 @@ void
 SourceMediaStream::NotifyDirectConsumers(TrackData *aTrack,
                                          MediaSegment *aSegment)
 {
+  PROFILER_LABEL("SourceMediaStream", "NotifyDirectConsumers");
   // Call with mMutex locked
   MOZ_ASSERT(aTrack);
 

@@ -19,6 +19,8 @@
 #include "webrtc/modules/audio_processing/audio_buffer.h"
 #include "webrtc/modules/audio_processing/audio_processing_impl.h"
 
+#include "GeckoProfiler.h"
+
 namespace webrtc {
 namespace {
 const int16_t kFilterCoefficients8kHz[5] =
@@ -112,6 +114,7 @@ HighPassFilterImpl::HighPassFilterImpl(const AudioProcessingImpl* apm)
 HighPassFilterImpl::~HighPassFilterImpl() {}
 
 int HighPassFilterImpl::ProcessCaptureAudio(AudioBuffer* audio) {
+  PROFILER_LABEL("HighPassFilterImpl", "ProcessCaptureAudio");
   int err = apm_->kNoError;
 
   if (!is_component_enabled()) {

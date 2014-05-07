@@ -22,6 +22,8 @@
 #include "webrtc/modules/audio_processing/audio_buffer.h"
 #include "webrtc/modules/audio_processing/audio_processing_impl.h"
 
+#include "GeckoProfiler.h"
+
 namespace webrtc {
 
 #if defined(WEBRTC_NS_FLOAT)
@@ -55,6 +57,7 @@ NoiseSuppressionImpl::NoiseSuppressionImpl(const AudioProcessingImpl* apm)
 NoiseSuppressionImpl::~NoiseSuppressionImpl() {}
 
 int NoiseSuppressionImpl::ProcessCaptureAudio(AudioBuffer* audio) {
+  PROFILER_LABEL("NoiseSuppressionImpl", "ProcessCaptureAudio");
   int err = apm_->kNoError;
 
   if (!is_component_enabled()) {

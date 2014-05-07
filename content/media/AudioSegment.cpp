@@ -10,6 +10,7 @@
 #include "AudioChannelFormat.h"
 #include "Latency.h"
 #include "speex/speex_resampler.h"
+#include "GeckoProfiler.h"
 
 namespace mozilla {
 
@@ -116,6 +117,7 @@ DownmixAndInterleave(const nsTArray<const void*>& aChannelData,
 
 void AudioSegment::ResampleChunks(SpeexResamplerState* aResampler)
 {
+  PROFILER_LABEL("AudioSegment", "ResampleChunks");
   uint32_t inRate, outRate;
 
   if (mChunks.IsEmpty()) {
@@ -151,6 +153,7 @@ void AudioSegment::ResampleChunks(SpeexResamplerState* aResampler)
 void
 AudioSegment::WriteTo(uint64_t aID, AudioStream* aOutput, AudioMixer* aMixer)
 {
+  PROFILER_LABEL("AudioSegment", "WriteTo");
   uint32_t outputChannels = aOutput->GetChannels();
   nsAutoTArray<AudioDataValue,AUDIO_PROCESSING_FRAMES*GUESS_AUDIO_CHANNELS> buf;
   nsAutoTArray<const void*,GUESS_AUDIO_CHANNELS> channelData;
