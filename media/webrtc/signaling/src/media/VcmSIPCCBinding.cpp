@@ -2127,6 +2127,8 @@ static int vcmEnsureExternalCodec(
   if (config->mName == "VP8") {
     // whitelist internal codecs; I420 will be here once we resolve bug 995884
     return 0;
+  } else if (config->mName == "H261") {
+    return 0;
 #ifdef MOZ_WEBRTC_OMX
   } else if (config->mName == "I420") {
     // Here we use "I420" to register H.264 because WebRTC.org code has a
@@ -2153,8 +2155,6 @@ static int vcmEnsureExternalCodec(
     NS_NOTREACHED("Shouldn't get here!");
 #else
   } else if (config->mName == "I420") {
-    return 0;
-  } else if (config->mName == "H261") {
     return 0;
 #endif
   } else {
