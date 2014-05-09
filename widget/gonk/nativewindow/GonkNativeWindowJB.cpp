@@ -138,7 +138,7 @@ GonkNativeWindow::RecycleCallback(TextureClient* client, void* closure) {
 }
 
 void GonkNativeWindow::returnBuffer(TextureClient* client) {
-    BI_LOGD("GonkNativeWindow::returnBuffer");
+    //BI_LOGD("GonkNativeWindow::returnBuffer");
     Mutex::Autolock lock(mMutex);
 
     int index =  mBufferQueue->getSlotFromTextureClientLocked(client);

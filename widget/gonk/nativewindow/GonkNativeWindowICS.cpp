@@ -518,7 +518,7 @@ GonkNativeWindow::RecycleCallback(TextureClient* client, void* closure) {
 }
 
 void GonkNativeWindow::returnBuffer(TextureClient* client) {
-  CNW_LOGD("GonkNativeWindow::returnBuffer");
+  //CNW_LOGD("GonkNativeWindow::returnBuffer");
   Mutex::Autolock lock(mMutex);
 
   if (mAbandoned) {
