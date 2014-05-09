@@ -195,6 +195,7 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
   bool capture_size_changed = false;
   if (input_image.width() != capture_width_ ||
       input_image.height() != capture_height_) {
+    capture_size_changed = true;
     capture_width_ = input_image.width();
     capture_height_ = input_image.height();
 
@@ -212,10 +213,10 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
         capture_height_ < CIF_HEIGHT ||
         new_bits_per_frame < 20) {
       video_quality_ = GetQCIFLevel(new_bits_per_frame);
-      retVal = SetQCIFSize();
+      retVal = SetQCIFSize(); // Sets frame_width_, frame_height_
     } else {
       video_quality_ = GetCIFLevel(new_bits_per_frame);
-      retVal = SetCIFSize();
+      retVal = SetCIFSize(); // Sets frame_width_, frame_height_
     }
     if (retVal != WEBRTC_VIDEO_CODEC_OK) {
       return retVal;
@@ -225,7 +226,7 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
 
   if (capture_size_changed ||
       encoding_size_changed_) {
-    double crop_aspect_ratio = (double) frame_width_ / frame_height_;
+    double crop_aspect_ratio = ((double) frame_width_) / frame_height_;
     crop_width_ = capture_height_ * crop_aspect_ratio;
     crop_height_ = capture_height_;
 
@@ -235,15 +236,15 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
       crop_height_ = capture_width_ / crop_aspect_ratio;
     }
 
-    std::cerr << "Input size is " << capture_width_ << "x" << capture_height_ << std::endl;
-    std::cerr << "Cropping size is " << crop_width_ << "x" << crop_height_ << std::endl;
-    std::cerr << "Target size is " << frame_width_ << "x" << frame_height_ << std::endl;
+    printf_stderr("Input size is %dx%d", capture_width_, capture_height_);
+    printf_stderr("Cropping size is %dx%d", crop_width_, crop_height_);
+    printf_stderr("Target size is %dx%d", frame_width_, frame_height_);
 
-    if ((double) capture_width_ / capture_height_ == crop_aspect_ratio) {
+    if (((double) capture_width_) / capture_height_ == crop_aspect_ratio) {
       cropping_required_ = false;
     } else {
       cropping_required_ = true;
-      std::cerr << "ENCODER, Cropping required. DOH" << std::endl;
+      printf_stderr("ENCODER, Cropping required. DOH");
     }
 
     if (crop_width_ == frame_width_ &&
@@ -251,7 +252,7 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
       scaling_required_ = false;
     } else {
       scaling_required_ = true;
-      std::cerr << "ENCODER, Scaling required. Double DOH" << std::endl;
+      printf_stderr("ENCODER, Scaling required. Double DOH");
     }
 
     cropped_image_.CreateEmptyFrame(crop_width_, crop_height_,
@@ -348,7 +349,7 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
 
   ++num_frames_prev_second_render_;
   if (input_image.render_time_ms() / 1000 > prev_second_render_time_ms_ / 1000) {
-    std::cerr << "H261 Encoder !! Current framerate = " << num_frames_prev_second_render_ << std::endl;
+    printf_stderr("H261 Encoder !! Current framerate = %d", num_frames_prev_second_render_);
     num_frames_prev_second_render_ = 0;
     prev_second_render_time_ms_ = input_image.render_time_ms();
   }
@@ -471,7 +472,7 @@ int H261DecoderImpl::ReportDecodedFrame() {
   PROFILER_LABEL("H261DecoderImpl", "ReportDecodedFrame");
   ++num_frames_prev_second_render_;
   if (decoded_image_.render_time_ms() / 1000 > prev_second_render_time_ms_ / 1000) {
-    std::cerr << "H261 Decoder !! Current framerate = " << num_frames_prev_second_render_ << std::endl;
+    printf_stderr("H261 Decoder !! Current framerate = %d", num_frames_prev_second_render_);
     num_frames_prev_second_render_ = 0;
     prev_second_render_time_ms_ = decoded_image_.render_time_ms();
   }
@@ -533,8 +534,7 @@ int H261DecoderImpl::Decode(const EncodedImage& input_image,
     if (!decoder_->decode(fragment_buffer,
                           fragment_length,
                           !input_image._completeFrame)) {
-      std::cerr << "DECODE FAILED, hdr: " << std::showbase <<
-                   std::hex << (int) ((uint32_t*)fragment_buffer)[0] << std::dec << std::endl;
+      printf_stderr("DECODE FAILED, hdr: %p", ((uint32_t*)fragment_buffer)[0]);
       return WEBRTC_VIDEO_CODEC_ERROR;
     }
   }
