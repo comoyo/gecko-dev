@@ -13,6 +13,8 @@
 #include "webrtc/modules/video_coding/main/source/generic_encoder.h"
 #include "webrtc/modules/video_coding/main/source/media_optimization.h"
 
+#include "GeckoProfiler.h"
+
 namespace webrtc {
 
 //#define DEBUG_ENCODER_BIT_STREAM
@@ -60,6 +62,7 @@ int32_t
 VCMGenericEncoder::Encode(const I420VideoFrame& inputFrame,
                           const CodecSpecificInfo* codecSpecificInfo,
                           const std::vector<FrameType>& frameTypes) {
+  PROFILER_LABEL("VCMGenericEncoder", "Encode");
   std::vector<VideoFrameType> video_frame_types(frameTypes.size(),
                                                 kDeltaFrame);
   VCMEncodedFrame::ConvertFrameTypes(frameTypes, &video_frame_types);

@@ -18,7 +18,6 @@
 #include "webrtc/system_wrappers/interface/clock.h"
 #include "webrtc/system_wrappers/interface/trace.h"
 #include "webrtc/system_wrappers/interface/trace_event.h"
-#include "GeckoProfiler.h"
 
 namespace webrtc {
 namespace vcm {
@@ -158,7 +157,6 @@ class VideoCodingModuleImpl : public VideoCodingModule {
                                 const VideoContentMetrics* contentMetrics,
                                 const CodecSpecificInfo* codecSpecificInfo)
       OVERRIDE {
-    PROFILER_LABEL("VideoCodingModuleImpl", "AddVideoFrame");
     return sender_->AddVideoFrame(
         videoFrame, contentMetrics, codecSpecificInfo);
   }
@@ -243,12 +241,10 @@ class VideoCodingModuleImpl : public VideoCodingModule {
   }
 
   virtual int32_t Decode(uint16_t maxWaitTimeMs) OVERRIDE {
-    PROFILER_LABEL("VideoCodingModuleImpl", "Decode");
     return receiver_->Decode(maxWaitTimeMs);
   }
 
   virtual int32_t DecodeDualFrame(uint16_t maxWaitTimeMs) OVERRIDE {
-    PROFILER_LABEL("VideoCodingModuleImpl", "DecodeDualFrame");
     return receiver_->DecodeDualFrame(maxWaitTimeMs);
   }
 
@@ -265,7 +261,6 @@ class VideoCodingModuleImpl : public VideoCodingModule {
   virtual int32_t IncomingPacket(const uint8_t* incomingPayload,
                                  uint32_t payloadLength,
                                  const WebRtcRTPHeader& rtpInfo) OVERRIDE {
-    PROFILER_LABEL("VideoCodingModuleImpl", "IncomingPacket");
     return receiver_->IncomingPacket(incomingPayload, payloadLength, rtpInfo);
   }
 

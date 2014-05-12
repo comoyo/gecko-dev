@@ -15,6 +15,8 @@
 #include "webrtc/system_wrappers/interface/trace.h"
 #include "webrtc/system_wrappers/interface/trace_event.h"
 
+#include "GeckoProfiler.h"
+
 namespace webrtc {
 
 VCMDecodedFrameCallback::VCMDecodedFrameCallback(VCMTiming& timing,
@@ -152,6 +154,7 @@ int32_t VCMGenericDecoder::InitDecode(const VideoCodec* settings,
 int32_t VCMGenericDecoder::Decode(const VCMEncodedFrame& frame,
                                         int64_t nowMs)
 {
+    PROFILER_LABEL("VCMGenericDecoder", "Decode");
     _frameInfos[_nextFrameInfoIdx].decodeStartTimeMs = nowMs;
     _frameInfos[_nextFrameInfoIdx].renderTimeMs = frame.RenderTimeMs();
     _callback->Map(frame.TimeStamp(), &_frameInfos[_nextFrameInfoIdx]);
