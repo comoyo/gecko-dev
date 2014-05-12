@@ -631,6 +631,10 @@ sip_config_video_supported_codecs_get (rtp_ptype aSupportedCodecs[],
       aSupportedCodecs[count] = RTP_H264_P0;
       count++;
     }
+    if ( codec_mask & VCM_CODEC_RESOURCE_H261) {
+      aSupportedCodecs[count] = RTP_H261;
+      ++count;
+    }
     if ( codec_mask & VCM_CODEC_RESOURCE_VP8) {
       aSupportedCodecs[count] = RTP_VP8;
       count++;
@@ -638,10 +642,6 @@ sip_config_video_supported_codecs_get (rtp_ptype aSupportedCodecs[],
     if ( codec_mask & VCM_CODEC_RESOURCE_H263) {
       aSupportedCodecs[count] = RTP_H263;
       count++;
-    }
-    if ( codec_mask & VCM_CODEC_RESOURCE_H261) {
-      aSupportedCodecs[count] = RTP_H261;
-      ++count;
     }
 
     return count;
