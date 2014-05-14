@@ -212,10 +212,10 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
     if (capture_width_ < CIF_WIDTH ||
         capture_height_ < CIF_HEIGHT ||
         new_bits_per_frame < 20) {
-      video_quality_ = GetQCIFLevel(new_bits_per_frame);
+      video_quality_ = 31;// XXX GetQCIFLevel(new_bits_per_frame);
       retVal = SetQCIFSize(); // Sets frame_width_, frame_height_
     } else {
-      video_quality_ = GetCIFLevel(new_bits_per_frame);
+      video_quality_ = 31;// XXX GetCIFLevel(new_bits_per_frame);
       retVal = SetCIFSize(); // Sets frame_width_, frame_height_
     }
     if (retVal != WEBRTC_VIDEO_CODEC_OK) {
@@ -325,12 +325,15 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
       return WEBRTC_VIDEO_CODEC_ERR_PARAMETER;
   }
 
-  if (frame_type == kKeyFrame || encoding_size_changed_) {
+  if (frame_type == kKeyFrame || encoding_size_changed_ || true) {
     frame_type = kKeyFrame;
     encoder_->FastUpdatePicture();
   }
 
   encoder_->PreProcessOneFrame();
+
+  int encoded_image_size = 0;
+  int num_packets = 0;
 
   while (encoder_->MoreToIncEncode()) {
     // We want to send all packets with a size, and eventually
@@ -345,7 +348,13 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
     SendPacket(input_image.timestamp(),
                5, //input_image.render_time_ms());
                frame_type);
+
+    encoded_image_size += encoded_image_._length;
+    ++num_packets;
   }
+
+  printf_stderr("##### H261 Encoder !! Encoded a frame of size %d kilobits divided on %d packets",
+          encoded_image_size * 8 / 1000, num_packets);
 
   ++num_frames_prev_second_render_;
   if (input_image.render_time_ms() / 1000 > prev_second_render_time_ms_ / 1000) {
