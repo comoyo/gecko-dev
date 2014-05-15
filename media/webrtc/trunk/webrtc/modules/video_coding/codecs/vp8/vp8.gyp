@@ -25,6 +25,9 @@
         '<(webrtc_root)/modules/video_coding/codecs/interface',
         '<(webrtc_root)/modules/interface',
       ],
+      'cflags_mozilla': [
+        '$(NSPR_CFLAGS)',
+      ],
       'conditions': [
         ['build_libvpx==1', {
           'dependencies': [

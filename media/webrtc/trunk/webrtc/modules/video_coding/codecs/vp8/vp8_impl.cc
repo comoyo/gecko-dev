@@ -31,6 +31,8 @@
 #include "webrtc/system_wrappers/interface/tick_util.h"
 #include "webrtc/system_wrappers/interface/trace_event.h"
 
+#include "nsDebug.h"
+
 enum { kVp8ErrorPropagationTh = 30 };
 
 namespace webrtc {
@@ -476,6 +478,8 @@ int VP8EncoderImpl::GetEncodedPartitions(const I420VideoFrame& input_image) {
     }
   }
   if (encoded_image_._length > 0) {
+    printf_stderr("##### VP8 Encoder !! Encoded frame size: %d kb with resoultion %dx%d",
+            encoded_image_._length * 8 / 1000, encoded_image_._encodedWidth, encoded_image_._encodedHeight);
     TRACE_COUNTER1("webrtc", "EncodedFrameSize", encoded_image_._length);
     encoded_image_._timeStamp = input_image.timestamp();
     encoded_image_.capture_time_ms_ = input_image.render_time_ms();
