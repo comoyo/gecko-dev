@@ -255,6 +255,8 @@ pref("media.navigator.video.max_fs", 0); // unrestricted
 pref("media.navigator.video.max_fr", 0); // unrestricted
 #endif
 pref("media.peerconnection.video.h261_enabled", true);
+pref("media.peerconnection.video.h261_force_quality", false);
+pref("media.peerconnection.video.h261_forced_quality", 10);
 pref("media.peerconnection.video.vp8_enabled", true);
 pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.default_iceservers", "[{\"url\": \"stun:stun.services.mozilla.com\"}]");
