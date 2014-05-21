@@ -222,8 +222,10 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
     }
 
 #ifdef MOZILLA_INTERNAL_API
-    if (Preferences::GetBool("media.peerconnection.video.h261_force_quality")) {
-      video_quality_ = Preferences::GetInt("media.peerconnection.video.h261_forced_quality", DEFAULT_ENCODER_QUALITY);
+    if (mozilla::Preferences::GetBool(
+            "media.peerconnection.video.h261_force_quality")) {
+      video_quality_ = mozilla::Preferences::GetInt(
+          "media.peerconnection.video.h261_forced_quality", DEFAULT_ENCODER_QUALITY);
       video_quality_ = std::min(WORST_ENCODER_QUALITY, video_quality_);
       video_quality_ = std::max(BEST_ENCODER_QUALITY, video_quality_);
     }
