@@ -9,6 +9,10 @@
 
 #include "GeckoProfiler.h"
 
+#ifdef MOZILLA_INTERNAL_API
+#include "mozilla/Preferences.h"
+#endif
+
 #define CIF_WIDTH   352
 #define CIF_HEIGHT  288
 #define QCIF_WIDTH  176
@@ -221,6 +225,15 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
     if (retVal != WEBRTC_VIDEO_CODEC_OK) {
       return retVal;
     }
+
+#ifdef MOZILLA_INTERNAL_API
+    if (Preferences::GetBool("media.peerconnection.video.h261_force_quality")) {
+      video_quality_ = Preferences::GetInt("media.peerconnection.video.h261_forced_quality", DEFAULT_ENCODER_QUALITY);
+      video_quality_ = std::min(WORST_ENCODER_QUALITY, video_quality_);
+      video_quality_ = std::max(BEST_ENCODER_QUALITY, video_quality_);
+    }
+#endif
+
     encoder_->SetQualityLevel(video_quality_);
   }
 

@@ -39,6 +39,13 @@
       'cflags_mozilla': [
         '$(NSPR_CFLAGS)',
       ],
+      'conditions': [
+        ['build_for_test==0', {
+          'defines' : [
+            'MOZILLA_INTERNAL_API'
+          ],
+        ],
+      ],
     },
   ], # targets
 }
