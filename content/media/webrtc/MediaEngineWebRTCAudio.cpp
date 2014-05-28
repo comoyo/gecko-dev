@@ -18,8 +18,8 @@
 #define ENCODING "L16"
 #define DEFAULT_PORT 5555
 
-#define SAMPLE_RATE 256000
-#define SAMPLE_FREQUENCY 16000
+#define SAMPLE_RATE 128000
+#define SAMPLE_FREQUENCY 8000
 #define SAMPLE_LENGTH ((SAMPLE_FREQUENCY*10)/1000)
 
 // These are restrictions from the webrtc.org code

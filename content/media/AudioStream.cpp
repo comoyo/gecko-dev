@@ -302,7 +302,7 @@ int64_t AudioStream::GetWritten()
 {
   MOZ_ASSERT(sPreferredSampleRate,
              "sPreferredSampleRate has not been initialized!");
-  return 16000;
+  return 8000;
   // XXX return sPreferredSampleRate;
 }
 
