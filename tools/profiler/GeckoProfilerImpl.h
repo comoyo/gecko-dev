@@ -277,7 +277,7 @@ static inline void profiler_tracing(const char* aCategory, const char* aInfo,
 #  undef REMOVE_HAVE_ANDROID_OS
 # endif
 #else
-# define MOZ_PLATFORM_TRACING
+# define MOZ_PLATFORM_TRACING(name)
 #endif
 
 // we want the class and function name but can't easily get that using preprocessor macros
