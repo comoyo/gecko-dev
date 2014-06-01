@@ -107,7 +107,6 @@
 #include "nsIXPConnect.h"
 #include "nsIInterfaceInfo.h"
 #include "nsIXPCScriptable.h"
-#include "nsIXPCSecurityManager.h"
 #include "nsIJSRuntimeService.h"
 #include "nsWeakReference.h"
 #include "nsCOMPtr.h"
@@ -279,13 +278,10 @@ public:
 
     static bool IsISupportsDescendant(nsIInterfaceInfo* info);
 
-    nsIXPCSecurityManager* GetDefaultSecurityManager() const
+    static nsIScriptSecurityManager* SecurityManager()
     {
-        // mDefaultSecurityManager is main-thread only.
-        if (!NS_IsMainThread()) {
-            return nullptr;
-        }
-        return mDefaultSecurityManager;
+        MOZ_ASSERT(NS_IsMainThread());
+        return gScriptSecurityManager;
     }
 
     // This returns an AddRef'd pointer. It does not do this with an 'out' param
@@ -330,7 +326,6 @@ private:
     static bool                     gOnceAliveNowDead;
 
     XPCJSRuntime*                   mRuntime;
-    nsRefPtr<nsIXPCSecurityManager> mDefaultSecurityManager;
     bool                            mShuttingDown;
 
     // nsIThreadInternal doesn't remember which observers it called
@@ -515,11 +510,16 @@ public:
     void DispatchDeferredDeletion(bool continuation) MOZ_OVERRIDE;
 
     void CustomGCCallback(JSGCStatus status) MOZ_OVERRIDE;
+    void CustomOutOfMemoryCallback() MOZ_OVERRIDE;
+    void CustomLargeAllocationFailureCallback() MOZ_OVERRIDE;
     bool CustomContextCallback(JSContext *cx, unsigned operation) MOZ_OVERRIDE;
     static void GCSliceCallback(JSRuntime *rt,
                                 JS::GCProgress progress,
                                 const JS::GCDescription &desc);
-    static void FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status, bool isCompartmentGC);
+    static void FinalizeCallback(JSFreeOp *fop,
+                                 JSFinalizeStatus status,
+                                 bool isCompartmentGC,
+                                 void *data);
 
     inline void AddVariantRoot(XPCTraceableVariant* variant);
     inline void AddWrappedJSRoot(nsXPCWrappedJS* wrappedJS);
@@ -549,7 +549,6 @@ public:
     static void CTypesActivityCallback(JSContext *cx,
                                        js::CTypesActivityType type);
     static bool InterruptCallback(JSContext *cx);
-    static void OutOfMemoryCallback(JSContext *cx);
 
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf);
 
@@ -674,8 +673,6 @@ public:
     void SetPendingResult(nsresult rc) {mPendingResult = rc;}
 
     void DebugDump(int16_t depth);
-    void AddScope(PRCList *scope) { PR_INSERT_AFTER(scope, &mScopes); }
-    void RemoveScope(PRCList *scope) { PR_REMOVE_LINK(scope); }
 
     void MarkErrorUnreported() { mErrorUnreported = true; }
     void ClearUnreportedError() { mErrorUnreported = false; }
@@ -697,9 +694,6 @@ private:
     nsCOMPtr<nsIException> mException;
     LangType mCallingLangType;
     bool mErrorUnreported;
-
-    // A linked list of scopes to notify when we are destroyed.
-    PRCList mScopes;
 };
 
 /***************************************************************************/
@@ -727,7 +721,6 @@ class MOZ_STACK_CLASS XPCCallContext : public nsAXPCNativeCallContext
 public:
     NS_IMETHOD GetCallee(nsISupports **aResult);
     NS_IMETHOD GetCalleeMethodIndex(uint16_t *aResult);
-    NS_IMETHOD GetCalleeWrapper(nsIXPConnectWrappedNative **aResult);
     NS_IMETHOD GetJSContext(JSContext **aResult);
     NS_IMETHOD GetArgc(uint32_t *aResult);
     NS_IMETHOD GetArgvPtr(jsval **aResult);
@@ -849,7 +842,6 @@ private:
 
     XPCCallContext*                 mPrevCallContext;
 
-    JS::RootedObject                mFlattenedJSObject;
     XPCWrappedNative*               mWrapper;
     XPCWrappedNativeTearOff*        mTearOff;
 
@@ -1084,11 +1076,6 @@ public:
     static bool
     IsDyingScope(XPCWrappedNativeScope *scope);
 
-    static void InitStatics() { gScopes = nullptr; gDyingScopes = nullptr; }
-
-    XPCContext *GetContext() { return mContext; }
-    void ClearContext() { mContext = nullptr; }
-
     typedef js::HashSet<JSObject *,
                         js::PointerHasher<JSObject *, 3>,
                         js::SystemAllocPolicy> DOMExpandoSet;
@@ -1146,8 +1133,6 @@ private:
     // EnsureXBLScope() decides whether it needs to be created or not.
     // This reference is wrapped into the compartment of mGlobalJSObject.
     JS::ObjectPtr                    mXBLScope;
-
-    XPCContext*                      mContext;
 
     nsAutoPtr<DOMExpandoSet> mDOMExpandoSet;
 
@@ -3302,6 +3287,7 @@ struct GlobalProperties {
     }
     bool Parse(JSContext *cx, JS::HandleObject obj);
     bool Define(JSContext *cx, JS::HandleObject obj);
+    bool CSS : 1;
     bool Promise : 1;
     bool indexedDB : 1;
     bool XMLHttpRequest : 1;
@@ -3405,6 +3391,8 @@ JSObject *
 CreateGlobalObject(JSContext *cx, const JSClass *clasp, nsIPrincipal *principal,
                    JS::CompartmentOptions& aOptions);
 
+// InitGlobalObject enters the compartment of aGlobal, so it doesn't matter what
+// compartment aJSContext is in.
 bool
 InitGlobalObject(JSContext* aJSContext, JS::Handle<JSObject*> aGlobal,
                  uint32_t aFlags);

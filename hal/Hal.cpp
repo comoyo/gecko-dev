@@ -871,6 +871,12 @@ SetProcessPriority(int aPid,
                                         aBackgroundLRU));
 }
 
+void
+SetCurrentThreadPriority(hal::ThreadPriority aThreadPriority)
+{
+  PROXY_IF_SANDBOXED(SetCurrentThreadPriority(aThreadPriority));
+}
+
 // From HalTypes.h.
 const char*
 ProcessPriorityToString(ProcessPriority aPriority)
@@ -897,6 +903,18 @@ ProcessPriorityToString(ProcessPriority aPriority)
   default:
     MOZ_ASSERT(false);
     return "???";
+  }
+}
+
+const char *
+ThreadPriorityToString(ThreadPriority aPriority)
+{
+  switch (aPriority) {
+    case THREAD_PRIORITY_COMPOSITOR:
+      return "COMPOSITOR";
+    default:
+      MOZ_ASSERT(false);
+      return "???";
   }
 }
 
@@ -1214,6 +1232,11 @@ GetTotalSystemMemory()
   return hal_impl::GetTotalSystemMemory();
 }
 
+uint32_t
+GetTotalSystemMemoryLevel()
+{
+  return hal_impl::GetTotalSystemMemoryLevel();
+}
 
 } // namespace hal
 } // namespace mozilla

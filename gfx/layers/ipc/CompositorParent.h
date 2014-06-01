@@ -29,6 +29,7 @@
 #include "mozilla/layers/GeckoContentController.h"
 #include "mozilla/layers/LayersMessages.h"  // for TargetConfig
 #include "mozilla/layers/PCompositorParent.h"
+#include "mozilla/layers/APZTestData.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsISupportsImpl.h"
 #include "nsSize.h"                     // for nsIntSize
@@ -62,8 +63,8 @@ private:
   uint64_t mLayersId;
 };
 
-class CompositorParent MOZ_FINAL : public PCompositorParent,
-                                   public ShadowLayersManager
+class CompositorParent : public PCompositorParent,
+                         public ShadowLayersManager
 {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(CompositorParent)
 
@@ -78,13 +79,14 @@ public:
                 base::ProcessHandle aPeerProcess,
                 mozilla::ipc::ProtocolCloneContext* aCtx) MOZ_OVERRIDE;
 
+  virtual bool RecvRequestOverfill() MOZ_OVERRIDE;
   virtual bool RecvWillStop() MOZ_OVERRIDE;
   virtual bool RecvStop() MOZ_OVERRIDE;
   virtual bool RecvPause() MOZ_OVERRIDE;
   virtual bool RecvResume() MOZ_OVERRIDE;
   virtual bool RecvNotifyChildCreated(const uint64_t& child) MOZ_OVERRIDE;
   virtual bool RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
-                                SurfaceDescriptor* aOutSnapshot) MOZ_OVERRIDE;
+                                const nsIntRect& aRect) MOZ_OVERRIDE;
   virtual bool RecvFlushRendering() MOZ_OVERRIDE;
 
   virtual bool RecvNotifyRegionInvalidated(const nsIntRegion& aRegion) MOZ_OVERRIDE;
@@ -96,11 +98,14 @@ public:
   virtual void ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
                                    const TargetConfig& aTargetConfig,
                                    bool aIsFirstPaint,
-                                   bool aScheduleComposite) MOZ_OVERRIDE;
+                                   bool aScheduleComposite,
+                                   uint32_t aPaintSequenceNumber) MOZ_OVERRIDE;
   virtual void ForceComposite(LayerTransactionParent* aLayerTree) MOZ_OVERRIDE;
   virtual bool SetTestSampleTime(LayerTransactionParent* aLayerTree,
                                  const TimeStamp& aTime) MOZ_OVERRIDE;
   virtual void LeaveTestMode(LayerTransactionParent* aLayerTree) MOZ_OVERRIDE;
+  virtual void GetAPZTestData(const LayerTransactionParent* aLayerTree,
+                              APZTestData* aOutData) MOZ_OVERRIDE;
   virtual AsyncCompositionManager* GetCompositionManager(LayerTransactionParent* aLayerTree) MOZ_OVERRIDE { return mCompositionManager; }
 
   /**
@@ -127,7 +132,8 @@ public:
   bool ScheduleResumeOnCompositorThread(int width, int height);
 
   virtual void ScheduleComposition();
-  void NotifyShadowTreeTransaction(uint64_t aId, bool aIsFirstPaint, bool aScheduleComposite);
+  void NotifyShadowTreeTransaction(uint64_t aId, bool aIsFirstPaint,
+      bool aScheduleComposite, uint32_t aPaintSequenceNumber);
 
   /**
    * Check rotation info and schedule a rendering task if needed.
@@ -219,6 +225,7 @@ public:
     // the PCompositorChild
     PCompositorParent* mCrossProcessParent;
     TargetConfig mTargetConfig;
+    APZTestData mApzTestData;
   };
 
   /**
@@ -226,7 +233,7 @@ public:
    * exists.  Otherwise null is returned.  This must only be called on
    * the compositor thread.
    */
-  static const LayerTreeState* GetIndirectShadowTree(uint64_t aId);
+  static LayerTreeState* GetIndirectShadowTree(uint64_t aId);
 
   float ComputeRenderIntegrity();
 
@@ -235,8 +242,8 @@ public:
    */
   static bool IsInCompositorThread();
 
-private:
-  // Private destructor, to discourage deletion outside of Release():
+protected:
+  // Protected destructor, to discourage deletion outside of Release():
   virtual ~CompositorParent();
 
   virtual PLayerTransactionParent*
@@ -247,8 +254,8 @@ private:
   virtual bool DeallocPLayerTransactionParent(PLayerTransactionParent* aLayers) MOZ_OVERRIDE;
   virtual void ScheduleTask(CancelableTask*, int);
   void Composite();
-  void CompositeToTarget(gfx::DrawTarget* aTarget);
-  void ForceComposeToTarget(gfx::DrawTarget* aTarget);
+  void CompositeToTarget(gfx::DrawTarget* aTarget, const nsIntRect* aRect = nullptr);
+  void ForceComposeToTarget(gfx::DrawTarget* aTarget, const nsIntRect* aRect = nullptr);
 
   void SetEGLSurfaceSize(int width, int height);
 

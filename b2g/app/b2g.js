@@ -4,8 +4,29 @@
 
 #filter substitution
 
+#ifndef MOZ_MULET
 pref("toolkit.defaultChromeURI", "chrome://b2g/content/shell.html");
 pref("browser.chromeURL", "chrome://b2g/content/");
+#endif
+
+#ifdef MOZ_MULET
+// Set FxOS as the default homepage
+// bug 1000122: this pref is fetched as a complex value,
+// so that it can't be set a just a string.
+// data: url is a workaround this.
+pref("browser.startup.homepage", "data:text/plain,browser.startup.homepage=chrome://b2g/content/shell.html");
+// Prevent having the firstrun page
+pref("startup.homepage_welcome_url", "");
+pref("browser.shell.checkDefaultBrowser", false);
+// Automatically open devtools on the firefox os panel
+pref("devtools.toolbox.host", "side");
+pref("devtools.toolbox.sidebar.width", 800);
+// Disable session store to ensure having only one tab opened
+pref("browser.sessionstore.max_tabs_undo", 0);
+pref("browser.sessionstore.max_windows_undo", 0);
+pref("browser.sessionstore.restore_on_demand", false);
+pref("browser.sessionstore.resume_from_crash", false);
+#endif
 
 // Bug 945235: Prevent all bars to be considered visible:
 pref("toolkit.defaultChromeFeatures", "chrome,dialog=no,close,resizable,scrollbars,extrachrome");
@@ -45,21 +66,19 @@ pref("network.protocol-handler.warn-external.tel", false);
 pref("network.protocol-handler.warn-external.mailto", false);
 pref("network.protocol-handler.warn-external.vnd.youtube", false);
 
-/* protocol expose prefs */
-// By default, all protocol handlers are exposed. This means that the browser
-// will response to openURL commands for all URL types. It will also try to open
-// link clicks inside the browser before failing over to the system handlers.
-pref("network.protocol-handler.expose.rtsp", true);
-
 /* http prefs */
 pref("network.http.pipelining", true);
 pref("network.http.pipelining.ssl", true);
 pref("network.http.proxy.pipelining", true);
 pref("network.http.pipelining.maxrequests" , 6);
-pref("network.http.keep-alive.timeout", 600);
+pref("network.http.keep-alive.timeout", 109);
 pref("network.http.max-connections", 20);
 pref("network.http.max-persistent-connections-per-server", 6);
 pref("network.http.max-persistent-connections-per-proxy", 20);
+
+// Keep the old default of accepting all cookies,
+// no matter if you already visited the website or not
+pref("network.cookie.cookieBehavior", 0);
 
 // spdy
 pref("network.http.spdy.push-allowance", 32768);
@@ -90,14 +109,15 @@ pref("mozilla.widget.use-buffer-pixmap", true);
 pref("mozilla.widget.disable-native-theme", true);
 pref("layout.reflow.synthMouseMove", false);
 pref("layers.enable-tiles", true);
+pref("layers.low-precision-buffer", true);
 /*
    Cross Process Mutex is not supported on Mac OS X so progressive
-   paint can not be enabled for B2G on Mac OS X desktop
+   paint cannot be enabled for B2G on Mac OS X desktop
 */
 #ifdef MOZ_WIDGET_COCOA
 pref("layers.progressive-paint", false);
 #else
-pref("layers.progressive-paint", false);
+pref("layers.progressive-paint", true);
 #endif
 
 /* download manager (don't show the window or alert) */
@@ -267,15 +287,15 @@ pref("ui.dragThresholdY", 25);
 // Layers Acceleration.  We can only have nice things on gonk, because
 // they're not maintained anywhere else.
 pref("layers.offmainthreadcomposition.enabled", true);
+pref("layers.offmainthreadcomposition.async-animations", true);
 #ifndef MOZ_WIDGET_GONK
 pref("dom.ipc.tabs.disabled", true);
-pref("layers.offmainthreadcomposition.async-animations", false);
 pref("layers.async-video.enabled", false);
 #else
 pref("dom.ipc.tabs.disabled", false);
 pref("layers.acceleration.disabled", false);
-pref("layers.offmainthreadcomposition.async-animations", true);
 pref("layers.async-video.enabled", true);
+pref("layers.async-video-oop.enabled",true);
 pref("layers.async-pan-zoom.enabled", true);
 pref("gfx.content.azure.backends", "cairo");
 #endif
@@ -530,7 +550,14 @@ pref("app.update.staging.enabled", true);
 pref("app.update.service.enabled", true);
 
 // The URL hosting the update manifest.
+// Temporary hack to only put Flame builds on aus4. 18 is Jelly Bean (4.3).
+// This needs to be changed if Flame upgrades to 19 (Kit Kat) before other devices
+// move to aus4.
+#if ANDROID_VERSION == 18
+pref("app.update.url", "https://aus4.mozilla.org/update/3/%PRODUCT%/%VERSION%/%BUILD_ID%/%PRODUCT_DEVICE%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
+#else
 pref("app.update.url", "http://update.boot2gecko.org/%CHANNEL%/update.xml");
+#endif
 pref("app.update.channel", "@MOZ_UPDATE_CHANNEL@");
 
 // Interval at which update manifest is fetched.  In units of seconds.
@@ -686,6 +713,19 @@ pref("hal.processPriorityManager.gonk.BACKGROUND.Nice", 18);
 // Processes get this niceness when they have low CPU priority.
 pref("hal.processPriorityManager.gonk.LowCPUNice", 18);
 
+// By default the compositor thread on gonk runs without real-time priority.  RT
+// priority can be enabled by setting this pref to a value between 1 and 99.
+// Note that audio processing currently runs at RT priority 2 or 3 at most.
+//
+// If RT priority is disabled, then the compositor nice value is used.  The
+// code will default to ANDROID_PRIORITY_URGENT_DISPLAY which is -8.  Per gfx
+// request we are keeping the compositor at nice level 0 until we can complete
+// the investigation in bug 982972.
+//
+// Do not change these values without gfx team review.
+pref("hal.gonk.COMPOSITOR.rt_priority", 0);
+pref("hal.gonk.COMPOSITOR.nice", 0);
+
 // Fire a memory pressure event when the system has less than Xmb of memory
 // remaining.  You should probably set this just above Y.KillUnderKB for
 // the highest priority class Y that you want to make an effort to keep alive.
@@ -755,7 +795,11 @@ pref("network.activity.blipIntervalMilliseconds", 250);
 // can be flipped to false.
 pref("network.gonk.manage-offline-status", true);
 
+// On Firefox Mulet, we can't enable shared JSM scope
+// as it breaks most Firefox JSMs (see bug 961777)
+#ifndef MOZ_MULET
 pref("jsloader.reuseGlobal", true);
+#endif
 
 // Enable font inflation for browser tab content.
 pref("font.size.inflation.minTwips", 120);
@@ -801,6 +845,7 @@ pref("general.useragent.updates.retry", 86400); // 1 day
 pref("media.useAudioChannelService", true);
 
 pref("b2g.version", @MOZ_B2G_VERSION@);
+pref("b2g.osName", @MOZ_B2G_OS_NAME@);
 
 // Disable console buffering to save memory.
 pref("consoleservice.buffered", false);
@@ -909,6 +954,11 @@ pref("apz.enlarge_displayport_when_clipped", true);
 pref("apz.axis_lock_mode", 2);
 pref("apz.subframe.enabled", true);
 
+// Overscroll-related settings
+pref("apz.overscroll.enabled", false);
+pref("apz.overscroll.snap_back_accel", "0.003");
+pref("apz.overscroll.snap_back_init_vel", "1");
+
 // This preference allows FirefoxOS apps (and content, I think) to force
 // the use of software (instead of hardware accelerated) 2D canvases by
 // creating a context like this:
@@ -931,3 +981,6 @@ pref("dom.wakelock.enabled", true);
 pref("services.sync.fxaccounts.enabled", true);
 pref("identity.fxaccounts.enabled", true);
 #endif
+
+// Enable mapped array buffer
+pref("dom.mapped_arraybuffer.enabled", true);

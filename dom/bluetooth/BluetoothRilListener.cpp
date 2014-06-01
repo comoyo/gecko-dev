@@ -7,7 +7,7 @@
 #include "BluetoothRilListener.h"
 
 #include "BluetoothHfpManager.h"
-#include "nsIDOMMobileConnection.h"
+#include "nsIMobileConnectionInfo.h"
 #include "nsIRadioInterfaceLayer.h"
 #include "nsRadioInterfaceLayer.h"
 #include "nsServiceManagerUtils.h"
@@ -181,7 +181,6 @@ TelephonyListener::CallStateChanged(uint32_t aServiceId,
                                     uint32_t aCallIndex,
                                     uint16_t aCallState,
                                     const nsAString& aNumber,
-                                    bool aIsActive,
                                     bool aIsOutgoing,
                                     bool aIsEmergency,
                                     bool aIsConference,
@@ -201,7 +200,6 @@ TelephonyListener::EnumerateCallState(uint32_t aServiceId,
                                       uint32_t aCallIndex,
                                       uint16_t aCallState,
                                       const nsAString_internal& aNumber,
-                                      bool aIsActive,
                                       bool aIsOutgoing,
                                       bool aIsEmergency,
                                       bool aIsConference,
@@ -350,7 +348,7 @@ BluetoothRilListener::SelectClient()
   NS_ENSURE_TRUE_VOID(connection);
 
   for (uint32_t i = 0; i < mMobileConnListeners.Length(); i++) {
-    nsCOMPtr<nsIDOMMozMobileConnectionInfo> voiceInfo;
+    nsCOMPtr<nsIMobileConnectionInfo> voiceInfo;
     connection->GetVoiceConnectionInfo(i, getter_AddRefs(voiceInfo));
     if (!voiceInfo) {
       BT_WARNING("%s: Failed to get voice connection info", __FUNCTION__);

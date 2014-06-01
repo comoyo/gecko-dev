@@ -1137,7 +1137,7 @@ class Chars {
     JSContext *cx;
     jschar *p;
   public:
-    Chars(JSContext *cx) : cx(cx), p(nullptr) {}
+    explicit Chars(JSContext *cx) : cx(cx), p(nullptr) {}
     ~Chars() { js_free(p); }
 
     bool allocate(size_t len) {
@@ -1403,7 +1403,8 @@ JSStructuredCloneReader::startRead(Value *vp)
             return false;
 
         RegExpObject *reobj = RegExpObject::createNoStatics(context(), flat->chars(),
-                                                            flat->length(), flags, nullptr);
+                                                            flat->length(), flags, nullptr,
+                                                            context()->tempLifoAlloc());
         if (!reobj)
             return false;
         vp->setObject(*reobj);

@@ -81,13 +81,16 @@ void nsStyleUtil::AppendEscapedCSSString(const nsAString& aString,
 nsStyleUtil::AppendEscapedCSSIdent(const nsAString& aIdent, nsAString& aReturn)
 {
   // The relevant parts of the CSS grammar are:
-  //   ident    [-]?{nmstart}{nmchar}*
+  //   ident    ([-]?{nmstart}|[-][-]){nmchar}*
   //   nmstart  [_a-z]|{nonascii}|{escape}
   //   nmchar   [_a-z0-9-]|{nonascii}|{escape}
   //   nonascii [^\0-\177]
   //   escape   {unicode}|\\[^\n\r\f0-9a-f]
   //   unicode  \\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?
-  // from http://www.w3.org/TR/CSS21/syndata.html#tokenization
+  // from http://www.w3.org/TR/CSS21/syndata.html#tokenization but
+  // modified for idents by
+  // http://dev.w3.org/csswg/cssom/#serialize-an-identifier and
+  // http://dev.w3.org/csswg/css-syntax/#would-start-an-identifier
 
   const char16_t* in = aIdent.BeginReading();
   const char16_t* const end = aIdent.EndReading();
@@ -97,7 +100,13 @@ nsStyleUtil::AppendEscapedCSSIdent(const nsAString& aIdent, nsAString& aReturn)
 
   // A leading dash does not need to be escaped as long as it is not the
   // *only* character in the identifier.
-  if (in + 1 != end && *in == '-') {
+  if (*in == '-') {
+    if (in + 1 == end) {
+      aReturn.Append(char16_t('\\'));
+      aReturn.Append(char16_t('-'));
+      return true;
+    }
+
     aReturn.Append(char16_t('-'));
     ++in;
   }
@@ -105,16 +114,8 @@ nsStyleUtil::AppendEscapedCSSIdent(const nsAString& aIdent, nsAString& aReturn)
   // Escape a digit at the start (including after a dash),
   // numerically.  If we didn't escape it numerically, it would get
   // interpreted as a numeric escape for the wrong character.
-  // A second dash immediately after a leading dash must also be
-  // escaped, but this may be done symbolically.
-  if (in != end && (*in == '-' ||
-                    ('0' <= *in && *in <= '9'))) {
-    if (*in == '-') {
-      aReturn.Append(char16_t('\\'));
-      aReturn.Append(char16_t('-'));
-    } else {
-      aReturn.AppendPrintf("\\%hX ", *in);
-    }
+  if (in != end && ('0' <= *in && *in <= '9')) {
+    aReturn.AppendPrintf("\\%hX ", *in);
     ++in;
   }
 
@@ -218,7 +219,7 @@ nsStyleUtil::AppendPaintOrderValue(uint8_t aValue,
 
   for (uint32_t position = 0; position <= lastPositionToSerialize; position++) {
     if (position > 0) {
-      aResult.AppendLiteral(" ");
+      aResult.Append(' ');
     }
     uint8_t component = aValue & MASK;
     switch (component) {
@@ -268,7 +269,7 @@ nsStyleUtil::AppendFontFeatureSettings(const nsTArray<gfxFontFeature>& aFeatures
       // 0 ==> off
       aResult.AppendLiteral(" off");
     } else if (feat.mValue > 1) {
-      aResult.AppendLiteral(" ");
+      aResult.Append(' ');
       aResult.AppendInt(feat.mValue);
     }
     // else, omit value if 1, implied by default
@@ -341,7 +342,7 @@ nsStyleUtil::SerializeFunctionalAlternates(
       AppendEscapedCSSIdent(v.value, funcParams);
     } else {
       if (!funcParams.IsEmpty()) {
-        funcParams.Append(NS_LITERAL_STRING(", "));
+        funcParams.AppendLiteral(", ");
       }
       AppendEscapedCSSIdent(v.value, funcParams);
     }

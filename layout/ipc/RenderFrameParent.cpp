@@ -704,20 +704,20 @@ private:
   nsRegion mTouchSensitiveRegion;
 };
 
-RenderFrameParent::RenderFrameParent()
+RenderFrameParent::RenderFrameParent(nsFrameLoader* aFrameLoader,
+                                     ScrollingBehavior aScrollingBehavior,
+                                     TextureFactoryIdentifier* aTextureFactoryIdentifier,
+                                     uint64_t* aId,
+                                     bool* aSuccess)
   : mLayersId(0)
+  , mFrameLoader(aFrameLoader)
   , mFrameLoaderDestroyed(false)
   , mBackgroundColor(gfxRGBA(1, 1, 1))
 {
-}
-
-void
-RenderFrameParent::Init(nsFrameLoader* aFrameLoader,
-                        ScrollingBehavior aScrollingBehavior,
-                        TextureFactoryIdentifier* aTextureFactoryIdentifier,
-                        uint64_t* aId)
-{
-  mFrameLoader = aFrameLoader;
+  *aSuccess = false;
+  if (!mFrameLoader) {
+    return;
+  }
 
   *aId = 0;
 
@@ -752,6 +752,7 @@ RenderFrameParent::Init(nsFrameLoader* aFrameLoader,
   }
   // Set a default RenderFrameParent
   mFrameLoader->SetCurrentRemoteFrame(this);
+  *aSuccess = true;
 }
 
 APZCTreeManager*
@@ -810,7 +811,8 @@ void
 RenderFrameParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
                                        const TargetConfig& aTargetConfig,
                                        bool aIsFirstPaint,
-                                       bool aScheduleComposite)
+                                       bool aScheduleComposite,
+                                       uint32_t aPaintSequenceNumber)
 {
   // View map must only contain views that are associated with the current
   // shadow layer tree. We must always update the map when shadow layers
@@ -929,13 +931,14 @@ RenderFrameParent::OwnerContentChanged(nsIContent* aContent)
   BuildViewMap();
 }
 
-void
+nsEventStatus
 RenderFrameParent::NotifyInputEvent(WidgetInputEvent& aEvent,
                                     ScrollableLayerGuid* aOutTargetGuid)
 {
   if (GetApzcTreeManager()) {
-    GetApzcTreeManager()->ReceiveInputEvent(aEvent, aOutTargetGuid);
+    return GetApzcTreeManager()->ReceiveInputEvent(aEvent, aOutTargetGuid);
   }
+  return nsEventStatus_eIgnore;
 }
 
 void
@@ -991,7 +994,7 @@ RenderFrameParent::AllocPLayerTransactionParent()
     return nullptr;
   }
   nsRefPtr<LayerManager> lm = GetFrom(mFrameLoader);
-  LayerTransactionParent* result = new LayerTransactionParent(lm->AsLayerManagerComposite(), this, 0);
+  LayerTransactionParent* result = new LayerTransactionParent(lm->AsLayerManagerComposite(), this, 0, 0);
   result->AddIPDLReference();
   return result;
 }

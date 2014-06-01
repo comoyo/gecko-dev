@@ -464,7 +464,6 @@ var gUpdateEnabled = true;
 var gAutoUpdateDefault = true;
 var gHotfixID = null;
 
-var gUpdateCheckInProgress = false;
 /**
  * This is the real manager, kept here rather than in AddonManager to keep its
  * contents hidden from API users.
@@ -1134,19 +1133,15 @@ var AddonManagerInternal = {
   /**
    * Performs a background update check by starting an update for all add-ons
    * that can be updated.
-   * @return Promise{null} resolves when the background update check is complete
-   *                       (including all addon installs)
+   * @return Promise{null} Resolves when the background update check is complete
+   *                       (the resulting addon installations may still be in progress).
    */
   backgroundUpdateCheck: function AMI_backgroundUpdateCheck() {
     if (!gStarted)
       throw Components.Exception("AddonManager is not initialized",
                                  Cr.NS_ERROR_NOT_INITIALIZED);
 
-    if (gUpdateCheckInProgress) {
-      throw Components.Exception("Background update check already in progress",
-                                 Cr.NS_ERROR_UNEXPECTED);
-    }
-    gUpdateCheckInProgress = true;
+    logger.debug("Background update check beginning");
 
     return Task.spawn(function* backgroundUpdateTask() {
       let hotfixID = this.hotfixID;
@@ -1165,39 +1160,38 @@ var AddonManagerInternal = {
         Components.utils.import("resource://gre/modules/LightweightThemeManager.jsm", scope);
         scope.LightweightThemeManager.updateCurrentTheme();
 
-        let aAddons = yield new Promise((resolve, reject) => this.getAllAddons(resolve));
-
-        // If there is a known hotfix then exclude it from the list of add-ons to update.
-        var ids = [a.id for each (a in aAddons) if (a.id != hotfixID)];
+        let allAddons = yield new Promise((resolve, reject) => this.getAllAddons(resolve));
 
         // Repopulate repository cache first, to ensure compatibility overrides
         // are up to date before checking for addon updates.
-        yield new Promise((resolve, reject) => AddonRepository.backgroundUpdateCheck(ids, resolve));
+        yield AddonRepository.backgroundUpdateCheck();
 
         // Keep track of all the async add-on updates happening in parallel
         let updates = [];
 
-        for (let aAddon of aAddons) {
-          if (aAddon.id == hotfixID) {
+        for (let addon of allAddons) {
+          if (addon.id == hotfixID) {
             continue;
           }
 
           // Check all add-ons for updates so that any compatibility updates will
           // be applied
           updates.push(new Promise((resolve, reject) => {
-            aAddon.findUpdates({
+            addon.findUpdates({
               onUpdateAvailable: function BUC_onUpdateAvailable(aAddon, aInstall) {
                 // Start installing updates when the add-on can be updated and
                 // background updates should be applied.
+                logger.debug("Found update for add-on ${id}", aAddon);
                 if (aAddon.permissions & AddonManager.PERM_CAN_UPGRADE &&
                     AddonManager.shouldAutoUpdate(aAddon)) {
                   // XXX we really should resolve when this install is done,
                   // not when update-available check completes, no?
+                  logger.debug("Starting install of ${id}", aAddon);
                   aInstall.install();
                 }
               },
 
-              onUpdateFinished: resolve
+              onUpdateFinished: aAddon => { logger.debug("onUpdateFinished for ${id}", aAddon); resolve(); }
             }, AddonManager.UPDATE_WHEN_PERIODIC_UPDATE);
           }));
         }
@@ -1266,7 +1260,7 @@ var AddonManagerInternal = {
                 }
                 catch (e) {
                   logger.warn("The hotfix add-on was not signed by the expected " +
-                       "certificate and so will not be installed.");
+                       "certificate and so will not be installed.", e);
                   aInstall.cancel();
                 }
               },
@@ -1290,7 +1284,7 @@ var AddonManagerInternal = {
         }
       }
 
-      gUpdateCheckInProgress = false;
+      logger.debug("Background update check complete");
       Services.obs.notifyObservers(null,
                                    "addons-background-update-complete",
                                    null);
@@ -2333,7 +2327,7 @@ this.AddonManagerPrivate = {
   },
 
   backgroundUpdateCheck: function AMP_backgroundUpdateCheck() {
-    AddonManagerInternal.backgroundUpdateCheck();
+    return AddonManagerInternal.backgroundUpdateCheck();
   },
 
   addStartupChange: function AMP_addStartupChange(aType, aID) {

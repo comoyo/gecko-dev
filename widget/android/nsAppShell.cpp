@@ -85,20 +85,21 @@ public:
         nsCOMPtr<nsIBrowserTab> tab;
         mBrowserApp->GetBrowserTab(mTabId, getter_AddRefs(tab));
         if (!tab) {
-            mozilla::widget::android::ThumbnailHelper::SendThumbnail(buffer, mTabId, false);
+            mozilla::widget::android::ThumbnailHelper::SendThumbnail(buffer, mTabId, false, false);
             return NS_ERROR_FAILURE;
         }
 
         tab->GetWindow(getter_AddRefs(domWindow));
         if (!domWindow) {
-            mozilla::widget::android::ThumbnailHelper::SendThumbnail(buffer, mTabId, false);
+            mozilla::widget::android::ThumbnailHelper::SendThumbnail(buffer, mTabId, false, false);
             return NS_ERROR_FAILURE;
         }
 
         NS_ASSERTION(mPoints.Length() == 1, "Thumbnail event does not have enough coordinates");
 
-        nsresult rv = AndroidBridge::Bridge()->CaptureThumbnail(domWindow, mPoints[0].x, mPoints[0].y, mTabId, buffer);
-        mozilla::widget::android::ThumbnailHelper::SendThumbnail(buffer, mTabId, NS_SUCCEEDED(rv));
+        bool shouldStore = true;
+        nsresult rv = AndroidBridge::Bridge()->CaptureThumbnail(domWindow, mPoints[0].x, mPoints[0].y, mTabId, buffer, shouldStore);
+        mozilla::widget::android::ThumbnailHelper::SendThumbnail(buffer, mTabId, NS_SUCCEEDED(rv), shouldStore);
         return rv;
     }
 private:
@@ -600,7 +601,7 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
         if (svc) {
             if (curEvent->Action() == AndroidGeckoEvent::ACTION_GAMEPAD_ADDED) {
                 int svc_id = svc->AddGamepad("android",
-                                             mozilla::dom::StandardMapping,
+                                             mozilla::dom::GamepadMappingType::Standard,
                                              mozilla::dom::kStandardGamepadButtons,
                                              mozilla::dom::kStandardGamepadAxes);
                 mozilla::widget::android::GeckoAppShell::GamepadAdded(curEvent->ID(),

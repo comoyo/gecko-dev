@@ -138,7 +138,7 @@ ToStackIndex(LAllocation *a)
 
 bool
 CodeGeneratorShared::encodeAllocation(LSnapshot *snapshot, MDefinition *mir,
-                                       uint32_t *allocIndex)
+                                      uint32_t *allocIndex)
 {
     if (mir->isBox())
         mir = mir->toBox()->getOperand(0);
@@ -721,7 +721,7 @@ class OutOfLineTruncateSlow : public OutOfLineCodeBase<CodeGeneratorShared>
 };
 
 OutOfLineCode *
-CodeGeneratorShared::oolTruncateDouble(const FloatRegister &src, const Register &dest)
+CodeGeneratorShared::oolTruncateDouble(FloatRegister src, Register dest)
 {
     OutOfLineTruncateSlow *ool = new(alloc()) OutOfLineTruncateSlow(src, dest);
     if (!addOutOfLineCode(ool))
@@ -730,7 +730,7 @@ CodeGeneratorShared::oolTruncateDouble(const FloatRegister &src, const Register 
 }
 
 bool
-CodeGeneratorShared::emitTruncateDouble(const FloatRegister &src, const Register &dest)
+CodeGeneratorShared::emitTruncateDouble(FloatRegister src, Register dest)
 {
     OutOfLineCode *ool = oolTruncateDouble(src, dest);
     if (!ool)
@@ -742,7 +742,7 @@ CodeGeneratorShared::emitTruncateDouble(const FloatRegister &src, const Register
 }
 
 bool
-CodeGeneratorShared::emitTruncateFloat32(const FloatRegister &src, const Register &dest)
+CodeGeneratorShared::emitTruncateFloat32(FloatRegister src, Register dest)
 {
     OutOfLineTruncateSlow *ool = new(alloc()) OutOfLineTruncateSlow(src, dest, true);
     if (!addOutOfLineCode(ool))
@@ -977,6 +977,9 @@ CodeGeneratorShared::labelForBackedgeWithImplicitCheck(MBasicBlock *mir)
 void
 CodeGeneratorShared::jumpToBlock(MBasicBlock *mir)
 {
+    // Skip past trivial blocks.
+    mir = skipTrivialBlocks(mir);
+
     // No jump necessary if we can fall through to the next block.
     if (isNextBlock(mir->lir()))
         return;
@@ -999,6 +1002,9 @@ CodeGeneratorShared::jumpToBlock(MBasicBlock *mir)
 void
 CodeGeneratorShared::jumpToBlock(MBasicBlock *mir, Assembler::Condition cond)
 {
+    // Skip past trivial blocks.
+    mir = skipTrivialBlocks(mir);
+
     if (Label *oolEntry = labelForBackedgeWithImplicitCheck(mir)) {
         // Note: the backedge is initially a jump to the next instruction.
         // It will be patched to the target block's label during link().

@@ -35,11 +35,10 @@ pref("general.warnOnAboutConfig", true);
 pref("browser.bookmarks.max_backups",       5);
 
 // Preference for switching the cache backend, can be changed freely at runtime
-// 0 - use the old (Darin's) cache [DEFAULT]
+// 0 - use the old (Darin's) cache
 // 1 - use the new cache back-end (cache v2)
-// 2 - do a random choise for A/B testing (browser chooses old or new back-end at startup
-//     and keeps it per session)
 pref("browser.cache.use_new_backend",       0);
+pref("browser.cache.use_new_backend_temp",  true);
 
 pref("browser.cache.disk.enable",           true);
 // Is this the first-time smartsizing has been introduced?
@@ -62,9 +61,12 @@ pref("browser.cache.memory.max_entry_size",  5120);
 pref("browser.cache.disk_cache_ssl",        true);
 // 0 = once-per-session, 1 = each-time, 2 = never, 3 = when-appropriate/automatically
 pref("browser.cache.check_doc_frequency",   3);
-
 // Limit of recent metadata we keep in memory for faster access, in Kb
 pref("browser.cache.disk.metadata_memory_limit", 250); // 0.25 MB
+// The number of chunks we preload ahead of read.  One chunk has currently 256kB.
+pref("browser.cache.disk.preload_chunk_count", 4); // 1 MB of read ahead
+// The half life used to re-compute cache entries frecency in hours.
+pref("browser.cache.frecency_half_life_hours", 6);
 
 pref("browser.cache.offline.enable",           true);
 // enable offline apps by default, disable prompt
@@ -102,6 +104,9 @@ pref("dom.workers.maxPerDomain", 20);
 // Whether or not Shared Web Workers are enabled.
 pref("dom.workers.sharedWorkers.enabled", true);
 
+// Service workers
+pref("dom.serviceWorkers.enabled", false);
+
 // Whether nonzero values can be returned from performance.timing.*
 pref("dom.enable_performance", true);
 
@@ -114,6 +119,20 @@ pref("dom.gamepad.enabled", true);
 pref("dom.gamepad.non_standard_events.enabled", false);
 #else
 pref("dom.gamepad.non_standard_events.enabled", true);
+#endif
+
+// Whether the KeyboardEvent.code is enabled
+#ifdef RELEASE_BUILD
+pref("dom.keyboardevent.code.enabled", false);
+#else
+pref("dom.keyboardevent.code.enabled", true);
+#endif
+
+// Whether the WebCrypto API is enabled
+#ifdef RELEASE_BUILD
+pref("dom.webcrypto.enabled", false);
+#else
+pref("dom.webcrypto.enabled", true);
 #endif
 
 // Whether the UndoManager API is enabled
@@ -254,6 +273,9 @@ pref("media.peerconnection.video.enabled", true);
 pref("media.navigator.video.max_fs", 0); // unrestricted
 pref("media.navigator.video.max_fr", 0); // unrestricted
 #endif
+pref("media.peerconnection.video.min_bitrate", 200);
+pref("media.peerconnection.video.start_bitrate", 300);
+pref("media.peerconnection.video.max_bitrate", 2000);
 pref("media.peerconnection.video.h261_enabled", true);
 pref("media.peerconnection.video.h261_force_quality", false);
 pref("media.peerconnection.video.h261_forced_quality", 10);
@@ -319,6 +341,7 @@ pref("media.mediasource.enabled", false);
 
 #ifdef MOZ_WEBSPEECH
 pref("media.webspeech.recognition.enable", false);
+pref("media.webspeech.synth.enabled", false);
 #endif
 #ifdef MOZ_WEBM_ENCODER
 pref("media.encoder.webm.enabled", true);
@@ -351,6 +374,9 @@ pref("apz.printtree", false);
 
 // Layerize scrollable subframes to allow async panning
 pref("apz.subframe.enabled", false);
+
+// APZ testing (bug 961289)
+pref("apz.test.logging_enabled", false);
 
 #ifdef XP_MACOSX
 // Whether to run in native HiDPI mode on machines with "Retina"/HiDPI display;
@@ -453,6 +479,8 @@ pref("gfx.content.azure.backends", "cairo");
 pref("gfx.work-around-driver-bugs", true);
 pref("gfx.prefer-mesa-llvmpipe", false);
 
+pref("gfx.draw-color-bars", false);
+
 pref("accessibility.browsewithcaret", false);
 pref("accessibility.warn_on_browsewithcaret", true);
 
@@ -477,7 +505,7 @@ pref("accessibility.tabfocus_applies_to_xul", true);
 #endif
 
 // provide ability to turn on support for canvas focus rings
-pref("canvas.focusring.enabled", false);
+pref("canvas.focusring.enabled", true);
 pref("canvas.customfocusring.enabled", false);
 pref("canvas.hitregions.enabled", false);
 // Add support for canvas path objects
@@ -527,15 +555,16 @@ pref("accessibility.typeaheadfind.timeout", 4000);
 pref("accessibility.typeaheadfind.enabletimeout", true);
 pref("accessibility.typeaheadfind.soundURL", "beep");
 pref("accessibility.typeaheadfind.enablesound", true);
+#ifdef XP_MACOSX
+pref("accessibility.typeaheadfind.prefillwithselection", false);
+#else
 pref("accessibility.typeaheadfind.prefillwithselection", true);
+#endif
 pref("accessibility.typeaheadfind.matchesCountTimeout", 250);
 pref("accessibility.typeaheadfind.matchesCountLimit", 100);
 
 // use Mac OS X Appearance panel text smoothing setting when rendering text, disabled by default
 pref("gfx.use_text_smoothing_setting", false);
-
-// loading and rendering of framesets and iframes
-pref("browser.frames.enabled", true);
 
 // Number of characters to consider emphasizing for rich autocomplete results
 pref("toolkit.autocomplete.richBoundaryCutoff", 200);
@@ -758,6 +787,8 @@ pref("dom.webapps.useCurrentProfile", false);
 
 pref("dom.cycle_collector.incremental", true);
 
+pref("dom.window_experimental_bindings", true);
+
 // Parsing perf prefs. For now just mimic what the old code did.
 #ifndef XP_WIN
 pref("content.sink.pending_event_mode", 0);
@@ -788,6 +819,7 @@ pref("javascript.options.strict.debug",     true);
 pref("javascript.options.baselinejit",      true);
 pref("javascript.options.ion",              true);
 pref("javascript.options.asmjs",            true);
+pref("javascript.options.native_regexp",    true);
 pref("javascript.options.parallel_parsing", true);
 pref("javascript.options.ion.parallel_compilation", true);
 // This preference instructs the JS engine to discard the
@@ -1316,7 +1348,7 @@ pref("network.dir.format", 2);
 pref("network.prefetch-next", true);
 
 // enables the predictive service
-pref("network.seer.enabled", true);
+pref("network.seer.enabled", false);
 pref("network.seer.enable-hover-on-ssl", false);
 pref("network.seer.page-degradation.day", 0);
 pref("network.seer.page-degradation.week", 5);
@@ -1409,6 +1441,7 @@ pref("network.proxy.socks",                 "");
 pref("network.proxy.socks_port",            0);
 pref("network.proxy.socks_version",         5);
 pref("network.proxy.socks_remote_dns",      false);
+pref("network.proxy.proxy_over_tls",        true);
 pref("network.proxy.no_proxies_on",         "localhost, 127.0.0.1");
 pref("network.proxy.failover_timeout",      1800); // 30 minutes
 pref("network.online",                      true); //online/offline
@@ -1418,9 +1451,6 @@ pref("network.cookie.cookieBehavior",       0); // 0-Accept, 1-dontAcceptForeign
 pref("network.cookie.cookieBehavior",       3); // 0-Accept, 1-dontAcceptForeign, 2-dontUse, 3-limitForeign
 #endif
 #ifdef ANDROID
-pref("network.cookie.cookieBehavior",       0); // Keep the old default of accepting all cookies
-#endif
-#ifdef MOZ_WIDGET_GONK
 pref("network.cookie.cookieBehavior",       0); // Keep the old default of accepting all cookies
 #endif
 pref("network.cookie.thirdparty.sessionOnly", false);
@@ -1550,6 +1580,7 @@ pref("security.notification_enable_delay", 500);
 pref("security.csp.enable", true);
 pref("security.csp.debug", false);
 pref("security.csp.experimentalEnabled", false);
+pref("security.csp.newbackend.enable", false);
 
 // Mixed content blocking
 pref("security.mixed_content.block_active_content", false);
@@ -1814,11 +1845,7 @@ pref("layout.css.supports-rule.enabled", true);
 pref("layout.css.filters.enabled", false);
 
 // Is support for CSS sticky positioning enabled?
-#ifdef RELEASE_BUILD
-pref("layout.css.sticky.enabled", false);
-#else
 pref("layout.css.sticky.enabled", true);
-#endif
 
 // Is support for CSS "will-change" enabled?
 pref("layout.css.will-change.enabled", false);
@@ -1870,11 +1897,7 @@ pref("layout.css.prefixes.animations", true);
 pref("layout.css.prefixes.box-sizing", true);
 
 // Is support for the :scope selector enabled?
-#ifdef RELEASE_BUILD
-pref("layout.css.scope-pseudo.enabled", false);
-#else
 pref("layout.css.scope-pseudo.enabled", true);
-#endif
 
 // Is support for background-blend-mode enabled?
 pref("layout.css.background-blend-mode.enabled", true);
@@ -1904,6 +1927,9 @@ pref("layout.css.overflow-clip-box.enabled", false);
 
 // Is support for CSS grid enabled?
 pref("layout.css.grid.enabled", false);
+
+// Is support for CSS box-decoration-break enabled?
+pref("layout.css.box-decoration-break.enabled", false);
 
 // pref for which side vertical scrollbars should be on
 // 0 = end-side in UI direction
@@ -1941,6 +1967,13 @@ pref("layout.display-list.dump", false);
 // but provides more time for other operations when the browser is
 // heavily loaded.
 pref("layout.frame_rate.precise", false);
+
+// Is support for the Web Animations API enabled?
+#ifdef RELEASE_BUILD
+pref("dom.animations-api.core.enabled", false);
+#else
+pref("dom.animations-api.core.enabled", true);
+#endif
 
 // pref to permit users to make verified SOAP calls by default
 pref("capability.policy.default.SOAPCall.invokeVerifySourceHeader", "allAccess");
@@ -1985,11 +2018,7 @@ pref("plugins.click_to_play", false);
 // Player ("Shockwave for Director"). To hide all plugins from enumeration, use
 // the empty string "" to match no plugin names. To allow all plugins to be
 // enumerated, use the string "*" to match all plugin names.
-#ifdef EARLY_BETA_OR_EARLIER
-pref("plugins.enumerable_names", "Java,Nexus Personal,QuickTime,Shockwave");
-#else
 pref("plugins.enumerable_names", "*");
-#endif
 
 // The default value for nsIPluginTag.enabledState (STATE_ENABLED = 2)
 pref("plugin.default.state", 2);
@@ -2049,6 +2078,10 @@ pref("dom.ipc.plugins.java.enabled", false);
 pref("dom.ipc.plugins.flash.subprocess.crashreporter.enabled", true);
 pref("dom.ipc.plugins.reportCrashURL", true);
 
+// How long we wait before unloading an idle plugin process.
+// Defaults to 30 seconds.
+pref("dom.ipc.plugins.unloadTimeoutSecs", 30);
+
 pref("dom.ipc.processCount", 1);
 
 // Enable the use of display-lists for SVG hit-testing and painting.
@@ -2066,6 +2099,19 @@ pref("svg.marker-improvements.enabled", false);
 pref("svg.marker-improvements.enabled", true);
 #endif
 
+#ifdef RELEASE_BUILD
+pref("svg.svg-iframe.enabled", false);
+#else
+pref("svg.svg-iframe.enabled", false);
+#endif
+
+// Is support for the new getBBox method from SVG 2 enabled?
+// See https://svgwg.org/svg2-draft/single-page.html#types-SVGBoundingBoxOptions
+#ifdef RELEASE_BUILD
+pref("svg.new-getBBox.enabled", false);
+#else
+pref("svg.new-getBBox.enabled", true);
+#endif
 
 // Default font types and sizes by locale
 pref("font.default.ar", "sans-serif");
@@ -3678,6 +3724,9 @@ pref("network.tcp.keepalive.probe_count", 4);
 
 // Whether to disable acceleration for all widgets.
 pref("layers.acceleration.disabled", false);
+// Preference that when switched at runtime will run a series of benchmarks
+// and output the result to stderr.
+pref("layers.bench.enabled", false);
 
 // Whether to force acceleration on, ignoring blacklists.
 #ifdef ANDROID
@@ -3696,6 +3745,9 @@ pref("layers.draw-tile-borders", false);
 pref("layers.draw-bigimage-borders", false);
 pref("layers.frame-counter", false);
 pref("layers.enable-tiles", false);
+pref("layers.low-precision-buffer", false);
+pref("layers.tile-width", 256);
+pref("layers.tile-height", 256);
 // Max number of layers per container. See Overwrite in mobile prefs.
 pref("layers.max-active", -1);
 // When a layer is moving it will add a scroll graph to measure the smoothness
@@ -3713,8 +3765,12 @@ pref("layers.offmainthreadcomposition.frame-rate", -1);
 #ifndef XP_WIN
 // Asynchonous video compositing using the ImageBridge IPDL protocol.
 // requires off-main-thread compositing.
-// Never works on Windows, so no point pref'ing it on.
 pref("layers.async-video.enabled",false);
+#endif
+
+#ifdef XP_WIN
+pref("layers.offmainthreadcomposition.enabled", true);
+pref("layers.async-video.enabled", true);
 #endif
 
 #ifdef MOZ_X11
@@ -4004,7 +4060,7 @@ pref("dom.mms.requestStatusReport", true);
 pref("dom.mms.retrieval_mode", "manual");
 
 pref("dom.mms.sendRetryCount", 3);
-pref("dom.mms.sendRetryInterval", 300000);
+pref("dom.mms.sendRetryInterval", "10000,60000,180000");
 
 pref("dom.mms.retrievalRetryCount", 4);
 pref("dom.mms.retrievalRetryIntervals", "60000,300000,600000,1800000");
@@ -4123,5 +4179,5 @@ pref("beacon.enabled", true);
 #endif
 
 // Camera prefs
-pref("camera.control.autofocus_moving_callback.enabled", false);
-pref("camera.control.face_detection.enabled", false);
+pref("camera.control.autofocus_moving_callback.enabled", true);
+pref("camera.control.face_detection.enabled", true);

@@ -32,6 +32,7 @@ class Shmem;
 namespace layers {
 
 class ClientTiledLayerBuffer;
+class AsyncTransactionTracker;
 class ImageClient;
 class ImageContainer;
 class ImageBridgeParent;
@@ -102,6 +103,7 @@ class ImageBridgeChild : public PImageBridgeChild
                        , public CompositableForwarder
 {
   friend class ImageContainer;
+  typedef InfallibleTArray<AsyncParentMessageData> AsyncParentMessageArray;
 public:
 
   /**
@@ -128,15 +130,6 @@ public:
    * Creates the ImageBridgeChild manager protocol.
    */
   static bool StartUpOnThread(base::Thread* aThread);
-
-  /**
-   * Destroys The ImageBridge protcol.
-   *
-   * The actual destruction happens synchronously on the ImageBridgeChild thread
-   * which means that if this function is called from another thread, the current
-   * thread will be paused until the destruction is done.
-   */
-  static void DestroyBridge();
 
   /**
    * Returns true if the singleton has been created.
@@ -192,6 +185,9 @@ public:
   virtual bool
   DeallocPTextureChild(PTextureChild* actor) MOZ_OVERRIDE;
 
+  virtual bool
+  RecvParentAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessages) MOZ_OVERRIDE;
+
   TemporaryRef<ImageClient> CreateImageClient(CompositableType aType);
   TemporaryRef<ImageClient> CreateImageClientNow(CompositableType aType);
 
@@ -204,11 +200,6 @@ public:
    */
   static void FlushAllImages(ImageClient* aClient, ImageContainer* aContainer, bool aExceptFront);
 
-  /**
-   * Must be called on the ImageBridgeChild's thread.
-   */
-  static void FlushAllImagesNow(ImageClient* aClient, ImageContainer* aContainer, bool aExceptFront);
-
   // CompositableForwarder
 
   virtual void Connect(CompositableClient* aCompositable) MOZ_OVERRIDE;
@@ -219,6 +210,8 @@ public:
   virtual void UpdatedTexture(CompositableClient* aCompositable,
                               TextureClient* aTexture,
                               nsIntRegion* aRegion) MOZ_OVERRIDE;
+
+  virtual bool IsImageBridgeChild() const MOZ_OVERRIDE { return true; }
 
   /**
    * See CompositableForwarder::UseTexture
@@ -231,6 +224,10 @@ public:
 
   virtual void RemoveTextureFromCompositable(CompositableClient* aCompositable,
                                              TextureClient* aTexture) MOZ_OVERRIDE;
+
+  virtual void RemoveTextureFromCompositableAsync(AsyncTransactionTracker* aAsyncTransactionTracker,
+                                                  CompositableClient* aCompositable,
+                                                  TextureClient* aTexture) MOZ_OVERRIDE;
 
   virtual void RemoveTexture(TextureClient* aTexture) MOZ_OVERRIDE;
 
@@ -302,6 +299,9 @@ public:
 
   virtual bool IsSameProcess() const MOZ_OVERRIDE;
 
+  void SendPendingAsyncMessge();
+
+  void MarkShutDown();
 protected:
   ImageBridgeChild();
   bool DispatchAllocShmemInternal(size_t aSize,
@@ -310,6 +310,7 @@ protected:
                                   bool aUnsafe);
 
   CompositableTransaction* mTxn;
+  bool mShuttingDown;
 };
 
 } // layers

@@ -46,9 +46,6 @@
 #include "jswrapper.h"
 #include "prmjtime.h"
 
-#if ENABLE_YARR_JIT
-#include "assembler/jit/ExecutableAllocator.h"
-#endif
 #include "builtin/Eval.h"
 #include "builtin/Intl.h"
 #include "builtin/MapObject.h"
@@ -85,7 +82,6 @@
 #include "vm/WeakMapObject.h"
 #include "vm/WrapperObject.h"
 #include "vm/Xdr.h"
-#include "yarr/BumpPointerAllocator.h"
 
 #include "jsatominlines.h"
 #include "jsfuninlines.h"
@@ -637,7 +633,7 @@ JS_FRIEND_API(bool) JS::isGCEnabled() { return true; }
 #endif
 
 JS_PUBLIC_API(JSRuntime *)
-JS_NewRuntime(uint32_t maxbytes, JSUseHelperThreads useHelperThreads, JSRuntime *parentRuntime)
+JS_NewRuntime(uint32_t maxbytes, JSRuntime *parentRuntime)
 {
     MOZ_ASSERT(jsInitState == Running,
                "must call JS_Init prior to creating any JSRuntimes");
@@ -648,7 +644,7 @@ JS_NewRuntime(uint32_t maxbytes, JSUseHelperThreads useHelperThreads, JSRuntime 
     // for the main runtime in the process.
     JS_ASSERT_IF(parentRuntime, !parentRuntime->parentRuntime);
 
-    JSRuntime *rt = js_new<JSRuntime>(parentRuntime, useHelperThreads);
+    JSRuntime *rt = js_new<JSRuntime>(parentRuntime);
     if (!rt)
         return nullptr;
 
@@ -720,7 +716,7 @@ StopRequest(JSContext *cx)
     if (rt->requestDepth != 1) {
         rt->requestDepth--;
     } else {
-        rt->gc.conservativeGC.updateForRequestEnd();
+        rt->gc.notifyRequestEnd();
         rt->requestDepth = 0;
         rt->triggerActivityCallback(false);
     }
@@ -1141,7 +1137,7 @@ JS_TransplantObject(JSContext *cx, HandleObject origobj, HandleObject target)
         JS_ASSERT(Wrapper::wrappedObject(newIdentityWrapper) == newIdentity);
         if (!JSObject::swap(cx, origobj, newIdentityWrapper))
             MOZ_CRASH();
-        origobj->compartment()->putWrapper(cx, ObjectValue(*newIdentity), origv);
+        origobj->compartment()->putWrapper(cx, CrossCompartmentKey(newIdentity), origv);
     }
 
     // The new identity object might be one of several things. Return it to avoid
@@ -1385,6 +1381,14 @@ JS_GetArrayPrototype(JSContext *cx, HandleObject forObj)
 }
 
 JS_PUBLIC_API(JSObject *)
+JS_GetErrorPrototype(JSContext *cx)
+{
+    CHECK_REQUEST(cx);
+    Rooted<GlobalObject*> global(cx, cx->global());
+    return GlobalObject::getOrCreateCustomErrorPrototype(cx, global, JSEXN_ERR);
+}
+
+JS_PUBLIC_API(JSObject *)
 JS_GetGlobalForObject(JSContext *cx, JSObject *obj)
 {
     AssertHeapIsIdle(cx);
@@ -1615,15 +1619,14 @@ JS_PUBLIC_API(bool)
 JS_AddExtraGCRootsTracer(JSRuntime *rt, JSTraceDataOp traceOp, void *data)
 {
     AssertHeapIsIdle(rt);
-    return !!rt->gc.blackRootTracers.append(ExtraTracer(traceOp, data));
+    return !!rt->gc.blackRootTracers.append(Callback<JSTraceDataOp>(traceOp, data));
 }
 
 JS_PUBLIC_API(void)
 JS_RemoveExtraGCRootsTracer(JSRuntime *rt, JSTraceDataOp traceOp, void *data)
 {
-    AssertHeapIsIdle(rt);
     for (size_t i = 0; i < rt->gc.blackRootTracers.length(); i++) {
-        ExtraTracer *e = &rt->gc.blackRootTracers[i];
+        Callback<JSTraceDataOp> *e = &rt->gc.blackRootTracers[i];
         if (e->op == traceOp && e->data == data) {
             rt->gc.blackRootTracers.erase(e);
             break;
@@ -1899,15 +1902,28 @@ JS_PUBLIC_API(void)
 JS_SetGCCallback(JSRuntime *rt, JSGCCallback cb, void *data)
 {
     AssertHeapIsIdle(rt);
-    rt->gc.callback = cb;
-    rt->gc.callbackData = data;
+    rt->gc.gcCallback = cb;
+    rt->gc.gcCallbackData = data;
+}
+
+JS_PUBLIC_API(bool)
+JS_AddFinalizeCallback(JSRuntime *rt, JSFinalizeCallback cb, void *data)
+{
+    AssertHeapIsIdle(rt);
+    return rt->gc.finalizeCallbacks.append(Callback<JSFinalizeCallback>(cb, data));
 }
 
 JS_PUBLIC_API(void)
-JS_SetFinalizeCallback(JSRuntime *rt, JSFinalizeCallback cb)
+JS_RemoveFinalizeCallback(JSRuntime *rt, JSFinalizeCallback cb)
 {
-    AssertHeapIsIdle(rt);
-    rt->gc.finalizeCallback = cb;
+    for (Callback<JSFinalizeCallback> *p = rt->gc.finalizeCallbacks.begin();
+         p < rt->gc.finalizeCallbacks.end(); p++)
+    {
+        if (p->op == cb) {
+            rt->gc.finalizeCallbacks.erase(p);
+            break;
+        }
+    }
 }
 
 JS_PUBLIC_API(bool)
@@ -2156,7 +2172,7 @@ js::RecomputeStackLimit(JSRuntime *rt, StackKind kind)
         JSRuntime::AutoLockForInterrupt lock(rt);
         if (rt->mainThread.jitStackLimit != uintptr_t(-1)) {
             rt->mainThread.jitStackLimit = rt->mainThread.nativeStackLimit[kind];
-#ifdef JS_ARM_SIMULATOR
+#if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
             rt->mainThread.jitStackLimit = jit::Simulator::StackLimit();
 #endif
         }
@@ -4315,8 +4331,8 @@ JS_DefineFunctionById(JSContext *cx, HandleObject obj, HandleId id, JSNative cal
 
 struct AutoLastFrameCheck
 {
-    AutoLastFrameCheck(JSContext *cx
-                       MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit AutoLastFrameCheck(JSContext *cx
+                                MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : cx(cx)
     {
         JS_ASSERT(cx);
@@ -5877,7 +5893,7 @@ JS_NewRegExpObject(JSContext *cx, HandleObject obj, char *bytes, size_t length, 
         return nullptr;
 
     RegExpObject *reobj = RegExpObject::create(cx, res, chars, length,
-                                               RegExpFlag(flags), nullptr);
+                                               RegExpFlag(flags), nullptr, cx->tempLifoAlloc());
     js_free(chars);
     return reobj;
 }
@@ -5893,7 +5909,7 @@ JS_NewUCRegExpObject(JSContext *cx, HandleObject obj, jschar *chars, size_t leng
         return nullptr;
 
     return RegExpObject::create(cx, res, chars, length,
-                                RegExpFlag(flags), nullptr);
+                                RegExpFlag(flags), nullptr, cx->tempLifoAlloc());
 }
 
 JS_PUBLIC_API(bool)
@@ -5950,7 +5966,7 @@ JS_NewRegExpObjectNoStatics(JSContext *cx, char *bytes, size_t length, unsigned 
     if (!chars)
         return nullptr;
     RegExpObject *reobj = RegExpObject::createNoStatics(cx, chars, length,
-                                                        RegExpFlag(flags), nullptr);
+                                                        RegExpFlag(flags), nullptr, cx->tempLifoAlloc());
     js_free(chars);
     return reobj;
 }
@@ -5961,7 +5977,7 @@ JS_NewUCRegExpObjectNoStatics(JSContext *cx, jschar *chars, size_t length, unsig
     AssertHeapIsIdle(cx);
     CHECK_REQUEST(cx);
     return RegExpObject::createNoStatics(cx, chars, length,
-                                         RegExpFlag(flags), nullptr);
+                                         RegExpFlag(flags), nullptr, cx->tempLifoAlloc());
 }
 
 JS_PUBLIC_API(bool)
@@ -6366,8 +6382,7 @@ AutoFilename::reset(void *newScriptSource)
 const char *
 AutoFilename::get() const
 {
-    JS_ASSERT(scriptSource_);
-    return reinterpret_cast<ScriptSource*>(scriptSource_)->filename();
+    return scriptSource_ ? reinterpret_cast<ScriptSource*>(scriptSource_)->filename() : nullptr;
 }
 
 JS_PUBLIC_API(bool)
@@ -6561,14 +6576,17 @@ JSAutoByteString::encodeLatin1(ExclusiveContext *cx, JSString *str)
 }
 
 JS_PUBLIC_API(void)
-JS::SetLargeAllocationFailureCallback(JSRuntime *rt, JS::LargeAllocationFailureCallback lafc)
+JS::SetLargeAllocationFailureCallback(JSRuntime *rt, JS::LargeAllocationFailureCallback lafc,
+                                      void *data)
 {
     rt->largeAllocationFailureCallback = lafc;
+    rt->largeAllocationFailureCallbackData = data;
 }
 
 JS_PUBLIC_API(void)
-JS::SetOutOfMemoryCallback(JSRuntime *rt, OutOfMemoryCallback cb)
+JS::SetOutOfMemoryCallback(JSRuntime *rt, OutOfMemoryCallback cb, void *data)
 {
     rt->oomCallback = cb;
+    rt->oomCallbackData = data;
 }
 

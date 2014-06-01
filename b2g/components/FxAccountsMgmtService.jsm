@@ -71,10 +71,15 @@ this.FxAccountsMgmtService = {
 
   handleEvent: function(aEvent) {
     let msg = aEvent.detail;
-    log.debug("Got content msg " + JSON.stringify(msg));
+    log.debug("MgmtService got content event: " + JSON.stringify(msg));
     let self = FxAccountsMgmtService;
 
     if (!msg.id) {
+      return;
+    }
+
+    if (msg.error) {
+      self._onReject(msg.id, msg.error);
       return;
     }
 
@@ -114,6 +119,16 @@ this.FxAccountsMgmtService = {
         FxAccountsManager.queryAccount(data.email).then(
           result => {
             self._onFulfill(msg.id, result);
+          },
+          reason => {
+            self._onReject(msg.id, reason);
+          }
+        ).then(null, Components.utils.reportError);
+        break;
+      case "resendVerificationEmail":
+        FxAccountsManager.resendVerificationEmail().then(
+          () => {
+            self._onFulfill(msg.id);
           },
           reason => {
             self._onReject(msg.id, reason);

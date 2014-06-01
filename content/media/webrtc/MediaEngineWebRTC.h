@@ -170,6 +170,7 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
 
   void OnHardwareStateChange(HardwareState aState);
+  void GetRotation();
   bool OnNewPreviewFrame(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight);
   void OnUserError(UserContext aContext, nsresult aError);
   void OnTakePictureComplete(uint8_t* aData, uint32_t aLength, const nsAString& aMimeType);
@@ -212,9 +213,12 @@ private:
 
   // Engine variables.
 #ifdef MOZ_B2G_CAMERA
-  nsRefPtr<ICameraControl> mCameraControl;
   mozilla::ReentrantMonitor mCallbackMonitor; // Monitor for camera callback handling
+  // This is only modified on MainThread (AllocImpl and DeallocImpl)
+  nsRefPtr<ICameraControl> mCameraControl;
   nsRefPtr<nsIDOMFile> mLastCapture;
+
+  // These are protected by mMonitor below
   int mRotation;
   int mCameraAngle; // See dom/base/ScreenOrientation.h
   bool mBackCamera;
@@ -352,7 +356,8 @@ private:
   NullTransport *mNullTransport;
 };
 
-class MediaEngineWebRTC : public MediaEngine
+class MediaEngineWebRTC : public MediaEngine,
+                          public webrtc::TraceCallback
 {
 public:
   MediaEngineWebRTC(MediaEnginePrefs &aPrefs);
@@ -363,6 +368,9 @@ public:
 
   virtual void EnumerateVideoDevices(nsTArray<nsRefPtr<MediaEngineVideoSource> >*);
   virtual void EnumerateAudioDevices(nsTArray<nsRefPtr<MediaEngineAudioSource> >*);
+
+  // Webrtc trace callbacks for proxying to NSPR
+  virtual void Print(webrtc::TraceLevel level, const char* message, int length);
 
 private:
   ~MediaEngineWebRTC() {

@@ -11,6 +11,7 @@
 #ifndef WEBRTC_COMMON_TYPES_H_
 #define WEBRTC_COMMON_TYPES_H_
 
+#include <stddef.h> // size_t
 #include "webrtc/typedefs.h"
 
 #if defined(_MSC_VER)
@@ -510,6 +511,22 @@ struct VideoCodecH261
 {
 };
 
+// H264 specific
+struct VideoCodecH264
+{
+    uint8_t        profile;
+    uint8_t        constraints;
+    uint8_t        level;
+    uint8_t        packetizationMode; // 0 or 1
+    bool           frameDroppingOn;
+    int            keyFrameInterval;
+    // These are null/0 if not externally negotiated
+    const uint8_t* spsData;
+    size_t         spsLen;
+    const uint8_t* ppsData;
+    size_t         ppsLen;
+};
+
 // Unknown specific
 struct VideoCodecGeneric
 {
@@ -519,8 +536,8 @@ struct VideoCodecGeneric
 enum VideoCodecType
 {
     kVideoCodecH261,
-    kVideoCodecH264,
     kVideoCodecVP8,
+    kVideoCodecH264,
     kVideoCodecI420,
     kVideoCodecRED,
     kVideoCodecULPFEC,
@@ -532,6 +549,7 @@ union VideoCodecUnion
 {
     VideoCodecH261      H261;
     VideoCodecVP8       VP8;
+    VideoCodecH264      H264;
     VideoCodecGeneric   Generic;
 };
 

@@ -968,7 +968,7 @@ Sync11Service.prototype = {
           && (username || password || passphrase)) {
         Svc.Obs.notify("weave:service:setup-complete");
       }
-      this._log.info("Logging in user " + this.identity.username);
+      this._log.info("Logging in the user.");
       this._updateCachedURLs();
 
       if (!this.verifyLogin()) {
@@ -1247,6 +1247,9 @@ Sync11Service.prototype = {
     return this._lock("service.js: sync",
                       this._notify("sync", "", function onNotify() {
 
+      let histogram = Services.telemetry.getHistogramById("WEAVE_START_COUNT");
+      histogram.add(1);
+
       let synchronizer = new EngineSynchronizer(this);
       let cb = Async.makeSpinningCallback();
       synchronizer.onComplete = cb;
@@ -1255,6 +1258,9 @@ Sync11Service.prototype = {
       // wait() throws if the first argument is truthy, which is exactly what
       // we want.
       let result = cb.wait();
+
+      histogram = Services.telemetry.getHistogramById("WEAVE_COMPLETE_SUCCESS_COUNT");
+      histogram.add(1);
 
       // We successfully synchronized. Now let's update our declined engines.
       let meta = this.recordManager.get(this.metaURL);

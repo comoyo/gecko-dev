@@ -352,10 +352,9 @@ function _execute_test() {
 
   _Promise.Debugging.clearUncaughtErrorObservers();
   _Promise.Debugging.addUncaughtErrorObserver(function observer({message, date, fileName, stack, lineNumber}) {
-    let text = "Once bug 976205 has landed, THIS ERROR WILL CAUSE A TEST FAILURE.\n" +
-        " A promise chain failed to handle a rejection: " +
+    let text = " A promise chain failed to handle a rejection: " +
         message + " - rejection date: " + date;
-    _log_message_with_stack("test_known_fail",
+    _log_message_with_stack("test_unexpected_fail",
                             text, stack, fileName);
   });
 
@@ -673,7 +672,7 @@ function do_report_unexpected_exception(ex, text) {
   text = text ? text + " - " : "";
 
   _passed = false;
-  _log_message_with_stack("test_unexpected_fail", ex, ex.stack,
+  _log_message_with_stack("test_unexpected_fail", ex, ex.stack || "",
                           caller_stack.filename, text + "Unexpected exception ");
   _do_quit();
   throw Components.results.NS_ERROR_ABORT;
@@ -904,7 +903,7 @@ function pattern_matcher(pattern) {
     var matchers = [[p, pattern_matcher(pattern[p])] for (p in pattern)];
     // Kludge: include 'length', if not enumerable. (If it is enumerable,
     // we picked it up in the array comprehension, above.
-    ld = Object.getOwnPropertyDescriptor(pattern, 'length');
+    var ld = Object.getOwnPropertyDescriptor(pattern, 'length');
     if (ld && !ld.enumerable) {
       matchers.push(['length', pattern_matcher(pattern.length)])
     }

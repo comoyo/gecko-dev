@@ -186,6 +186,10 @@ class JitRuntime
     JitCode *valuePreBarrier_;
     JitCode *shapePreBarrier_;
 
+    // Thunk to call malloc/free.
+    JitCode *mallocStub_;
+    JitCode *freeStub_;
+
     // Thunk used by the debugger for breakpoint and step mode.
     JitCode *debugTrapHandler_;
 
@@ -204,9 +208,6 @@ class JitRuntime
     // too long, it's also freed in JitCompartment::mark and in EnterBaseline
     // (after returning from JIT code).
     uint8_t *osrTempData_;
-
-    // Keep track of memoryregions that are going to be flushed.
-    AutoFlushCache *flusher_;
 
     // Whether all Ion code in the runtime is protected, and will fault if it
     // is accessed.
@@ -239,6 +240,8 @@ class JitRuntime
     JitCode *generateBailoutHandler(JSContext *cx);
     JitCode *generateInvalidator(JSContext *cx);
     JitCode *generatePreBarrier(JSContext *cx, MIRType type);
+    JitCode *generateMallocStub(JSContext *cx);
+    JitCode *generateFreeStub(JSContext *cx);
     JitCode *generateDebugTrapHandler(JSContext *cx);
     JitCode *generateForkJoinGetSliceStub(JSContext *cx);
     JitCode *generateBaselineDebugModeOSRHandler(JSContext *cx, uint32_t *noFrameRegPopOffsetOut);
@@ -255,14 +258,6 @@ class JitRuntime
     void freeOsrTempData();
 
     static void Mark(JSTracer *trc);
-
-    AutoFlushCache *flusher() {
-        return flusher_;
-    }
-    void setFlusher(AutoFlushCache *fl) {
-        if (!flusher_ || !fl)
-            flusher_ = fl;
-    }
 
     JSC::ExecutableAllocator *execAlloc() const {
         return execAlloc_;
@@ -353,6 +348,14 @@ class JitRuntime
 
     JitCode *shapePreBarrier() const {
         return shapePreBarrier_;
+    }
+
+    JitCode *mallocStub() const {
+        return mallocStub_;
+    }
+
+    JitCode *freeStub() const {
+        return freeStub_;
     }
 
     bool ensureForkJoinGetSliceStubExists(JSContext *cx);

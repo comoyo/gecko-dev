@@ -84,14 +84,14 @@ GetBasename(const nsCString& aPath, nsACString& aOut)
 }
 
 static bool
-IsNumeric(const char* s)
+IsNumeric(const char* aStr)
 {
-  MOZ_ASSERT(*s);   // shouldn't see empty strings
-  while (*s) {
-    if (!isdigit(*s)) {
+  MOZ_ASSERT(*aStr);  // shouldn't see empty strings
+  while (*aStr) {
+    if (!isdigit(*aStr)) {
       return false;
     }
-    s++;
+    ++aStr;
   }
   return true;
 }
@@ -130,7 +130,7 @@ public:
   } while (0)
 
 #define REPORT(_path, _amount, _desc) \
-    REPORT_WITH_CLEANUP(_path, UNITS_BYTES, _amount, _desc, (void)0)
+  REPORT_WITH_CLEANUP(_path, UNITS_BYTES, _amount, _desc, (void)0)
 
   NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
                             nsISupports* aData)
@@ -190,7 +190,10 @@ private:
   // These are the cross-cutting measurements across all processes.
   struct ProcessSizes
   {
-    ProcessSizes() { memset(this, 0, sizeof(*this)); }
+    ProcessSizes()
+    {
+      memset(this, 0, sizeof(*this));
+    }
 
     size_t mSizes[ProcessSizeKindLimit];
   };
@@ -252,13 +255,13 @@ private:
             // as path separators.  Consumers of this reporter (such as
             // about:memory) have to undo this change.
             processName.ReplaceChar('/', '\\');
-            processName.Append(", ");
+            processName.AppendLiteral(", ");
           }
           fclose(f);
         }
-        processName.Append("pid=");
+        processName.AppendLiteral("pid=");
         processName.Append(pidStr);
-        processName.Append(")");
+        processName.Append(')');
 
         // Read the PSS values from the smaps file.
         nsPrintfCString smapsPath("/proc/%s/smaps", pidStr);
@@ -271,8 +274,9 @@ private:
         while (true) {
           nsresult rv = ParseMapping(f, processName, aHandleReport, aData,
                                      &processSizes, aTotalPss);
-          if (NS_FAILED(rv))
+          if (NS_FAILED(rv)) {
             break;
+          }
         }
         fclose(f);
 
@@ -295,7 +299,7 @@ private:
 
       nsAutoCString desc("This is the sum of all processes' '");
       desc.Append(kindPathSuffixes[i]);
-      desc.Append("' numbers.");
+      desc.AppendLiteral("' numbers.");
 
       REPORT(path, processSizes.mSizes[i], desc);
     }
@@ -361,8 +365,9 @@ private:
       size_t pss = 0;
       nsresult rv = ParseMapBody(aFile, aProcessName, name, description,
                                  aHandleReport, aData, &pss);
-      if (NS_FAILED(rv))
+      if (NS_FAILED(rv)) {
         break;
+      }
 
       // Increment the appropriate aProcessSizes values, and the total.
       aProcessSizes->mSizes[kind] += pss;
@@ -392,27 +397,28 @@ private:
     GetBasename(absPath, basename);
 
     if (basename.EqualsLiteral("[heap]")) {
-      aName.Append("anonymous/brk-heap");
-      aDesc.Append("Memory in anonymous mappings within the boundaries "
-                   "defined by brk() / sbrk().  This is likely to be just "
-                   "a portion of the application's heap; the remainder "
-                   "lives in other anonymous mappings. This corresponds to "
-                   "'[heap]' in /proc/<pid>/smaps.");
+      aName.AppendLiteral("anonymous/brk-heap");
+      aDesc.AppendLiteral(
+        "Memory in anonymous mappings within the boundaries defined by "
+        "brk() / sbrk().  This is likely to be just a portion of the "
+        "application's heap; the remainder lives in other anonymous mappings. "
+        "This corresponds to '[heap]' in /proc/<pid>/smaps.");
       *aProcessSizeKind = AnonymousBrkHeap;
 
     } else if (basename.EqualsLiteral("[stack]")) {
-      aName.Append("main-thread-stack");
-      aDesc.Append("The stack size of the process's main thread.  This "
-                   "corresponds to '[stack]' in /proc/<pid>/smaps.");
+      aName.AppendLiteral("main-thread-stack");
+      aDesc.AppendLiteral(
+        "The stack size of the process's main thread.  This corresponds to "
+        "'[stack]' in /proc/<pid>/smaps.");
       *aProcessSizeKind = MainThreadStack;
 
     } else if (basename.EqualsLiteral("[vdso]")) {
-      aName.Append("vdso");
-      aDesc.Append("The virtual dynamically-linked shared object, also known "
-                   "as the 'vsyscall page'. This is a memory region mapped by "
-                   "the operating system for the purpose of allowing processes "
-                   "to perform some privileged actions without the overhead of "
-                   "a syscall.");
+      aName.AppendLiteral("vdso");
+      aDesc.AppendLiteral(
+        "The virtual dynamically-linked shared object, also known as the "
+        "'vsyscall page'. This is a memory region mapped by the operating "
+        "system for the purpose of allowing processes to perform some "
+        "privileged actions without the overhead of a syscall.");
       *aProcessSizeKind = Vdso;
 
     } else if (!IsAnonymous(basename)) {
@@ -423,7 +429,7 @@ private:
       // its dirname contains "/lib", or if the basename ends with ".so".
       if (EndsWithLiteral(basename, ".so") ||
           (basename.Find(".so") != -1 && dirname.Find("/lib") != -1)) {
-        aName.Append("shared-libraries/");
+        aName.AppendLiteral("shared-libraries/");
 
         if (strncmp(aPerms, "r-x", 3) == 0) {
           *aProcessSizeKind = SharedLibrariesRX;
@@ -436,11 +442,11 @@ private:
         }
 
       } else {
-        aName.Append("other-files/");
+        aName.AppendLiteral("other-files/");
         if (EndsWithLiteral(basename, ".xpi")) {
-          aName.Append("extensions/");
+          aName.AppendLiteral("extensions/");
         } else if (dirname.Find("/fontconfig") != -1) {
-          aName.Append("fontconfig/");
+          aName.AppendLiteral("fontconfig/");
         }
         *aProcessSizeKind = OtherFiles;
       }
@@ -449,22 +455,23 @@ private:
       aDesc.Append(absPath);
 
     } else {
-      aName.Append("anonymous/outside-brk");
-      aDesc.Append("Memory in anonymous mappings outside the boundaries "
-                   "defined by brk() / sbrk().");
+      aName.AppendLiteral("anonymous/outside-brk");
+      aDesc.AppendLiteral(
+        "Memory in anonymous mappings outside the boundaries defined by "
+        "brk() / sbrk().");
       *aProcessSizeKind = AnonymousOutsideBrk;
     }
 
-    aName.Append("/[");
+    aName.AppendLiteral("/[");
     aName.Append(aPerms);
-    aName.Append("]");
+    aName.Append(']');
 
     // Append the permissions.  This is useful for non-verbose mode in
     // about:memory when the filename is long and goes of the right side of the
     // window.
-    aDesc.Append(" [");
+    aDesc.AppendLiteral(" [");
     aDesc.Append(aPerms);
-    aDesc.Append("]");
+    aDesc.Append(']');
   }
 
   nsresult ParseMapBody(
@@ -511,7 +518,7 @@ private:
 
       nsAutoCString path("mem/processes/");
       path.Append(aProcessName);
-      path.Append("/");
+      path.Append('/');
       path.Append(aName);
 
       REPORT(path, *aPss, aDescription);
@@ -626,16 +633,16 @@ private:
   uint64_t
   ReadSizeFromFile(const char* aFilename)
   {
-      FILE* sizeFile = fopen(aFilename, "r");
-      if (NS_WARN_IF(!sizeFile)) {
-        return 0;
-      }
+    FILE* sizeFile = fopen(aFilename, "r");
+    if (NS_WARN_IF(!sizeFile)) {
+      return 0;
+    }
 
-      uint64_t size = 0;
-      fscanf(sizeFile, "%" SCNu64, &size);
-      fclose(sizeFile);
+    uint64_t size = 0;
+    fscanf(sizeFile, "%" SCNu64, &size);
+    fclose(sizeFile);
 
-      return size;
+    return size;
   }
 
   nsresult
@@ -681,16 +688,16 @@ private:
 
       nsPrintfCString diskUsedPath("zram-disksize/%s/used", name);
       nsPrintfCString diskUsedDesc(
-                           "The uncompressed size of data stored in \"%s.\" "
-                           "This excludes zero-filled pages since "
-                           "no memory is allocated for them.", name);
+        "The uncompressed size of data stored in \"%s.\" "
+        "This excludes zero-filled pages since "
+        "no memory is allocated for them.", name);
       REPORT_WITH_CLEANUP(diskUsedPath, UNITS_BYTES, origSize,
                           diskUsedDesc, closedir(d));
 
       nsPrintfCString diskUnusedPath("zram-disksize/%s/unused", name);
       nsPrintfCString diskUnusedDesc(
-                           "The amount of uncompressed data that can still be "
-                           "be stored in \"%s\"", name);
+        "The amount of uncompressed data that can still be "
+        "be stored in \"%s\"", name);
       REPORT_WITH_CLEANUP(diskUnusedPath, UNITS_BYTES, unusedSize,
                           diskUnusedDesc, closedir(d));
 
@@ -702,15 +709,15 @@ private:
       uint64_t writes = ReadSizeFromFile(writesFile.get());
 
       nsPrintfCString readsDesc(
-                           "The number of reads (failed or successful) done on "
-                           "\"%s\"", name);
+        "The number of reads (failed or successful) done on "
+        "\"%s\"", name);
       nsPrintfCString readsPath("zram-accesses/%s/reads", name);
       REPORT_WITH_CLEANUP(readsPath, UNITS_COUNT_CUMULATIVE, reads,
                           readsDesc, closedir(d));
 
       nsPrintfCString writesDesc(
-                           "The number of writes (failed or successful) done "
-                           "on \"%s\"", name);
+        "The number of writes (failed or successful) done "
+        "on \"%s\"", name);
       nsPrintfCString writesPath("zram-accesses/%s/writes", name);
       REPORT_WITH_CLEANUP(writesPath, UNITS_COUNT_CUMULATIVE, writes,
                           writesDesc, closedir(d));
@@ -720,8 +727,8 @@ private:
       uint64_t comprSize = ReadSizeFromFile(comprSizeFile.get());
 
       nsPrintfCString comprSizeDesc(
-                           "The compressed size of data stored in \"%s\"",
-                            name);
+        "The compressed size of data stored in \"%s\"",
+        name);
       nsPrintfCString comprSizePath("zram-compr-data-size/%s", name);
       REPORT_WITH_CLEANUP(comprSizePath, UNITS_BYTES, comprSize,
                           comprSizeDesc, closedir(d));
@@ -816,18 +823,19 @@ NS_IMPL_ISUPPORTS(SystemReporter, nsIMemoryReporter)
 
 // Keep this in sync with SystemReporter::ProcessSizeKind!
 const char* SystemReporter::kindPathSuffixes[] = {
-    "anonymous/outside-brk",
-    "anonymous/brk-heap",
-    "shared-libraries/read-executable",
-    "shared-libraries/read-write",
-    "shared-libraries/read-only",
-    "shared-libraries/other",
-    "other-files",
-    "main-thread-stack",
-    "vdso"
+  "anonymous/outside-brk",
+  "anonymous/brk-heap",
+  "shared-libraries/read-executable",
+  "shared-libraries/read-write",
+  "shared-libraries/read-only",
+  "shared-libraries/other",
+  "other-files",
+  "main-thread-stack",
+  "vdso"
 };
 
-void Init()
+void
+Init()
 {
   RegisterStrongMemoryReporter(new SystemReporter());
 }

@@ -113,15 +113,26 @@ jit::EliminateDeadResumePointOperands(MIRGenerator *mir, MIRGraph &graph)
             // to be numbered, ensured by running this immediately after alias
             // analysis.
             uint32_t maxDefinition = 0;
-            for (MUseDefIterator uses(*ins); uses; uses++) {
-                if (uses.def()->block() != *block ||
-                    uses.def()->isBox() ||
-                    uses.def()->isPhi())
-                {
+            for (MUseIterator uses(ins->usesBegin()); uses != ins->usesEnd(); uses++) {
+                MNode *consumer = uses->consumer();
+                if (consumer->isResumePoint()) {
+                    // If the instruction's is captured by one of the resume point, then
+                    // it might be observed indirectly while the frame is live on the
+                    // stack, so it has to be computed.
+                    MResumePoint *resume = consumer->toResumePoint();
+                    if (resume->isObservableOperand(*uses)) {
+                        maxDefinition = UINT32_MAX;
+                        break;
+                    }
+                    continue;
+                }
+
+                MDefinition *def = consumer->toDefinition();
+                if (def->block() != *block || def->isBox() || def->isPhi()) {
                     maxDefinition = UINT32_MAX;
                     break;
                 }
-                maxDefinition = Max(maxDefinition, uses.def()->id());
+                maxDefinition = Max(maxDefinition, def->id());
             }
             if (maxDefinition == UINT32_MAX)
                 continue;
@@ -129,30 +140,16 @@ jit::EliminateDeadResumePointOperands(MIRGenerator *mir, MIRGraph &graph)
             // Walk the uses a second time, removing any in resume points after
             // the last use in a definition.
             for (MUseIterator uses(ins->usesBegin()); uses != ins->usesEnd(); ) {
-                if (uses->consumer()->isDefinition()) {
-                    uses++;
+                MUse *use = *uses++;
+                if (use->consumer()->isDefinition())
                     continue;
-                }
-                MResumePoint *mrp = uses->consumer()->toResumePoint();
+                MResumePoint *mrp = use->consumer()->toResumePoint();
                 if (mrp->block() != *block ||
                     !mrp->instruction() ||
                     mrp->instruction() == *ins ||
                     mrp->instruction()->id() <= maxDefinition)
                 {
-                    uses++;
                     continue;
-                }
-
-                // Function.arguments can be used to access all arguments in
-                // non-strict scripts, so we can't optimize out any arguments.
-                CompileInfo &info = block->info();
-                if (!info.script()->strict()) {
-                    uint32_t slot = uses->index();
-                    uint32_t firstArgSlot = info.firstArgSlot();
-                    if (firstArgSlot <= slot && slot - firstArgSlot < info.nargs()) {
-                        uses++;
-                        continue;
-                    }
                 }
 
                 // Store an optimized out magic value in place of all dead
@@ -165,7 +162,7 @@ jit::EliminateDeadResumePointOperands(MIRGenerator *mir, MIRGraph &graph)
                 // by removing dead operands before removing dead code.
                 MConstant *constant = MConstant::New(graph.alloc(), MagicValue(JS_OPTIMIZED_OUT));
                 block->insertBefore(*(block->begin()), constant);
-                uses = mrp->replaceOperand(uses, constant);
+                use->replaceProducer(constant);
             }
         }
     }
@@ -219,53 +216,21 @@ IsPhiObservable(MPhi *phi, Observability observe)
     // actual uses in the program have been (incorrectly) optimized
     // away, so we must be more conservative and consider resume
     // points as well.
-    switch (observe) {
-      case AggressiveObservability:
-        for (MUseDefIterator iter(phi); iter; iter++) {
-            if (!iter.def()->isPhi())
+    for (MUseIterator iter(phi->usesBegin()); iter != phi->usesEnd(); iter++) {
+        MNode *consumer = iter->consumer();
+        if (consumer->isResumePoint()) {
+            MResumePoint *resume = consumer->toResumePoint();
+            if (observe == ConservativeObservability)
+                return true;
+            if (resume->isObservableOperand(*iter))
+                return true;
+        } else {
+            MDefinition *def = consumer->toDefinition();
+            if (!def->isPhi())
                 return true;
         }
-        break;
-
-      case ConservativeObservability:
-        for (MUseIterator iter(phi->usesBegin()); iter != phi->usesEnd(); iter++) {
-            if (!iter->consumer()->isDefinition() ||
-                !iter->consumer()->toDefinition()->isPhi())
-                return true;
-        }
-        break;
     }
 
-    uint32_t slot = phi->slot();
-    CompileInfo &info = phi->block()->info();
-    JSFunction *fun = info.funMaybeLazy();
-
-    // If the Phi is of the |this| value, it must always be observable.
-    if (fun && slot == info.thisSlot())
-        return true;
-
-    // If the function may need an arguments object, then make sure to
-    // preserve the scope chain, because it may be needed to construct the
-    // arguments object during bailout. If we've already created an arguments
-    // object (or got one via OSR), preserve that as well.
-    if (fun && info.hasArguments() &&
-        (slot == info.scopeChainSlot() || slot == info.argsObjSlot()))
-    {
-        return true;
-    }
-
-    // If the Phi is one of the formal argument, and we are using an argument
-    // object in the function. The phi might be observable after a bailout.
-    // For inlined frames this is not needed, as they are captured in the inlineResumePoint.
-    if (fun && info.hasArguments()) {
-        uint32_t first = info.firstArgSlot();
-        if (first <= slot && slot - first < info.nargs()) {
-            // If arguments obj aliases formals, then the arg slots will never be used.
-            if (info.argsObjAliasesFormals())
-                return false;
-            return true;
-        }
-    }
     return false;
 }
 
@@ -1167,7 +1132,7 @@ static void
 ComputeImmediateDominators(MIRGraph &graph)
 {
     // The default start block is a root and therefore only self-dominates.
-    MBasicBlock *startBlock = *graph.begin();
+    MBasicBlock *startBlock = graph.entryBlock();
     startBlock->setImmediateDominator(startBlock);
 
     // Any OSR block is a root and therefore only self-dominates.
@@ -1251,7 +1216,7 @@ jit::BuildDominatorTree(MIRGraph &graph)
     // If compiling with OSR, many blocks will self-dominate.
     // Without OSR, there is only one root block which dominates all.
     if (!graph.osrBlock())
-        JS_ASSERT(graph.begin()->numDominated() == graph.numBlocks() - 1);
+        JS_ASSERT(graph.entryBlock()->numDominated() == graph.numBlocks() - 1);
 #endif
     // Now, iterate through the dominator tree and annotate every
     // block with its index in the pre-order traversal of the
@@ -1460,6 +1425,50 @@ AssertReversePostOrder(MIRGraph &graph)
 }
 #endif
 
+#ifdef DEBUG
+static void
+AssertDominatorTree(MIRGraph &graph)
+{
+    // Check dominators.
+    size_t i = graph.numBlocks();
+    size_t totalNumDominated = 0;
+    for (MBasicBlockIterator block(graph.begin()); block != graph.end(); block++) {
+        MBasicBlock *idom = block->immediateDominator();
+        JS_ASSERT(idom->dominates(*block));
+        JS_ASSERT(idom == *block || idom->id() < block->id());
+
+        if (idom == *block) {
+            totalNumDominated += block->numDominated() + 1;
+        } else {
+            bool foundInParent = false;
+            for (size_t j = 0; j < idom->numImmediatelyDominatedBlocks(); j++) {
+                if (idom->getImmediatelyDominatedBlock(j) == *block) {
+                    foundInParent = true;
+                    break;
+                }
+            }
+            JS_ASSERT(foundInParent);
+        }
+
+        size_t numDominated = 0;
+        for (size_t j = 0; j < block->numImmediatelyDominatedBlocks(); j++) {
+            MBasicBlock *dom = block->getImmediatelyDominatedBlock(j);
+            JS_ASSERT(block->dominates(dom));
+            JS_ASSERT(dom->id() > block->id());
+            JS_ASSERT(dom->immediateDominator() == *block);
+
+            numDominated += dom->numDominated() + 1;
+        }
+        JS_ASSERT(block->numDominated() == numDominated);
+        JS_ASSERT(block->numDominated() + 1 <= i);
+        JS_ASSERT(block->numSuccessors() != 0 || block->numDominated() == 0);
+        i--;
+    }
+    JS_ASSERT(i == 0);
+    JS_ASSERT(totalNumDominated == graph.numBlocks());
+}
+#endif
+
 void
 jit::AssertGraphCoherency(MIRGraph &graph)
 {
@@ -1522,6 +1531,8 @@ jit::AssertExtendedGraphCoherency(MIRGraph &graph)
         //
         // JS_ASSERT_IF(!successorWithPhis, block->successorWithPhis() == nullptr);
     }
+
+    AssertDominatorTree(graph);
 #endif
 }
 
@@ -1903,97 +1914,6 @@ jit::EliminateRedundantChecks(MIRGraph &graph)
     return true;
 }
 
-// If the given block contains a goto and nothing interesting before that,
-// return the goto. Return nullptr otherwise.
-static LGoto *
-FindLeadingGoto(LBlock *bb)
-{
-    for (LInstructionIterator ins(bb->begin()); ins != bb->end(); ins++) {
-        // Ignore labels.
-        if (ins->isLabel())
-            continue;
-        // If we have a goto, we're good to go.
-        if (ins->isGoto())
-            return ins->toGoto();
-        break;
-    }
-    return nullptr;
-}
-
-// Eliminate blocks containing nothing interesting besides gotos. These are
-// often created by optimizer, which splits all critical edges. If these
-// splits end up being unused after optimization and register allocation,
-// fold them back away to avoid unnecessary branching.
-bool
-jit::UnsplitEdges(LIRGraph *lir)
-{
-    for (size_t i = 0; i < lir->numBlocks(); i++) {
-        LBlock *bb = lir->getBlock(i);
-        MBasicBlock *mirBlock = bb->mir();
-
-        // Renumber the MIR blocks as we go, since we may remove some.
-        mirBlock->setId(i);
-
-        // Register allocation is done by this point, so we don't need the phis
-        // anymore. Clear them to avoid needed to keep them current as we edit
-        // the CFG.
-        bb->clearPhis();
-        mirBlock->discardAllPhis();
-
-        // First make sure the MIR block looks sane. Some of these checks may be
-        // over-conservative, but we're attempting to keep everything in MIR
-        // current as we modify the LIR, so only proceed if the MIR is simple.
-        if (mirBlock->numPredecessors() == 0 || mirBlock->numSuccessors() != 1 ||
-            !mirBlock->begin()->isGoto())
-        {
-            continue;
-        }
-
-        // The MIR block is empty, but check the LIR block too (in case the
-        // register allocator inserted spill code there, or whatever).
-        LGoto *theGoto = FindLeadingGoto(bb);
-        if (!theGoto)
-            continue;
-        MBasicBlock *target = theGoto->target();
-        if (target == mirBlock || target != mirBlock->getSuccessor(0))
-            continue;
-
-        // If we haven't yet cleared the phis for the successor, do so now so
-        // that the CFG manipulation routines don't trip over them.
-        if (!target->phisEmpty()) {
-            target->discardAllPhis();
-            target->lir()->clearPhis();
-        }
-
-        // Edit the CFG to remove lir/mirBlock and reconnect all its edges.
-        for (size_t j = 0; j < mirBlock->numPredecessors(); j++) {
-            MBasicBlock *mirPred = mirBlock->getPredecessor(j);
-
-            for (size_t k = 0; k < mirPred->numSuccessors(); k++) {
-                if (mirPred->getSuccessor(k) == mirBlock) {
-                    mirPred->replaceSuccessor(k, target);
-                    if (!target->addPredecessorWithoutPhis(mirPred))
-                        return false;
-                }
-            }
-
-            LInstruction *predTerm = *mirPred->lir()->rbegin();
-            for (size_t k = 0; k < predTerm->numSuccessors(); k++) {
-                if (predTerm->getSuccessor(k) == mirBlock)
-                    predTerm->setSuccessor(k, target);
-            }
-        }
-        target->removePredecessor(mirBlock);
-
-        // Zap the block.
-        lir->removeBlock(i);
-        lir->mir().removeBlock(mirBlock);
-        --i;
-    }
-
-    return true;
-}
-
 bool
 LinearSum::multiply(int32_t scale)
 {
@@ -2158,14 +2078,10 @@ AnalyzePoppedThis(JSContext *cx, types::TypeObject *type,
         JS_ASSERT(!baseobj->inDictionaryMode());
 
         Vector<MResumePoint *> callerResumePoints(cx);
-        MBasicBlock *block = ins->block();
-        for (MResumePoint *rp = block->callerResumePoint();
+        for (MResumePoint *rp = ins->block()->callerResumePoint();
              rp;
-             block = rp->block(), rp = block->callerResumePoint())
+             rp = rp->block()->callerResumePoint())
         {
-            JSScript *script = rp->block()->info().script();
-            if (!types::AddClearDefiniteFunctionUsesInScript(cx, type, script, block->info().script()))
-                return true;
             if (!callerResumePoints.append(rp))
                 return false;
         }
@@ -2324,7 +2240,7 @@ jit::AnalyzeNewScriptProperties(JSContext *cx, JSFunction *fun,
     if (!EliminatePhis(&builder, graph, AggressiveObservability))
         return false;
 
-    MDefinition *thisValue = graph.begin()->getSlot(info.thisSlot());
+    MDefinition *thisValue = graph.entryBlock()->getSlot(info.thisSlot());
 
     // Get a list of instructions using the |this| value in the order they
     // appear in the graph.
@@ -2352,6 +2268,9 @@ jit::AnalyzeNewScriptProperties(JSContext *cx, JSFunction *fun,
             return false;
     }
 
+    // id of the last block which added a new property.
+    size_t lastAddedBlock = 0;
+
     for (size_t i = 0; i < instructions.length(); i++) {
         MInstruction *ins = instructions[i];
 
@@ -2378,13 +2297,40 @@ jit::AnalyzeNewScriptProperties(JSContext *cx, JSFunction *fun,
             definitelyExecuted = false;
 
         bool handled = false;
+        size_t slotSpan = baseobj->slotSpan();
         if (!AnalyzePoppedThis(cx, type, thisValue, ins, definitelyExecuted,
                                baseobj, initializerList, &accessedProperties, &handled))
         {
             return false;
         }
         if (!handled)
-            return true;
+            break;
+
+        if (slotSpan != baseobj->slotSpan()) {
+            JS_ASSERT(ins->block()->id() >= lastAddedBlock);
+            lastAddedBlock = ins->block()->id();
+        }
+    }
+
+    if (baseobj->slotSpan() != 0) {
+        // We found some definite properties, but their correctness is still
+        // contingent on the correct frames being inlined. Add constraints to
+        // invalidate the definite properties if additional functions could be
+        // called at the inline frame sites.
+        Vector<MBasicBlock *> exitBlocks(cx);
+        for (MBasicBlockIterator block(graph.begin()); block != graph.end(); block++) {
+            // Inlining decisions made after the last new property was added to
+            // the object don't need to be frozen.
+            if (block->id() > lastAddedBlock)
+                break;
+            if (MResumePoint *rp = block->callerResumePoint()) {
+                if (block->numPredecessors() == 1 && block->getPredecessor(0) == rp->block()) {
+                    JSScript *script = rp->block()->info().script();
+                    if (!types::AddClearDefiniteFunctionUsesInScript(cx, type, script, block->info().script()))
+                        return false;
+                }
+            }
+        }
     }
 
     return true;
@@ -2512,7 +2458,7 @@ jit::AnalyzeArgumentsUsage(JSContext *cx, JSScript *scriptArg)
     if (!EliminatePhis(&builder, graph, AggressiveObservability))
         return false;
 
-    MDefinition *argumentsValue = graph.begin()->getSlot(info.argsObjSlot());
+    MDefinition *argumentsValue = graph.entryBlock()->getSlot(info.argsObjSlot());
 
     bool argumentsContentsObserved = false;
 
@@ -2523,7 +2469,7 @@ jit::AnalyzeArgumentsUsage(JSContext *cx, JSScript *scriptArg)
         if (!use->isInstruction())
             return true;
 
-        if (!ArgumentsUseCanBeLazy(cx, script, use->toInstruction(), uses.index(),
+        if (!ArgumentsUseCanBeLazy(cx, script, use->toInstruction(), use->indexOf(uses.use()),
                                    &argumentsContentsObserved))
         {
             return true;

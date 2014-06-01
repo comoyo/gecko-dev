@@ -78,8 +78,10 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext *cx,
     // add ourselves to the scopes list
     {
         MOZ_ASSERT(aGlobal);
-        MOZ_ASSERT(js::GetObjectClass(aGlobal)->flags & (JSCLASS_PRIVATE_IS_NSISUPPORTS |
-                                                         JSCLASS_HAS_PRIVATE)); 
+        DebugOnly<const js::Class*> clasp = js::GetObjectClass(aGlobal);
+        MOZ_ASSERT(clasp->flags & (JSCLASS_PRIVATE_IS_NSISUPPORTS |
+                                   JSCLASS_HAS_PRIVATE) ||
+                   mozilla::dom::IsDOMClass(clasp));
 #ifdef DEBUG
         for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext)
             MOZ_ASSERT(aGlobal != cur->GetGlobalJSObjectPreserveColor(), "dup object");
@@ -87,10 +89,6 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext *cx,
 
         mNext = gScopes;
         gScopes = this;
-
-        // Grab the XPCContext associated with our context.
-        mContext = XPCContext::GetXPCContext(cx);
-        mContext->AddScope(this);
     }
 
     MOZ_COUNT_CTOR(XPCWrappedNativeScope);
@@ -135,7 +133,7 @@ XPCWrappedNativeScope::GetComponentsJSObject()
     AutoJSContext cx;
     if (!mComponents) {
         nsIPrincipal *p = GetPrincipal();
-        bool system = XPCWrapper::GetSecurityManager()->IsSystemPrincipal(p);
+        bool system = nsXPConnect::SecurityManager()->IsSystemPrincipal(p);
         mComponents = system ? new nsXPCComponents(this)
                              : new nsXPCComponentsBase(this);
     }
@@ -289,9 +287,6 @@ XPCWrappedNativeScope::~XPCWrappedNativeScope()
         MOZ_ASSERT(0 == mWrappedNativeProtoMap->Count(), "scope has non-empty map");
         delete mWrappedNativeProtoMap;
     }
-
-    if (mContext)
-        mContext->RemoveScope(this);
 
     // This should not be necessary, since the Components object should die
     // with the scope but just in case.

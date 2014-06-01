@@ -6,6 +6,7 @@
 
 PARALLEL_DIRS += [
   'encoder',
+  'gmp',
   'mediasource',
   'ogg',
   'webaudio',
@@ -188,3 +189,5 @@ DEFINES['MOZILLA_INTERNAL_API'] = True
 if CONFIG['MOZ_OMX_DECODER']:
     DEFINES['MOZ_OMX_DECODER'] = True
 
+if CONFIG['ANDROID_VERSION'] > '15':
+    DEFINES['MOZ_OMX_WEBM_DECODER'] = True

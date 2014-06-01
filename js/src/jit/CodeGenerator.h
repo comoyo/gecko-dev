@@ -135,7 +135,6 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitCallDirectEvalV(LCallDirectEvalV *lir);
     bool visitDoubleToInt32(LDoubleToInt32 *lir);
     bool visitFloat32ToInt32(LFloat32ToInt32 *lir);
-    bool visitNewSlots(LNewSlots *lir);
     bool visitNewArrayCallVM(LNewArray *lir);
     bool visitNewArray(LNewArray *lir);
     bool visitOutOfLineNewArray(OutOfLineNewArray *ool);
@@ -204,8 +203,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitModD(LModD *ins);
     bool visitMinMaxI(LMinMaxI *lir);
     bool visitBinaryV(LBinaryV *lir);
-    bool emitCompareS(LInstruction *lir, JSOp op, Register left, Register right,
-                      Register output, Register temp);
+    bool emitCompareS(LInstruction *lir, JSOp op, Register left, Register right, Register output);
     bool visitCompareS(LCompareS *lir);
     bool visitCompareStrictS(LCompareStrictS *lir);
     bool visitCompareVM(LCompareVM *lir);
@@ -353,16 +351,16 @@ class CodeGenerator : public CodeGeneratorSpecific
   private:
     bool addGetPropertyCache(LInstruction *ins, RegisterSet liveRegs, Register objReg,
                              PropertyName *name, TypedOrValueRegister output,
-                             bool monitoredResult);
+                             bool monitoredResult, jsbytecode *profilerLeavePc);
     bool addGetElementCache(LInstruction *ins, Register obj, ConstantOrRegister index,
                             TypedOrValueRegister output, bool monitoredResult,
-                            bool allowDoubleResult);
+                            bool allowDoubleResult, jsbytecode *profilerLeavePc);
     bool addSetPropertyCache(LInstruction *ins, RegisterSet liveRegs, Register objReg,
                              PropertyName *name, ConstantOrRegister value, bool strict,
-                             bool needsTypeBarrier);
+                             bool needsTypeBarrier, jsbytecode *profilerLeavePc);
     bool addSetElementCache(LInstruction *ins, Register obj, Register unboxIndex, Register temp,
                             FloatRegister tempFloat, ValueOperand index, ConstantOrRegister value,
-                            bool strict, bool guardHoles);
+                            bool strict, bool guardHoles, jsbytecode *profilerLeavePc);
     bool checkForAbortPar(LInstruction *lir);
 
     bool generateBranchV(const ValueOperand &value, Label *ifTrue, Label *ifFalse, FloatRegister fr);

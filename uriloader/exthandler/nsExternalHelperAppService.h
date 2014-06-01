@@ -38,7 +38,6 @@
 #include "nsIPrompt.h"
 #include "nsAutoPtr.h"
 #include "mozilla/Attributes.h"
-#include "necko-config.h"
 
 class nsExternalAppHandler;
 class nsIMIMEInfo;
@@ -176,14 +175,6 @@ protected:
    * the private browsing mode)
    */
   void ExpungeTemporaryPrivateFiles();
-
-#ifdef NECKO_PROTOCOL_rtsp
-  /**
-   * Launch video app for rtsp protocol. This function is supported only on Gonk
-   * for now.
-   */
-  static void LaunchVideoAppForRtsp(nsIURI* aURI);
-#endif
 
   /**
    * Array for the files that should be deleted
@@ -337,6 +328,10 @@ protected:
    * empty.
    */
   nsCOMPtr<nsIArray> mSignatureInfo;
+  /**
+   * Stores the redirect information associated with the channel.
+   */
+  nsCOMPtr<nsIArray> mRedirects;
   /**
    * Creates the temporary file for the download and an output stream for it.
    * Upon successful return, both mTempFile and mSaver will be valid.

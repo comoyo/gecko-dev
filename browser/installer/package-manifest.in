@@ -121,6 +121,11 @@
 #endif
 #endif
 #endif
+#ifdef MOZ_REPLACE_MALLOC
+#ifndef MOZ_JEMALLOC3
+@BINPATH@/@DLL_PREFIX@replace_jemalloc@DLL_SUFFIX@
+#endif
+#endif
 
 [browser]
 ; [Base Browser Files]
@@ -344,6 +349,8 @@
 @BINPATH@/components/telemetry.xpt
 
 ; JavaScript components
+@BINPATH@/components/ChromeNotifications.js
+@BINPATH@/components/ChromeNotifications.manifest
 @BINPATH@/components/ConsoleAPI.manifest
 @BINPATH@/components/ConsoleAPIStorage.js
 @BINPATH@/components/BrowserElementParent.manifest
@@ -383,7 +390,7 @@
 @BINPATH@/components/nsLoginInfo.js
 @BINPATH@/components/nsLoginManager.js
 @BINPATH@/components/nsLoginManagerPrompter.js
-@BINPATH@/components/storage-mozStorage.js
+@BINPATH@/components/storage-json.js
 @BINPATH@/components/crypto-SDR.js
 @BINPATH@/components/jsconsole-clhandler.manifest
 @BINPATH@/components/jsconsole-clhandler.js
@@ -405,6 +412,7 @@
 @BINPATH@/components/extensions.manifest
 @BINPATH@/components/addonManager.js
 @BINPATH@/components/amContentHandler.js
+@BINPATH@/components/amInstallTrigger.js
 @BINPATH@/components/amWebInstallListener.js
 @BINPATH@/components/nsBlocklistService.js
 #ifdef MOZ_UPDATER
@@ -528,6 +536,9 @@
 @BINPATH@/components/Push.manifest
 @BINPATH@/components/PushServiceLauncher.js
 
+@BINPATH@/components/SlowScriptDebug.manifest
+@BINPATH@/components/SlowScriptDebug.js
+
 #ifndef RELEASE_BUILD
 @BINPATH@/components/InterAppComm.manifest
 @BINPATH@/components/InterAppCommService.js
@@ -626,6 +637,13 @@
 @BINPATH@/browser/chrome/icons/default/default16.png
 @BINPATH@/browser/chrome/icons/default/default32.png
 @BINPATH@/browser/chrome/icons/default/default48.png
+#endif
+
+; [Webide Files]
+#ifdef MOZ_DEVTOOLS_WEBIDE
+@BINPATH@/browser/chrome/webide@JAREXT@
+@BINPATH@/browser/chrome/webide.manifest
+@BINPATH@/browser/@PREF_DIR@/webide-prefs.js
 #endif
 
 ; shell icons
@@ -771,6 +789,7 @@ bin/libfreebl_32int64_3.so
 #ifdef MOZ_CRASHREPORTER
 @BINPATH@/components/CrashService.manifest
 @BINPATH@/components/CrashService.js
+@BINPATH@/components/toolkit_crashservice.xpt
 #ifdef XP_MACOSX
 @BINPATH@/crashreporter.app/
 #else
@@ -847,5 +866,7 @@ bin/libfreebl_32int64_3.so
 
 
 #ifdef MOZ_ASAN
+#ifdef CLANG_CXX
 @BINPATH@/llvm-symbolizer
+#endif
 #endif

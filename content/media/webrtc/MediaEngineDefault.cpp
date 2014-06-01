@@ -51,14 +51,14 @@ MediaEngineDefaultVideoSource::~MediaEngineDefaultVideoSource()
 void
 MediaEngineDefaultVideoSource::GetName(nsAString& aName)
 {
-  aName.Assign(NS_LITERAL_STRING("Default Video Device"));
+  aName.AssignLiteral(MOZ_UTF16("Default Video Device"));
   return;
 }
 
 void
 MediaEngineDefaultVideoSource::GetUUID(nsAString& aUUID)
 {
-  aUUID.Assign(NS_LITERAL_STRING("1041FCBD-3F12-4F7B-9E9B-1EC556DD5676"));
+  aUUID.AssignLiteral(MOZ_UTF16("1041FCBD-3F12-4F7B-9E9B-1EC556DD5676"));
   return;
 }
 
@@ -362,14 +362,14 @@ MediaEngineDefaultAudioSource::~MediaEngineDefaultAudioSource()
 void
 MediaEngineDefaultAudioSource::GetName(nsAString& aName)
 {
-  aName.Assign(NS_LITERAL_STRING("Default Audio Device"));
+  aName.AssignLiteral(MOZ_UTF16("Default Audio Device"));
   return;
 }
 
 void
 MediaEngineDefaultAudioSource::GetUUID(nsAString& aUUID)
 {
-  aUUID.Assign(NS_LITERAL_STRING("B7CBD7C1-53EF-42F9-8353-73F61C70C092"));
+  aUUID.AssignLiteral(MOZ_UTF16("B7CBD7C1-53EF-42F9-8353-73F61C70C092"));
   return;
 }
 
@@ -425,10 +425,10 @@ MediaEngineDefaultAudioSource::Start(SourceMediaStream* aStream, TrackID aID)
 #if defined(MOZ_WIDGET_GONK) && defined(DEBUG)
 // B2G emulator debug is very, very slow and has problems dealing with realtime audio inputs
   mTimer->InitWithCallback(this, MediaEngine::DEFAULT_AUDIO_TIMER_MS*10,
-                           nsITimer::TYPE_REPEATING_PRECISE);
+                           nsITimer::TYPE_REPEATING_PRECISE_CAN_SKIP);
 #else
   mTimer->InitWithCallback(this, MediaEngine::DEFAULT_AUDIO_TIMER_MS,
-                           nsITimer::TYPE_REPEATING_PRECISE);
+                           nsITimer::TYPE_REPEATING_PRECISE_CAN_SKIP);
 #endif
   mState = kStarted;
 

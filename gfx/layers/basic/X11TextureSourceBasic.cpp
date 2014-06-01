@@ -8,8 +8,9 @@
 #include "gfxXlibSurface.h"
 #include "gfx2DGlue.h"
 
-using namespace mozilla;
-using namespace mozilla::layers;
+namespace mozilla {
+namespace layers {
+
 using namespace mozilla::gfx;
 
 X11TextureSourceBasic::X11TextureSourceBasic(BasicCompositor* aCompositor, gfxXlibSurface* aSurface)
@@ -32,11 +33,15 @@ X11TextureSourceBasic::GetFormat() const
 }
 
 SourceSurface*
-X11TextureSourceBasic::GetSurface()
+X11TextureSourceBasic::GetSurface(DrawTarget* aTarget)
 {
   if (!mSourceSurface) {
-    mSourceSurface =
-      Factory::CreateSourceSurfaceForCairoSurface(mSurface->CairoSurface(), GetFormat());
+    NativeSurface surf;
+    surf.mFormat = GetFormat();
+    surf.mType = NativeSurfaceType::CAIRO_SURFACE;
+    surf.mSurface = mSurface->CairoSurface();
+    surf.mSize = GetSize();
+    mSourceSurface = aTarget->CreateSourceSurfaceFromNativeSurface(surf);
   }
   return mSourceSurface;
 }
@@ -62,4 +67,7 @@ X11TextureSourceBasic::ContentTypeToSurfaceFormat(gfxContentType aType)
     default:
       return SurfaceFormat::UNKNOWN;
   }
+}
+
+}
 }

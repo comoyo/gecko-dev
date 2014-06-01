@@ -18,12 +18,14 @@ namespace mozilla {
 
 namespace layout {
 class RenderFrameChild;
+class ShadowLayerForwarder;
 }
 
 namespace layers {
 
 class LayerTransactionChild : public PLayerTransactionChild
 {
+  typedef InfallibleTArray<AsyncParentMessageData> AsyncParentMessageArray;
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(LayerTransactionChild)
   /**
@@ -37,9 +39,16 @@ public:
 
   bool IPCOpen() const { return mIPCOpen; }
 
+  void SetForwarder(ShadowLayerForwarder* aForwarder)
+  {
+    mForwarder = aForwarder;
+  }
+
 protected:
   LayerTransactionChild()
     : mIPCOpen(false)
+    , mDestroyed(false)
+    , mForwarder(nullptr)
   {}
   ~LayerTransactionChild() { }
 
@@ -52,6 +61,9 @@ protected:
   virtual PTextureChild* AllocPTextureChild(const SurfaceDescriptor& aSharedData,
                                             const TextureFlags& aFlags) MOZ_OVERRIDE;
   virtual bool DeallocPTextureChild(PTextureChild* actor) MOZ_OVERRIDE;
+
+  virtual bool
+  RecvParentAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessages) MOZ_OVERRIDE;
 
   virtual void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
 
@@ -69,6 +81,8 @@ protected:
   friend class layout::RenderFrameChild;
 
   bool mIPCOpen;
+  bool mDestroyed;
+  ShadowLayerForwarder* mForwarder;
 };
 
 } // namespace layers

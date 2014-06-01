@@ -785,15 +785,14 @@ nsWindowWatcher::OpenWindowInternal(nsIDOMWindow *aParent,
 
   // Now we have to set the right opener principal on the new window.  Note
   // that we have to do this _before_ starting any URI loads, thanks to the
-  // sync nature of javascript: loads.  Since this is the only place where we
-  // set said opener principal, we need to do it for all URIs, including
-  // chrome ones.  So to deal with the mess that is bug 79775, just press on in
-  // a reasonable way even if GetSubjectPrincipal fails.  In that case, just
-  // use a null subjectPrincipal.
-  nsCOMPtr<nsIPrincipal> subjectPrincipal;
-  if (NS_FAILED(sm->GetSubjectPrincipal(getter_AddRefs(subjectPrincipal)))) {
-    subjectPrincipal = nullptr;
-  }
+  // sync nature of javascript: loads.
+  //
+  // Note: The check for the current JSContext isn't necessarily sensical.
+  // It's just designed to preserve old semantics during a mass-conversion
+  // patch.
+  nsCOMPtr<nsIPrincipal> subjectPrincipal =
+    nsContentUtils::GetCurrentJSContext() ? nsContentUtils::SubjectPrincipal()
+                                          : nullptr;
 
   if (windowIsNew) {
     // Now set the opener principal on the new window.  Note that we need to do
@@ -802,10 +801,8 @@ nsWindowWatcher::OpenWindowInternal(nsIDOMWindow *aParent,
     // cases we do _not_ set the parent window principal as the owner of the
     // load--since we really don't know who the owner is, just leave it null.
     nsCOMPtr<nsPIDOMWindow> newWindow = do_QueryInterface(*_retval);
-#ifdef DEBUG
-    nsCOMPtr<nsPIDOMWindow> newDebugWindow = do_GetInterface(newDocShell);
-    NS_ASSERTION(newWindow == newDebugWindow, "Different windows??");
-#endif
+    NS_ASSERTION(newWindow == newDocShell->GetWindow(), "Different windows??");
+
     // The principal of the initial about:blank document gets set up in
     // nsWindowWatcher::AddWindow. Make sure to call it. In the common case
     // this call already happened when the window was created, but
@@ -956,7 +953,11 @@ nsWindowWatcher::OpenWindowInternal(nsIDOMWindow *aParent,
     // we're opening a modal content window (the helper classes are
     // no-ops if given no window), for chrome dialogs we don't want to
     // do any of that (it's done elsewhere for us).
-    nsAutoWindowStateHelper windowStateHelper(aParent);
+    // Make sure we maintain the state on an outer window, because
+    // that's where it lives; inner windows assert if you try to
+    // maintain the state on them.
+    nsAutoWindowStateHelper windowStateHelper(
+      parentWindow ? parentWindow->GetOuterWindow() : nullptr);
 
     if (!windowStateHelper.DefaultEnabled()) {
       // Default to cancel not opening the modal window.
@@ -1309,8 +1310,10 @@ nsWindowWatcher::GetWindowByName(const char16_t *aTargetName,
     FindItemWithName(aTargetName, nullptr, nullptr, getter_AddRefs(treeItem));
   }
 
-  nsCOMPtr<nsIDOMWindow> domWindow = do_GetInterface(treeItem);
-  domWindow.swap(*aResult);
+  if (treeItem) {
+    nsCOMPtr<nsIDOMWindow> domWindow = treeItem->GetWindow();
+    domWindow.forget(aResult);
+  }
 
   return NS_OK;
 }
@@ -1731,7 +1734,7 @@ nsWindowWatcher::GetCallerTreeItem(nsIDocShellTreeItem* aParentItem)
   return callerItem.forget();
 }
 
-already_AddRefed<nsIDOMWindow>
+nsPIDOMWindow*
 nsWindowWatcher::SafeGetWindowByName(const nsAString& aName,
                                      nsIDOMWindow* aCurrentWindow)
 {
@@ -1752,8 +1755,7 @@ nsWindowWatcher::SafeGetWindowByName(const nsAString& aName,
                      getter_AddRefs(foundItem));
   }
 
-  nsCOMPtr<nsIDOMWindow> foundWin = do_GetInterface(foundItem);
-  return foundWin.forget();
+  return foundItem ? foundItem->GetWindow() : nullptr;
 }
 
 /* Fetch the nsIDOMWindow corresponding to the given nsIDocShellTreeItem.
@@ -1769,8 +1771,10 @@ nsWindowWatcher::ReadyOpenedDocShellItem(nsIDocShellTreeItem *aOpenedItem,
 {
   nsresult rv = NS_ERROR_FAILURE;
 
+  NS_ENSURE_ARG(aOpenedWindow);
+
   *aOpenedWindow = 0;
-  nsCOMPtr<nsPIDOMWindow> piOpenedWindow(do_GetInterface(aOpenedItem));
+  nsCOMPtr<nsPIDOMWindow> piOpenedWindow = aOpenedItem->GetWindow();
   if (piOpenedWindow) {
     if (aParent) {
       piOpenedWindow->SetOpenerWindow(aParent, aWindowIsNew); // damnit

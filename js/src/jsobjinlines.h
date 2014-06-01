@@ -223,12 +223,13 @@ JSObject::ensureDenseInitializedLengthNoPackedCheck(js::ThreadSafeContext *cx, u
     uint32_t &initlen = getElementsHeader()->initializedLength;
 
     if (initlen < index + extra) {
-        JSRuntime *rt = runtimeFromAnyThread();
         size_t offset = initlen;
         for (js::HeapSlot *sp = elements + initlen;
              sp != elements + (index + extra);
              sp++, offset++)
-            sp->init(rt, this, js::HeapSlot::Element, offset, js::MagicValue(JS_ELEMENTS_HOLE));
+        {
+            sp->init(this, js::HeapSlot::Element, offset, js::MagicValue(JS_ELEMENTS_HOLE));
+        }
         initlen = index + extra;
     }
 }
@@ -354,8 +355,7 @@ JSObject::getDenseOrTypedArrayElement(uint32_t idx)
 /* static */ inline bool
 JSObject::setSingletonType(js::ExclusiveContext *cx, js::HandleObject obj)
 {
-    JS_ASSERT_IF(cx->isJSContext(),
-                 !IsInsideNursery(cx->asJSContext()->runtime(), obj.get()));
+    JS_ASSERT_IF(cx->isJSContext(), !IsInsideNursery(obj));
 
     js::types::TypeObject *type = cx->getSingletonType(obj->getClass(), obj->getTaggedProto());
     if (!type)
@@ -384,7 +384,7 @@ JSObject::clearType(JSContext *cx, js::HandleObject obj)
     JS_ASSERT(!obj->hasSingletonType());
     JS_ASSERT(cx->compartment() == obj->compartment());
 
-    js::types::TypeObject *type = cx->getNewType(obj->getClass(), nullptr);
+    js::types::TypeObject *type = cx->getNewType(obj->getClass(), js::TaggedProto(nullptr));
     if (!type)
         return false;
 
@@ -472,7 +472,8 @@ JSObject::setProto(JSContext *cx, JS::HandleObject obj, JS::HandleObject proto, 
             return false;
     }
 
-    return SetClassAndProto(cx, obj, obj->getClass(), proto, succeeded);
+    JS::Rooted<js::TaggedProto> taggedProto(cx, js::TaggedProto(proto));
+    return SetClassAndProto(cx, obj, obj->getClass(), taggedProto, succeeded);
 }
 
 inline bool
@@ -485,14 +486,8 @@ JSObject::isVarObj()
 
 /* static */ inline JSObject *
 JSObject::create(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::InitialHeap heap,
-                 js::HandleShape shape, js::HandleTypeObject type,
-                 js::HeapSlot *extantSlots /* = nullptr */)
+                 js::HandleShape shape, js::HandleTypeObject type)
 {
-    /*
-     * Callers must use dynamicSlotsCount to size the initial slot array of the
-     * object. We can't check the allocated capacity of the dynamic slots, but
-     * make sure their presence is consistent with the shape.
-     */
     JS_ASSERT(shape && type);
     JS_ASSERT(type->clasp() == shape->getObjectClass());
     JS_ASSERT(type->clasp() != &js::ArrayObject::class_);
@@ -500,13 +495,9 @@ JSObject::create(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::Initi
                  js::gc::GetGCKindSlots(kind, type->clasp()) == shape->numFixedSlots());
     JS_ASSERT_IF(type->clasp()->flags & JSCLASS_BACKGROUND_FINALIZE, IsBackgroundFinalized(kind));
     JS_ASSERT_IF(type->clasp()->finalize, heap == js::gc::TenuredHeap);
-    JS_ASSERT_IF(extantSlots, dynamicSlotsCount(shape->numFixedSlots(), shape->slotSpan(),
-                                                type->clasp()));
 
     const js::Class *clasp = type->clasp();
-    size_t nDynamicSlots = 0;
-    if (!extantSlots)
-        nDynamicSlots = dynamicSlotsCount(shape->numFixedSlots(), shape->slotSpan(), clasp);
+    size_t nDynamicSlots = dynamicSlotsCount(shape->numFixedSlots(), shape->slotSpan(), clasp);
 
     JSObject *obj = js::NewGCObject<js::CanGC>(cx, kind, nDynamicSlots, heap);
     if (!obj)
@@ -514,13 +505,7 @@ JSObject::create(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::Initi
 
     obj->shape_.init(shape);
     obj->type_.init(type);
-    if (extantSlots) {
-#ifdef JSGC_GENERATIONAL
-        if (cx->isJSContext())
-            cx->asJSContext()->runtime()->gc.nursery.notifyInitialSlots(obj, extantSlots);
-#endif
-        obj->slots = extantSlots;
-    }
+    // Note: slots are created and assigned internally by NewGCObject.
     obj->elements = js::emptyObjectElements;
 
     if (clasp->hasPrivate())
@@ -790,7 +775,7 @@ IsInternalFunctionObject(JSObject *funobj)
 class AutoPropDescArrayRooter : private AutoGCRooter
 {
   public:
-    AutoPropDescArrayRooter(JSContext *cx)
+    explicit AutoPropDescArrayRooter(JSContext *cx)
       : AutoGCRooter(cx, DESCRIPTORS), descriptors(cx)
     { }
 

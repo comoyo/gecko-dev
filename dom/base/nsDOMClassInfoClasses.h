@@ -15,7 +15,6 @@ DOMCI_CLASS(CSSCharsetRule)
 DOMCI_CLASS(CSSImportRule)
 DOMCI_CLASS(CSSMediaRule)
 DOMCI_CLASS(CSSNameSpaceRule)
-DOMCI_CLASS(CSSStyleSheet)
 
 // XUL classes
 #ifdef MOZ_XUL
@@ -43,9 +42,6 @@ DOMCI_CLASS(TreeColumn)
 DOMCI_CLASS(CSSMozDocumentRule)
 DOMCI_CLASS(CSSSupportsRule)
 
-// other SVG classes
-DOMCI_CLASS(SVGNumber)
-
 // WindowUtils
 DOMCI_CLASS(WindowUtils)
 
@@ -72,10 +68,6 @@ DOMCI_CLASS(MozMmsMessage)
 DOMCI_CLASS(MozSmsFilter)
 DOMCI_CLASS(MozSmsSegmentInfo)
 DOMCI_CLASS(MozMobileMessageThread)
-
-#ifdef MOZ_B2G_RIL
-DOMCI_CLASS(MozMobileConnection)
-#endif
 
 // @font-face in CSS
 DOMCI_CLASS(CSSFontFaceRule)

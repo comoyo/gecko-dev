@@ -13,6 +13,7 @@
 #include "gfxFont.h"
 #include "nsFontMetrics.h"
 #include "nsLayoutUtils.h"
+#include "nsContainerFrame.h"
 #include "HyperTextAccessible.h"
 #include "mozilla/AppUnits.h"
 #include "mozilla/gfx/2D.h"
@@ -68,8 +69,11 @@ TextAttrsMgr::GetAttributes(nsIPersistentProperties* aAttributes,
 
   // Get the content and frame of the accessible. In the case of document
   // accessible it's role content and root frame.
-  nsIContent *hyperTextElm = mHyperTextAcc->GetContent();
-  nsIFrame *rootFrame = mHyperTextAcc->GetFrame();
+  nsIContent* hyperTextElm = mHyperTextAcc->GetContent();
+  if (!hyperTextElm)
+    return; // XXX: we don't support text attrs on document with no body
+
+  nsIFrame* rootFrame = mHyperTextAcc->GetFrame();
   NS_ASSERTION(rootFrame, "No frame for accessible!");
   if (!rootFrame)
     return;
@@ -361,7 +365,7 @@ TextAttrsMgr::BGColorTextAttr::
     return true;
   }
 
-  nsIFrame *parentFrame = aFrame->GetParent();
+  nsContainerFrame *parentFrame = aFrame->GetParent();
   if (!parentFrame) {
     *aColor = aFrame->PresContext()->DefaultBackgroundColor();
     return true;
@@ -515,7 +519,7 @@ TextAttrsMgr::FontSizeTextAttr::
 
   nsAutoString value;
   value.AppendInt(pts);
-  value.Append(NS_LITERAL_STRING("pt"));
+  value.AppendLiteral("pt");
 
   nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::font_size, value);
 }

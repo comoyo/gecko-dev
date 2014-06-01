@@ -23,8 +23,10 @@
 #include "mozilla/dom/ExternalHelperAppChild.h"
 #include "mozilla/dom/PCrashReporterChild.h"
 #include "mozilla/dom/DOMStorageIPC.h"
+#include "mozilla/dom/Promise.h"
 #include "mozilla/hal_sandbox/PHalChild.h"
 #include "mozilla/ipc/BackgroundChild.h"
+#include "mozilla/ipc/FileDescriptorUtils.h"
 #include "mozilla/ipc/GeckoChildProcessHost.h"
 #include "mozilla/ipc/TestShellChild.h"
 #include "mozilla/layers/CompositorChild.h"
@@ -46,6 +48,7 @@
 #include "mozilla/unused.h"
 
 #include "nsIConsoleListener.h"
+#include "nsICycleCollectorListener.h"
 #include "nsIIPCBackgroundChildCreateCallback.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIMemoryReporter.h"
@@ -78,6 +81,7 @@
 
 #include "nsIGeolocationProvider.h"
 #include "mozilla/dom/PMemoryReportRequestChild.h"
+#include "mozilla/dom/PCycleCollectWithLogsChild.h"
 
 #ifdef MOZ_PERMISSIONS
 #include "nsIScriptSecurityManager.h"
@@ -202,6 +206,108 @@ MemoryReportRequestChild::~MemoryReportRequestChild()
 {
     MOZ_COUNT_DTOR(MemoryReportRequestChild);
 }
+
+// IPC sender for remote GC/CC logging.
+class CycleCollectWithLogsChild MOZ_FINAL
+    : public PCycleCollectWithLogsChild
+    , public nsICycleCollectorLogSink
+{
+public:
+    NS_DECL_ISUPPORTS
+
+    CycleCollectWithLogsChild(const FileDescriptor& aGCLog,
+                              const FileDescriptor& aCCLog)
+    {
+        mGCLog = FileDescriptorToFILE(aGCLog, "w");
+        mCCLog = FileDescriptorToFILE(aCCLog, "w");
+    }
+
+    NS_IMETHOD Open(FILE** aGCLog, FILE** aCCLog) MOZ_OVERRIDE
+    {
+        if (NS_WARN_IF(!mGCLog) || NS_WARN_IF(!mCCLog)) {
+            return NS_ERROR_FAILURE;
+        }
+        *aGCLog = mGCLog;
+        *aCCLog = mCCLog;
+        return NS_OK;
+    }
+
+    NS_IMETHOD CloseGCLog() MOZ_OVERRIDE
+    {
+        MOZ_ASSERT(mGCLog);
+        fclose(mGCLog);
+        mGCLog = nullptr;
+        SendCloseGCLog();
+        return NS_OK;
+    }
+
+    NS_IMETHOD CloseCCLog() MOZ_OVERRIDE
+    {
+        MOZ_ASSERT(mCCLog);
+        fclose(mCCLog);
+        mCCLog = nullptr;
+        SendCloseCCLog();
+        return NS_OK;
+    }
+
+    NS_IMETHOD GetFilenameIdentifier(nsAString& aIdentifier) MOZ_OVERRIDE
+    {
+        return UnimplementedProperty();
+    }
+
+    NS_IMETHOD SetFilenameIdentifier(const nsAString& aIdentifier) MOZ_OVERRIDE
+    {
+        return UnimplementedProperty();
+    }
+
+    NS_IMETHOD GetProcessIdentifier(int32_t *aIdentifier) MOZ_OVERRIDE
+    {
+        return UnimplementedProperty();
+    }
+
+    NS_IMETHOD SetProcessIdentifier(int32_t aIdentifier) MOZ_OVERRIDE
+    {
+        return UnimplementedProperty();
+    }
+
+    NS_IMETHOD GetGcLog(nsIFile** aPath) MOZ_OVERRIDE
+    {
+        return UnimplementedProperty();
+    }
+
+    NS_IMETHOD GetCcLog(nsIFile** aPath) MOZ_OVERRIDE
+    {
+        return UnimplementedProperty();
+    }
+
+private:
+    ~CycleCollectWithLogsChild()
+    {
+        if (mGCLog) {
+            fclose(mGCLog);
+            mGCLog = nullptr;
+        }
+        if (mCCLog) {
+            fclose(mCCLog);
+            mCCLog = nullptr;
+        }
+        // The XPCOM refcount drives the IPC lifecycle; see also
+        // DeallocPCycleCollectWithLogsChild.
+        unused << Send__delete__(this);
+    }
+
+    nsresult UnimplementedProperty()
+    {
+        MOZ_ASSERT(false, "This object is a remote GC/CC logger;"
+                   " this property isn't meaningful.");
+        return NS_ERROR_UNEXPECTED;
+    }
+
+    FILE* mGCLog;
+    FILE* mCCLog;
+};
+
+NS_IMPL_ISUPPORTS(CycleCollectWithLogsChild, nsICycleCollectorLogSink);
 
 class AlertObserver
 {
@@ -511,7 +617,7 @@ ContentChild::GetProcessName(nsACString& aName)
 ContentChild::AppendProcessId(nsACString& aName)
 {
     if (!aName.IsEmpty()) {
-        aName.AppendLiteral(" ");
+        aName.Append(' ');
     }
     unsigned pid = getpid();
     aName.Append(nsPrintfCString("(pid %u)", pid));
@@ -669,16 +775,39 @@ ContentChild::DeallocPMemoryReportRequestChild(PMemoryReportRequestChild* actor)
     return true;
 }
 
-bool
-ContentChild::RecvDumpGCAndCCLogsToFile(const nsString& aIdentifier,
-                                        const bool& aDumpAllTraces,
-                                        const bool& aDumpChildProcesses)
+PCycleCollectWithLogsChild*
+ContentChild::AllocPCycleCollectWithLogsChild(const bool& aDumpAllTraces,
+                                              const FileDescriptor& aGCLog,
+                                              const FileDescriptor& aCCLog)
 {
+    CycleCollectWithLogsChild* actor = new CycleCollectWithLogsChild(aGCLog, aCCLog);
+    // Return actor with refcount 0, which is safe because it has a non-XPCOM type.
+    return actor;
+}
+
+bool
+ContentChild::RecvPCycleCollectWithLogsConstructor(PCycleCollectWithLogsChild* aActor,
+                                                   const bool& aDumpAllTraces,
+                                                   const FileDescriptor& aGCLog,
+                                                   const FileDescriptor& aCCLog)
+{
+    // Take a reference here, where the XPCOM type is regained.
+    nsRefPtr<CycleCollectWithLogsChild> sink = static_cast<CycleCollectWithLogsChild*>(aActor);
     nsCOMPtr<nsIMemoryInfoDumper> dumper = do_GetService("@mozilla.org/memory-info-dumper;1");
 
-    nsString gcLogPath, ccLogPath;
-    dumper->DumpGCAndCCLogsToFile(aIdentifier, aDumpAllTraces,
-                                  aDumpChildProcesses, gcLogPath, ccLogPath);
+    dumper->DumpGCAndCCLogsToSink(aDumpAllTraces, sink);
+
+    // The actor's destructor is called when the last reference goes away...
+    return true;
+}
+
+bool
+ContentChild::DeallocPCycleCollectWithLogsChild(PCycleCollectWithLogsChild* /* aActor */)
+{
+    // ...so when we get here, there's nothing for us to do.
+    //
+    // Also, we're already in ~CycleCollectWithLogsChild (q.v.) at
+    // this point, so we shouldn't touch the actor in any case.
     return true;
 }
 
@@ -717,26 +846,26 @@ ContentChild::RecvSetProcessSandbox()
   // at some point; see bug 880808.
 #if defined(MOZ_CONTENT_SANDBOX)
 #if defined(XP_LINUX)
-  SetCurrentProcessSandbox();
+    SetCurrentProcessSandbox();
 #elif defined(XP_WIN)
-  mozilla::SandboxTarget::Instance()->StartSandbox();
+    mozilla::SandboxTarget::Instance()->StartSandbox();
 #endif
 #endif
-  return true;
+    return true;
 }
 
 bool
 ContentChild::RecvSpeakerManagerNotify()
 {
 #ifdef MOZ_WIDGET_GONK
-  nsRefPtr<SpeakerManagerService> service =
-    SpeakerManagerService::GetSpeakerManagerService();
-  if (service) {
-    service->Notify();
-  }
-  return true;
+    nsRefPtr<SpeakerManagerService> service =
+        SpeakerManagerService::GetSpeakerManagerService();
+    if (service) {
+        service->Notify();
+    }
+    return true;
 #endif
-  return false;
+    return false;
 }
 
 static CancelableTask* sFirstIdleTask;
@@ -751,6 +880,8 @@ static void FirstIdle(void)
 mozilla::jsipc::PJavaScriptChild *
 ContentChild::AllocPJavaScriptChild()
 {
+    MOZ_ASSERT(!ManagedPJavaScriptChild().Length());
+
     nsCOMPtr<nsIJSRuntimeService> svc = do_GetService("@mozilla.org/js/xpc/RuntimeService;1");
     NS_ENSURE_TRUE(svc, nullptr);
 
@@ -769,7 +900,7 @@ ContentChild::AllocPJavaScriptChild()
 bool
 ContentChild::DeallocPJavaScriptChild(PJavaScriptChild *child)
 {
-    delete child;
+    static_cast<mozilla::jsipc::JavaScriptChild *>(child)->decref();
     return true;
 }
 
@@ -850,87 +981,53 @@ ContentChild::DeallocPBrowserChild(PBrowserChild* iframe)
 PBlobChild*
 ContentChild::AllocPBlobChild(const BlobConstructorParams& aParams)
 {
-  return BlobChild::Create(this, aParams);
+    return BlobChild::Create(this, aParams);
 }
 
 bool
 ContentChild::DeallocPBlobChild(PBlobChild* aActor)
 {
-  delete aActor;
-  return true;
+    delete aActor;
+    return true;
 }
 
 BlobChild*
 ContentChild::GetOrCreateActorForBlob(nsIDOMBlob* aBlob)
 {
-  MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aBlob);
+    MOZ_ASSERT(NS_IsMainThread());
+    MOZ_ASSERT(aBlob);
 
-  // If the blob represents a remote blob then we can simply pass its actor back
-  // here.
-  if (nsCOMPtr<nsIRemoteBlob> remoteBlob = do_QueryInterface(aBlob)) {
-    BlobChild* actor =
-      static_cast<BlobChild*>(
-        static_cast<PBlobChild*>(remoteBlob->GetPBlob()));
-    MOZ_ASSERT(actor);
-    return actor;
-  }
-
-  // XXX This is only safe so long as all blob implementations in our tree
-  //     inherit nsDOMFileBase. If that ever changes then this will need to grow
-  //     a real interface or something.
-  const nsDOMFileBase* blob = static_cast<nsDOMFileBase*>(aBlob);
-
-  // We often pass blobs that are multipart but that only contain one sub-blob
-  // (WebActivities does this a bunch). Unwrap to reduce the number of actors
-  // that we have to maintain.
-  const nsTArray<nsCOMPtr<nsIDOMBlob> >* subBlobs = blob->GetSubBlobs();
-  if (subBlobs && subBlobs->Length() == 1) {
-    const nsCOMPtr<nsIDOMBlob>& subBlob = subBlobs->ElementAt(0);
-    MOZ_ASSERT(subBlob);
-
-    // We can only take this shortcut if the multipart and the sub-blob are both
-    // Blob objects or both File objects.
-    nsCOMPtr<nsIDOMFile> multipartBlobAsFile = do_QueryInterface(aBlob);
-    nsCOMPtr<nsIDOMFile> subBlobAsFile = do_QueryInterface(subBlob);
-    if (!multipartBlobAsFile == !subBlobAsFile) {
-      // The wrapping was unnecessary, see if we can simply pass an existing
-      // remote blob.
-      if (nsCOMPtr<nsIRemoteBlob> remoteBlob = do_QueryInterface(subBlob)) {
+    // If the blob represents a remote blob then we can simply pass its actor back
+    // here.
+    if (nsCOMPtr<nsIRemoteBlob> remoteBlob = do_QueryInterface(aBlob)) {
         BlobChild* actor =
-          static_cast<BlobChild*>(
+            static_cast<BlobChild*>(
             static_cast<PBlobChild*>(remoteBlob->GetPBlob()));
         MOZ_ASSERT(actor);
         return actor;
-      }
-
-      // No need to add a reference here since the original blob must have a
-      // strong reference in the caller and it must also have a strong reference
-      // to this sub-blob.
-      aBlob = subBlob;
-      blob = static_cast<nsDOMFileBase*>(aBlob);
-      subBlobs = blob->GetSubBlobs();
     }
-  }
 
-  // All blobs shared between processes must be immutable.
-  nsCOMPtr<nsIMutable> mutableBlob = do_QueryInterface(aBlob);
-  if (!mutableBlob || NS_FAILED(mutableBlob->SetMutable(false))) {
-    NS_WARNING("Failed to make blob immutable!");
-    return nullptr;
-  }
+    // All blobs shared between processes must be immutable.
+    nsCOMPtr<nsIMutable> mutableBlob = do_QueryInterface(aBlob);
+    if (!mutableBlob || NS_FAILED(mutableBlob->SetMutable(false))) {
+        NS_WARNING("Failed to make blob immutable!");
+        return nullptr;
+    }
 
-  ParentBlobConstructorParams params;
+#ifdef DEBUG
+    {
+        // XXX This is only safe so long as all blob implementations in our tree
+        //     inherit nsDOMFileBase. If that ever changes then this will need to
+        //     grow a real interface or something.
+        const auto* blob = static_cast<nsDOMFileBase*>(aBlob);
 
-  if (blob->IsSizeUnknown() || blob->IsDateUnknown()) {
-    // We don't want to call GetSize or GetLastModifiedDate
-    // yet since that may stat a file on the main thread
-    // here. Instead we'll learn the size lazily from the
-    // other process.
-    params.blobParams() = MysteryBlobConstructorParams();
-    params.optionalInputStreamParams() = void_t();
-  }
-  else {
+        MOZ_ASSERT(!blob->IsSizeUnknown());
+        MOZ_ASSERT(!blob->IsDateUnknown());
+    }
+#endif
+
+    ParentBlobConstructorParams params;
+
     nsString contentType;
     nsresult rv = aBlob->GetType(contentType);
     NS_ENSURE_SUCCESS(rv, nullptr);
@@ -946,36 +1043,36 @@ ContentChild::GetOrCreateActorForBlob(nsIDOMBlob* aBlob)
     InputStreamParams inputStreamParams;
     nsTArray<mozilla::ipc::FileDescriptor> fds;
     SerializeInputStream(stream, inputStreamParams, fds);
+
     MOZ_ASSERT(fds.IsEmpty());
 
     params.optionalInputStreamParams() = inputStreamParams;
 
     nsCOMPtr<nsIDOMFile> file = do_QueryInterface(aBlob);
     if (file) {
-      FileBlobConstructorParams fileParams;
+        FileBlobConstructorParams fileParams;
 
-      rv = file->GetName(fileParams.name());
-      NS_ENSURE_SUCCESS(rv, nullptr);
+        rv = file->GetName(fileParams.name());
+        NS_ENSURE_SUCCESS(rv, nullptr);
 
-      rv = file->GetMozLastModifiedDate(&fileParams.modDate());
-      NS_ENSURE_SUCCESS(rv, nullptr);
+        rv = file->GetMozLastModifiedDate(&fileParams.modDate());
+        NS_ENSURE_SUCCESS(rv, nullptr);
 
-      fileParams.contentType() = contentType;
-      fileParams.length() = length;
+        fileParams.contentType() = contentType;
+        fileParams.length() = length;
 
-      params.blobParams() = fileParams;
+        params.blobParams() = fileParams;
     } else {
-      NormalBlobConstructorParams blobParams;
-      blobParams.contentType() = contentType;
-      blobParams.length() = length;
-      params.blobParams() = blobParams;
+        NormalBlobConstructorParams blobParams;
+        blobParams.contentType() = contentType;
+        blobParams.length() = length;
+        params.blobParams() = blobParams;
     }
-  }
 
-  BlobChild* actor = BlobChild::Create(this, aBlob);
-  NS_ENSURE_TRUE(actor, nullptr);
+    BlobChild* actor = BlobChild::Create(this, aBlob);
+    NS_ENSURE_TRUE(actor, nullptr);
 
-  return SendPBlobConstructor(actor, params) ? actor : nullptr;
+    return SendPBlobConstructor(actor, params) ? actor : nullptr;
 }
 
 PCrashReporterChild*
@@ -1012,15 +1109,15 @@ ContentChild::DeallocPHalChild(PHalChild* aHal)
 PIndexedDBChild*
 ContentChild::AllocPIndexedDBChild()
 {
-  NS_NOTREACHED("Should never get here!");
-  return nullptr;
+    NS_NOTREACHED("Should never get here!");
+    return nullptr;
 }
 
 bool
 ContentChild::DeallocPIndexedDBChild(PIndexedDBChild* aActor)
 {
-  delete aActor;
-  return true;
+    delete aActor;
+    return true;
 }
 
 asmjscache::PAsmJSCacheEntryChild*
@@ -1029,15 +1126,15 @@ ContentChild::AllocPAsmJSCacheEntryChild(
                                     const asmjscache::WriteParams& aWriteParams,
                                     const IPC::Principal& aPrincipal)
 {
-  NS_NOTREACHED("Should never get here!");
-  return nullptr;
+    NS_NOTREACHED("Should never get here!");
+    return nullptr;
 }
 
 bool
 ContentChild::DeallocPAsmJSCacheEntryChild(PAsmJSCacheEntryChild* aActor)
 {
-  asmjscache::DeallocEntryChild(aActor);
-  return true;
+    asmjscache::DeallocEntryChild(aActor);
+    return true;
 }
 
 PTestShellChild*
@@ -1260,12 +1357,12 @@ ContentChild::RecvRegisterChrome(const InfallibleTArray<ChromePackage>& packages
 bool
 ContentChild::RecvSetOffline(const bool& offline)
 {
-  nsCOMPtr<nsIIOService> io (do_GetIOService());
-  NS_ASSERTION(io, "IO Service can not be null");
+    nsCOMPtr<nsIIOService> io (do_GetIOService());
+    NS_ASSERTION(io, "IO Service can not be null");
 
-  io->SetOffline(offline);
+    io->SetOffline(offline);
 
-  return true;
+    return true;
 }
 
 void
@@ -1341,6 +1438,22 @@ ContentChild::AddRemoteAlertObserver(const nsString& aData,
     return NS_OK;
 }
 
+
+bool
+ContentChild::RecvSystemMemoryAvailable(const uint64_t& aGetterId,
+                                        const uint32_t& aMemoryAvailable)
+{
+    nsRefPtr<Promise> p = dont_AddRef(reinterpret_cast<Promise*>(aGetterId));
+
+    if (!aMemoryAvailable) {
+        p->MaybeReject(NS_LITERAL_STRING("Abnormal"));
+        return true;
+    }
+
+    p->MaybeResolve((int)aMemoryAvailable);
+    return true;
+}
+
 bool
 ContentChild::RecvPreferenceUpdate(const PrefSetting& aPref)
 {
@@ -1376,7 +1489,7 @@ ContentChild::RecvNotifyVisited(const URIParams& aURI)
     }
     nsCOMPtr<IHistory> history = services::GetHistoryService();
     if (history) {
-      history->NotifyVisited(newURI);
+        history->NotifyVisited(newURI);
     }
     return true;
 }
@@ -1387,63 +1500,63 @@ ContentChild::RecvAsyncMessage(const nsString& aMsg,
                                const InfallibleTArray<CpowEntry>& aCpows,
                                const IPC::Principal& aPrincipal)
 {
-  nsRefPtr<nsFrameMessageManager> cpm = nsFrameMessageManager::sChildProcessManager;
-  if (cpm) {
-    StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForChild(aData);
-    CpowIdHolder cpows(GetCPOWManager(), aCpows);
-    cpm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(cpm.get()),
-                        aMsg, false, &cloneData, &cpows, aPrincipal, nullptr);
-  }
-  return true;
+    nsRefPtr<nsFrameMessageManager> cpm = nsFrameMessageManager::sChildProcessManager;
+    if (cpm) {
+        StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForChild(aData);
+        CpowIdHolder cpows(GetCPOWManager(), aCpows);
+        cpm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(cpm.get()),
+                            aMsg, false, &cloneData, &cpows, aPrincipal, nullptr);
+    }
+    return true;
 }
 
 bool
 ContentChild::RecvGeolocationUpdate(const GeoPosition& somewhere)
 {
-  nsCOMPtr<nsIGeolocationUpdate> gs = do_GetService("@mozilla.org/geolocation/service;1");
-  if (!gs) {
+    nsCOMPtr<nsIGeolocationUpdate> gs = do_GetService("@mozilla.org/geolocation/service;1");
+    if (!gs) {
+        return true;
+    }
+    nsCOMPtr<nsIDOMGeoPosition> position = somewhere;
+    gs->Update(position);
     return true;
-  }
-  nsCOMPtr<nsIDOMGeoPosition> position = somewhere;
-  gs->Update(position);
-  return true;
 }
 
 bool
 ContentChild::RecvAddPermission(const IPC::Permission& permission)
 {
 #if MOZ_PERMISSIONS
-  nsCOMPtr<nsIPermissionManager> permissionManagerIface =
-      services::GetPermissionManager();
-  nsPermissionManager* permissionManager =
-      static_cast<nsPermissionManager*>(permissionManagerIface.get());
-  NS_ABORT_IF_FALSE(permissionManager, 
-                   "We have no permissionManager in the Content process !");
+    nsCOMPtr<nsIPermissionManager> permissionManagerIface =
+        services::GetPermissionManager();
+    nsPermissionManager* permissionManager =
+        static_cast<nsPermissionManager*>(permissionManagerIface.get());
+    NS_ABORT_IF_FALSE(permissionManager,
+                     "We have no permissionManager in the Content process !");
 
-  nsCOMPtr<nsIURI> uri;
-  NS_NewURI(getter_AddRefs(uri), NS_LITERAL_CSTRING("http://") + nsCString(permission.host));
-  NS_ENSURE_TRUE(uri, true);
+    nsCOMPtr<nsIURI> uri;
+    NS_NewURI(getter_AddRefs(uri), NS_LITERAL_CSTRING("http://") + nsCString(permission.host));
+    NS_ENSURE_TRUE(uri, true);
 
-  nsIScriptSecurityManager* secMan = nsContentUtils::GetSecurityManager();
-  MOZ_ASSERT(secMan);
+    nsIScriptSecurityManager* secMan = nsContentUtils::GetSecurityManager();
+    MOZ_ASSERT(secMan);
 
-  nsCOMPtr<nsIPrincipal> principal;
-  nsresult rv = secMan->GetAppCodebasePrincipal(uri, permission.appId,
+    nsCOMPtr<nsIPrincipal> principal;
+    nsresult rv = secMan->GetAppCodebasePrincipal(uri, permission.appId,
                                                 permission.isInBrowserElement,
                                                 getter_AddRefs(principal));
-  NS_ENSURE_SUCCESS(rv, true);
+    NS_ENSURE_SUCCESS(rv, true);
 
-  permissionManager->AddInternal(principal,
-                                 nsCString(permission.type),
-                                 permission.capability,
-                                 0,
-                                 permission.expireType,
-                                 permission.expireTime,
-                                 nsPermissionManager::eNotify,
-                                 nsPermissionManager::eNoDBOperation);
+    permissionManager->AddInternal(principal,
+                                   nsCString(permission.type),
+                                   permission.capability,
+                                   0,
+                                   permission.expireType,
+                                   permission.expireTime,
+                                   nsPermissionManager::eNotify,
+                                   nsPermissionManager::eNoDBOperation);
 #endif
 
-  return true;
+    return true;
 }
 
 bool
@@ -1454,7 +1567,7 @@ ContentChild::RecvScreenSizeChanged(const gfxIntSize& size)
 #else
     NS_RUNTIMEABORT("Message currently only expected on android");
 #endif
-  return true;
+    return true;
 }
 
 bool
@@ -1594,12 +1707,13 @@ ContentChild::RecvFileSystemUpdate(const nsString& aFsName,
                                    const int32_t& aMountGeneration,
                                    const bool& aIsMediaPresent,
                                    const bool& aIsSharing,
-                                   const bool& aIsFormatting)
+                                   const bool& aIsFormatting,
+                                   const bool& aIsFake)
 {
 #ifdef MOZ_WIDGET_GONK
     nsRefPtr<nsVolume> volume = new nsVolume(aFsName, aVolumeName, aState,
                                              aMountGeneration, aIsMediaPresent,
-                                             aIsSharing, aIsFormatting);
+                                             aIsSharing, aIsFormatting, aIsFake);
 
     nsRefPtr<nsVolumeService> vs = nsVolumeService::GetSingleton();
     if (vs) {
@@ -1614,6 +1728,7 @@ ContentChild::RecvFileSystemUpdate(const nsString& aFsName,
     unused << aIsMediaPresent;
     unused << aIsSharing;
     unused << aIsFormatting;
+    unused << aIsFake;
 #endif
     return true;
 }
@@ -1655,30 +1770,30 @@ ContentChild::RecvMinimizeMemoryUsage()
 bool
 ContentChild::RecvNotifyPhoneStateChange(const nsString& aState)
 {
-  nsCOMPtr<nsIObserverService> os = services::GetObserverService();
-  if (os) {
-    os->NotifyObservers(nullptr, "phone-state-changed", aState.get());
-  }
-  return true;
+    nsCOMPtr<nsIObserverService> os = services::GetObserverService();
+    if (os) {
+      os->NotifyObservers(nullptr, "phone-state-changed", aState.get());
+    }
+    return true;
 }
 
 void
 ContentChild::AddIdleObserver(nsIObserver* aObserver, uint32_t aIdleTimeInS)
 {
-  MOZ_ASSERT(aObserver, "null idle observer");
-  // Make sure aObserver isn't released while we wait for the parent
-  aObserver->AddRef();
-  SendAddIdleObserver(reinterpret_cast<uint64_t>(aObserver), aIdleTimeInS);
-  mIdleObservers.PutEntry(aObserver);
+    MOZ_ASSERT(aObserver, "null idle observer");
+    // Make sure aObserver isn't released while we wait for the parent
+    aObserver->AddRef();
+    SendAddIdleObserver(reinterpret_cast<uint64_t>(aObserver), aIdleTimeInS);
+    mIdleObservers.PutEntry(aObserver);
 }
 
 void
 ContentChild::RemoveIdleObserver(nsIObserver* aObserver, uint32_t aIdleTimeInS)
 {
-  MOZ_ASSERT(aObserver, "null idle observer");
-  SendRemoveIdleObserver(reinterpret_cast<uint64_t>(aObserver), aIdleTimeInS);
-  aObserver->Release();
-  mIdleObservers.RemoveEntry(aObserver);
+    MOZ_ASSERT(aObserver, "null idle observer");
+    SendRemoveIdleObserver(reinterpret_cast<uint64_t>(aObserver), aIdleTimeInS);
+    aObserver->Release();
+    mIdleObservers.RemoveEntry(aObserver);
 }
 
 bool
@@ -1686,13 +1801,13 @@ ContentChild::RecvNotifyIdleObserver(const uint64_t& aObserver,
                                      const nsCString& aTopic,
                                      const nsString& aTimeStr)
 {
-  nsIObserver* observer = reinterpret_cast<nsIObserver*>(aObserver);
-  if (mIdleObservers.Contains(observer)) {
-    observer->Observe(nullptr, aTopic.get(), aTimeStr.get());
-  } else {
-    NS_WARNING("Received notification for an idle observer that was removed.");
-  }
-  return true;
+    nsIObserver* observer = reinterpret_cast<nsIObserver*>(aObserver);
+    if (mIdleObservers.Contains(observer)) {
+        observer->Observe(nullptr, aTopic.get(), aTimeStr.get());
+    } else {
+        NS_WARNING("Received notification for an idle observer that was removed.");
+    }
+    return true;
 }
 
 bool

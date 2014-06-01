@@ -8,10 +8,12 @@
 
 let { Ci, Cu } = require("chrome");
 let Services = require("Services");
-let { createExtraActors, appendExtraActors } = require("devtools/server/actors/common");
+let { ActorPool, createExtraActors, appendExtraActors } = require("devtools/server/actors/common");
 let { RootActor } = require("devtools/server/actors/root");
 let { AddonThreadActor, ThreadActor } = require("devtools/server/actors/script");
+let { DebuggerServer } = require("devtools/server/main");
 let DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
+let { dbg_assert, dumpn } = DevToolsUtils;
 
 let {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -22,7 +24,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "AddonManager", "resource://gre/modules/
 // events needs to be dispatched synchronously,
 // by calling the listeners in the order or registration.
 XPCOMUtils.defineLazyGetter(this, "events", () => {
-  return devtools.require("sdk/event/core");
+  return require("sdk/event/core");
 });
 
 // Also depends on following symbols, shared by common scope with main.js:
@@ -64,6 +66,8 @@ function sendShutdownEvent() {
     win.document.documentElement.dispatchEvent(evt);
   }
 }
+
+exports.sendShutdownEvent = sendShutdownEvent;
 
 /**
  * Construct a root actor appropriate for use in a server running in a
@@ -490,6 +494,8 @@ BrowserTabList.prototype.onCloseWindow = DevToolsUtils.makeInfallible(function(a
   }, "BrowserTabList.prototype.onCloseWindow's delayed body"), 0);
 }, "BrowserTabList.prototype.onCloseWindow");
 
+exports.BrowserTabList = BrowserTabList;
+
 /**
  * Creates a tab actor for handling requests to a browser tab, like
  * attaching and detaching. TabActor respects the actor factories
@@ -662,6 +668,12 @@ TabActor.prototype = {
   exit: function BTA_exit() {
     if (this.exited) {
       return;
+    }
+
+    // Tell the thread actor that the tab is closed, so that it may terminate
+    // instead of resuming the debuggee script.
+    if (this._attached) {
+      this.threadActor._tabClosed = true;
     }
 
     if (this._detach()) {
@@ -1075,6 +1087,8 @@ TabActor.prototype.requestTypes = {
   "reconfigure": TabActor.prototype.onReconfigure
 };
 
+exports.TabActor = TabActor;
+
 /**
  * Creates a tab actor for handling requests to a single in-process
  * <browser> tab. Most of the implementation comes from TabActor.
@@ -1142,6 +1156,8 @@ BrowserTabActor.prototype.exit = function() {
   this._browser = null;
   this._tabbrowser = null;
 };
+
+exports.BrowserTabActor = BrowserTabActor;
 
 /**
  * This actor is a shim that connects to a ContentActor in a remote
@@ -1218,6 +1234,8 @@ BrowserAddonList.prototype.onUninstalled = function (aAddon) {
   this._actorByAddonId.delete(aAddon.id);
   this._onListChanged();
 };
+
+exports.BrowserAddonList = BrowserAddonList;
 
 function BrowserAddonActor(aConnection, aAddon) {
   this.conn = aConnection;
@@ -1453,4 +1471,12 @@ DebuggerProgressListener.prototype = {
       this._tabActor._navigate(window);
     }
   }, "DebuggerProgressListener.prototype.onStateChange")
+};
+
+exports.register = function(handle) {
+  handle.setRootActor(createRootActor);
+};
+
+exports.unregister = function(handle) {
+  handle.setRootActor(null);
 };

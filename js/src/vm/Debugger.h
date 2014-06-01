@@ -70,7 +70,6 @@ class DebuggerWeakMap : private WeakMap<Key, Value, DefaultHasher<Key> >
 
     /* Expose WeakMap public interface */
 
-    using Base::clearWithoutCallingDestructors;
     using Base::lookupForAdd;
     using Base::all;
     using Base::trace;
@@ -472,6 +471,10 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
      *
      * If *vp is a magic JS_OPTIMIZED_OUT value, this produces a plain object
      * of the form { optimizedOut: true }.
+     *
+     * If *vp is a magic JS_OPTIMIZED_ARGUMENTS value signifying missing
+     * arguments, this produces a plain object of the form { missingArguments:
+     * true }.
      */
     bool wrapDebuggeeValue(JSContext *cx, MutableHandleValue vp);
 

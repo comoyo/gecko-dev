@@ -171,10 +171,12 @@ AnalyserNode::GetFloatFrequencyData(const Float32Array& aArray)
     return;
   }
 
-  float* buffer = aArray.Data();
-  uint32_t length = std::min(aArray.Length(), mOutputBuffer.Length());
+  aArray.ComputeLengthAndData();
 
-  for (uint32_t i = 0; i < length; ++i) {
+  float* buffer = aArray.Data();
+  size_t length = std::min(size_t(aArray.Length()), mOutputBuffer.Length());
+
+  for (size_t i = 0; i < length; ++i) {
     buffer[i] = WebAudioUtils::ConvertLinearToDecibels(mOutputBuffer[i], mMinDecibels);
   }
 }
@@ -189,10 +191,12 @@ AnalyserNode::GetByteFrequencyData(const Uint8Array& aArray)
 
   const double rangeScaleFactor = 1.0 / (mMaxDecibels - mMinDecibels);
 
-  unsigned char* buffer = aArray.Data();
-  uint32_t length = std::min(aArray.Length(), mOutputBuffer.Length());
+  aArray.ComputeLengthAndData();
 
-  for (uint32_t i = 0; i < length; ++i) {
+  unsigned char* buffer = aArray.Data();
+  size_t length = std::min(size_t(aArray.Length()), mOutputBuffer.Length());
+
+  for (size_t i = 0; i < length; ++i) {
     const double decibels = WebAudioUtils::ConvertLinearToDecibels(mOutputBuffer[i], mMinDecibels);
     // scale down the value to the range of [0, UCHAR_MAX]
     const double scaled = std::max(0.0, std::min(double(UCHAR_MAX),
@@ -204,10 +208,12 @@ AnalyserNode::GetByteFrequencyData(const Uint8Array& aArray)
 void
 AnalyserNode::GetFloatTimeDomainData(const Float32Array& aArray)
 {
-  float* buffer = aArray.Data();
-  uint32_t length = std::min(aArray.Length(), mBuffer.Length());
+  aArray.ComputeLengthAndData();
 
-  for (uint32_t i = 0; i < length; ++i) {
+  float* buffer = aArray.Data();
+  size_t length = std::min(size_t(aArray.Length()), mBuffer.Length());
+
+  for (size_t i = 0; i < length; ++i) {
     buffer[i] = mBuffer[(i + mWriteIndex) % mBuffer.Length()];;
   }
 }
@@ -215,10 +221,12 @@ AnalyserNode::GetFloatTimeDomainData(const Float32Array& aArray)
 void
 AnalyserNode::GetByteTimeDomainData(const Uint8Array& aArray)
 {
-  unsigned char* buffer = aArray.Data();
-  uint32_t length = std::min(aArray.Length(), mBuffer.Length());
+  aArray.ComputeLengthAndData();
 
-  for (uint32_t i = 0; i < length; ++i) {
+  unsigned char* buffer = aArray.Data();
+  size_t length = std::min(size_t(aArray.Length()), mBuffer.Length());
+
+  for (size_t i = 0; i < length; ++i) {
     const float value = mBuffer[(i + mWriteIndex) % mBuffer.Length()];
     // scale the value to the range of [0, UCHAR_MAX]
     const float scaled = std::max(0.0f, std::min(float(UCHAR_MAX),

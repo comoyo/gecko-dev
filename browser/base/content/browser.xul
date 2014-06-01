@@ -101,10 +101,12 @@
                 accesskey="&moveToNewWindow.accesskey;"
                 tbattr="tabbrowser-multiple"
                 oncommand="gBrowser.replaceTabWithWindow(TabContextMenu.contextTab);"/>
+#ifdef E10S_TESTING_ONLY
       <menuitem id="context_openNonRemoteWindow" label="Open in new non-e10s window"
                 tbattr="tabbrowser-remote"
                 hidden="true"
                 oncommand="gBrowser.openNonRemoteWindow(TabContextMenu.contextTab);"/>
+#endif
       <menuseparator/>
       <menuitem id="context_reloadAllTabs" label="&reloadAllTabs.label;" accesskey="&reloadAllTabs.accesskey;"
                 tbattr="tabbrowser-multiple-visible"
@@ -244,7 +246,7 @@
            onpopuphidden="SocialShare.onHidden()"
            hidden="true">
       <vbox class="social-share-toolbar">
-        <vbox id="social-share-provider-buttons" flex="1"/>
+        <arrowscrollbox id="social-share-provider-buttons" orient="vertical" flex="1"/>
       </vbox>
     </panel>
 
@@ -797,6 +799,12 @@
                       oncommand="toggleSidebar('viewBookmarksSidebar');">
               <observes element="viewBookmarksSidebar" attribute="checked"/>
             </menuitem>
+            <!-- NB: temporary solution for bug 985024, this should go away soon. -->
+            <menuitem id="BMB_bookmarksShowAllTop"
+                      class="menuitem-iconic subviewbutton"
+                      label="&showAllBookmarks2.label;"
+                      command="Browser:ShowAllBookmarks"
+                      key="manBookmarkKb"/>
             <menuseparator/>
             <menuitem id="BMB_subscribeToPageMenuitem"
 #ifndef XP_MACOSX
@@ -867,6 +875,7 @@
              during the customization of the toolbar, in the palette, and before
              the Downloads Indicator overlay is loaded. -->
         <toolbarbutton id="downloads-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
+                       key="key_openDownloads"
                        oncommand="DownloadsIndicatorView.onCommand(event);"
                        ondrop="DownloadsIndicatorView.onDrop(event);"
                        ondragover="DownloadsIndicatorView.onDragOver(event);"
@@ -883,6 +892,7 @@
                        ondragenter="homeButtonObserver.onDragOver(event)"
                        ondrop="homeButtonObserver.onDrop(event)"
                        ondragexit="homeButtonObserver.onDragExit(event)"
+                       key="goHome"
                        onclick="BrowserGoHome(event);"
                        cui-areatype="toolbar"
                        aboutHomeOverrideTooltip="&abouthome.pageTitle;"/>
@@ -891,10 +901,10 @@
         <toolbarbutton id="social-share-button"
                        class="toolbarbutton-1 chromeclass-toolbar-additional"
                        hidden="true"
-                       overflows="false"
                        label="&sharePageCmd.label;"
                        tooltiptext="&sharePageCmd.label;"
                        cui-areatype="toolbar"
+                       removable="true"
                        command="Social:SharePage"/>
       </hbox>
 
@@ -1005,10 +1015,12 @@
       <toolbarbutton id="print-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
 #ifdef XP_MACOSX
                      command="cmd_print"
+                     tooltip="dynamic-shortcut-tooltip"
 #else
                      command="cmd_printPreview"
+                     tooltiptext="&printButton.tooltip;"
 #endif
-                     tooltip="dynamic-shortcut-tooltip" label="&printButton.label;"/>
+                     label="&printButton.label;"/>
 
 
       <toolbarbutton id="new-window-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
@@ -1063,8 +1075,7 @@
                     tabcontainer="tabbrowser-tabs"
                     contentcontextmenu="contentAreaContextMenu"
                     autocompletepopup="PopupAutoComplete"
-                    selectpopup="ContentSelectDropdown"
-                    onclick="contentAreaClick(event, false);"/>
+                    selectpopup="ContentSelectDropdown"/>
         <chatbar id="pinnedchats" layer="true" mousethrough="always" hidden="true"/>
       </vbox>
       <splitter id="social-sidebar-splitter"

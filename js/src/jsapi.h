@@ -142,8 +142,8 @@ class AutoValueArray : public AutoGCRooter
     Value elements_[N];
 
   public:
-    AutoValueArray(JSContext *cx
-                   MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit AutoValueArray(JSContext *cx
+                            MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : AutoGCRooter(cx, VALARRAY), length_(N)
     {
         /* Always initialize in case we GC before assignment. */
@@ -569,7 +569,7 @@ class AutoScriptVector : public AutoVectorRooter<JSScript *>
 };
 
 /*
- * Cutsom rooting behavior for internal and external clients.
+ * Custom rooting behavior for internal and external clients.
  */
 class JS_PUBLIC_API(CustomAutoRooter) : private AutoGCRooter
 {
@@ -600,16 +600,16 @@ class HandleValueArray
     HandleValueArray(size_t len, const Value *elements) : length_(len), elements_(elements) {}
 
   public:
-    HandleValueArray(const RootedValue& value) : length_(1), elements_(value.address()) {}
+    explicit HandleValueArray(const RootedValue& value) : length_(1), elements_(value.address()) {}
 
-    HandleValueArray(const AutoValueVector& values)
+    MOZ_IMPLICIT HandleValueArray(const AutoValueVector& values)
       : length_(values.length()), elements_(values.begin()) {}
 
     template <size_t N>
     HandleValueArray(const AutoValueArray<N>& values) : length_(N), elements_(values.begin()) {}
 
     /* CallArgs must already be rooted somewhere up the stack. */
-    HandleValueArray(const JS::CallArgs& args) : length_(args.length()), elements_(args.array()) {}
+    MOZ_IMPLICIT HandleValueArray(const JS::CallArgs& args) : length_(args.length()), elements_(args.array()) {}
 
     /* Use with care! Only call this if the data is guaranteed to be marked. */
     static HandleValueArray fromMarkedLocation(size_t len, const Value *elements) {
@@ -643,7 +643,7 @@ struct JSFreeOp {
     JSRuntime   *runtime_;
 
   protected:
-    JSFreeOp(JSRuntime *rt)
+    explicit JSFreeOp(JSRuntime *rt)
       : runtime_(rt) { }
 
   public:
@@ -708,7 +708,7 @@ typedef enum JSFinalizeStatus {
 } JSFinalizeStatus;
 
 typedef void
-(* JSFinalizeCallback)(JSFreeOp *fop, JSFinalizeStatus status, bool isCompartment);
+(* JSFinalizeCallback)(JSFreeOp *fop, JSFinalizeStatus status, bool isCompartment, void *data);
 
 typedef bool
 (* JSInterruptCallback)(JSContext *cx);
@@ -1247,12 +1247,6 @@ JS_IsBuiltinFunctionConstructor(JSFunction *fun);
  * See: http://developer.mozilla.org/en/docs/Category:JSAPI_Reference
  */
 
-typedef enum JSUseHelperThreads
-{
-    JS_NO_HELPER_THREADS,
-    JS_USE_HELPER_THREADS
-} JSUseHelperThreads;
-
 /**
  * Initialize SpiderMonkey, returning true only if initialization succeeded.
  * Once this method has succeeded, it is safe to call JS_NewRuntime and other
@@ -1290,8 +1284,7 @@ extern JS_PUBLIC_API(void)
 JS_ShutDown(void);
 
 extern JS_PUBLIC_API(JSRuntime *)
-JS_NewRuntime(uint32_t maxbytes, JSUseHelperThreads useHelperThreads,
-              JSRuntime *parentRuntime = nullptr);
+JS_NewRuntime(uint32_t maxbytes, JSRuntime *parentRuntime = nullptr);
 
 extern JS_PUBLIC_API(void)
 JS_DestroyRuntime(JSRuntime *rt);
@@ -1342,8 +1335,8 @@ AssertHeapIsIdle(JSContext *cx);
 class JSAutoRequest
 {
   public:
-    JSAutoRequest(JSContext *cx
-                  MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit JSAutoRequest(JSContext *cx
+                           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : mContext(cx)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
@@ -1367,8 +1360,8 @@ class JSAutoRequest
 class JSAutoCheckRequest
 {
   public:
-    JSAutoCheckRequest(JSContext *cx
-                       MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit JSAutoCheckRequest(JSContext *cx
+                                MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
     {
 #if defined JS_THREADSAFE && defined JS_DEBUG
         mContext = cx;
@@ -1446,7 +1439,8 @@ class JS_PUBLIC_API(RuntimeOptions) {
     RuntimeOptions()
       : baseline_(false),
         ion_(false),
-        asmJS_(false)
+        asmJS_(false),
+        nativeRegExp_(false)
     {
     }
 
@@ -1480,10 +1474,17 @@ class JS_PUBLIC_API(RuntimeOptions) {
         return *this;
     }
 
+    bool nativeRegExp() const { return nativeRegExp_; }
+    RuntimeOptions &setNativeRegExp(bool flag) {
+        nativeRegExp_ = flag;
+        return *this;
+    }
+
   private:
     bool baseline_ : 1;
     bool ion_ : 1;
     bool asmJS_ : 1;
+    bool nativeRegExp_ : 1;
 };
 
 JS_PUBLIC_API(RuntimeOptions &)
@@ -1614,7 +1615,7 @@ ContextOptionsRef(JSContext *cx);
 
 class JS_PUBLIC_API(AutoSaveContextOptions) {
   public:
-    AutoSaveContextOptions(JSContext *cx)
+    explicit AutoSaveContextOptions(JSContext *cx)
       : cx_(cx),
         oldOptions_(ContextOptionsRef(cx_))
     {
@@ -1727,7 +1728,7 @@ class JS_PUBLIC_API(JSAutoNullCompartment)
     JSContext *cx_;
     JSCompartment *oldCompartment_;
   public:
-    JSAutoNullCompartment(JSContext *cx);
+    explicit JSAutoNullCompartment(JSContext *cx);
     ~JSAutoNullCompartment();
 };
 
@@ -1825,6 +1826,13 @@ JS_GetObjectPrototype(JSContext *cx, JS::HandleObject forObj);
  */
 extern JS_PUBLIC_API(JSObject *)
 JS_GetArrayPrototype(JSContext *cx, JS::HandleObject forObj);
+
+/*
+ * Returns the original value of |Error.prototype| from the global
+ * object of the current compartment of cx.
+ */
+extern JS_PUBLIC_API(JSObject *)
+JS_GetErrorPrototype(JSContext *cx);
 
 extern JS_PUBLIC_API(JSObject *)
 JS_GetGlobalForObject(JSContext *cx, JSObject *obj);
@@ -2059,8 +2067,11 @@ JS_MaybeGC(JSContext *cx);
 extern JS_PUBLIC_API(void)
 JS_SetGCCallback(JSRuntime *rt, JSGCCallback cb, void *data);
 
+extern JS_PUBLIC_API(bool)
+JS_AddFinalizeCallback(JSRuntime *rt, JSFinalizeCallback cb, void *data);
+
 extern JS_PUBLIC_API(void)
-JS_SetFinalizeCallback(JSRuntime *rt, JSFinalizeCallback cb);
+JS_RemoveFinalizeCallback(JSRuntime *rt, JSFinalizeCallback cb);
 
 extern JS_PUBLIC_API(bool)
 JS_IsGCMarkingTracer(JSTracer *trc);
@@ -2248,7 +2259,7 @@ class AutoIdArray : private AutoGCRooter
         if (idArray)
             JS_DestroyIdArray(context, idArray);
     }
-    bool operator!() {
+    bool operator!() const {
         return !idArray;
     }
     jsid operator[](size_t i) const {
@@ -4856,8 +4867,8 @@ UnhideScriptedCaller(JSContext *cx);
 class AutoHideScriptedCaller
 {
   public:
-    AutoHideScriptedCaller(JSContext *cx
-                           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit AutoHideScriptedCaller(JSContext *cx
+                                    MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : mContext(cx)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
@@ -4906,8 +4917,7 @@ typedef bool
 (* OpenAsmJSCacheEntryForReadOp)(HandleObject global, const jschar *begin, const jschar *limit,
                                  size_t *size, const uint8_t **memory, intptr_t *handle);
 typedef void
-(* CloseAsmJSCacheEntryForReadOp)(HandleObject global, size_t size, const uint8_t *memory,
-                                  intptr_t handle);
+(* CloseAsmJSCacheEntryForReadOp)(size_t size, const uint8_t *memory, intptr_t handle);
 
 /*
  * This callback represents a request by the JS engine to open for writing a
@@ -4929,8 +4939,7 @@ typedef bool
                                   const jschar *begin, const jschar *end,
                                   size_t size, uint8_t **memory, intptr_t *handle);
 typedef void
-(* CloseAsmJSCacheEntryForWriteOp)(HandleObject global, size_t size, uint8_t *memory,
-                                   intptr_t handle);
+(* CloseAsmJSCacheEntryForWriteOp)(size_t size, uint8_t *memory, intptr_t handle);
 
 typedef js::Vector<char, 0, js::SystemAllocPolicy> BuildIdCharVector;
 
@@ -4998,7 +5007,7 @@ class MOZ_STACK_CLASS JS_PUBLIC_API(ForOfIterator) {
     ForOfIterator &operator=(const ForOfIterator &) MOZ_DELETE;
 
   public:
-    ForOfIterator(JSContext *cx) : cx_(cx), iterator(cx_), index(NOT_ARRAY) { }
+    explicit ForOfIterator(JSContext *cx) : cx_(cx), iterator(cx_), index(NOT_ARRAY) { }
 
     enum NonIterableBehavior {
         ThrowOnNonIterable,
@@ -5043,10 +5052,10 @@ class MOZ_STACK_CLASS JS_PUBLIC_API(ForOfIterator) {
  */
 
 typedef void
-(* LargeAllocationFailureCallback)();
+(* LargeAllocationFailureCallback)(void *data);
 
 extern JS_PUBLIC_API(void)
-SetLargeAllocationFailureCallback(JSRuntime *rt, LargeAllocationFailureCallback afc);
+SetLargeAllocationFailureCallback(JSRuntime *rt, LargeAllocationFailureCallback afc, void *data);
 
 /*
  * Unlike the error reporter, which is only called if the exception for an OOM
@@ -5060,10 +5069,10 @@ SetLargeAllocationFailureCallback(JSRuntime *rt, LargeAllocationFailureCallback 
  */
 
 typedef void
-(* OutOfMemoryCallback)(JSContext *cx);
+(* OutOfMemoryCallback)(JSContext *cx, void *data);
 
 extern JS_PUBLIC_API(void)
-SetOutOfMemoryCallback(JSRuntime *rt, OutOfMemoryCallback cb);
+SetOutOfMemoryCallback(JSRuntime *rt, OutOfMemoryCallback cb, void *data);
 
 } /* namespace JS */
 
