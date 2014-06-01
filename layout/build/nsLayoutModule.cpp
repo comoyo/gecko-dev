@@ -215,6 +215,7 @@ static void Shutdown();
 #include "mozilla/dom/GamepadService.h"
 #endif
 #include "nsCSPService.h"
+#include "nsCSPContext.h"
 #include "nsISmsService.h"
 #include "nsIMmsService.h"
 #include "nsIMobileMessageService.h"
@@ -241,6 +242,8 @@ static void Shutdown();
 #endif
 #include "MediaManager.h"
 
+#include "GMPService.h"
+
 using namespace mozilla;
 using namespace mozilla::dom;
 using namespace mozilla::dom::mobilemessage;
@@ -255,6 +258,7 @@ using mozilla::dom::TCPServerSocketChild;
 using mozilla::dom::UDPSocketChild;
 using mozilla::dom::time::TimeService;
 using mozilla::net::StreamingProtocolControllerService;
+using mozilla::gmp::GeckoMediaPluginService;
 
 // Transformiix
 /* 5d5d92cd-6bf8-11d9-bf4a-000a95dc234c */
@@ -588,11 +592,11 @@ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(AudioChannelService, AudioChannelServic
 NS_GENERIC_FACTORY_CONSTRUCTOR(FakeSpeechRecognitionService)
 #endif
 
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsCSPContext)
 NS_GENERIC_FACTORY_CONSTRUCTOR(CSPService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsMixedContentBlocker)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsPrincipal)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsSecurityNameSet)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsSystemPrincipal,
     nsScriptSecurityManager::SystemPrincipalSingletonConstructor)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNullPrincipal, Init)
@@ -603,6 +607,8 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(TCPSocketChild)
 NS_GENERIC_FACTORY_CONSTRUCTOR(TCPSocketParent)
 NS_GENERIC_FACTORY_CONSTRUCTOR(TCPServerSocketChild)
 NS_GENERIC_FACTORY_CONSTRUCTOR(UDPSocketChild)
+
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(GeckoMediaPluginService, GeckoMediaPluginService::GetGeckoMediaPluginService)
 
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
@@ -732,6 +738,7 @@ NS_DEFINE_NAMED_CID(NS_GEOLOCATION_CID);
 NS_DEFINE_NAMED_CID(NS_AUDIOCHANNEL_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_FOCUSMANAGER_CID);
 NS_DEFINE_NAMED_CID(CSPSERVICE_CID);
+NS_DEFINE_NAMED_CID(NS_CSPCONTEXT_CID);
 NS_DEFINE_NAMED_CID(NS_MIXEDCONTENTBLOCKER_CID);
 NS_DEFINE_NAMED_CID(NS_EVENTLISTENERSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_GLOBALMESSAGEMANAGER_CID);
@@ -742,7 +749,6 @@ NS_DEFINE_NAMED_CID(NS_SCRIPTSECURITYMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_PRINCIPAL_CID);
 NS_DEFINE_NAMED_CID(NS_SYSTEMPRINCIPAL_CID);
 NS_DEFINE_NAMED_CID(NS_NULLPRINCIPAL_CID);
-NS_DEFINE_NAMED_CID(NS_SECURITYNAMESET_CID);
 NS_DEFINE_NAMED_CID(THIRDPARTYUTIL_CID);
 NS_DEFINE_NAMED_CID(NS_STRUCTUREDCLONECONTAINER_CID);
 NS_DEFINE_NAMED_CID(NS_DEVICE_SENSORS_CID);
@@ -781,6 +787,8 @@ NS_DEFINE_NAMED_CID(NS_SYNTHVOICEREGISTRY_CID);
 NS_DEFINE_NAMED_CID(NS_ACCESSIBILITY_SERVICE_CID);
 #endif
 NS_DEFINE_NAMED_CID(TELEPHONY_PROVIDER_CID);
+
+NS_DEFINE_NAMED_CID(GECKO_MEDIA_PLUGIN_SERVICE_CID);
 
 static nsresult
 CreateWindowCommandTableConstructor(nsISupports *aOuter,
@@ -1021,6 +1029,7 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_SYNTHVOICEREGISTRY_CID, true, nullptr, nsSynthVoiceRegistryConstructor },
 #endif
   { &kCSPSERVICE_CID, false, nullptr, CSPServiceConstructor },
+  { &kNS_CSPCONTEXT_CID, false, nullptr, nsCSPContextConstructor },
   { &kNS_MIXEDCONTENTBLOCKER_CID, false, nullptr, nsMixedContentBlockerConstructor },
   { &kNS_EVENTLISTENERSERVICE_CID, false, nullptr, CreateEventListenerService },
   { &kNS_GLOBALMESSAGEMANAGER_CID, false, nullptr, CreateGlobalMessageManager },
@@ -1031,7 +1040,6 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_PRINCIPAL_CID, false, nullptr, nsPrincipalConstructor },
   { &kNS_SYSTEMPRINCIPAL_CID, false, nullptr, nsSystemPrincipalConstructor },
   { &kNS_NULLPRINCIPAL_CID, false, nullptr, nsNullPrincipalConstructor },
-  { &kNS_SECURITYNAMESET_CID, false, nullptr, nsSecurityNameSetConstructor },
   { &kNS_DEVICE_SENSORS_CID, false, nullptr, nsDeviceSensorsConstructor },
 #ifndef MOZ_WIDGET_GONK
 #if defined(ANDROID)
@@ -1051,6 +1059,7 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kTCPSOCKETPARENT_CID, false, nullptr, TCPSocketParentConstructor },
   { &kTCPSERVERSOCKETCHILD_CID, false, nullptr, TCPServerSocketChildConstructor },
   { &kUDPSOCKETCHILD_CID, false, nullptr, UDPSocketChildConstructor },
+  { &kGECKO_MEDIA_PLUGIN_SERVICE_CID, true, nullptr, GeckoMediaPluginServiceConstructor },
   { &kNS_TIMESERVICE_CID, false, nullptr, nsITimeServiceConstructor },
   { &kNS_MEDIASTREAMCONTROLLERSERVICE_CID, false, nullptr, nsIStreamingProtocolControllerServiceConstructor },
 #ifdef MOZ_WIDGET_GONK
@@ -1174,6 +1183,7 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { NS_SYNTHVOICEREGISTRY_CONTRACTID, &kNS_SYNTHVOICEREGISTRY_CID },
 #endif
   { CSPSERVICE_CONTRACTID, &kCSPSERVICE_CID },
+  { NS_CSPCONTEXT_CONTRACTID, &kNS_CSPCONTEXT_CID },
   { NS_MIXEDCONTENTBLOCKER_CONTRACTID, &kNS_MIXEDCONTENTBLOCKER_CID },
   { NS_EVENTLISTENERSERVICE_CONTRACTID, &kNS_EVENTLISTENERSERVICE_CID },
   { NS_GLOBALMESSAGEMANAGER_CONTRACTID, &kNS_GLOBALMESSAGEMANAGER_CID },
@@ -1185,7 +1195,6 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { NS_PRINCIPAL_CONTRACTID, &kNS_PRINCIPAL_CID },
   { NS_SYSTEMPRINCIPAL_CONTRACTID, &kNS_SYSTEMPRINCIPAL_CID },
   { NS_NULLPRINCIPAL_CONTRACTID, &kNS_NULLPRINCIPAL_CID },
-  { NS_SECURITYNAMESET_CONTRACTID, &kNS_SECURITYNAMESET_CID },
   { NS_DEVICE_SENSORS_CONTRACTID, &kNS_DEVICE_SENSORS_CID },
 #ifndef MOZ_WIDGET_GONK
 #if defined(ANDROID)
@@ -1219,6 +1228,7 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { "@mozilla.org/accessibleRetrieval;1", &kNS_ACCESSIBILITY_SERVICE_CID },
 #endif
   { TELEPHONY_PROVIDER_CONTRACTID, &kTELEPHONY_PROVIDER_CID },
+  { "@mozilla.org/gecko-media-plugin-service;1",  &kGECKO_MEDIA_PLUGIN_SERVICE_CID },
   { nullptr }
 };
 
@@ -1229,7 +1239,6 @@ static const mozilla::Module::CategoryEntry kLayoutCategories[] = {
   { "content-policy", "CSPService", CSPSERVICE_CONTRACTID },
   { "content-policy", NS_MIXEDCONTENTBLOCKER_CONTRACTID, NS_MIXEDCONTENTBLOCKER_CONTRACTID },
   { "net-channel-event-sinks", "CSPService", CSPSERVICE_CONTRACTID },
-  { JAVASCRIPT_GLOBAL_STATIC_NAMESET_CATEGORY, "PrivilegeManager", NS_SECURITYNAMESET_CONTRACTID },
   { "app-startup", "Script Security Manager", "service," NS_SCRIPTSECURITYMANAGER_CONTRACTID },
   { TOPIC_WEB_APP_CLEAR_DATA, "QuotaManager", "service," QUOTA_MANAGER_CONTRACTID },
 #ifdef MOZ_WIDGET_GONK

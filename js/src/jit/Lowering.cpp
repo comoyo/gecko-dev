@@ -159,17 +159,6 @@ LIRGenerator::visitDefFun(MDefFun *ins)
 }
 
 bool
-LIRGenerator::visitNewSlots(MNewSlots *ins)
-{
-    // No safepoint needed, since we don't pass a cx.
-    LNewSlots *lir = new(alloc()) LNewSlots(tempFixed(CallTempReg0), tempFixed(CallTempReg1),
-                                            tempFixed(CallTempReg2));
-    if (!assignSnapshot(lir))
-        return false;
-    return defineReturn(lir, ins);
-}
-
-bool
 LIRGenerator::visitNewArray(MNewArray *ins)
 {
     LNewArray *lir = new(alloc()) LNewArray(temp());
@@ -193,20 +182,14 @@ LIRGenerator::visitNewDeclEnvObject(MNewDeclEnvObject *ins)
 bool
 LIRGenerator::visitNewCallObject(MNewCallObject *ins)
 {
-    LAllocation slots;
-    if (ins->slots()->type() == MIRType_Slots)
-        slots = useRegister(ins->slots());
-    else
-        slots = LConstantIndex::Bogus();
-
     LInstruction *lir;
     if (ins->templateObject()->hasSingletonType()) {
-        LNewSingletonCallObject *singletonLir = new(alloc()) LNewSingletonCallObject(slots);
+        LNewSingletonCallObject *singletonLir = new(alloc()) LNewSingletonCallObject(temp());
         if (!define(singletonLir, ins))
             return false;
         lir = singletonLir;
     } else {
-        LNewCallObject *normalLir = new(alloc()) LNewCallObject(slots, temp());
+        LNewCallObject *normalLir = new(alloc()) LNewCallObject(temp());
         if (!define(normalLir, ins))
             return false;
         lir = normalLir;
@@ -221,13 +204,7 @@ LIRGenerator::visitNewCallObject(MNewCallObject *ins)
 bool
 LIRGenerator::visitNewRunOnceCallObject(MNewRunOnceCallObject *ins)
 {
-    LAllocation slots;
-    if (ins->slots()->type() == MIRType_Slots)
-        slots = useRegister(ins->slots());
-    else
-        slots = LConstantIndex::Bogus();
-
-    LNewSingletonCallObject *lir = new(alloc()) LNewSingletonCallObject(slots);
+    LNewSingletonCallObject *lir = new(alloc()) LNewSingletonCallObject(temp());
     if (!define(lir, ins))
         return false;
 
@@ -251,17 +228,7 @@ bool
 LIRGenerator::visitNewCallObjectPar(MNewCallObjectPar *ins)
 {
     const LAllocation &parThreadContext = useRegister(ins->forkJoinContext());
-    const LDefinition &temp1 = temp();
-    const LDefinition &temp2 = temp();
-
-    LNewCallObjectPar *lir;
-    if (ins->slots()->type() == MIRType_Slots) {
-        const LAllocation &slots = useRegister(ins->slots());
-        lir = LNewCallObjectPar::NewWithSlots(alloc(), parThreadContext, slots, temp1, temp2);
-    } else {
-        lir = LNewCallObjectPar::NewSansSlots(alloc(), parThreadContext, temp1, temp2);
-    }
-
+    LNewCallObjectPar *lir = LNewCallObjectPar::New(alloc(), parThreadContext, temp(), temp());
     return define(lir, ins);
 }
 
@@ -681,8 +648,8 @@ ReorderCommutative(MDefinition **lhsp, MDefinition **rhsp)
     // be fully precise, we should check whether this is the *last* use,
     // but checking hasOneDefUse() is a decent approximation which doesn't
     // require any extra analysis.
-    JS_ASSERT(lhs->defUseCount() > 0);
-    JS_ASSERT(rhs->defUseCount() > 0);
+    JS_ASSERT(lhs->hasDefUses());
+    JS_ASSERT(rhs->hasDefUses());
     if (lhs->isConstant() || (rhs->hasOneDefUse() && !lhs->hasOneDefUse())) {
         *rhsp = lhs;
         *lhsp = rhs;
@@ -929,7 +896,7 @@ LIRGenerator::visitCompare(MCompare *comp)
     // LCompareSAndBranch. Doing this now wouldn't be wrong, but doesn't
     // make sense and avoids confusion.
     if (comp->compareType() == MCompare::Compare_String) {
-        LCompareS *lir = new(alloc()) LCompareS(useRegister(left), useRegister(right), temp());
+        LCompareS *lir = new(alloc()) LCompareS(useRegister(left), useRegister(right));
         if (!define(lir, comp))
             return false;
         return assignSafepoint(lir, comp);
@@ -940,7 +907,7 @@ LIRGenerator::visitCompare(MCompare *comp)
         JS_ASSERT(left->type() == MIRType_Value);
         JS_ASSERT(right->type() == MIRType_String);
 
-        LCompareStrictS *lir = new(alloc()) LCompareStrictS(useRegister(right), temp(), tempToUnbox());
+        LCompareStrictS *lir = new(alloc()) LCompareStrictS(useRegister(right), tempToUnbox());
         if (!useBox(lir, LCompareStrictS::Lhs, left))
             return false;
         if (!define(lir, comp))
@@ -1222,6 +1189,25 @@ LIRGenerator::visitFloor(MFloor *ins)
 }
 
 bool
+LIRGenerator::visitCeil(MCeil *ins)
+{
+    MIRType type = ins->num()->type();
+    JS_ASSERT(IsFloatingPointType(type));
+
+    if (type == MIRType_Double) {
+        LCeil *lir = new(alloc()) LCeil(useRegister(ins->num()));
+        if (!assignSnapshot(lir))
+            return false;
+        return define(lir, ins);
+    }
+
+    LCeilF *lir = new(alloc()) LCeilF(useRegister(ins->num()));
+    if (!assignSnapshot(lir))
+        return false;
+    return define(lir, ins);
+}
+
+bool
 LIRGenerator::visitRound(MRound *ins)
 {
     MIRType type = ins->num()->type();
@@ -1352,8 +1338,7 @@ bool
 LIRGenerator::visitMathFunction(MMathFunction *ins)
 {
     JS_ASSERT(IsFloatingPointType(ins->type()));
-    JS_ASSERT_IF(ins->type() == MIRType_Double, ins->input()->type() == MIRType_Double);
-    JS_ASSERT_IF(ins->type() == MIRType_Float32, ins->input()->type() == MIRType_Float32);
+    JS_ASSERT(ins->type() == ins->input()->type());
 
     if (ins->type() == MIRType_Double) {
         // Note: useRegisterAtStart is safe here, the temp is not a FP register.
@@ -1672,6 +1657,12 @@ LIRGenerator::visitNop(MNop *nop)
 }
 
 bool
+LIRGenerator::visitLimitedTruncate(MLimitedTruncate *nop)
+{
+    return redefine(nop, nop->input());
+}
+
+bool
 LIRGenerator::visitOsrEntry(MOsrEntry *entry)
 {
     LOsrEntry *lir = new(alloc()) LOsrEntry;
@@ -1984,14 +1975,18 @@ MustCloneRegExp(MRegExp *regexp)
             return true;
 
         MDefinition *def = node->toDefinition();
-        if (def->isRegExpTest() && iter->index() == 1) {
-            // Optimized RegExp.prototype.test.
-            JS_ASSERT(def->toRegExpTest()->regexp() == regexp);
-            continue;
+        if (def->isRegExpTest()) {
+            MRegExpTest *test = def->toRegExpTest();
+            if (test->indexOf(*iter) == 1) {
+                // Optimized RegExp.prototype.test.
+                JS_ASSERT(test->regexp() == regexp);
+                continue;
+            }
+        } else if (def->isCall()) {
+            MCall *call = def->toCall();
+            if (!MustCloneRegExpForCall(call, call->indexOf(*iter)))
+                continue;
         }
-
-        if (def->isCall() && !MustCloneRegExpForCall(def->toCall(), iter->index()))
-            continue;
 
         return true;
     }

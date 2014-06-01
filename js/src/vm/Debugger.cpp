@@ -181,7 +181,7 @@ class Debugger::FrameRange
      * Similarly, if stack frames are added to or removed from frontDebugger(),
      * then the range's front is invalid until popFront is called.
      */
-    FrameRange(AbstractFramePtr frame, GlobalObject *global = nullptr)
+    explicit FrameRange(AbstractFramePtr frame, GlobalObject *global = nullptr)
       : frame(frame)
     {
         nextDebugger = 0;
@@ -755,15 +755,23 @@ Debugger::wrapDebuggeeValue(JSContext *cx, MutableHandleValue vp)
             vp.setObject(*dobj);
         }
     } else if (vp.isMagic()) {
-        // Other magic values should not have escaped.
-        MOZ_ASSERT(vp.whyMagic() == JS_OPTIMIZED_OUT);
-
         RootedObject optObj(cx, NewBuiltinClassInstance(cx, &JSObject::class_));
         if (!optObj)
             return false;
 
+        // We handle two sentinel values: missing arguments (overloading
+        // JS_OPTIMIZED_ARGUMENTS) and optimized out slots (JS_OPTIMIZED_OUT).
+        // Other magic values should not have escaped.
+        PropertyName *name;
+        if (vp.whyMagic() == JS_OPTIMIZED_ARGUMENTS) {
+            name = cx->names().missingArguments;
+        } else {
+            MOZ_ASSERT(vp.whyMagic() == JS_OPTIMIZED_OUT);
+            name = cx->names().optimizedOut;
+        }
+
         RootedValue trueVal(cx, BooleanValue(true));
-        if (!JSObject::defineProperty(cx, optObj, cx->names().optimizedOut, trueVal))
+        if (!JSObject::defineProperty(cx, optObj, name, trueVal))
             return false;
 
         vp.setObject(*optObj);
@@ -1321,7 +1329,7 @@ Debugger::onSingleStep(JSContext *cx, MutableHandleValue vp)
         RootedValue savedIterValue;
 
       public:
-        PreserveIterValue(JSContext *cx) : cx(cx), savedIterValue(cx, cx->iterValue) {
+        explicit PreserveIterValue(JSContext *cx) : cx(cx), savedIterValue(cx, cx->iterValue) {
             cx->iterValue.setMagic(JS_NO_ITER_VALUE);
         }
         ~PreserveIterValue() {
@@ -1983,7 +1991,7 @@ Debugger::unwrapDebuggeeArgument(JSContext *cx, const Value &v)
     }
 
     /* If that produced an outer window, innerize it. */
-    obj = GetInnerObject(cx, obj);
+    obj = GetInnerObject(obj);
     if (!obj)
         return nullptr;
 
@@ -3353,7 +3361,7 @@ class FlowGraphSummary {
         size_t column_;
     };
 
-    FlowGraphSummary(JSContext *cx) : entries_(cx) {}
+    explicit FlowGraphSummary(JSContext *cx) : entries_(cx) {}
 
     Entry &operator[](size_t index) {
         return entries_[index];
@@ -5986,8 +5994,18 @@ DebuggerEnv_getVariable(JSContext *cx, unsigned argc, Value *vp)
 
         /* This can trigger getters. */
         ErrorCopier ec(ac, dbg->toJSObject());
-        if (!JSObject::getGeneric(cx, env, env, id, &v))
-            return false;
+
+        // For DebugScopeObjects, we get sentinel values for optimized out
+        // slots and arguments instead of throwing (the default behavior).
+        //
+        // See wrapDebuggeeValue for how the sentinel values are wrapped.
+        if (env->is<DebugScopeObject>()) {
+            if (!env->as<DebugScopeObject>().getMaybeSentinelValue(cx, id, &v))
+                return false;
+        } else {
+            if (!JSObject::getGeneric(cx, env, env, id, &v))
+                return false;
+        }
     }
 
     if (!dbg->wrapDebuggeeValue(cx, &v))

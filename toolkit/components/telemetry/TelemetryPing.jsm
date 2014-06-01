@@ -471,7 +471,7 @@ let Impl = {
     // sysinfo fields are not always available, get what we can.
     let sysInfo = Cc["@mozilla.org/system-info;1"].getService(Ci.nsIPropertyBag2);
     let fields = ["cpucount", "memsize", "arch", "version", "kernel_version",
-                  "device", "manufacturer", "hardware",
+                  "device", "manufacturer", "hardware", "tablet",
                   "hasMMX", "hasSSE", "hasSSE2", "hasSSE3",
                   "hasSSSE3", "hasSSE4A", "hasSSE4_1", "hasSSE4_2",
                   "hasEDSP", "hasARMv6", "hasARMv7", "hasNEON", "isWow64",
@@ -531,6 +531,17 @@ let Impl = {
     let flashVersion = this.getFlashVersion();
     if (flashVersion)
       ret.flashVersion = flashVersion;
+
+    try {
+      let scope = {};
+      Cu.import("resource:///modules/experiments/Experiments.jsm", scope);
+      let activeExperiment = scope.Experiments.instance().getActiveExperimentID();
+      if (activeExperiment) {
+        ret.activeExperiment = activeExperiment;
+      }
+    } catch(e) {
+      // If this is not Firefox, the import will fail.
+    }
 
     return ret;
   },

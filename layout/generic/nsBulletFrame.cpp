@@ -416,8 +416,11 @@ nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
     aRenderingContext.SetFont(fm);
     nscoord ascent = fm->MaxAscent();
     aRenderingContext.SetTextRunRTL(mTextIsRTL);
-    aRenderingContext.DrawString(text, mPadding.left + aPt.x,
-                                 mPadding.top + aPt.y + ascent);
+    aRenderingContext.DrawString(
+        text, mPadding.left + aPt.x,
+        NSToCoordRound(nsLayoutUtils::GetSnappedBaselineY(
+                this, aRenderingContext.ThebesContext(),
+                mPadding.top + aPt.y, ascent)));
     break;
   }
 }
@@ -437,7 +440,7 @@ nsBulletFrame::SetListItemOrdinal(int32_t aNextOrdinal,
   // Try to get value directly from the list-item, if it specifies a
   // value attribute. Note: we do this with our parent's content
   // because our parent is the list-item.
-  nsIContent* parentContent = mParent->GetContent();
+  nsIContent* parentContent = GetParent()->GetContent();
   if (parentContent) {
     nsGenericHTMLElement *hc =
       nsGenericHTMLElement::FromContent(parentContent);
@@ -1653,7 +1656,7 @@ nsBulletFrame::GetDesiredSize(nsPresContext*  aCX,
   }
 }
 
-nsresult
+void
 nsBulletFrame::Reflow(nsPresContext* aPresContext,
                       nsHTMLReflowMetrics& aMetrics,
                       const nsHTMLReflowState& aReflowState,
@@ -1694,7 +1697,6 @@ nsBulletFrame::Reflow(nsPresContext* aPresContext,
 
   aStatus = NS_FRAME_COMPLETE;
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aMetrics);
-  return NS_OK;
 }
 
 /* virtual */ nscoord

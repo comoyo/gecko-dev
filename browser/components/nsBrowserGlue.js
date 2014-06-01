@@ -105,13 +105,13 @@ const PREF_PLUGINS_NOTIFYUSER = "plugins.update.notifyUser";
 const PREF_PLUGINS_UPDATEURL  = "plugins.update.url";
 
 // Seconds of idle before trying to create a bookmarks backup.
-const BOOKMARKS_BACKUP_IDLE_TIME_SEC = 10 * 60;
+const BOOKMARKS_BACKUP_IDLE_TIME_SEC = 8 * 60;
 // Minimum interval between backups.  We try to not create more than one backup
 // per interval.
 const BOOKMARKS_BACKUP_MIN_INTERVAL_DAYS = 1;
 // Maximum interval between backups.  If the last backup is older than these
 // days we will try to create a new one more aggressively.
-const BOOKMARKS_BACKUP_MAX_INTERVAL_DAYS = 5;
+const BOOKMARKS_BACKUP_MAX_INTERVAL_DAYS = 3;
 
 // Factory object
 const BrowserGlueServiceFactory = {
@@ -1124,7 +1124,7 @@ BrowserGlue.prototype = {
       // from bookmarks.html, we will try to restore from JSON
       if (importBookmarks && !restoreDefaultBookmarks && !importBookmarksHTML) {
         // get latest JSON backup
-        lastBackupFile = yield PlacesBackups.getMostRecentBackup("json");
+        lastBackupFile = yield PlacesBackups.getMostRecentBackup();
         if (lastBackupFile) {
           // restore from JSON backup
           yield BookmarkJSONUtils.importFromFile(lastBackupFile, true);
@@ -1407,19 +1407,6 @@ BrowserGlue.prototype = {
       }
     }
 
-    if (currentUIVersion < 6) {
-      // convert tabsontop attribute to pref
-      let toolboxResource = this._rdf.GetResource(BROWSER_DOCURL + "navigator-toolbox");
-      let tabsOnTopResource = this._rdf.GetResource("tabsontop");
-      let tabsOnTopAttribute = this._getPersist(toolboxResource, tabsOnTopResource);
-      if (tabsOnTopAttribute)
-        Services.prefs.setBoolPref("browser.tabs.onTop", tabsOnTopAttribute == "true");
-    }
-
-    // Migration at version 7 only occurred for users who wanted to try the new
-    // Downloads Panel feature before its release. Since migration at version
-    // 9 adds the button by default, this step has been removed.
-
     if (currentUIVersion < 8) {
       // Reset homepage pref for users who have it set to google.com/firefox
       let uri = Services.prefs.getComplexValue("browser.startup.homepage",
@@ -1511,8 +1498,6 @@ BrowserGlue.prototype = {
                               "chromeappsstore.sqlite");
       OS.File.remove(path);
     }
-
-    // Version 15 was obsoleted in favour of 18.
 
     if (currentUIVersion < 16) {
       let toolbarResource = this._rdf.GetResource(BROWSER_DOCURL + "nav-bar");

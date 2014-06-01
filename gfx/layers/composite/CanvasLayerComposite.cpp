@@ -20,8 +20,9 @@
 #include "nsPoint.h"                    // for nsIntPoint
 #include "nsString.h"                   // for nsAutoCString
 
-using namespace mozilla;
-using namespace mozilla::layers;
+namespace mozilla {
+namespace layers {
+
 using namespace mozilla::gfx;
 
 CanvasLayerComposite::CanvasLayerComposite(LayerManagerComposite* aManager)
@@ -99,6 +100,7 @@ CanvasLayerComposite::RenderLayer(const nsIntRect& aClipRect)
 #endif
 
   EffectChain effectChain(this);
+  AddBlendModeEffect(effectChain);
 
   LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(mMaskLayer, effectChain);
   gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
@@ -143,3 +145,5 @@ CanvasLayerComposite::PrintInfo(nsACString& aTo, const char* aPrefix)
   return aTo;
 }
 
+}
+}

@@ -304,21 +304,6 @@ public:
   void SetFilePickerFiltersFromAccept(nsIFilePicker* filePicker);
 
   /**
-   * Returns the filter which should be used for the file picker according to
-   * the accept attribute value.
-   *
-   * See:
-   * http://dev.w3.org/html5/spec/forms.html#attr-input-accept
-   *
-   * @return Filter to use on the file picker with AppendFilters, 0 if none.
-   *
-   * @note You should not call this function if the element has no @accept.
-   * @note This will only filter for one type of file. If more than one filter
-   * is specified by the accept attribute they will *all* be ignored.
-   */
-  int32_t GetFilterFromAccept();
-
-  /**
    * The form might need to request an update of the UI bits
    * (BF_CAN_SHOW_INVALID_UI and BF_CAN_SHOW_VALID_UI) when an invalid form
    * submission is tried.
@@ -592,7 +577,7 @@ public:
   void SetType(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::type, aValue, aRv);
-    if (aValue.Equals(NS_LITERAL_STRING("number"))) {
+    if (aValue.EqualsLiteral("number")) {
       // For NS_FORM_INPUT_NUMBER we rely on having frames to process key
       // events. Make sure we have them in case someone changes the type of
       // this element to "number" and then expects to be able to send key
@@ -1321,7 +1306,7 @@ private:
   bool SupportsSetRangeText() const {
     return mType == NS_FORM_INPUT_TEXT || mType == NS_FORM_INPUT_SEARCH ||
            mType == NS_FORM_INPUT_URL || mType == NS_FORM_INPUT_TEL ||
-           mType == NS_FORM_INPUT_PASSWORD;
+           mType == NS_FORM_INPUT_PASSWORD || mType == NS_FORM_INPUT_NUMBER;
   }
 
   static bool MayFireChangeOnBlur(uint8_t aType) {

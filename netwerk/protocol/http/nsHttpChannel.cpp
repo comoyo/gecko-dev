@@ -613,7 +613,7 @@ nsHttpChannel::RetrieveSSLOptions()
     if (!IsHTTPS() || mPrivateBrowsing)
         return;
 
-    nsIPrincipal *principal = GetPrincipal();
+    nsIPrincipal *principal = GetPrincipal(true);
     if (!principal)
         return;
 
@@ -1172,7 +1172,7 @@ nsHttpChannel::ProcessSSLInformation()
 
     int16_t kea = ssl->GetKEAUsed();
 
-    nsIPrincipal *principal = GetPrincipal();
+    nsIPrincipal *principal = GetPrincipal(true);
     if (!principal)
         return;
 
@@ -1209,10 +1209,10 @@ nsHttpChannel::ProcessResponse()
     // Gather data on whether the transaction and page (if this is
     // the initial page load) is being loaded with SSL.
     Telemetry::Accumulate(Telemetry::HTTP_TRANSACTION_IS_SSL,
-                          mConnectionInfo->UsingSSL());
+                          mConnectionInfo->EndToEndSSL());
     if (mLoadFlags & LOAD_INITIAL_DOCUMENT_URI) {
         Telemetry::Accumulate(Telemetry::HTTP_PAGELOAD_IS_SSL,
-                              mConnectionInfo->UsingSSL());
+                              mConnectionInfo->EndToEndSSL());
     }
 
     LOG(("nsHttpChannel::ProcessResponse [this=%p httpStatus=%u]\n",
@@ -1325,7 +1325,7 @@ nsHttpChannel::ProcessResponse()
     case 401:
     case 407:
         rv = mAuthProvider->ProcessAuthentication(
-            httpStatus, mConnectionInfo->UsingSSL() &&
+            httpStatus, mConnectionInfo->EndToEndSSL() &&
                         mTransaction->ProxyConnectFailed());
         if (rv == NS_ERROR_IN_PROGRESS)  {
             // authentication prompt has been invoked and result
@@ -2181,6 +2181,7 @@ nsHttpChannel::ProcessPartialContent()
         if (NS_FAILED(rv)) return rv;
 
         mCachedContentIsPartial = false;
+        mConcurentCacheAccess = 0;
 
         // notify observers interested in looking at a response that has been
         // merged with any cached headers (http-on-examine-merged-response).
@@ -2202,7 +2203,7 @@ nsHttpChannel::ProcessPartialContent()
         if (NS_FAILED(rv)) return rv;
 
         // make the cached response be the current response
-        mResponseHead = mCachedResponseHead;
+        mResponseHead = Move(mCachedResponseHead);
 
         UpdateInhibitPersistentCachingFlag();
 
@@ -2333,7 +2334,7 @@ nsHttpChannel::ProcessNotModified()
     if (NS_FAILED(rv)) return rv;
 
     // make the cached response be the current response
-    mResponseHead = mCachedResponseHead;
+    mResponseHead = Move(mCachedResponseHead);
 
     UpdateInhibitPersistentCachingFlag();
 
@@ -3010,6 +3011,7 @@ nsHttpChannel::OnCacheEntryCheck(nsICacheEntry* entry, nsIApplicationCache* appC
             if (mDidReval) {
                 // Make the request unconditional again.
                 mRequestHead.ClearHeader(nsHttp::If_Modified_Since);
+                mRequestHead.ClearHeader(nsHttp::If_None_Match);
                 mRequestHead.ClearHeader(nsHttp::ETag);
                 mDidReval = false;
             }
@@ -3535,7 +3537,7 @@ nsHttpChannel::ReadFromCache(bool alreadyMarkedValid)
          "Using cached copy of: %s\n", this, mSpec.get()));
 
     if (mCachedResponseHead)
-        mResponseHead = mCachedResponseHead;
+        mResponseHead = Move(mCachedResponseHead);
 
     UpdateInhibitPersistentCachingFlag();
 
@@ -3751,7 +3753,7 @@ nsHttpChannel::UpdateInhibitPersistentCachingFlag()
 
     // Only cache SSL content on disk if the pref is set
     if (!gHttpHandler->IsPersistentHttpsCachingEnabled() &&
-        mConnectionInfo->UsingSSL())
+        mConnectionInfo->EndToEndSSL())
         mLoadFlags |= INHIBIT_PERSISTENT_CACHING;
 }
 
@@ -4156,26 +4158,6 @@ nsHttpChannel::AsyncProcessRedirection(uint32_t redirectType)
     return ContinueProcessRedirectionAfterFallback(NS_OK);
 }
 
-// Creates an URI to the given location using current URI for base and charset
-nsresult
-nsHttpChannel::CreateNewURI(const char *loc, nsIURI **newURI)
-{
-    nsCOMPtr<nsIIOService> ioService;
-    nsresult rv = gHttpHandler->GetIOService(getter_AddRefs(ioService));
-    if (NS_FAILED(rv)) return rv;
-
-    // the new uri should inherit the origin charset of the current uri
-    nsAutoCString originCharset;
-    rv = mURI->GetOriginCharset(originCharset);
-    if (NS_FAILED(rv))
-        originCharset.Truncate();
-
-    return ioService->NewURI(nsDependentCString(loc),
-                             originCharset.get(),
-                             mURI,
-                             newURI);
-}
-
 nsresult
 nsHttpChannel::ContinueProcessRedirectionAfterFallback(nsresult rv)
 {
@@ -4254,7 +4236,8 @@ nsHttpChannel::ContinueProcessRedirection(nsresult rv)
 {
     AutoRedirectVetoNotifier notifier(this);
 
-    LOG(("ContinueProcessRedirection [rv=%x]\n", rv));
+    LOG(("nsHttpChannel::ContinueProcessRedirection [rv=%x,this=%p]\n", rv,
+         this));
     if (NS_FAILED(rv))
         return rv;
 
@@ -4559,6 +4542,7 @@ nsHttpChannel::BeginConnect()
         proxyInfo = do_QueryInterface(mProxyInfo);
 
     mConnectionInfo = new nsHttpConnectionInfo(host, port, username, proxyInfo, usingSSL);
+    mRequestHead.SetHTTPS(usingSSL);
 
     mAuthProvider =
         do_CreateInstance("@mozilla.org/network/http-channel-auth-provider;1",
@@ -4833,7 +4817,7 @@ nsHttpChannel::GetResponseEnd(TimeStamp* _retval) {
 NS_IMETHODIMP
 nsHttpChannel::GetIsSSL(bool *aIsSSL)
 {
-    *aIsSSL = mConnectionInfo->UsingSSL();
+    *aIsSSL = mConnectionInfo->EndToEndSSL();
     return NS_OK;
 }
 
@@ -5140,8 +5124,6 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
         }
     }
 
-    mIsPending = false;
-
     // if needed, check cache entry has all data we expect
     if (mCacheEntry && mCachePump &&
         mConcurentCacheAccess && contentComplete) {
@@ -5156,7 +5138,7 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
             }
             else if (contentLength != int64_t(-1) && contentLength != size) {
                 LOG(("  concurrent cache entry write has been interrupted"));
-                mCachedResponseHead = mResponseHead;
+                mCachedResponseHead = Move(mResponseHead);
                 rv = MaybeSetupByteRangeRequest(size, contentLength);
                 if (NS_SUCCEEDED(rv) && mIsPartialRequest) {
                     // Prevent read from cache again
@@ -5181,6 +5163,7 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
         }
     }
 
+    mIsPending = false;
     mStatus = status;
 
     // perform any final cache operations before we close the cache entry.
@@ -6025,6 +6008,26 @@ nsHttpChannel::OnLookupComplete(nsICancelable *request,
 // nsHttpChannel internal functions
 //-----------------------------------------------------------------------------
 
+// Creates an URI to the given location using current URI for base and charset
+nsresult
+nsHttpChannel::CreateNewURI(const char *loc, nsIURI **newURI)
+{
+    nsCOMPtr<nsIIOService> ioService;
+    nsresult rv = gHttpHandler->GetIOService(getter_AddRefs(ioService));
+    if (NS_FAILED(rv)) return rv;
+
+    // the new uri should inherit the origin charset of the current uri
+    nsAutoCString originCharset;
+    rv = mURI->GetOriginCharset(originCharset);
+    if (NS_FAILED(rv))
+        originCharset.Truncate();
+
+    return ioService->NewURI(nsDependentCString(loc),
+                             originCharset.get(),
+                             mURI,
+                             newURI);
+}
+
 void
 nsHttpChannel::MaybeInvalidateCacheEntryForSubsequentGet()
 {
@@ -6129,30 +6132,6 @@ nsHttpChannel::UpdateAggregateCallbacks()
                                            getter_AddRefs(callbacks));
     mTransaction->SetSecurityCallbacks(callbacks);
 }
-
-nsIPrincipal *
-nsHttpChannel::GetPrincipal()
-{
-    if (mPrincipal)
-        return mPrincipal;
-
-    nsIScriptSecurityManager *securityManager =
-        nsContentUtils::GetSecurityManager();
-
-    if (!securityManager)
-        return nullptr;
-
-    securityManager->GetChannelPrincipal(this, getter_AddRefs(mPrincipal));
-    if (!mPrincipal)
-        return nullptr;
-
-    // principals with unknown app ids do not work with the permission manager
-    if (mPrincipal->GetUnknownAppId())
-        mPrincipal = nullptr;
-
-    return mPrincipal;
-}
-
 
 NS_IMETHODIMP
 nsHttpChannel::SetLoadGroup(nsILoadGroup *aLoadGroup)

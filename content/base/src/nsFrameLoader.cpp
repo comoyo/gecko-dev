@@ -33,7 +33,6 @@
 #include "nsIDOMApplicationRegistry.h"
 #include "nsIBaseWindow.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
 #include "nsIXPConnect.h"
 #include "nsUnicharUtils.h"
 #include "nsIScriptGlobalObject.h"
@@ -86,6 +85,7 @@
 
 #include "jsapi.h"
 #include "mozilla/dom/HTMLIFrameElement.h"
+#include "mozilla/dom/SVGIFrameElement.h"
 #include "nsSandboxFlags.h"
 #include "JavaScriptParent.h"
 
@@ -318,7 +318,8 @@ nsFrameLoader::LoadFrame()
 
   nsAutoString src;
 
-  bool isSrcdoc = mOwnerContent->IsHTML(nsGkAtoms::iframe) &&
+  bool isSrcdoc = (mOwnerContent->IsHTML(nsGkAtoms::iframe) ||
+                   mOwnerContent->IsSVG(nsGkAtoms::iframe)) &&
                   mOwnerContent->HasAttr(kNameSpaceID_None, nsGkAtoms::srcdoc);
   if (isSrcdoc) {
     src.AssignLiteral("about:srcdoc");
@@ -518,7 +519,8 @@ nsFrameLoader::ReallyStartLoadingInternal()
   nsCOMPtr<nsIURI> referrer;
   
   nsAutoString srcdoc;
-  bool isSrcdoc = mOwnerContent->IsHTML(nsGkAtoms::iframe) &&
+  bool isSrcdoc = (mOwnerContent->IsHTML(nsGkAtoms::iframe) ||
+                   mOwnerContent->IsSVG(nsGkAtoms::iframe)) &&
                   mOwnerContent->GetAttr(kNameSpaceID_None, nsGkAtoms::srcdoc,
                                          srcdoc);
 
@@ -651,9 +653,9 @@ static void
 FirePageHideEvent(nsIDocShellTreeItem* aItem,
                   EventTarget* aChromeEventHandler)
 {
-  nsCOMPtr<nsIDocument> internalDoc = do_GetInterface(aItem);
-  NS_ASSERTION(internalDoc, "What happened here?");
-  internalDoc->OnPageHide(true, aChromeEventHandler);
+  nsCOMPtr<nsIDocument> doc = aItem->GetDocument();
+  NS_ASSERTION(doc, "What happened here?");
+  doc->OnPageHide(true, aChromeEventHandler);
 
   int32_t childCount = 0;
   aItem->GetChildCount(&childCount);
@@ -693,10 +695,10 @@ FirePageShowEvent(nsIDocShellTreeItem* aItem,
     }
   }
 
-  nsCOMPtr<nsIDocument> internalDoc = do_GetInterface(aItem);
-  NS_ASSERTION(internalDoc, "What happened here?");
-  if (internalDoc->IsShowing() == aFireIfShowing) {
-    internalDoc->OnPageShow(true, aChromeEventHandler);
+  nsCOMPtr<nsIDocument> doc = aItem->GetDocument();
+  NS_ASSERTION(doc, "What happened here?");
+  if (doc->IsShowing() == aFireIfShowing) {
+    doc->OnPageShow(true, aChromeEventHandler);
   }
 }
 
@@ -1154,8 +1156,8 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
-  nsCOMPtr<nsPIDOMWindow> ourWindow = do_GetInterface(ourDocshell);
-  nsCOMPtr<nsPIDOMWindow> otherWindow = do_GetInterface(otherDocshell);
+  nsCOMPtr<nsPIDOMWindow> ourWindow = ourDocshell->GetWindow();
+  nsCOMPtr<nsPIDOMWindow> otherWindow = otherDocshell->GetWindow();
 
   nsCOMPtr<Element> ourFrameElement =
     ourWindow->GetFrameElementInternal();
@@ -1409,9 +1411,11 @@ nsFrameLoader::Destroy()
   }
   
   // Let our window know that we are gone
-  nsCOMPtr<nsPIDOMWindow> win_private(do_GetInterface(mDocShell));
-  if (win_private) {
-    win_private->SetFrameElementInternal(nullptr);
+  if (mDocShell) {
+    nsCOMPtr<nsPIDOMWindow> win_private(mDocShell->GetWindow());
+    if (win_private) {
+      win_private->SetFrameElementInternal(nullptr);
+    }
   }
 
   if ((mNeedsAsyncDestroy || !doc ||
@@ -1603,8 +1607,13 @@ nsFrameLoader::MaybeCreateDocShell()
   // Apply sandbox flags even if our owner is not an iframe, as this copies
   // flags from our owning content's owning document.
   uint32_t sandboxFlags = 0;
-  HTMLIFrameElement* iframe = HTMLIFrameElement::FromContent(mOwnerContent);
-  if (iframe) {
+  if (!mOwnerContent->IsSVG(nsGkAtoms::iframe)) {
+    HTMLIFrameElement* iframe = HTMLIFrameElement::FromContent(mOwnerContent);
+    if (iframe) {
+      sandboxFlags = iframe->GetSandboxFlags();
+    }
+  } else {
+    SVGIFrameElement* iframe = static_cast<SVGIFrameElement*>(mOwnerContent);
     sandboxFlags = iframe->GetSandboxFlags();
   }
   ApplySandboxFlags(sandboxFlags);
@@ -1620,7 +1629,8 @@ nsFrameLoader::MaybeCreateDocShell()
   nsAutoString frameName;
 
   int32_t namespaceID = mOwnerContent->GetNameSpaceID();
-  if (namespaceID == kNameSpaceID_XHTML && !mOwnerContent->IsInHTMLDocument()) {
+  if ((namespaceID == kNameSpaceID_XHTML || namespaceID == kNameSpaceID_SVG)
+      && !mOwnerContent->IsInHTMLDocument()) {
     mOwnerContent->GetAttr(kNameSpaceID_None, nsGkAtoms::id, frameName);
   } else {
     mOwnerContent->GetAttr(kNameSpaceID_None, nsGkAtoms::name, frameName);
@@ -1669,7 +1679,7 @@ nsFrameLoader::MaybeCreateDocShell()
 
   mDocShell->SetChromeEventHandler(chromeEventHandler);
 
-  // This is nasty, this code (the do_GetInterface(mDocShell) below)
+  // This is nasty, this code (the mDocShell->GetWindow() below)
   // *must* come *after* the above call to
   // mDocShell->SetChromeEventHandler() for the global window to get
   // the right chrome event handler.
@@ -1678,7 +1688,7 @@ nsFrameLoader::MaybeCreateDocShell()
   nsCOMPtr<Element> frame_element = mOwnerContent;
   NS_ASSERTION(frame_element, "frame loader owner element not a DOM element!");
 
-  nsCOMPtr<nsPIDOMWindow> win_private(do_GetInterface(mDocShell));
+  nsCOMPtr<nsPIDOMWindow> win_private(mDocShell->GetWindow());
   nsCOMPtr<nsIBaseWindow> base_win(do_QueryInterface(mDocShell));
   if (win_private) {
     win_private->SetFrameElementInternal(frame_element);
@@ -1870,14 +1880,15 @@ nsFrameLoader::GetWindowDimensions(nsRect& aRect)
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIWebNavigation> parentAsWebNav =
-    do_GetInterface(doc->GetWindow());
-
-  if (!parentAsWebNav) {
+  nsCOMPtr<nsPIDOMWindow> win = doc->GetWindow();
+  if (!win) {
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIDocShellTreeItem> parentAsItem(do_QueryInterface(parentAsWebNav));
+  nsCOMPtr<nsIDocShellTreeItem> parentAsItem(win->GetDocShell());
+  if (!parentAsItem) {
+    return NS_ERROR_FAILURE;
+  }
 
   nsCOMPtr<nsIDocShellTreeOwner> parentOwner;
   if (NS_FAILED(parentAsItem->GetTreeOwner(getter_AddRefs(parentOwner))) ||
@@ -2044,14 +2055,15 @@ nsFrameLoader::TryRemoteBrowser()
     return false;
   }
 
-  nsCOMPtr<nsIWebNavigation> parentAsWebNav =
-    do_GetInterface(doc->GetWindow());
-
-  if (!parentAsWebNav) {
+  nsCOMPtr<nsPIDOMWindow> parentWin = doc->GetWindow();
+  if (!parentWin) {
     return false;
   }
 
-  nsCOMPtr<nsIDocShellTreeItem> parentAsItem(do_QueryInterface(parentAsWebNav));
+  nsCOMPtr<nsIDocShellTreeItem> parentAsItem(parentWin->GetDocShell());
+  if (!parentAsItem) {
+    return false;
+  }
 
   // <iframe mozbrowser> gets to skip these checks.
   if (!OwnerIsBrowserOrAppFrame()) {
@@ -2119,7 +2131,7 @@ nsFrameLoader::TryRemoteBrowser()
     mChildID = mRemoteBrowser->Manager()->ChildID();
     nsCOMPtr<nsIDocShellTreeItem> rootItem;
     parentAsItem->GetRootTreeItem(getter_AddRefs(rootItem));
-    nsCOMPtr<nsIDOMWindow> rootWin = do_GetInterface(rootItem);
+    nsCOMPtr<nsIDOMWindow> rootWin = rootItem->GetWindow();
     nsCOMPtr<nsIDOMChromeWindow> rootChromeWin = do_QueryInterface(rootWin);
     NS_ABORT_IF_FALSE(rootChromeWin, "How did we not get a chrome window here?");
 
@@ -2214,15 +2226,18 @@ nsFrameLoader::CreateStaticClone(nsIFrameLoader* aDest)
   dest->MaybeCreateDocShell();
   NS_ENSURE_STATE(dest->mDocShell);
 
-  nsCOMPtr<nsIDocument> dummy = do_GetInterface(dest->mDocShell);
+  nsCOMPtr<nsIDocument> dummy = dest->mDocShell->GetDocument();
   nsCOMPtr<nsIContentViewer> viewer;
   dest->mDocShell->GetContentViewer(getter_AddRefs(viewer));
   NS_ENSURE_STATE(viewer);
 
   nsCOMPtr<nsIDocShell> origDocShell;
   GetDocShell(getter_AddRefs(origDocShell));
-  nsCOMPtr<nsIDocument> doc = do_GetInterface(origDocShell);
+  NS_ENSURE_STATE(origDocShell);
+
+  nsCOMPtr<nsIDocument> doc = origDocShell->GetDocument();
   NS_ENSURE_STATE(doc);
+
   nsCOMPtr<nsIDocument> clonedDoc = doc->CreateStaticClone(dest->mDocShell);
   nsCOMPtr<nsIDOMDocument> clonedDOMDoc = do_QueryInterface(clonedDoc);
 
@@ -2414,17 +2429,22 @@ nsFrameLoader::EnsureMessageManager()
     return NS_OK;
   }
 
-  nsIScriptContext* sctx = mOwnerContent->GetContextForEventHandlers(&rv);
-  NS_ENSURE_SUCCESS(rv, rv);
-  NS_ENSURE_STATE(sctx);
-  AutoPushJSContext cx(sctx->GetNativeContext());
-  NS_ENSURE_STATE(cx);
-
   nsCOMPtr<nsIDOMChromeWindow> chromeWindow =
     do_QueryInterface(GetOwnerDoc()->GetWindow());
   nsCOMPtr<nsIMessageBroadcaster> parentManager;
+
   if (chromeWindow) {
-    chromeWindow->GetMessageManager(getter_AddRefs(parentManager));
+    nsAutoString messagemanagergroup;
+    if (mOwnerContent->IsXUL() &&
+        mOwnerContent->GetAttr(kNameSpaceID_None,
+                               nsGkAtoms::messagemanagergroup,
+                               messagemanagergroup)) {
+      chromeWindow->GetGroupMessageManager(messagemanagergroup, getter_AddRefs(parentManager));
+    }
+
+    if (!parentManager) {
+      chromeWindow->GetMessageManager(getter_AddRefs(parentManager));
+    }
   }
 
   if (ShouldUseRemoteProcess()) {

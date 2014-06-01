@@ -150,7 +150,8 @@ function Editor(config) {
     styleActiveLine:   true,
     autoCloseBrackets: "()[]{}''\"\"",
     autoCloseEnabled:  useAutoClose,
-    theme:             "mozilla"
+    theme:             "mozilla",
+    autocomplete:      false
   };
 
   // Additional shortcuts.
@@ -303,7 +304,7 @@ Editor.prototype = {
           return;
         }
 
-        this.emit("gutterClick", line);
+        this.emit("gutterClick", line, ev.button);
       });
 
       win.CodeMirror.defineExtension("l10n", (name) => {
@@ -334,6 +335,17 @@ Editor.prototype = {
    */
   getMode: function () {
     return this.getOption("mode");
+  },
+
+  /**
+   * Load a script into editor's containing window.
+   */
+  loadScript: function (url) {
+    if (!this.container) {
+      throw new Error("Can't load a script until the editor is loaded.")
+    }
+    let win = this.container.contentWindow.wrappedJSObject;
+    Services.scriptloader.loadSubScript(url, win, "utf8");
   },
 
   /**
@@ -509,16 +521,7 @@ Editor.prototype = {
    * Returns whether a marker of a specified class exists in a line's gutter.
    */
   hasMarker: function (line, gutterName, markerClass) {
-    let cm = editors.get(this);
-    let info = cm.lineInfo(line);
-    if (!info)
-      return false;
-
-    let gutterMarkers = info.gutterMarkers;
-    if (!gutterMarkers)
-      return false;
-
-    let marker = gutterMarkers[gutterName];
+    let marker = this.getMarker(line, gutterName);
     if (!marker)
       return false;
 
@@ -559,6 +562,19 @@ Editor.prototype = {
 
     let cm = editors.get(this);
     cm.lineInfo(line).gutterMarkers[gutterName].classList.remove(markerClass);
+  },
+
+  getMarker: function(line, gutterName) {
+    let cm = editors.get(this);
+    let info = cm.lineInfo(line);
+    if (!info)
+      return null;
+
+    let gutterMarkers = info.gutterMarkers;
+    if (!gutterMarkers)
+      return null;
+
+    return gutterMarkers[gutterName];
   },
 
   /**
@@ -816,6 +832,19 @@ Editor.prototype = {
     let cm = editors.get(this);
     cm.getWrapperElement().style.fontSize = parseInt(size, 10) + "px";
     cm.refresh();
+  },
+
+  /**
+   * Sets up autocompletion for the editor. Lazily imports the required
+   * dependencies because they vary by editor mode.
+   */
+  setupAutoCompletion: function (options = {}) {
+    if (this.config.autocomplete) {
+      this.extend(require("./autocomplete"));
+      // The autocomplete module will overwrite this.setupAutoCompletion with
+      // a mode specific autocompletion handler.
+      this.setupAutoCompletion(options);
+    }
   },
 
   /**

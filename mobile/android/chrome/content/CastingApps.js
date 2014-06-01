@@ -12,9 +12,9 @@ var CastingApps = {
     }
 
     // Register a service target
-    SimpleServiceDiscovery.registerTarget("roku:ecp", function(aService, aApp) {
+    SimpleServiceDiscovery.registerTarget("roku:ecp", function(aService) {
       Cu.import("resource://gre/modules/RokuApp.jsm");
-      return new RokuApp(aService, "FirefoxTest");
+      return new RokuApp(aService);
     });
 
     // Search for devices continuously every 120 seconds
@@ -89,7 +89,8 @@ var CastingApps = {
       case "ended": {
         let video = aEvent.target;
         if (video instanceof HTMLVideoElement) {
-          this._updatePageActionForVideo(video);
+          // If playing, send the <video>, but if ended we send nothing to shutdown the pageaction
+          this._updatePageActionForVideo(aEvent.type === "playing" ? video : null);
         }
         break;
       }
@@ -106,7 +107,7 @@ var CastingApps = {
     // Let's figure out if we have everything needed to cast a video. The binding
     // defaults to |false| so we only need to send an event if |true|.
     let video = aEvent.target;
-    if (!video instanceof HTMLVideoElement) {
+    if (!(video instanceof HTMLVideoElement)) {
       return;
     }
 
@@ -125,7 +126,7 @@ var CastingApps = {
   handleVideoBindingCast: function handleVideoBindingCast(aTab, aEvent) {
     // The binding wants to start a casting session
     let video = aEvent.target;
-    if (!video instanceof HTMLVideoElement) {
+    if (!(video instanceof HTMLVideoElement)) {
       return;
     }
 
@@ -171,13 +172,7 @@ var CastingApps = {
   },
 
   _getVideo: function(aElement) {
-    if (!aElement instanceof HTMLVideoElement) {
-      return null;
-    }
-
-    // Allow websites to opt-out using the Apple airplay attribute
-    // https://developer.apple.com/library/safari/documentation/AudioVideo/Conceptual/AirPlayGuide/OptingInorOutofAirPlay/OptingInorOutofAirPlay.html
-    if (aElement.getAttribute("x-webkit-airplay") === "deny") {
+    if (!(aElement instanceof HTMLVideoElement)) {
       return null;
     }
 
@@ -289,8 +284,7 @@ var CastingApps = {
   },
 
   _updatePageActionForVideo: function _updatePageActionForVideo(aVideo) {
-    // If playing, send the <video>, but if ended we send nothing to shutdown the pageaction
-    this._updatePageAction(aEvent.type == "playing" ? video : null);
+    this._updatePageAction(aVideo);
   },
 
   _updatePageAction: function _updatePageAction(aVideo) {
@@ -367,7 +361,7 @@ var CastingApps = {
         return;
 
       // Make sure we have a player app for the given service
-      let app = SimpleServiceDiscovery.findAppForService(aService, "video-sharing");
+      let app = SimpleServiceDiscovery.findAppForService(aService);
       if (!app)
         return;
 

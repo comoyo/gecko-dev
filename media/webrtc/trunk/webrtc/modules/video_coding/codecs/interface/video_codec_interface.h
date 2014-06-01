@@ -53,10 +53,16 @@ struct CodecSpecificInfoGeneric {
   uint8_t simulcast_idx;
 };
 
-union CodecSpecificInfoUnion
-{
+struct CodecSpecificInfoH264 {
+  uint8_t nalu_header;
+  bool    single_nalu;
+  uint8_t simulcastIdx;
+};
+
+union CodecSpecificInfoUnion {
     CodecSpecificInfoGeneric   generic;
     CodecSpecificInfoVP8       VP8;
+    CodecSpecificInfoH264      H264;
     CodecSpecificInfoH261      H261;
 };
 

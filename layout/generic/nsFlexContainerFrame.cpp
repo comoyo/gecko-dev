@@ -458,8 +458,9 @@ public:
   // Setters
   // =======
 
-  // This sets our flex base size, and then updates the main size to the
-  // base size clamped to our main-axis [min,max] constraints.
+  // This sets our flex base size, and then sets our main size to the
+  // resulting "hypothetical main size" (the base size clamped to our
+  // main-axis [min,max] sizing constraints).
   void SetFlexBaseSizeAndMainSize(nscoord aNewFlexBaseSize)
   {
     MOZ_ASSERT(!mIsFrozen || mFlexBaseSize == NS_INTRINSICSIZE,
@@ -723,7 +724,9 @@ public:
   friend class AutoFlexLineListClearer; // (needs access to mItems)
 
 private:
-  // Helper for ResolveFlexibleLengths():
+  // Helpers for ResolveFlexibleLengths():
+  void FreezeItemsEarly(bool aIsUsingFlexGrow);
+
   void FreezeOrRestoreEachFlexibleSize(const nscoord aTotalViolation,
                                        bool aIsFinalIteration);
 
@@ -1116,19 +1119,17 @@ nsFlexContainerFrame::
   nsHTMLReflowMetrics childDesiredSize(childRSForMeasuringHeight);
   nsReflowStatus childReflowStatus;
   const uint32_t flags = NS_FRAME_NO_MOVE_FRAME;
-  nsresult rv = ReflowChild(aFlexItem.Frame(), aPresContext,
-                            childDesiredSize, childRSForMeasuringHeight,
-                            0, 0, flags, childReflowStatus);
-  NS_ENSURE_SUCCESS(rv, rv);
+  ReflowChild(aFlexItem.Frame(), aPresContext,
+              childDesiredSize, childRSForMeasuringHeight,
+              0, 0, flags, childReflowStatus);
 
   MOZ_ASSERT(NS_FRAME_IS_COMPLETE(childReflowStatus),
              "We gave flex item unconstrained available height, so it "
              "should be complete");
 
-  rv = FinishReflowChild(aFlexItem.Frame(), aPresContext,
-                         childDesiredSize, &childRSForMeasuringHeight,
-                         0, 0, flags);
-  NS_ENSURE_SUCCESS(rv, rv);
+  FinishReflowChild(aFlexItem.Frame(), aPresContext,
+                    childDesiredSize, &childRSForMeasuringHeight,
+                    0, 0, flags);
 
   // Subtract border/padding in vertical axis, to get _just_
   // the effective computed value of the "height" property.
@@ -1463,7 +1464,7 @@ NS_QUERYFRAME_TAIL_INHERITING(nsFlexContainerFrameSuper)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsFlexContainerFrame)
 
-nsIFrame*
+nsContainerFrame*
 NS_NewFlexContainerFrame(nsIPresShell* aPresShell,
                          nsStyleContext* aContext)
 {
@@ -1551,7 +1552,7 @@ bool
 FrameWantsToBeInAnonymousFlexItem(nsIFrame* aFrame)
 {
   // Note: This needs to match the logic in
-  // nsCSSFrameConstructor::FrameConstructionItem::NeedsAnonFlexItem()
+  // nsCSSFrameConstructor::FrameConstructionItem::NeedsAnonFlexOrGridItem()
   return (aFrame->IsFrameOfType(nsIFrame::eLineParticipant) ||
           nsGkAtoms::placeholderFrame == aFrame->GetType());
 }
@@ -1593,6 +1594,56 @@ nsFlexContainerFrame::SanityCheckAnonymousFlexItems() const
   }
 }
 #endif // DEBUG
+
+void
+FlexLine::FreezeItemsEarly(bool aIsUsingFlexGrow)
+{
+  // After we've established the type of flexing we're doing (growing vs.
+  // shrinking), and before we try to flex any items, we freeze items that
+  // obviously *can't* flex.
+  //
+  // Quoting the spec:
+  //  # Freeze, setting its target main size to its hypothetical main size...
+  //  #  - any item that has a flex factor of zero
+  //  #  - if using the flex grow factor: any item that has a flex base size
+  //  #    greater than its hypothetical main size
+  //  #  - if using the flex shrink factor: any item that has a flex base size
+  //  #    smaller than its hypothetical main size
+  //  http://dev.w3.org/csswg/css-flexbox/#resolve-flexible-lengths-flex-factors
+  //
+  // (NOTE: At this point, item->GetMainSize() *is* the item's hypothetical
+  // main size, since SetFlexBaseSizeAndMainSize() sets it up that way, and the
+  // item hasn't had a chance to flex away from that yet.)
+
+  // Since this loop only operates on unfrozen flex items, we can break as
+  // soon as we have seen all of them.
+  uint32_t numUnfrozenItemsToBeSeen = mNumItems - mNumFrozenItems;
+  for (FlexItem* item = mItems.getFirst();
+       numUnfrozenItemsToBeSeen > 0; item = item->getNext()) {
+    MOZ_ASSERT(item, "numUnfrozenItemsToBeSeen says items remain to be seen");
+
+    if (!item->IsFrozen()) {
+      numUnfrozenItemsToBeSeen--;
+      bool shouldFreeze = (0.0f == item->GetFlexFactor(aIsUsingFlexGrow));
+      if (!shouldFreeze) {
+        if (aIsUsingFlexGrow) {
+          if (item->GetFlexBaseSize() > item->GetMainSize()) {
+            shouldFreeze = true;
+          }
+        } else { // using flex-shrink
+          if (item->GetFlexBaseSize() < item->GetMainSize()) {
+            shouldFreeze = true;
+          }
+        }
+      }
+      if (shouldFreeze) {
+        // Freeze item! (at its hypothetical main size)
+        item->Freeze();
+        mNumFrozenItems++;
+      }
+    }
+  }
+}
 
 // Based on the sign of aTotalViolation, this function freezes a subset of our
 // flexible sizes, and restores the remaining ones to their initial pref sizes.
@@ -1658,11 +1709,19 @@ void
 FlexLine::ResolveFlexibleLengths(nscoord aFlexContainerMainSize)
 {
   PR_LOG(GetFlexContainerLog(), PR_LOG_DEBUG, ("ResolveFlexibleLengths\n"));
+
+  // Determine whether we're going to be growing or shrinking items.
+  const bool isUsingFlexGrow =
+    (mTotalOuterHypotheticalMainSize < aFlexContainerMainSize);
+
+  // Do an "early freeze" for flex items that obviously can't flex in the
+  // direction we've chosen:
+  FreezeItemsEarly(isUsingFlexGrow);
+
   if (mNumFrozenItems == mNumItems) {
     // All our items are frozen, so we have no flexible lengths to resolve.
     return;
   }
-
   MOZ_ASSERT(!IsEmpty(), "empty lines should take the early-return above");
 
   // Subtract space occupied by our items' margins/borders/padding, so we can
@@ -1673,10 +1732,6 @@ FlexLine::ResolveFlexibleLengths(nscoord aFlexContainerMainSize)
 
   nscoord spaceAvailableForFlexItemsContentBoxes =
     aFlexContainerMainSize - spaceReservedForMarginBorderPadding;
-
-  // Determine whether we're going to be growing or shrinking items.
-  const bool isUsingFlexGrow =
-    (mTotalOuterHypotheticalMainSize < aFlexContainerMainSize);
 
   nscoord origAvailableFreeSpace;
   bool isOrigAvailFreeSpaceInitialized = false;
@@ -1704,11 +1759,16 @@ FlexLine::ResolveFlexibleLengths(nscoord aFlexContainerMainSize)
     PR_LOG(GetFlexContainerLog(), PR_LOG_DEBUG,
            (" available free space = %d\n", availableFreeSpace));
 
-    // If sign of free space matches the type of flexing that we're doing, give
-    // each flexible item a portion of availableFreeSpace.
-    if ((availableFreeSpace > 0 && isUsingFlexGrow) ||
-        (availableFreeSpace < 0 && !isUsingFlexGrow)) {
+    MOZ_ASSERT((isUsingFlexGrow && availableFreeSpace >= 0) ||
+               (!isUsingFlexGrow && availableFreeSpace <= 0),
+               "The sign of our free space should never disagree with the "
+               "type of flexing (grow/shrink) that we're doing. Any potential "
+               "disagreement should've made us use the other type of flexing, "
+               "or should've been resolved in FreezeItemsEarly");
 
+    // If we have any free space available, give each flexible item a portion
+    // of availableFreeSpace.
+    if (availableFreeSpace != 0) {
       // The first time we do this, we initialize origAvailableFreeSpace.
       if (!isOrigAvailFreeSpaceInitialized) {
         origAvailableFreeSpace = availableFreeSpace;
@@ -2907,11 +2967,10 @@ nsFlexContainerFrame::SizeItemInCrossAxis(
   nsHTMLReflowMetrics childDesiredSize(aChildReflowState);
   nsReflowStatus childReflowStatus;
   const uint32_t flags = NS_FRAME_NO_MOVE_FRAME;
-  nsresult rv = ReflowChild(aItem.Frame(), aPresContext,
-                            childDesiredSize, aChildReflowState,
-                            0, 0, flags, childReflowStatus);
+  ReflowChild(aItem.Frame(), aPresContext,
+              childDesiredSize, aChildReflowState,
+              0, 0, flags, childReflowStatus);
   aItem.SetHadMeasuringReflow();
-  NS_ENSURE_SUCCESS(rv, rv);
 
   // XXXdholbert Once we do pagination / splitting, we'll need to actually
   // handle incomplete childReflowStatuses. But for now, we give our kids
@@ -2922,9 +2981,8 @@ nsFlexContainerFrame::SizeItemInCrossAxis(
 
   // Tell the child we're done with its initial reflow.
   // (Necessary for e.g. GetBaseline() to work below w/out asserting)
-  rv = FinishReflowChild(aItem.Frame(), aPresContext,
-                         childDesiredSize, &aChildReflowState, 0, 0, flags);
-  NS_ENSURE_SUCCESS(rv, rv);
+  FinishReflowChild(aItem.Frame(), aPresContext,
+                    childDesiredSize, &aChildReflowState, 0, 0, flags);
 
   // Save the sizing info that we learned from this reflow
   // -----------------------------------------------------
@@ -2988,7 +3046,7 @@ FlexLine::PositionItemsInCrossAxis(nscoord aLineStartPosition,
   }
 }
 
-nsresult
+void
 nsFlexContainerFrame::Reflow(nsPresContext*           aPresContext,
                              nsHTMLReflowMetrics&     aDesiredSize,
                              const nsHTMLReflowState& aReflowState,
@@ -3000,7 +3058,7 @@ nsFlexContainerFrame::Reflow(nsPresContext*           aPresContext,
          ("Reflow() for nsFlexContainerFrame %p\n", this));
 
   if (IsFrameTreeTooDeep(aReflowState, aDesiredSize, aStatus)) {
-    return NS_OK;
+    return;
   }
 
   // We (and our children) can only depend on our ancestor's height if we have
@@ -3063,12 +3121,10 @@ nsFlexContainerFrame::Reflow(nsPresContext*           aPresContext,
 
   if (NS_SUCCEEDED(rv) && !struts.IsEmpty()) {
     // We're restarting flex layout, with new knowledge of collapsed items.
-    rv = DoFlexLayout(aPresContext, aDesiredSize, aReflowState, aStatus,
-                      contentBoxMainSize, availableHeightForContent,
-                      struts, axisTracker);
+    DoFlexLayout(aPresContext, aDesiredSize, aReflowState, aStatus,
+                 contentBoxMainSize, availableHeightForContent,
+                 struts, axisTracker);
   }
-
-  return rv;
 }
 
 // RAII class to clean up a list of FlexLines.
@@ -3318,11 +3374,10 @@ nsFlexContainerFrame::DoFlexLayout(nsPresContext*           aPresContext,
 
       nsHTMLReflowMetrics childDesiredSize(childReflowState);
       nsReflowStatus childReflowStatus;
-      nsresult rv = ReflowChild(item->Frame(), aPresContext,
-                                childDesiredSize, childReflowState,
-                                physicalPosn.x, physicalPosn.y,
-                                0, childReflowStatus);
-      NS_ENSURE_SUCCESS(rv, rv);
+      ReflowChild(item->Frame(), aPresContext,
+                  childDesiredSize, childReflowState,
+                  physicalPosn.x, physicalPosn.y,
+                  0, childReflowStatus);
 
       // XXXdholbert Once we do pagination / splitting, we'll need to actually
       // handle incomplete childReflowStatuses. But for now, we give our kids
@@ -3334,10 +3389,9 @@ nsFlexContainerFrame::DoFlexLayout(nsPresContext*           aPresContext,
 
       childReflowState.ApplyRelativePositioning(&physicalPosn);
 
-      rv = FinishReflowChild(item->Frame(), aPresContext,
-                             childDesiredSize, &childReflowState,
-                             physicalPosn.x, physicalPosn.y, 0);
-      NS_ENSURE_SUCCESS(rv, rv);
+      FinishReflowChild(item->Frame(), aPresContext,
+                        childDesiredSize, &childReflowState,
+                        physicalPosn.x, physicalPosn.y, 0);
 
       // If this is our first child and we haven't established a baseline for
       // the container yet (i.e. if we don't have 'align-self: baseline' on any

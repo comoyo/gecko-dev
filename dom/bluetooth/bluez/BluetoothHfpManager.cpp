@@ -26,9 +26,10 @@
 
 #ifdef MOZ_B2G_RIL
 #include "nsIDOMIccInfo.h"
-#include "nsIDOMMobileConnection.h"
 #include "nsIIccProvider.h"
+#include "nsIMobileConnectionInfo.h"
 #include "nsIMobileConnectionProvider.h"
+#include "nsIMobileNetworkInfo.h"
 #include "nsITelephonyProvider.h"
 #include "nsRadioInterfaceLayer.h"
 #endif
@@ -220,7 +221,7 @@ BluetoothHfpManager::Notify(const hal::BatteryInformation& aBatteryInfo)
 {
   // Range of battery level: [0, 1], double
   // Range of CIND::BATTCHG: [0, 5], int
-  int level = ceil(aBatteryInfo.level() * 5.0);
+  int level = round(aBatteryInfo.level() * 5.0);
   if (level != sCINDItems[CINDType::BATTCHG].value) {
     sCINDItems[CINDType::BATTCHG].value = level;
     SendCommand(RESPONSE_CIEV, CINDType::BATTCHG);
@@ -425,6 +426,10 @@ BluetoothHfpManager::Init()
   }
 
   hal::RegisterBatteryObserver(this);
+  // Update to the latest battery level
+  hal::BatteryInformation batteryInfo;
+  hal::GetCurrentBatteryInformation(&batteryInfo);
+  Notify(batteryInfo);
 
 #ifdef MOZ_B2G_RIL
   mListener = new BluetoothRilListener();
@@ -605,7 +610,7 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
     do_GetService(NS_RILCONTENTHELPER_CONTRACTID);
   NS_ENSURE_TRUE_VOID(connection);
 
-  nsCOMPtr<nsIDOMMozMobileConnectionInfo> voiceInfo;
+  nsCOMPtr<nsIMobileConnectionInfo> voiceInfo;
   connection->GetVoiceConnectionInfo(aClientId, getter_AddRefs(voiceInfo));
   NS_ENSURE_TRUE_VOID(voiceInfo);
 
@@ -648,7 +653,7 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
     mNetworkSelectionMode = 0;
   }
 
-  nsCOMPtr<nsIDOMMozMobileNetworkInfo> network;
+  nsCOMPtr<nsIMobileNetworkInfo> network;
   voiceInfo->GetNetwork(getter_AddRefs(network));
   NS_ENSURE_TRUE_VOID(network);
   network->GetLongName(mOperatorName);
@@ -806,7 +811,7 @@ BluetoothHfpManager::ReceiveSocketData(BluetoothSocket* aSocket,
     message.AppendInt(mNetworkSelectionMode);
     message.AppendLiteral(",0,\"");
     message.Append(NS_ConvertUTF16toUTF8(mOperatorName));
-    message.AppendLiteral("\"");
+    message.Append('"');
     SendLine(message.get());
   } else if (msg.Find("AT+VTS=") != -1) {
     ParseAtCommand(msg, 7, atCommandValues);
@@ -1062,9 +1067,9 @@ BluetoothHfpManager::ReceiveSocketData(BluetoothSocket* aSocket,
 #endif // MOZ_B2G_RIL
   } else {
     nsCString warningMsg;
-    warningMsg.Append(NS_LITERAL_CSTRING("Unsupported AT command: "));
+    warningMsg.AppendLiteral("Unsupported AT command: ");
     warningMsg.Append(msg);
-    warningMsg.Append(NS_LITERAL_CSTRING(", reply with ERROR"));
+    warningMsg.AppendLiteral(", reply with ERROR");
     BT_WARNING(warningMsg.get());
 
     SendLine("ERROR");
@@ -1206,9 +1211,9 @@ BluetoothHfpManager::SendCLCC(const Call& aCall, int aIndex)
 
   nsAutoCString message(RESPONSE_CLCC);
   message.AppendInt(aIndex);
-  message.AppendLiteral(",");
+  message.Append(',');
   message.AppendInt(aCall.mDirection);
-  message.AppendLiteral(",");
+  message.Append(',');
 
   int status = 0;
   switch (aCall.mState) {
@@ -1285,7 +1290,7 @@ BluetoothHfpManager::SendCommand(const char* aCommand, uint32_t aValue)
     }
 
     message.AppendInt(aValue);
-    message.AppendLiteral(",");
+    message.Append(',');
     message.AppendInt(sCINDItems[aValue].value);
   } else if (!strcmp(aCommand, RESPONSE_CIND)) {
     if (!aValue) {
@@ -1295,9 +1300,9 @@ BluetoothHfpManager::SendCommand(const char* aCommand, uint32_t aValue)
         message.Append(sCINDItems[i].name);
         message.AppendLiteral("\",(");
         message.Append(sCINDItems[i].range);
-        message.AppendLiteral(")");
+        message.Append(')');
         if (i == (ArrayLength(sCINDItems) - 1)) {
-          message.AppendLiteral(")");
+          message.Append(')');
           break;
         }
         message.AppendLiteral("),");
@@ -1309,7 +1314,7 @@ BluetoothHfpManager::SendCommand(const char* aCommand, uint32_t aValue)
         if (i == (ArrayLength(sCINDItems) - 1)) {
           break;
         }
-        message.AppendLiteral(",");
+        message.Append(',');
       }
     }
 #ifdef MOZ_B2G_RIL
@@ -1524,7 +1529,7 @@ BluetoothHfpManager::HandleCallStateChanged(uint32_t aCallIndex,
 
         nsAutoString number(aNumber);
         if (!mCLIP) {
-          number.AssignLiteral("");
+          number.Truncate();
         }
 
         MessageLoop::current()->PostDelayedTask(
@@ -1634,7 +1639,7 @@ BluetoothHfpManager::HandleCallStateChanged(uint32_t aCallIndex,
           GetNumberOfCalls(nsITelephonyProvider::CALL_STATE_DISCONNECTED)) {
         // In order to let user hear busy tone via connected Bluetooth headset,
         // we postpone the timing of dropping SCO.
-        if (!(aError.Equals(NS_LITERAL_STRING("BusyError")))) {
+        if (!(aError.EqualsLiteral("BusyError"))) {
           DisconnectSco();
         } else {
           // Close Sco later since Dialer is still playing busy tone via HF.
@@ -1824,7 +1829,7 @@ BluetoothHfpManager::OnUpdateSdpRecords(const nsAString& aDeviceAddress)
 {
   // UpdateSdpRecord() is not called so this callback function should not
   // be invoked.
-  MOZ_ASSUME_UNREACHABLE("UpdateSdpRecords() should be called somewhere");
+  MOZ_ASSERT_UNREACHABLE("UpdateSdpRecords() should be called somewhere");
 }
 
 void

@@ -1,6 +1,8 @@
-<!-- This Source Code Form is subject to the terms of the Mozilla Public
-   - License, v. 2.0. If a copy of the MPL was not distributed with this file,
-   - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+<!-- Advanced panel -->
 
 <script type="application/javascript"
         src="chrome://browser/content/preferences/in-content/advanced.js"/>
@@ -133,18 +135,22 @@
          value="&paneAdvanced.title;"/>
 </hbox>
 
-<tabbox id="advancedPrefs" flex="1"
-        data-category="paneAdvanced" hidden="true"
+<tabbox id="advancedPrefs"
+        handleCtrlTab="false"
+        handleCtrlPageUpDown="false"
+        flex="1"
+        data-category="paneAdvanced"
+        hidden="true"
         onselect="gAdvancedPane.tabSelectionChanged();">
 
   <tabs id="tabsElement">
-    <tab id="generalTab" label="&generalTab.label;" helpTopic="prefs-advanced-general"/>
+    <tab id="generalTab" label="&generalTab.label;"/>
 #ifdef MOZ_DATA_REPORTING
-    <tab id="dataChoicesTab" label="&dataChoicesTab.label;" helpTopic="prefs-advanced-data-choices"/>
+    <tab id="dataChoicesTab" label="&dataChoicesTab.label;"/>
 #endif
-    <tab id="networkTab" label="&networkTab.label;" helpTopic="prefs-advanced-network"/>
-    <tab id="updateTab" label="&updateTab.label;"  helpTopic="prefs-advanced-update"/>
-    <tab id="encryptionTab" label="&certificateTab.label;" helpTopic="prefs-advanced-encryption"/>
+    <tab id="networkTab" label="&networkTab.label;"/>
+    <tab id="updateTab" label="&updateTab.label;"/>
+    <tab id="encryptionTab" label="&certificateTab.label;"/>
   </tabs>
 
   <tabpanels flex="1">
@@ -205,7 +211,8 @@
                     label="&setDefault.label;" accesskey="&setDefault.accesskey;"
                     oncommand="gAdvancedPane.setDefaultBrowser();"
                     preference="pref.general.disable_button.default_browser"/>
-            <description>&isDefault.label;</description>
+            <label id="isDefaultLabel"
+                   value="&isDefault.label;"/>
           </deck>
         </hbox>
       </groupbox>
@@ -435,9 +442,6 @@
 
         <separator/>
 
-#ifdef XP_MACOSX
-        <vbox>
-#endif
         <hbox>
           <button id="viewCertificatesButton"
                   label="&viewCerts.label;" accesskey="&viewCerts.accesskey;"
@@ -446,18 +450,11 @@
           <button id="verificationButton"
                   label="&verify2.label;" accesskey="&verify2.accesskey;"
                   oncommand="gAdvancedPane.showOCSP();"/>
-#ifdef XP_MACOSX
-        </hbox>
-        <hbox>
-#endif
           <button id="viewSecurityDevicesButton"
                   label="&viewSecurityDevices.label;" accesskey="&viewSecurityDevices.accesskey;"
                   oncommand="gAdvancedPane.showSecurityDevices();"
                   preference="security.disable_button.openDeviceManager"/>
         </hbox>
-#ifdef XP_MACOSX
-        </vbox>
-#endif
     </tabpanel>
   </tabpanels>
 </tabbox>

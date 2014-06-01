@@ -36,6 +36,7 @@
 #include "jswatchpoint.h"
 #include "jswrapper.h"
 
+#include "builtin/Eval.h"
 #include "builtin/Object.h"
 #include "frontend/BytecodeCompiler.h"
 #include "gc/Marking.h"
@@ -71,6 +72,116 @@ using mozilla::RoundUpPow2;
 
 JS_STATIC_ASSERT(int32_t((JSObject::NELEMENTS_LIMIT - 1) * sizeof(Value)) == int64_t((JSObject::NELEMENTS_LIMIT - 1) * sizeof(Value)));
 
+static JSObject *
+CreateObjectConstructor(JSContext *cx, JSProtoKey key)
+{
+    Rooted<GlobalObject*> self(cx, cx->global());
+    if (!GlobalObject::ensureConstructor(cx, self, JSProto_Function))
+        return nullptr;
+
+    RootedObject functionProto(cx, &self->getPrototype(JSProto_Function).toObject());
+
+    /* Create the Object function now that we have a [[Prototype]] for it. */
+    RootedObject ctor(cx, NewObjectWithGivenProto(cx, &JSFunction::class_, functionProto,
+                                                  self, SingletonObject));
+    if (!ctor)
+        return nullptr;
+    return NewFunction(cx, ctor, obj_construct, 1, JSFunction::NATIVE_CTOR, self,
+                       HandlePropertyName(cx->names().Object));
+}
+
+static JSObject *
+CreateObjectPrototype(JSContext *cx, JSProtoKey key)
+{
+    Rooted<GlobalObject*> self(cx, cx->global());
+    cx->setDefaultCompartmentObjectIfUnset(self);
+
+    JS_ASSERT(!cx->runtime()->isAtomsCompartment(cx->compartment()));
+    JS_ASSERT(self->isNative());
+
+    /*
+     * Create |Object.prototype| first, mirroring CreateBlankProto but for the
+     * prototype of the created object.
+     */
+    RootedObject objectProto(cx, NewObjectWithGivenProto(cx, &JSObject::class_, nullptr,
+                                                         self, SingletonObject));
+    if (!objectProto)
+        return nullptr;
+
+    /*
+     * The default 'new' type of Object.prototype is required by type inference
+     * to have unknown properties, to simplify handling of e.g. heterogenous
+     * objects in JSON and script literals.
+     */
+    if (!JSObject::setNewTypeUnknown(cx, &JSObject::class_, objectProto))
+        return nullptr;
+
+    return objectProto;
+}
+
+static bool
+ThrowTypeError(JSContext *cx, unsigned argc, Value *vp)
+{
+    JS_ReportErrorFlagsAndNumber(cx, JSREPORT_ERROR, js_GetErrorMessage, nullptr,
+                                 JSMSG_THROW_TYPE_ERROR);
+    return false;
+}
+
+static bool
+FinishObjectClassInit(JSContext *cx, JS::HandleObject ctor, JS::HandleObject proto)
+{
+    Rooted<GlobalObject*> self(cx, cx->global());
+
+    /* ES5 15.1.2.1. */
+    RootedId evalId(cx, NameToId(cx->names().eval));
+    JSObject *evalobj = DefineFunction(cx, self, evalId, IndirectEval, 1, JSFUN_STUB_GSOPS);
+    if (!evalobj)
+        return false;
+    self->setOriginalEval(evalobj);
+
+    /* ES5 13.2.3: Construct the unique [[ThrowTypeError]] function object. */
+    RootedFunction throwTypeError(cx, NewFunction(cx, js::NullPtr(), ThrowTypeError, 0,
+                                                  JSFunction::NATIVE_FUN, self, js::NullPtr()));
+    if (!throwTypeError)
+        return false;
+    if (!JSObject::preventExtensions(cx, throwTypeError))
+        return false;
+    self->setThrowTypeError(throwTypeError);
+
+    RootedObject intrinsicsHolder(cx);
+    if (cx->runtime()->isSelfHostingGlobal(self)) {
+        intrinsicsHolder = self;
+    } else {
+        intrinsicsHolder = NewObjectWithGivenProto(cx, &JSObject::class_, proto, self,
+                                                   TenuredObject);
+        if (!intrinsicsHolder)
+            return false;
+    }
+    self->setIntrinsicsHolder(intrinsicsHolder);
+    /* Define a property 'global' with the current global as its value. */
+    RootedValue global(cx, ObjectValue(*self));
+    if (!JSObject::defineProperty(cx, intrinsicsHolder, cx->names().global,
+                                  global, JS_PropertyStub, JS_StrictPropertyStub,
+                                  JSPROP_PERMANENT | JSPROP_READONLY))
+    {
+        return false;
+    }
+
+    /*
+     * The global object should have |Object.prototype| as its [[Prototype]].
+     * Eventually we'd like to have standard classes be there from the start,
+     * and thus we would know we were always setting what had previously been a
+     * null [[Prototype]], but right now some code assumes it can set the
+     * [[Prototype]] before standard classes have been initialized.  For now,
+     * only set the [[Prototype]] if it hasn't already been set.
+     */
+    Rooted<TaggedProto> tagged(cx, TaggedProto(proto));
+    if (self->shouldSplicePrototype(cx) && !self->splicePrototype(cx, self->getClass(), tagged))
+        return false;
+    return true;
+}
+
+
 const Class JSObject::class_ = {
     js_Object_str,
     JSCLASS_HAS_CACHED_PROTO(JSProto_Object),
@@ -80,7 +191,20 @@ const Class JSObject::class_ = {
     JS_StrictPropertyStub,   /* setProperty */
     JS_EnumerateStub,
     JS_ResolveStub,
-    JS_ConvertStub
+    JS_ConvertStub,
+    nullptr,                 /* finalize */
+    nullptr,                 /* call */
+    nullptr,                 /* hasInstance */
+    nullptr,                 /* construct */
+    nullptr,                 /* trace */
+    {
+        CreateObjectConstructor,
+        CreateObjectPrototype,
+        object_static_methods,
+        object_methods,
+        object_properties,
+        FinishObjectClassInit
+    }
 };
 
 const Class* const js::ObjectClassPtr = &JSObject::class_;
@@ -92,7 +216,7 @@ JS_ObjectToInnerObject(JSContext *cx, HandleObject obj)
         JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_INACTIVE);
         return nullptr;
     }
-    return GetInnerObject(cx, obj);
+    return GetInnerObject(obj);
 }
 
 JS_FRIEND_API(JSObject *)
@@ -1382,7 +1506,7 @@ js::NewObjectWithClassProtoCommon(ExclusiveContext *cxArg,
                                   gc::AllocKind allocKind, NewObjectKind newKind)
 {
     if (protoArg)
-        return NewObjectWithGivenProto(cxArg, clasp, protoArg, parentArg, allocKind, newKind);
+        return NewObjectWithGivenProto(cxArg, clasp, TaggedProto(protoArg), parentArg, allocKind, newKind);
 
     if (CanBeFinalizedInBackground(allocKind, clasp))
         allocKind = GetBackgroundAllocKind(allocKind);
@@ -1431,7 +1555,8 @@ js::NewObjectWithClassProtoCommon(ExclusiveContext *cxArg,
     if (!FindProto(cxArg, clasp, &proto))
         return nullptr;
 
-    types::TypeObject *type = cxArg->getNewType(clasp, proto.get());
+    Rooted<TaggedProto> taggedProto(cxArg, TaggedProto(proto));
+    types::TypeObject *type = cxArg->getNewType(clasp, taggedProto);
     if (!type)
         return nullptr;
 
@@ -1543,7 +1668,7 @@ CreateThisForFunctionWithType(JSContext *cx, HandleTypeObject type, JSObject *pa
         if (!res)
             return nullptr;
         if (newKind == SingletonObject) {
-            Rooted<TaggedProto> proto(cx, templateObject->getProto());
+            Rooted<TaggedProto> proto(cx, TaggedProto(templateObject->getProto()));
             if (!res->splicePrototype(cx, &JSObject::class_, proto))
                 return nullptr;
         } else {
@@ -1563,7 +1688,7 @@ js::CreateThisForFunctionWithProto(JSContext *cx, HandleObject callee, JSObject 
     RootedObject res(cx);
 
     if (proto) {
-        RootedTypeObject type(cx, cx->getNewType(&JSObject::class_, proto, &callee->as<JSFunction>()));
+        RootedTypeObject type(cx, cx->getNewType(&JSObject::class_, TaggedProto(proto), &callee->as<JSFunction>()));
         if (!type)
             return nullptr;
         res = CreateThisForFunctionWithType(cx, type, callee->getParent(), newKind);
@@ -1830,7 +1955,7 @@ js::DeepCloneObjectLiteral(JSContext *cx, HandleObject obj, NewObjectKind newKin
         if (!typeObj)
             return nullptr;
         RootedObject parent(cx, obj->getParent());
-        clone = NewObjectWithGivenProto(cx, &JSObject::class_, typeObj->proto().toObject(),
+        clone = NewObjectWithGivenProto(cx, &JSObject::class_, TaggedProto(typeObj->proto().toObject()),
                                         parent, kind, newKind);
     }
 
@@ -2089,7 +2214,7 @@ JSObject *
 js::CloneObjectLiteral(JSContext *cx, HandleObject parent, HandleObject srcObj)
 {
     Rooted<TypeObject*> typeObj(cx);
-    typeObj = cx->getNewType(&JSObject::class_, cx->global()->getOrCreateObjectPrototype(cx));
+    typeObj = cx->getNewType(&JSObject::class_, TaggedProto(cx->global()->getOrCreateObjectPrototype(cx)));
 
     JS_ASSERT(srcObj->getClass() == &JSObject::class_);
     AllocKind kind = GetBackgroundAllocKind(GuessObjectGCKind(srcObj->numFixedSlots()));
@@ -2109,7 +2234,7 @@ struct JSObject::TradeGutsReserved {
     HeapSlot *newaslots;
     HeapSlot *newbslots;
 
-    TradeGutsReserved(JSContext *cx)
+    explicit TradeGutsReserved(JSContext *cx)
         : avals(cx), bvals(cx),
           newafixed(0), newbfixed(0),
           newashape(cx), newbshape(cx),
@@ -2293,8 +2418,8 @@ JSObject::TradeGuts(JSContext *cx, JSObject *a, JSObject *b, TradeGutsReserved &
          * below, in common with the other case.
          */
         for (size_t i = 0; i < a->numFixedSlots(); ++i) {
-            HeapSlot::writeBarrierPost(cx->runtime(), a, HeapSlot::Slot, i, a->getSlot(i));
-            HeapSlot::writeBarrierPost(cx->runtime(), b, HeapSlot::Slot, i, b->getSlot(i));
+            HeapSlot::writeBarrierPost(a, HeapSlot::Slot, i, a->getSlot(i));
+            HeapSlot::writeBarrierPost(b, HeapSlot::Slot, i, b->getSlot(i));
         }
 #endif
     } else {
@@ -4028,8 +4153,8 @@ LookupPropertyInline(ExclusiveContext *cx,
                      typename MaybeRooted<JSObject*, allowGC>::MutableHandleType objp,
                      typename MaybeRooted<Shape*, allowGC>::MutableHandleType propp)
 {
-    /* NB: The logic of this procedure is implicitly reflected in IonBuilder.cpp's
-     *     |CanEffectlesslyCallLookupGenericOnObject| logic.
+    /* NB: The logic of this procedure is implicitly reflected in
+     *     BaselineIC.cpp's |EffectlesslyLookupProperty| logic.
      *     If this changes, please remember to update the logic there as well.
      */
 
@@ -4089,9 +4214,8 @@ baseops::LookupProperty<NoGC>(ExclusiveContext *cx, JSObject *obj, jsid id,
 JSObject::lookupGeneric(JSContext *cx, HandleObject obj, js::HandleId id,
                         MutableHandleObject objp, MutableHandleShape propp)
 {
-    /*
-     * NB: The logic of lookupGeneric is implicitly reflected in IonBuilder.cpp's
-     *     |CanEffectlesslyCallLookupGenericOnObject| logic.
+    /* NB: The logic of lookupGeneric is implicitly reflected in
+     *     BaselineIC.cpp's |EffectlesslyLookupProperty| logic.
      *     If this changes, please remember to update the logic there as well.
      */
     LookupGenericOp op = obj->getOps()->lookupGeneric;
@@ -4219,7 +4343,7 @@ js::HasOwnProperty(JSContext *cx, LookupGenericOp lookup,
         return true;
 
     JSObject *outer = nullptr;
-    if (JSObjectOp op = objp->getClass()->ext.outerObject) {
+    if (js::ObjectOp op = objp->getClass()->ext.outerObject) {
         if (!allowGC)
             return false;
         RootedObject inner(cx, objp);
@@ -5201,7 +5325,7 @@ baseops::DeleteElement(JSContext *cx, HandleObject obj, uint32_t index, bool *su
 bool
 js::WatchGuts(JSContext *cx, JS::HandleObject origObj, JS::HandleId id, JS::HandleObject callable)
 {
-    RootedObject obj(cx, GetInnerObject(cx, origObj));
+    RootedObject obj(cx, GetInnerObject(origObj));
     if (obj->isNative()) {
         // Use sparse indexes for watched objects, as dense elements can be
         // written to without checking the watchpoint map.
@@ -5241,7 +5365,7 @@ js::UnwatchGuts(JSContext *cx, JS::HandleObject origObj, JS::HandleId id)
 {
     // Looking in the map for an unsupported object will never hit, so we don't
     // need to check for nativeness or watchable-ness here.
-    RootedObject obj(cx, GetInnerObject(cx, origObj));
+    RootedObject obj(cx, GetInnerObject(origObj));
     if (WatchpointMap *wpmap = cx->compartment()->watchpointMap)
         wpmap->unwatch(obj, id, nullptr, nullptr);
     return true;

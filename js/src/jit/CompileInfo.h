@@ -80,6 +80,15 @@ class InlineScriptTree {
         return caller_;
     }
 
+    bool isOutermostCaller() const {
+        return caller_ == nullptr;
+    }
+    InlineScriptTree *outermostCaller() {
+        if (isOutermostCaller())
+            return this;
+        return caller_->outermostCaller();
+    }
+
     jsbytecode *callerPc() const {
         return callerPc_;
     }
@@ -170,6 +179,9 @@ class CompileInfo
 
     JSScript *script() const {
         return script_;
+    }
+    bool compilingAsmJS() const {
+        return script() == nullptr;
     }
     JSFunction *funMaybeLazy() const {
         return fun_;
@@ -390,6 +402,33 @@ class CompileInfo
 
     bool isParallelExecution() const {
         return executionMode_ == ParallelExecution;
+    }
+
+    // Returns true if a slot can be observed out-side the current frame while
+    // the frame is active on the stack.  This implies that these definitions
+    // would have to be executed and that they cannot be removed even if they
+    // are unused.
+    bool isObservableSlot(uint32_t slot) const {
+        if (!funMaybeLazy())
+            return false;
+
+        // The |this| value must always be observable.
+        if (slot == thisSlot())
+            return true;
+
+        // If the function may need an arguments object, then make sure to
+        // preserve the scope chain, because it may be needed to construct the
+        // arguments object during bailout. If we've already created an
+        // arguments object (or got one via OSR), preserve that as well.
+        if (hasArguments() && (slot == scopeChainSlot() || slot == argsObjSlot()))
+            return true;
+
+        // Function.arguments can be used to access all arguments in non-strict
+        // scripts, so we can't optimize out any arguments.
+        if (!script()->strict() && firstArgSlot() <= slot && slot - firstArgSlot() < nargs())
+            return true;
+
+        return false;
     }
 
   private:

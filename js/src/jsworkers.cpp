@@ -578,6 +578,12 @@ GlobalWorkerThreadState::canStartCompressionTask()
     return !compressionWorklist().empty();
 }
 
+bool
+GlobalWorkerThreadState::canStartGCHelperTask()
+{
+    return !gcHelperWorklist().empty();
+}
+
 static void
 CallNewScriptHookForAllScripts(JSContext *cx, HandleScript script)
 {
@@ -669,7 +675,7 @@ GlobalWorkerThreadState::finishParseTask(JSContext *maybecx, JSRuntime *rt, void
         JSObject *newProto = GetBuiltinPrototypePure(global, key);
         JS_ASSERT(newProto);
 
-        object->setProtoUnchecked(newProto);
+        object->setProtoUnchecked(TaggedProto(newProto));
     }
 
     // Move the parsed script and all its contents into the desired compartment.
@@ -719,11 +725,26 @@ WorkerThread::destroy()
         threadData.destroy();
 }
 
+#ifdef MOZ_NUWA_PROCESS
+extern "C" {
+MFBT_API bool IsNuwaProcess();
+MFBT_API void NuwaMarkCurrentThread(void (*recreate)(void *), void *arg);
+}
+#endif
+
 /* static */
 void
 WorkerThread::ThreadMain(void *arg)
 {
     PR_SetCurrentThreadName("Analysis Helper");
+
+#ifdef MOZ_NUWA_PROCESS
+    if (IsNuwaProcess()) {
+        JS_ASSERT(NuwaMarkCurrentThread != nullptr);
+        NuwaMarkCurrentThread(nullptr, nullptr);
+    }
+#endif
+
     static_cast<WorkerThread *>(arg)->threadLoop();
 }
 
@@ -788,7 +809,24 @@ WorkerThread::handleIonWorkload()
     JS_ASSERT(WorkerThreadState().canStartIonCompile());
     JS_ASSERT(idle());
 
-    ionBuilder = WorkerThreadState().ionWorklist().popCopy();
+    // Find the ionBuilder with the script having the highest usecount.
+    GlobalWorkerThreadState::IonBuilderVector &ionWorklist = WorkerThreadState().ionWorklist();
+    size_t highest = 0;
+    for (size_t i = 1; i < ionWorklist.length(); i++) {
+        if (ionWorklist[i]->script()->getUseCount() >
+            ionWorklist[highest]->script()->getUseCount())
+        {
+            highest = i;
+        }
+    }
+    ionBuilder = ionWorklist[highest];
+
+    // Pop the top IonBuilder and move it to the original place of the
+    // IonBuilder we took to start compiling. If both are the same, only pop.
+    if (highest != ionWorklist.length() - 1)
+        ionWorklist[highest] = ionWorklist.popCopy();
+    else
+        ionWorklist.popBack();
 
     TraceLogger *logger = TraceLoggerForCurrentThread();
     AutoTraceLog logScript(logger, TraceLogCreateTextId(logger, ionBuilder->script()));
@@ -894,8 +932,7 @@ WorkerThread::handleCompressionWorkload()
 
     {
         AutoUnlockWorkerThreadState unlock;
-        if (!compressionTask->work())
-            compressionTask->setOOM();
+        compressionTask->result = compressionTask->work();
     }
 
     compressionTask->workerThread = nullptr;
@@ -912,8 +949,11 @@ js::StartOffThreadCompression(ExclusiveContext *cx, SourceCompressionTask *task)
 
     AutoLockWorkerThreadState lock;
 
-    if (!WorkerThreadState().compressionWorklist().append(task))
+    if (!WorkerThreadState().compressionWorklist().append(task)) {
+        if (JSContext *maybecx = cx->maybeJSContext())
+            js_ReportOutOfMemory(maybecx);
         return false;
+    }
 
     WorkerThreadState().notifyOne(GlobalWorkerThreadState::PRODUCER);
     return true;
@@ -937,27 +977,36 @@ GlobalWorkerThreadState::compressionInProgress(SourceCompressionTask *task)
 bool
 SourceCompressionTask::complete()
 {
-    JS_ASSERT_IF(!ss, !chars);
-    if (active()) {
-        AutoLockWorkerThreadState lock;
+    if (!active()) {
+        JS_ASSERT(!compressed);
+        return true;
+    }
 
+    {
+        AutoLockWorkerThreadState lock;
         while (WorkerThreadState().compressionInProgress(this))
             WorkerThreadState().wait(GlobalWorkerThreadState::CONSUMER);
+    }
 
-        ss->ready_ = true;
+    if (result == Success) {
+        ss->setCompressedSource(compressed, compressedBytes);
 
         // Update memory accounting.
-        if (!oom)
-            cx->updateMallocCounter(ss->computedSizeOfData());
+        cx->updateMallocCounter(ss->computedSizeOfData());
+    } else {
+        js_free(compressed);
 
-        ss = nullptr;
-        chars = nullptr;
+        if (result == OOM)
+            js_ReportOutOfMemory(cx);
+        else if (result == Aborted && !ss->ensureOwnsSource(cx))
+            result = OOM;
     }
-    if (oom) {
-        js_ReportOutOfMemory(cx);
-        return false;
-    }
-    return true;
+
+    ss = nullptr;
+    compressed = nullptr;
+    JS_ASSERT(!active());
+
+    return result != OOM;
 }
 
 SourceCompressionTask *
@@ -977,28 +1026,22 @@ GlobalWorkerThreadState::compressionTaskForSource(ScriptSource *ss)
     return nullptr;
 }
 
-const jschar *
-ScriptSource::getOffThreadCompressionChars(ExclusiveContext *cx)
+void
+WorkerThread::handleGCHelperWorkload()
 {
-    // If this is being compressed off thread, return its uncompressed chars.
+    JS_ASSERT(WorkerThreadState().isLocked());
+    JS_ASSERT(WorkerThreadState().canStartGCHelperTask());
+    JS_ASSERT(idle());
 
-    if (ready()) {
-        // Compression has already finished on the source.
-        return nullptr;
+    JS_ASSERT(!gcHelperState);
+    gcHelperState = WorkerThreadState().gcHelperWorklist().popCopy();
+
+    {
+        AutoUnlockWorkerThreadState unlock;
+        gcHelperState->work();
     }
 
-    AutoLockWorkerThreadState lock;
-
-    // Look for a token that hasn't finished compressing and whose source is
-    // the given ScriptSource.
-    if (SourceCompressionTask *task = WorkerThreadState().compressionTaskForSource(this))
-        return task->uncompressedChars();
-
-    // Compressing has finished, so this ScriptSource is ready. Avoid future
-    // queries on the worker thread state when getting the chars.
-    ready_ = true;
-
-    return nullptr;
+    gcHelperState = nullptr;
 }
 
 void
@@ -1029,7 +1072,8 @@ WorkerThread::threadLoop()
             if (WorkerThreadState().canStartIonCompile() ||
                 WorkerThreadState().canStartAsmJSCompile() ||
                 WorkerThreadState().canStartParseTask() ||
-                WorkerThreadState().canStartCompressionTask())
+                WorkerThreadState().canStartCompressionTask() ||
+                WorkerThreadState().canStartGCHelperTask())
             {
                 break;
             }
@@ -1045,6 +1089,8 @@ WorkerThread::threadLoop()
             handleParseWorkload();
         else if (WorkerThreadState().canStartCompressionTask())
             handleCompressionWorkload();
+        else if (WorkerThreadState().canStartGCHelperTask())
+            handleGCHelperWorkload();
         else
             MOZ_ASSUME_UNREACHABLE("No task to perform");
     }
@@ -1097,15 +1143,8 @@ js::StartOffThreadCompression(ExclusiveContext *cx, SourceCompressionTask *task)
 bool
 SourceCompressionTask::complete()
 {
-    JS_ASSERT(!active() && !oom);
+    JS_ASSERT(!ss);
     return true;
-}
-
-const jschar *
-ScriptSource::getOffThreadCompressionChars(ExclusiveContext *cx)
-{
-    JS_ASSERT(ready());
-    return nullptr;
 }
 
 frontend::CompileError &

@@ -604,7 +604,7 @@ private:
       NS_WARNING("Available failed on this stream!");
     }
 
-    nsresult rv = NS_DispatchToMainThread(this, NS_DISPATCH_NORMAL);
+    nsresult rv = NS_DispatchToMainThread(this);
     NS_ENSURE_SUCCESS(rv, rv);
 
     return NS_OK;
@@ -1821,10 +1821,15 @@ BlobParent::Create(ContentParent* aManager,
 
   const ChildBlobConstructorParams& blobParams = aParams.blobParams();
 
+  MOZ_ASSERT(blobParams.type() !=
+             ChildBlobConstructorParams::TMysteryBlobConstructorParams);
+
   switch (blobParams.type()) {
+    case ChildBlobConstructorParams::TMysteryBlobConstructorParams:
+      return nullptr;
+
     case ChildBlobConstructorParams::TNormalBlobConstructorParams:
     case ChildBlobConstructorParams::TFileBlobConstructorParams:
-    case ChildBlobConstructorParams::TMysteryBlobConstructorParams:
       return new BlobParent(aManager, aParams);
 
     case ChildBlobConstructorParams::TSlicedBlobConstructorParams: {

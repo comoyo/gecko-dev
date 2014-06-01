@@ -387,7 +387,7 @@ class Type
 
   public:
     Type() : which_(Which(-1)) {}
-    Type(Which w) : which_(w) {}
+    MOZ_IMPLICIT Type(Which w) : which_(w) {}
 
     bool operator==(Type rhs) const { return which_ == rhs.which_; }
     bool operator!=(Type rhs) const { return which_ != rhs.which_; }
@@ -498,8 +498,8 @@ class RetType
 
   public:
     RetType() : which_(Which(-1)) {}
-    RetType(Which w) : which_(w) {}
-    RetType(AsmJSCoercion coercion) {
+    MOZ_IMPLICIT RetType(Which w) : which_(w) {}
+    MOZ_IMPLICIT RetType(AsmJSCoercion coercion) {
         switch (coercion) {
           case AsmJS_ToInt32: which_ = Signed; break;
           case AsmJS_ToNumber: which_ = Double; break;
@@ -572,9 +572,9 @@ class VarType
   public:
     VarType()
       : which_(Which(-1)) {}
-    VarType(Which w)
+    MOZ_IMPLICIT VarType(Which w)
       : which_(w) {}
-    VarType(AsmJSCoercion coercion) {
+    MOZ_IMPLICIT VarType(AsmJSCoercion coercion) {
         switch (coercion) {
           case AsmJS_ToInt32: which_ = Int; break;
           case AsmJS_ToNumber: which_ = Double; break;
@@ -647,7 +647,7 @@ class ABIArgIter
     void settle() { if (!done()) gen_.next(ToMIRType(types_[i_])); }
 
   public:
-    ABIArgIter(const VecT &types) : types_(types), i_(0) { settle(); }
+    explicit ABIArgIter(const VecT &types) : types_(types), i_(0) { settle(); }
     void operator++(int) { JS_ASSERT(!done()); i_++; settle(); }
     bool done() const { return i_ == types_.length(); }
 
@@ -662,7 +662,7 @@ class ABIArgIter
 typedef js::Vector<MIRType, 8> MIRTypeVector;
 typedef ABIArgIter<MIRTypeVector> ABIArgMIRTypeIter;
 
-typedef js::Vector<VarType, 8, LifoAllocPolicy> VarTypeVector;
+typedef js::Vector<VarType, 8, LifoAllocPolicy<Fallible> > VarTypeVector;
 typedef ABIArgIter<VarTypeVector> ABIArgTypeIter;
 
 class Signature
@@ -671,7 +671,7 @@ class Signature
     RetType retType_;
 
   public:
-    Signature(LifoAlloc &alloc)
+    explicit Signature(LifoAlloc &alloc)
       : argTypes_(alloc) {}
     Signature(LifoAlloc &alloc, RetType retType)
       : argTypes_(alloc), retType_(retType) {}
@@ -881,7 +881,7 @@ class MOZ_STACK_CLASS ModuleCompiler
         friend class ModuleCompiler;
         friend class js::LifoAlloc;
 
-        Global(Which which) : which_(which) {}
+        explicit Global(Which which) : which_(which) {}
 
       public:
         Which which() const {
@@ -998,10 +998,10 @@ class MOZ_STACK_CLASS ModuleCompiler
         } u;
 
         MathBuiltin() : kind(Kind(-1)) {}
-        MathBuiltin(double cst) : kind(Constant) {
+        explicit MathBuiltin(double cst) : kind(Constant) {
             u.cst = cst;
         }
-        MathBuiltin(AsmJSMathBuiltinFunction func) : kind(Function) {
+        explicit MathBuiltin(AsmJSMathBuiltinFunction func) : kind(Function) {
             u.func = func;
         }
     };
@@ -1620,7 +1620,7 @@ class MOZ_STACK_CLASS ModuleCompiler
         for (size_t i = 0; i < masm_.numAsmJSAbsoluteLinks(); i++) {
             AsmJSAbsoluteLink src = masm_.asmJSAbsoluteLink(i);
             AsmJSModule::AbsoluteLink link;
-            link.patchAt = masm_.actualOffset(src.patchAt.offset());
+            link.patchAt = CodeOffsetLabel(masm_.actualOffset(src.patchAt.offset()));
             link.target = src.target;
             if (!module_->addAbsoluteLink(link))
                 return false;
@@ -2025,7 +2025,7 @@ class FunctionCompiler
         if (!newBlock(/* pred = */ nullptr, &curBlock_, fn_))
             return false;
 
-        for (ABIArgTypeIter i = argTypes; !i.done(); i++) {
+        for (ABIArgTypeIter i(argTypes); !i.done(); i++) {
             MAsmJSParameter *ins = MAsmJSParameter::New(alloc(), *i, i.mirType());
             curBlock_->add(ins);
             curBlock_->initSlot(info().localSlot(i.index()), ins);
@@ -3596,10 +3596,10 @@ CheckStoreArray(FunctionCompiler &f, ParseNode *lhs, ParseNode *rhs, MDefinition
             return f.failf(lhs, "%s is not a subtype of double? or floatish", rhsType.toChars());
         break;
       case ArrayBufferView::TYPE_FLOAT64:
-        if (rhsType.isFloat())
+        if (rhsType.isMaybeFloat())
             rhsDef = f.unary<MToDouble>(rhsDef);
         else if (!rhsType.isMaybeDouble())
-            return f.failf(lhs, "%s is not a subtype of float or double?", rhsType.toChars());
+            return f.failf(lhs, "%s is not a subtype of float? or double?", rhsType.toChars());
         break;
       default:
         MOZ_ASSUME_UNREACHABLE("Unexpected view type");
@@ -5616,7 +5616,7 @@ struct ParallelGroupState
     int32_t outstandingJobs; // Good work, jobs!
     uint32_t compiledJobs;
 
-    ParallelGroupState(js::Vector<AsmJSParallelTask> &tasks)
+    explicit ParallelGroupState(js::Vector<AsmJSParallelTask> &tasks)
       : tasks(tasks), outstandingJobs(0), compiledJobs(0)
     { }
 };
@@ -5992,7 +5992,7 @@ static const RegisterSet NonVolatileRegs =
 static void
 LoadAsmJSActivationIntoRegister(MacroAssembler &masm, Register reg)
 {
-    masm.movePtr(AsmJSImm_Runtime, reg);
+    masm.movePtr(AsmJSImmPtr(AsmJSImm_Runtime), reg);
     size_t offset = offsetof(JSRuntime, mainThread) +
                     PerThreadData::offsetOfAsmJSActivationStackReadOnly();
     masm.loadPtr(Address(reg, offset), reg);
@@ -6388,16 +6388,16 @@ GenerateFFIInterpreterExit(ModuleCompiler &m, const ModuleCompiler::ExitDescript
     AssertStackAlignment(masm);
     switch (exit.sig().retType().which()) {
       case RetType::Void:
-        masm.callExit(AsmJSImm_InvokeFromAsmJS_Ignore, i.stackBytesConsumedSoFar());
+        masm.callExit(AsmJSImmPtr(AsmJSImm_InvokeFromAsmJS_Ignore), i.stackBytesConsumedSoFar());
         masm.branchTest32(Assembler::Zero, ReturnReg, ReturnReg, throwLabel);
         break;
       case RetType::Signed:
-        masm.callExit(AsmJSImm_InvokeFromAsmJS_ToInt32, i.stackBytesConsumedSoFar());
+        masm.callExit(AsmJSImmPtr(AsmJSImm_InvokeFromAsmJS_ToInt32), i.stackBytesConsumedSoFar());
         masm.branchTest32(Assembler::Zero, ReturnReg, ReturnReg, throwLabel);
         masm.unboxInt32(argv, ReturnReg);
         break;
       case RetType::Double:
-        masm.callExit(AsmJSImm_InvokeFromAsmJS_ToNumber, i.stackBytesConsumedSoFar());
+        masm.callExit(AsmJSImmPtr(AsmJSImm_InvokeFromAsmJS_ToNumber), i.stackBytesConsumedSoFar());
         masm.branchTest32(Assembler::Zero, ReturnReg, ReturnReg, throwLabel);
         masm.loadDouble(argv, ReturnFloatReg);
         break;
@@ -6463,12 +6463,12 @@ GenerateOOLConvert(ModuleCompiler &m, RetType retType, Label *throwLabel)
     AssertStackAlignment(masm);
     switch (retType.which()) {
       case RetType::Signed:
-        masm.callExit(AsmJSImm_CoerceInPlace_ToInt32, i.stackBytesConsumedSoFar());
+        masm.callExit(AsmJSImmPtr(AsmJSImm_CoerceInPlace_ToInt32), i.stackBytesConsumedSoFar());
         masm.branchTest32(Assembler::Zero, ReturnReg, ReturnReg, throwLabel);
         masm.unboxInt32(Address(StackPointer, offsetToArgv), ReturnReg);
         break;
       case RetType::Double:
-        masm.callExit(AsmJSImm_CoerceInPlace_ToNumber, i.stackBytesConsumedSoFar());
+        masm.callExit(AsmJSImmPtr(AsmJSImm_CoerceInPlace_ToNumber), i.stackBytesConsumedSoFar());
         masm.branchTest32(Assembler::Zero, ReturnReg, ReturnReg, throwLabel);
         masm.loadDouble(Address(StackPointer, offsetToArgv), ReturnFloatReg);
         break;
@@ -6537,10 +6537,10 @@ GenerateFFIIonExit(ModuleCompiler &m, const ModuleCompiler::ExitDescriptor &exit
     unsigned globalDataOffset = m.module().exitIndexToGlobalDataOffset(exitIndex);
 #if defined(JS_CODEGEN_X64)
     CodeOffsetLabel label2 = masm.leaRipRelative(callee);
-    m.masm().append(AsmJSGlobalAccess(label2.offset(), globalDataOffset));
+    m.masm().append(AsmJSGlobalAccess(CodeOffsetLabel(label2.offset()), globalDataOffset));
 #elif defined(JS_CODEGEN_X86)
     CodeOffsetLabel label2 = masm.movlWithPatch(Imm32(0), callee);
-    m.masm().append(AsmJSGlobalAccess(label2.offset(), globalDataOffset));
+    m.masm().append(AsmJSGlobalAccess(CodeOffsetLabel(label2.offset()), globalDataOffset));
 #else
     masm.lea(Operand(GlobalReg, globalDataOffset), callee);
 #endif
@@ -6771,7 +6771,7 @@ GenerateStackOverflowExit(ModuleCompiler &m, Label *throwLabel)
     JS_ASSERT(i.done());
 
     AssertStackAlignment(masm);
-    masm.callExit(AsmJSImm_ReportOverRecursed, i.stackBytesConsumedSoFar());
+    masm.callExit(AsmJSImmPtr(AsmJSImm_ReportOverRecursed), i.stackBytesConsumedSoFar());
 
     // Don't worry about restoring the stack; throwLabel will pop everything.
     masm.jump(throwLabel);
@@ -6829,7 +6829,7 @@ GenerateInterruptExit(ModuleCompiler &m, Label *throwLabel)
     LoadJSContextFromActivation(masm, activation, IntArgReg0);
 #endif
 
-    masm.call(AsmJSImm_HandleExecutionInterrupt);
+    masm.call(AsmJSImmPtr(AsmJSImm_HandleExecutionInterrupt));
     masm.branchIfFalseBool(ReturnReg, throwLabel);
 
     // Restore the StackPointer to it's position before the call.
@@ -7021,6 +7021,9 @@ CheckModule(ExclusiveContext *cx, AsmJSParser &parser, ParseNode *stmtList,
     TokenKind tk = PeekToken(m.parser());
     if (tk != TOK_EOF && tk != TOK_RC)
         return m.fail(nullptr, "top-level export (return) must be the last statement");
+
+    // The instruction cache is flushed when dynamically linking, so can inhibit now.
+    AutoFlushICache afc("CheckModule", /* inhibit= */ true);
 
     ScopedJSDeletePtr<AsmJSModule> module;
     if (!FinishModule(m, &module))

@@ -779,7 +779,7 @@ SYNC_ENUMS(CONTENT, Content)
 SYNC_ENUMS(IPDLUNITTEST, IPDLUnitTest)
 
 // .. and ensure that that is all of them:
-static_assert(GeckoProcessType_IPDLUnitTest + 1 == GeckoProcessType_End,
+static_assert(GeckoProcessType_GMPlugin + 1 == GeckoProcessType_End,
               "Did not find the final GeckoProcessType");
 
 NS_IMETHODIMP
@@ -2268,7 +2268,7 @@ SelectProfile(nsIProfileLock* *aResult, nsIToolkitProfileService* aProfileSvc, n
       rv = profile->Lock(nullptr, aResult);
       if (NS_SUCCEEDED(rv)) {
         if (aProfileName)
-          aProfileName->Assign(NS_LITERAL_CSTRING("default"));
+          aProfileName->AssignLiteral("default");
         return NS_OK;
       }
     }
@@ -2917,19 +2917,8 @@ XREMain::XRE_mainInit(bool* aExitFlag)
 #endif
 
 #ifdef MOZ_ACCESSIBILITY_ATK
-  // Reset GTK_MODULES, strip atk-bridge if exists
-  // Mozilla will load libatk-bridge.so later if necessary
-  const char* gtkModules = PR_GetEnv("GTK_MODULES");
-  if (gtkModules && *gtkModules) {
-    nsCString gtkModulesStr(gtkModules);
-    gtkModulesStr.ReplaceSubstring("atk-bridge", "");
-    char* expr = PR_smprintf("GTK_MODULES=%s", gtkModulesStr.get());
-    if (expr)
-      PR_SetEnv(expr);
-    // We intentionally leak |expr| here since it is required by PR_SetEnv.
-  }
-
-  // Suppress atk-bridge init at startup, it works after GNOME 2.24.2
+  // Suppress atk-bridge init at startup, until mozilla accessibility is
+  // initialized.  This works after gnome 2.24.2.
   SaveToEnv("NO_AT_BRIDGE=1");
 #endif
 
@@ -3021,7 +3010,11 @@ XREMain::XRE_mainInit(bool* aExitFlag)
   if ((mAppData->flags & NS_XRE_ENABLE_CRASH_REPORTER) &&
       NS_SUCCEEDED(
          CrashReporter::SetExceptionHandler(mAppData->xreDirectory))) {
-    CrashReporter::UpdateCrashEventsDir();
+    nsCOMPtr<nsIFile> file;
+    rv = mDirProvider.GetUserAppDataDirectory(getter_AddRefs(file));
+    if (NS_SUCCEEDED(rv)) {
+      CrashReporter::SetUserAppDataDirectory(file);
+    }
     if (mAppData->crashReporterURL)
       CrashReporter::SetServerURL(nsDependentCString(mAppData->crashReporterURL));
 
@@ -3676,7 +3669,7 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   if (mAppData->flags & NS_XRE_ENABLE_CRASH_REPORTER)
       MakeOrSetMinidumpPath(mProfD);
 
-  CrashReporter::UpdateCrashEventsDir();
+  CrashReporter::SetProfileDirectory(mProfD);
 #endif
 
   nsAutoCString version;

@@ -22,6 +22,7 @@
 #include "nsIObjectLoadingContent.h"
 #include "nsFrame.h"
 #include "mozilla/layers/ShadowLayers.h"
+#include "ClientLayerManager.h"
 
 #include "nsIScrollableFrame.h"
 
@@ -64,7 +65,7 @@
 #include "mozilla/layers/ShadowLayers.h"
 
 #include "mozilla/dom/Element.h"
-#include "mozilla/dom/file/FileHandle.h"
+#include "mozilla/dom/FileHandle.h"
 #include "mozilla/dom/FileHandleBinding.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/IDBFactoryBinding.h"
@@ -483,54 +484,6 @@ nsDOMWindowUtils::SetDisplayPortBaseForElement(int32_t aX,
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::SetCriticalDisplayPortForElement(float aXPx, float aYPx,
-                                                   float aWidthPx, float aHeightPx,
-                                                   nsIDOMElement* aElement)
-{
-  if (!nsContentUtils::IsCallerChrome()) {
-    return NS_ERROR_DOM_SECURITY_ERR;
-  }
-
-  nsIPresShell* presShell = GetPresShell();
-  if (!presShell) {
-    return NS_ERROR_FAILURE;
-  }
-
-  if (!aElement) {
-    return NS_ERROR_INVALID_ARG;
-  }
-
-  nsCOMPtr<nsIContent> content = do_QueryInterface(aElement);
-
-  if (!content) {
-    return NS_ERROR_INVALID_ARG;
-  }
-
-  if (content->GetCurrentDoc() != presShell->GetDocument()) {
-    return NS_ERROR_INVALID_ARG;
-  }
-
-  nsRect displayport;
-  if (!nsLayoutUtils::GetDisplayPort(content, &displayport)) {
-    return NS_ERROR_INVALID_ARG;
-  }
-
-  nsRect criticalDisplayport(nsPresContext::CSSPixelsToAppUnits(aXPx),
-                             nsPresContext::CSSPixelsToAppUnits(aYPx),
-                             nsPresContext::CSSPixelsToAppUnits(aWidthPx),
-                             nsPresContext::CSSPixelsToAppUnits(aHeightPx));
-  content->SetProperty(nsGkAtoms::CriticalDisplayPort, new nsRect(criticalDisplayport),
-                       nsINode::DeleteProperty<nsRect>);
-
-  nsIFrame* rootFrame = presShell->GetRootFrame();
-  if (rootFrame) {
-    rootFrame->InvalidateFrame();
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsDOMWindowUtils::SetResolution(float aXResolution, float aYResolution)
 {
   if (!nsContentUtils::IsCallerChrome()) {
@@ -572,6 +525,23 @@ nsDOMWindowUtils::GetResolution(float* aXResolution, float* aYResolution)
     *aXResolution = presShell->GetXResolution();
     *aYResolution = presShell->GetYResolution();
   }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::GetIsResolutionSet(bool* aIsResolutionSet) {
+  if (!nsContentUtils::IsCallerChrome()) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  nsIPresShell* presShell = GetPresShell();
+  if (!presShell) {
+    return NS_ERROR_FAILURE;
+  }
+
+  const nsIScrollableFrame* sf = presShell->GetRootScrollFrameAsScrollable();
+  *aIsResolutionSet = sf && sf->IsResolutionSet();
 
   return NS_OK;
 }
@@ -2481,7 +2451,7 @@ nsDOMWindowUtils::GetParent(JS::Handle<JS::Value> aObject,
 
   // Outerize if necessary.
   if (parent) {
-    if (JSObjectOp outerize = js::GetObjectClass(parent)->ext.outerObject) {
+    if (js::ObjectOp outerize = js::GetObjectClass(parent)->ext.outerObject) {
       parent = outerize(aCx, parent);
     }
   }
@@ -2708,8 +2678,8 @@ nsDOMWindowUtils::AdvanceTimeAndRefresh(int64_t aMilliseconds)
   nsRefreshDriver* driver = GetPresContext()->RefreshDriver();
   driver->AdvanceTimeAndRefresh(aMilliseconds);
 
-  LayerTransactionChild* transaction = GetLayerTransaction();
-  if (transaction) {
+  RefPtr<LayerTransactionChild> transaction = GetLayerTransaction();
+  if (transaction && transaction->IPCOpen()) {
     transaction->SendSetTestSampleTime(driver->MostRecentRefresh());
   }
 
@@ -2726,8 +2696,8 @@ nsDOMWindowUtils::RestoreNormalRefresh()
   // Kick the compositor out of test mode before the refresh driver, so that
   // the refresh driver doesn't send an update that gets ignored by the
   // compositor.
-  LayerTransactionChild* transaction = GetLayerTransaction();
-  if (transaction) {
+  RefPtr<LayerTransactionChild> transaction = GetLayerTransaction();
+  if (transaction && transaction->IPCOpen()) {
     transaction->SendLeaveTestMode();
   }
 
@@ -3226,7 +3196,7 @@ nsDOMWindowUtils::GetFileId(JS::Handle<JS::Value> aFile, JSContext* aCx,
   if (!aFile.isPrimitive()) {
     JSObject* obj = aFile.toObjectOrNull();
 
-    file::FileHandle* fileHandle;
+    FileHandle* fileHandle;
     if (NS_SUCCEEDED(UNWRAP_OBJECT(FileHandle, obj, fileHandle))) {
       *aResult = fileHandle->GetFileId();
       return NS_OK;
@@ -3947,6 +3917,50 @@ nsDOMWindowUtils::GetOMTAOrComputedStyle(nsIDOMElement* aElement,
   NS_ENSURE_SUCCESS(rv, rv);
 
   return style->GetPropertyValue(aProperty, aResult);
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::GetContentAPZTestData(JSContext* aContext,
+                                        JS::MutableHandleValue aOutContentTestData)
+{
+  if (!nsContentUtils::IsCallerChrome()) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  if (nsIWidget* widget = GetWidget()) {
+    nsRefPtr<LayerManager> lm = widget->GetLayerManager();
+    if (lm && lm->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
+      ClientLayerManager* clm = static_cast<ClientLayerManager*>(lm.get());
+      if (!clm->GetAPZTestData().ToJS(aOutContentTestData, aContext)) {
+        return NS_ERROR_FAILURE;
+      }
+    }
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::GetCompositorAPZTestData(JSContext* aContext,
+                                           JS::MutableHandleValue aOutCompositorTestData)
+{
+  if (!nsContentUtils::IsCallerChrome()) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  if (nsIWidget* widget = GetWidget()) {
+    nsRefPtr<LayerManager> lm = widget->GetLayerManager();
+    if (lm && lm->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
+      ClientLayerManager* clm = static_cast<ClientLayerManager*>(lm.get());
+      APZTestData compositorSideData;
+      clm->GetCompositorSideAPZTestData(&compositorSideData);
+      if (!compositorSideData.ToJS(aOutCompositorTestData, aContext)) {
+        return NS_ERROR_FAILURE;
+      }
+    }
+  }
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP

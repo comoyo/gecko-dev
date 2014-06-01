@@ -131,7 +131,6 @@ callback RTCStatsReportCallback = void (RTCStatsReport obj);
 
 dictionary RTCStatsReportInternal {
   DOMString                           pcid = "";
-  sequence<RTCRTPStreamStats>         rtpStreamStats;
   sequence<RTCInboundRTPStreamStats>  inboundRTPStreamStats;
   sequence<RTCOutboundRTPStreamStats> outboundRTPStreamStats;
   sequence<RTCMediaStreamTrackStats>  mediaStreamTrackStats;
@@ -141,6 +140,10 @@ dictionary RTCStatsReportInternal {
   sequence<RTCIceCandidatePairStats>  iceCandidatePairStats;
   sequence<RTCIceCandidateStats>      iceCandidateStats;
   sequence<RTCCodecStats>             codecStats;
+  DOMString                           localSdp;
+  DOMString                           remoteSdp;
+  DOMHighResTimeStamp                 timestamp;
+  boolean                             closed; // Is the PC now closed
 };
 
 [Pref="media.peerconnection.enabled",

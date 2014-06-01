@@ -20,6 +20,8 @@ import org.mozilla.gecko.LightweightTheme;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
+import org.mozilla.gecko.Telemetry;
+import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.PropertyAnimator.PropertyAnimationListener;
 import org.mozilla.gecko.animation.ViewHelper;
@@ -375,6 +377,9 @@ public class BrowserToolbar extends ThemedRelativeLayout
             editCancel.setOnClickListener(new OnClickListener() {
                 @Override
                 public void onClick(View v) {
+                    Telemetry.sendUIEvent(TelemetryContract.Event.CANCEL,
+                                          TelemetryContract.Method.ACTIONBAR,
+                                          getResources().getResourceEntryName(editCancel.getId()));
                     cancelEdit();
                 }
             });
@@ -403,42 +408,13 @@ public class BrowserToolbar extends ThemedRelativeLayout
 
     public boolean onBackPressed() {
         if (isEditing()) {
+            Telemetry.sendUIEvent(TelemetryContract.Event.CANCEL,
+                                  TelemetryContract.Method.BACK);
             cancelEdit();
             return true;
         }
 
         return urlDisplayLayout.dismissSiteIdentityPopup();
-    }
-
-    public boolean onKey(int keyCode, KeyEvent event) {
-        if (event.getAction() != KeyEvent.ACTION_DOWN) {
-            return false;
-        }
-
-        // Galaxy Note sends key events for the stylus that are outside of the
-        // valid keyCode range (see bug 758427)
-        if (keyCode > KeyEvent.getMaxKeyCode()) {
-            return true;
-        }
-
-        // This method is called only if the key event was not handled
-        // by any of the views, which usually means the edit box lost focus
-        if (keyCode == KeyEvent.KEYCODE_BACK ||
-            keyCode == KeyEvent.KEYCODE_MENU ||
-            keyCode == KeyEvent.KEYCODE_DPAD_UP ||
-            keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
-            keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
-            keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
-            keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
-            keyCode == KeyEvent.KEYCODE_DEL ||
-            keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
-            keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            return false;
-        } else if (isEditing()) {
-            return urlEditLayout.onKey(keyCode, event);
-        }
-
-        return false;
     }
 
     @Override
@@ -607,9 +583,10 @@ public class BrowserToolbar extends ThemedRelativeLayout
             return 0;
         }
 
-        // Subtract the right margin because it's negative.
-        final LayoutParams lp = (LayoutParams) urlEditLayout.getLayoutParams();
-        return urlEditLayout.getRight() - lp.rightMargin - urlBarEntry.getRight();
+        // Find the distance from the right-edge of the url bar (where we're translating from) to
+        // the left-edge of the cancel button (where we're translating to; note that the cancel
+        // button must be laid out, i.e. not View.GONE).
+        return editCancel.getLeft() - urlBarEntry.getRight();
     }
 
     private int getUrlBarCurveTranslation() {
@@ -1002,11 +979,17 @@ public class BrowserToolbar extends ThemedRelativeLayout
             ViewHelper.setTranslationX(urlBarTranslatingEdge, entryTranslation);
         }
 
+        // Prevent taps through the editing mode cancel button (bug 1001243).
+        tabsButton.setEnabled(false);
+
         ViewHelper.setTranslationX(tabsButton, curveTranslation);
         ViewHelper.setTranslationX(tabsCounter, curveTranslation);
         ViewHelper.setTranslationX(actionItemBar, curveTranslation);
 
         if (hasSoftMenuButton) {
+            // Prevent tabs through the editing mode cancel button (bug 1001243).
+            menuButton.setEnabled(false);
+
             ViewHelper.setTranslationX(menuButton, curveTranslation);
             ViewHelper.setTranslationX(menuIcon, curveTranslation);
         }
@@ -1068,6 +1051,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
      * @return the url that was entered
      */
     public String cancelEdit() {
+        Telemetry.stopUISession(TelemetryContract.Session.AWESOMESCREEN);
         return stopEditing();
     }
 
@@ -1128,11 +1112,15 @@ public class BrowserToolbar extends ThemedRelativeLayout
             }
         }
 
+        tabsButton.setEnabled(true);
+
         ViewHelper.setTranslationX(tabsButton, 0);
         ViewHelper.setTranslationX(tabsCounter, 0);
         ViewHelper.setTranslationX(actionItemBar, 0);
 
         if (hasSoftMenuButton) {
+            menuButton.setEnabled(true);
+
             ViewHelper.setTranslationX(menuButton, 0);
             ViewHelper.setTranslationX(menuIcon, 0);
         }

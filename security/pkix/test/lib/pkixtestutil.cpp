@@ -1,6 +1,13 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=8 sts=2 et sw=2 tw=80: */
-/* Copyright 2013 Mozilla Foundation
+/* This code is made available to you under your choice of the following sets
+ * of licensing terms:
+ */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+/* Copyright 2013 Mozilla Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -590,20 +597,36 @@ GenerateKeyPair(/*out*/ ScopedSECKEYPublicKey& publicKey,
   if (!slot) {
     return SECFailure;
   }
-  PK11RSAGenParams params;
-  params.keySizeInBits = 2048;
-  params.pe = 3;
-  SECKEYPublicKey* publicKeyTemp = nullptr;
-  privateKey = PK11_GenerateKeyPair(slot.get(), CKM_RSA_PKCS_KEY_PAIR_GEN,
-  				    &params, &publicKeyTemp, false, true,
-                                    nullptr);
-  if (!privateKey) {
+
+  // Bug 1012786: PK11_GenerateKeyPair can fail if there is insufficient
+  // entropy to generate a random key. Attempting to add some entropy and
+  // retrying appears to solve this issue.
+  for (uint32_t retries = 0; retries < 10; retries++) {
+    PK11RSAGenParams params;
+    params.keySizeInBits = 2048;
+    params.pe = 3;
+    SECKEYPublicKey* publicKeyTemp = nullptr;
+    privateKey = PK11_GenerateKeyPair(slot.get(), CKM_RSA_PKCS_KEY_PAIR_GEN,
+                                      &params, &publicKeyTemp, false, true,
+                                      nullptr);
+    if (privateKey) {
+      publicKey = publicKeyTemp;
+      PR_ASSERT(publicKey);
+      return SECSuccess;
+    }
+
     PR_ASSERT(!publicKeyTemp);
-    return SECFailure;
+
+    if (PR_GetError() != SEC_ERROR_PKCS11_FUNCTION_FAILED) {
+      return SECFailure;
+    }
+
+    PRTime now = PR_Now();
+    if (PK11_RandomUpdate(&now, sizeof(PRTime)) != SECSuccess) {
+      return SECFailure;
+    }
   }
-  publicKey = publicKeyTemp;
-  PR_ASSERT(publicKey);
-  return SECSuccess;
+  return SECFailure;
 }
 
 
@@ -611,7 +634,7 @@ GenerateKeyPair(/*out*/ ScopedSECKEYPublicKey& publicKey,
 // Certificates
 
 static SECItem* TBSCertificate(PLArenaPool* arena, long version,
-                               long serialNumber, SECOidTag signature,
+                               SECItem* serialNumber, SECOidTag signature,
                                const SECItem* issuer, PRTime notBefore,
                                PRTime notAfter, const SECItem* subject,
                                const SECKEYPublicKey* subjectPublicKey,
@@ -623,7 +646,7 @@ static SECItem* TBSCertificate(PLArenaPool* arena, long version,
 //         signatureValue       BIT STRING  }
 SECItem*
 CreateEncodedCertificate(PLArenaPool* arena, long version,
-                         SECOidTag signature, long serialNumber,
+                         SECOidTag signature, SECItem* serialNumber,
                          const SECItem* issuerNameDER, PRTime notBefore,
                          PRTime notAfter, const SECItem* subjectNameDER,
                          /*optional*/ SECItem const* const* extensions,
@@ -674,7 +697,7 @@ CreateEncodedCertificate(PLArenaPool* arena, long version,
 //                           -- If present, version MUST be v3 --  }
 static SECItem*
 TBSCertificate(PLArenaPool* arena, long versionValue,
-               long serialNumberValue, SECOidTag signatureOidTag,
+               SECItem* serialNumber, SECOidTag signatureOidTag,
                const SECItem* issuer, PRTime notBeforeTime,
                PRTime notAfterTime, const SECItem* subject,
                const SECKEYPublicKey* subjectPublicKey,
@@ -707,10 +730,6 @@ TBSCertificate(PLArenaPool* arena, long versionValue,
     }
   }
 
-  SECItem* serialNumber(Integer(arena, serialNumberValue));
-  if (!serialNumber) {
-    return nullptr;
-  }
   if (output.Add(serialNumber) != der::Success) {
     return nullptr;
   }

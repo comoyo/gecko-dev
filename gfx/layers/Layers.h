@@ -69,6 +69,10 @@ namespace css {
 class ComputedTimingFunction;
 }
 
+namespace dom {
+class OverfillCallback;
+}
+
 namespace layers {
 
 class Animation;
@@ -605,10 +609,23 @@ public:
   virtual bool IsCompositingCheap() { return true; }
 
   bool IsInTransaction() const { return mInTransaction; }
+  virtual bool RequestOverfill(mozilla::dom::OverfillCallback* aCallback) { return true; }
+  virtual void RunOverfillCallback(const uint32_t aOverfill) { }
 
   virtual void SetRegionToClear(const nsIntRegion& aRegion)
   {
     mRegionToClear = aRegion;
+  }
+
+  virtual bool SupportsMixBlendModes(EnumSet<gfx::CompositionOp>& aMixBlendModes)
+  {
+    return false;
+  }
+
+  bool SupportsMixBlendMode(gfx::CompositionOp aMixBlendMode)
+  {
+    EnumSet<gfx::CompositionOp> modes(aMixBlendMode);
+    return SupportsMixBlendModes(modes);
   }
 
 protected:
@@ -1744,6 +1761,14 @@ protected:
   void DefaultComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface);
 
   /**
+   * A default implementation to compute and set the value for SupportsComponentAlphaChildren().
+   *
+   * If aNeedsSurfaceCopy is provided, then it is set to true if the caller needs to copy the background
+   * up into the intermediate surface created, false otherwise.
+   */
+  void DefaultComputeSupportsComponentAlphaChildren(bool* aNeedsSurfaceCopy = nullptr);
+
+  /**
    * Loops over the children calling ComputeEffectiveTransforms on them.
    */
   void ComputeEffectiveTransformsForChildren(const gfx::Matrix4x4& aTransformToSurface);
@@ -1844,6 +1869,7 @@ public:
       , mStream(nullptr)
       , mTexID(0)
       , mSize(0,0)
+      , mHasAlpha(false)
       , mIsGLAlphaPremult(false)
     { }
 
@@ -1859,6 +1885,9 @@ public:
 
     // The size of the canvas content
     nsIntSize mSize;
+
+    // Whether the canvas drawingbuffer has an alpha channel.
+    bool mHasAlpha;
 
     // Whether mGLContext contains data that is alpha-premultiplied.
     bool mIsGLAlphaPremult;

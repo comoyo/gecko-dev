@@ -435,14 +435,14 @@ class AutoEnterWarmup
     JSRuntime *runtime_;
 
   public:
-    AutoEnterWarmup(JSRuntime *runtime) : runtime_(runtime) { runtime_->forkJoinWarmup++; }
+    explicit AutoEnterWarmup(JSRuntime *runtime) : runtime_(runtime) { runtime_->forkJoinWarmup++; }
     ~AutoEnterWarmup() { runtime_->forkJoinWarmup--; }
 };
 
 class AutoSetForkJoinContext
 {
   public:
-    AutoSetForkJoinContext(ForkJoinContext *threadCx) {
+    explicit AutoSetForkJoinContext(ForkJoinContext *threadCx) {
         ForkJoinContext::tlsForkJoinContext.set(threadCx);
     }
 
@@ -479,7 +479,7 @@ ForkJoinActivation::ForkJoinActivation(JSContext *cx)
 
     MinorGC(cx->runtime(), JS::gcreason::API);
 
-    cx->runtime()->gc.helperThread.waitBackgroundSweepEnd();
+    cx->runtime()->gc.waitBackgroundSweepEnd();
 
     JS_ASSERT(!cx->runtime()->needsBarrier());
     JS_ASSERT(!cx->zone()->needsBarrier());
@@ -1477,7 +1477,7 @@ ForkJoinShared::executeFromWorker(ThreadPoolWorker *worker, uintptr_t stackLimit
     }
     TlsPerThreadData.set(&thisThread);
 
-#ifdef JS_ARM_SIMULATOR
+#if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
     stackLimit = Simulator::StackLimit();
 #endif
 

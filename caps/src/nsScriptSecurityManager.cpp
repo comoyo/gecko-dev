@@ -11,6 +11,7 @@
 #include "js/OldDebugAPI.h"
 #include "xpcprivate.h"
 #include "XPCWrapper.h"
+#include "nsILoadContext.h"
 #include "nsIServiceManager.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScriptContext.h"
@@ -28,7 +29,6 @@
 #include "nsError.h"
 #include "nsDOMCID.h"
 #include "nsIXPConnect.h"
-#include "nsIXPCSecurityManager.h"
 #include "nsTextFormatter.h"
 #include "nsIStringBundle.h"
 #include "nsNetUtil.h"
@@ -77,16 +77,6 @@ nsIIOService    *nsScriptSecurityManager::sIOService = nullptr;
 nsIStringBundle *nsScriptSecurityManager::sStrBundle = nullptr;
 JSRuntime       *nsScriptSecurityManager::sRuntime   = 0;
 bool nsScriptSecurityManager::sStrictFileOriginPolicy = true;
-
-bool
-nsScriptSecurityManager::SubjectIsPrivileged()
-{
-    JSContext *cx = GetCurrentJSContext();
-    if (cx && xpc::IsUniversalXPConnectEnabled(cx))
-        return true;
-    bool isSystem = false;
-    return NS_SUCCEEDED(SubjectPrincipalIsSystem(&isSystem)) && isSystem;
-}
 
 ///////////////////////////
 // Convenience Functions //
@@ -299,11 +289,12 @@ nsScriptSecurityManager::GetChannelPrincipal(nsIChannel* aChannel,
     nsresult rv = NS_GetFinalChannelURI(aChannel, getter_AddRefs(uri));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIDocShell> docShell;
-    NS_QueryNotificationCallbacks(aChannel, docShell);
 
-    if (docShell) {
-        return GetDocShellCodebasePrincipal(uri, docShell, aPrincipal);
+    nsCOMPtr<nsILoadContext> loadContext;
+    NS_QueryNotificationCallbacks(aChannel, loadContext);
+
+    if (loadContext) {
+        return GetLoadContextCodebasePrincipal(uri, loadContext, aPrincipal);
     }
 
     return GetCodebasePrincipalInternal(uri, UNKNOWN_APP_ID,
@@ -318,20 +309,6 @@ nsScriptSecurityManager::IsSystemPrincipal(nsIPrincipal* aPrincipal,
     return NS_OK;
 }
 
-NS_IMETHODIMP_(nsIPrincipal *)
-nsScriptSecurityManager::GetCxSubjectPrincipal(JSContext *cx)
-{
-    NS_ASSERTION(cx == GetCurrentJSContext(),
-                 "Uh, cx is not the current JS context!");
-
-    nsresult rv = NS_ERROR_FAILURE;
-    nsIPrincipal *principal = GetSubjectPrincipal(cx, &rv);
-    if (NS_FAILED(rv))
-        return nullptr;
-
-    return principal;
-}
-
 /////////////////////////////
 // nsScriptSecurityManager //
 /////////////////////////////
@@ -341,7 +318,6 @@ nsScriptSecurityManager::GetCxSubjectPrincipal(JSContext *cx)
 ////////////////////////////////////
 NS_IMPL_ISUPPORTS(nsScriptSecurityManager,
                   nsIScriptSecurityManager,
-                  nsIXPCSecurityManager,
                   nsIChannelEventSink,
                   nsIObserver)
 
@@ -354,26 +330,10 @@ NS_IMPL_ISUPPORTS(nsScriptSecurityManager,
 bool
 nsScriptSecurityManager::ContentSecurityPolicyPermitsJSAction(JSContext *cx)
 {
-    // Get the security manager
-    nsScriptSecurityManager *ssm =
-        nsScriptSecurityManager::GetScriptSecurityManager();
-
-    NS_ASSERTION(ssm, "Failed to get security manager service");
-    if (!ssm)
-        return false;
-
-    nsresult rv;
-    nsIPrincipal* subjectPrincipal = ssm->GetSubjectPrincipal(cx, &rv);
-
-    NS_ASSERTION(NS_SUCCEEDED(rv), "CSP: Failed to get nsIPrincipal from js context");
-    if (NS_FAILED(rv))
-        return false; // Not just absence of principal, but failure.
-
-    if (!subjectPrincipal)
-        return true;
-
+    MOZ_ASSERT(cx == nsContentUtils::GetCurrentJSContext());
+    nsCOMPtr<nsIPrincipal> subjectPrincipal = nsContentUtils::SubjectPrincipal();
     nsCOMPtr<nsIContentSecurityPolicy> csp;
-    rv = subjectPrincipal->GetCsp(getter_AddRefs(csp));
+    nsresult rv = subjectPrincipal->GetCsp(getter_AddRefs(csp));
     NS_ASSERTION(NS_SUCCEEDED(rv), "CSP: Failed to get CSP from principal.");
 
     // don't do anything unless there's a CSP
@@ -424,27 +384,10 @@ NS_IMETHODIMP
 nsScriptSecurityManager::CheckSameOrigin(JSContext* cx,
                                          nsIURI* aTargetURI)
 {
-    nsresult rv;
-
-    // Get a context if necessary
-    if (!cx)
-    {
-        cx = GetCurrentJSContext();
-        if (!cx)
-            return NS_OK; // No JS context, so allow access
-    }
+    MOZ_ASSERT_IF(cx, cx == nsContentUtils::GetCurrentJSContext());
 
     // Get a principal from the context
-    nsIPrincipal* sourcePrincipal = GetSubjectPrincipal(cx, &rv);
-    if (NS_FAILED(rv))
-        return rv;
-
-    if (!sourcePrincipal)
-    {
-        NS_WARNING("CheckSameOrigin called on script w/o principals; should this happen?");
-        return NS_OK;
-    }
-
+    nsIPrincipal* sourcePrincipal = nsContentUtils::SubjectPrincipal();
     if (sourcePrincipal == mSystemPrincipal)
     {
         // This is a system (chrome) script, so allow access
@@ -520,17 +463,10 @@ NS_IMETHODIMP
 nsScriptSecurityManager::CheckLoadURIFromScript(JSContext *cx, nsIURI *aURI)
 {
     // Get principal of currently executing script.
-    nsresult rv;
-    nsIPrincipal* principal = GetSubjectPrincipal(cx, &rv);
-    if (NS_FAILED(rv))
-        return rv;
-
-    // Native code can load all URIs.
-    if (!principal)
-        return NS_OK;
-
-    rv = CheckLoadURIWithPrincipal(principal, aURI,
-                                   nsIScriptSecurityManager::STANDARD);
+    MOZ_ASSERT(cx == nsContentUtils::GetCurrentJSContext());
+    nsIPrincipal* principal = nsContentUtils::SubjectPrincipal();
+    nsresult rv = CheckLoadURIWithPrincipal(principal, aURI,
+                                            nsIScriptSecurityManager::STANDARD);
     if (NS_SUCCEEDED(rv)) {
         // OK to load
         return NS_OK;
@@ -545,7 +481,7 @@ nsScriptSecurityManager::CheckLoadURIFromScript(JSContext *cx, nsIURI *aURI)
         return NS_ERROR_FAILURE;
     if (isFile || isRes)
     {
-        if (SubjectIsPrivileged())
+        if (nsContentUtils::IsCallerChrome())
             return NS_OK;
     }
 
@@ -780,6 +716,14 @@ nsScriptSecurityManager::CheckLoadURIWithPrincipal(nsIPrincipal* aPrincipal,
                              &hasFlags);
     NS_ENSURE_SUCCESS(rv, rv);
     if (hasFlags) {
+        // Allow domains that were whitelisted in the prefs. In 99.9% of cases,
+        // this array is empty.
+        for (size_t i = 0; i < mFileURIWhitelist.Length(); ++i) {
+            if (SecurityCompareURIs(mFileURIWhitelist[i], sourceURI)) {
+                return NS_OK;
+            }
+        }
+
         // resource: and chrome: are equivalent, securitywise
         // That's bogus!!  Fix this.  But watch out for
         // the view-source stylesheet?
@@ -939,28 +883,6 @@ nsScriptSecurityManager::ScriptAllowed(JSObject *aGlobal)
 }
 
 ///////////////// Principals ///////////////////////
-NS_IMETHODIMP
-nsScriptSecurityManager::GetSubjectPrincipal(nsIPrincipal **aSubjectPrincipal)
-{
-    nsresult rv;
-    *aSubjectPrincipal = doGetSubjectPrincipal(&rv);
-    if (NS_SUCCEEDED(rv))
-        NS_IF_ADDREF(*aSubjectPrincipal);
-    return rv;
-}
-
-nsIPrincipal*
-nsScriptSecurityManager::doGetSubjectPrincipal(nsresult* rv)
-{
-    NS_PRECONDITION(rv, "Null out param");
-    JSContext *cx = GetCurrentJSContext();
-    if (!cx)
-    {
-        *rv = NS_OK;
-        return nullptr;
-    }
-    return GetSubjectPrincipal(cx, rv);
-}
 
 NS_IMETHODIMP
 nsScriptSecurityManager::GetSystemPrincipal(nsIPrincipal **result)
@@ -968,31 +890,6 @@ nsScriptSecurityManager::GetSystemPrincipal(nsIPrincipal **result)
     NS_ADDREF(*result = mSystemPrincipal);
 
     return NS_OK;
-}
-
-NS_IMETHODIMP
-nsScriptSecurityManager::SubjectPrincipalIsSystem(bool* aIsSystem)
-{
-    NS_ENSURE_ARG_POINTER(aIsSystem);
-    *aIsSystem = false;
-
-    if (!mSystemPrincipal)
-        return NS_OK;
-
-    nsCOMPtr<nsIPrincipal> subject;
-    nsresult rv = GetSubjectPrincipal(getter_AddRefs(subject));
-    if (NS_FAILED(rv))
-        return rv;
-
-    if(!subject)
-    {
-        // No subject principal means no JS is running;
-        // this is the equivalent of system principal code
-        *aIsSystem = true;
-        return NS_OK;
-    }
-
-    return mSystemPrincipal->Equals(subject, aIsSystem);
 }
 
 nsresult
@@ -1067,6 +964,22 @@ nsScriptSecurityManager::GetAppCodebasePrincipal(nsIURI* aURI,
 }
 
 NS_IMETHODIMP
+nsScriptSecurityManager::
+  GetLoadContextCodebasePrincipal(nsIURI* aURI,
+                                  nsILoadContext* aLoadContext,
+                                  nsIPrincipal** aPrincipal)
+{
+  uint32_t appId;
+  aLoadContext->GetAppId(&appId);
+  bool isInBrowserElement;
+  aLoadContext->GetIsInBrowserElement(&isInBrowserElement);
+  return GetCodebasePrincipalInternal(aURI,
+                                      appId,
+                                      isInBrowserElement,
+                                      aPrincipal);
+}
+
+NS_IMETHODIMP
 nsScriptSecurityManager::GetDocShellCodebasePrincipal(nsIURI* aURI,
                                                       nsIDocShell* aDocShell,
                                                       nsIPrincipal** aPrincipal)
@@ -1103,21 +1016,6 @@ nsScriptSecurityManager::GetCodebasePrincipalInternal(nsIURI *aURI,
     return NS_OK;
 }
 
-nsIPrincipal*
-nsScriptSecurityManager::GetSubjectPrincipal(JSContext *cx,
-                                             nsresult* rv)
-{
-    *rv = NS_OK;
-    JSCompartment *compartment = js::GetContextCompartment(cx);
-
-    // The context should always be in a compartment, either one it has entered
-    // or the one associated with its global.
-    MOZ_ASSERT(!!compartment);
-
-    JSPrincipals *principals = JS_GetCompartmentPrincipals(compartment);
-    return nsJSPrincipals::get(principals);
-}
-
 // static
 nsIPrincipal*
 nsScriptSecurityManager::doGetObjectPrincipal(JSObject *aObj)
@@ -1126,10 +1024,6 @@ nsScriptSecurityManager::doGetObjectPrincipal(JSObject *aObj)
     JSPrincipals *principals = JS_GetCompartmentPrincipals(compartment);
     return nsJSPrincipals::get(principals);
 }
-
-////////////////////////////////////////////////
-// Methods implementing nsIXPCSecurityManager //
-////////////////////////////////////////////////
 
 NS_IMETHODIMP
 nsScriptSecurityManager::CanCreateWrapper(JSContext *cx,
@@ -1150,7 +1044,7 @@ nsScriptSecurityManager::CanCreateWrapper(JSContext *cx,
         return NS_OK;
     }
 
-    if (SubjectIsPrivileged())
+    if (nsContentUtils::IsCallerChrome())
     {
         return NS_OK;
     }
@@ -1158,11 +1052,8 @@ nsScriptSecurityManager::CanCreateWrapper(JSContext *cx,
     //-- Access denied, report an error
     NS_ConvertUTF8toUTF16 strName("CreateWrapperDenied");
     nsAutoCString origin;
-    nsresult rv2;
-    nsIPrincipal* subjectPrincipal = doGetSubjectPrincipal(&rv2);
-    if (NS_SUCCEEDED(rv2) && subjectPrincipal) {
-        GetPrincipalDomainOrigin(subjectPrincipal, origin);
-    }
+    nsIPrincipal* subjectPrincipal = nsContentUtils::SubjectPrincipal();
+    GetPrincipalDomainOrigin(subjectPrincipal, origin);
     NS_ConvertUTF8toUTF16 originUnicode(origin);
     NS_ConvertUTF8toUTF16 classInfoName(objClassInfo.GetName());
     const char16_t* formatStrings[] = {
@@ -1176,14 +1067,11 @@ nsScriptSecurityManager::CanCreateWrapper(JSContext *cx,
         strName.AppendLiteral("ForOrigin");
     }
     nsXPIDLString errorMsg;
-    // We need to keep our existing failure rv and not override it
-    // with a likely success code from the following string bundle
-    // call in order to throw the correct security exception later.
-    rv2 = sStrBundle->FormatStringFromName(strName.get(),
-                                           formatStrings,
-                                           length,
-                                           getter_Copies(errorMsg));
-    NS_ENSURE_SUCCESS(rv2, rv2);
+    nsresult rv = sStrBundle->FormatStringFromName(strName.get(),
+                                                   formatStrings,
+                                                   length,
+                                                   getter_Copies(errorMsg));
+    NS_ENSURE_SUCCESS(rv, rv);
 
     SetPendingException(cx, errorMsg.get());
     return NS_ERROR_DOM_XPCONNECT_ACCESS_DENIED;
@@ -1193,7 +1081,7 @@ NS_IMETHODIMP
 nsScriptSecurityManager::CanCreateInstance(JSContext *cx,
                                            const nsCID &aCID)
 {
-    if (SubjectIsPrivileged()) {
+    if (nsContentUtils::IsCallerChrome()) {
         return NS_OK;
     }
 
@@ -1210,7 +1098,7 @@ NS_IMETHODIMP
 nsScriptSecurityManager::CanGetService(JSContext *cx,
                                        const nsCID &aCID)
 {
-    if (SubjectIsPrivileged()) {
+    if (nsContentUtils::IsCallerChrome()) {
         return NS_OK;
     }
 
@@ -1268,6 +1156,7 @@ const char sFileOriginPolicyPrefName[] =
 static const char* kObservedPrefs[] = {
   sJSEnabledPrefName,
   sFileOriginPolicyPrefName,
+  "capability.policy.",
   nullptr
 };
 
@@ -1276,18 +1165,8 @@ NS_IMETHODIMP
 nsScriptSecurityManager::Observe(nsISupports* aObject, const char* aTopic,
                                  const char16_t* aMessage)
 {
-    nsresult rv = NS_OK;
-    NS_ConvertUTF16toUTF8 messageStr(aMessage);
-    const char *message = messageStr.get();
-
-    static const char jsPrefix[] = "javascript.";
-    static const char securityPrefix[] = "security.";
-    if ((PL_strncmp(message, jsPrefix, sizeof(jsPrefix)-1) == 0) ||
-        (PL_strncmp(message, securityPrefix, sizeof(securityPrefix)-1) == 0) )
-    {
-        ScriptSecurityPrefChanged();
-    }
-    return rv;
+    ScriptSecurityPrefChanged();
+    return NS_OK;
 }
 
 /////////////////////////////////////////////
@@ -1368,27 +1247,20 @@ nsScriptSecurityManager::Shutdown()
 nsScriptSecurityManager *
 nsScriptSecurityManager::GetScriptSecurityManager()
 {
-    if (!gScriptSecMan && nsXPConnect::XPConnect())
-    {
-        nsRefPtr<nsScriptSecurityManager> ssManager = new nsScriptSecurityManager();
-
-        nsresult rv;
-        rv = ssManager->Init();
-        if (NS_FAILED(rv)) {
-            return nullptr;
-        }
- 
-        rv = nsXPConnect::XPConnect()->
-            SetDefaultSecurityManager(ssManager);
-        if (NS_FAILED(rv)) {
-            NS_WARNING("Failed to install xpconnect security manager!");
-            return nullptr;
-        }
-
-        ClearOnShutdown(&gScriptSecMan);
-        gScriptSecMan = ssManager;
-    }
     return gScriptSecMan;
+}
+
+/* static */ void
+nsScriptSecurityManager::InitStatics()
+{
+    nsRefPtr<nsScriptSecurityManager> ssManager = new nsScriptSecurityManager();
+    nsresult rv = ssManager->Init();
+    if (NS_FAILED(rv)) {
+        MOZ_CRASH();
+    }
+
+    ClearOnShutdown(&gScriptSecMan);
+    gScriptSecMan = ssManager;
 }
 
 // Currently this nsGenericFactory constructor is used only from FastLoad
@@ -1403,26 +1275,98 @@ nsScriptSecurityManager::SystemPrincipalSingletonConstructor()
     return static_cast<nsSystemPrincipal*>(sysprin);
 }
 
+struct IsWhitespace {
+    static bool Test(char aChar) { return NS_IsAsciiWhitespace(aChar); };
+};
+struct IsWhitespaceOrComma {
+    static bool Test(char aChar) { return aChar == ',' || NS_IsAsciiWhitespace(aChar); };
+};
+
+template <typename Predicate>
+uint32_t SkipPast(const nsCString& str, uint32_t base)
+{
+    while (base < str.Length() && Predicate::Test(str[base])) {
+        ++base;
+    }
+    return base;
+}
+
+template <typename Predicate>
+uint32_t SkipUntil(const nsCString& str, uint32_t base)
+{
+    while (base < str.Length() && !Predicate::Test(str[base])) {
+        ++base;
+    }
+    return base;
+}
+
 inline void
 nsScriptSecurityManager::ScriptSecurityPrefChanged()
 {
-    // JavaScript defaults to enabled in failure cases.
-    mIsJavaScriptEnabled = true;
-
-    sStrictFileOriginPolicy = true;
-
-    nsresult rv;
-    if (!mPrefInitialized) {
-        rv = InitPrefs();
-        if (NS_FAILED(rv))
-            return;
-    }
-
+    MOZ_ASSERT(mPrefInitialized);
     mIsJavaScriptEnabled =
         Preferences::GetBool(sJSEnabledPrefName, mIsJavaScriptEnabled);
-
     sStrictFileOriginPolicy =
         Preferences::GetBool(sFileOriginPolicyPrefName, false);
+
+    //
+    // Rebuild the set of principals for which we allow file:// URI loads. This
+    // implements a small subset of an old pref-based CAPS people that people
+    // have come to depend on. See bug 995943.
+    //
+
+    mFileURIWhitelist.Clear();
+    auto policies = mozilla::Preferences::GetCString("capability.policy.policynames");
+    for (uint32_t base = SkipPast<IsWhitespaceOrComma>(policies, 0), bound = 0;
+         base < policies.Length();
+         base = SkipPast<IsWhitespaceOrComma>(policies, bound))
+    {
+        // Grab the current policy name.
+        bound = SkipUntil<IsWhitespaceOrComma>(policies, base);
+        auto policyName = Substring(policies, base, bound - base);
+
+        // Figure out if this policy allows loading file:// URIs. If not, we can skip it.
+        nsCString checkLoadURIPrefName = NS_LITERAL_CSTRING("capability.policy.") +
+                                         policyName +
+                                         NS_LITERAL_CSTRING(".checkloaduri.enabled");
+        if (!Preferences::GetString(checkLoadURIPrefName.get()).LowerCaseEqualsLiteral("allaccess")) {
+            continue;
+        }
+
+        // Grab the list of domains associated with this policy.
+        nsCString domainPrefName = NS_LITERAL_CSTRING("capability.policy.") +
+                                   policyName +
+                                   NS_LITERAL_CSTRING(".sites");
+        auto siteList = Preferences::GetCString(domainPrefName.get());
+        AddSitesToFileURIWhitelist(siteList);
+    }
+}
+
+void
+nsScriptSecurityManager::AddSitesToFileURIWhitelist(const nsCString& aSiteList)
+{
+    for (uint32_t base = SkipPast<IsWhitespace>(aSiteList, 0), bound = 0;
+         base < aSiteList.Length();
+         base = SkipPast<IsWhitespace>(aSiteList, bound))
+    {
+        // Grab the current site.
+        bound = SkipUntil<IsWhitespace>(aSiteList, base);
+        auto site = Substring(aSiteList, base, bound - base);
+
+        // Convert it to a URI and add it to our list.
+        nsCOMPtr<nsIURI> uri;
+        nsresult rv = NS_NewURI(getter_AddRefs(uri), site, nullptr, nullptr, sIOService);
+        if (NS_SUCCEEDED(rv)) {
+            mFileURIWhitelist.AppendElement(uri);
+        } else {
+            nsCOMPtr<nsIConsoleService> console(do_GetService("@mozilla.org/consoleservice;1"));
+            if (console) {
+                nsAutoString msg = NS_LITERAL_STRING("Unable to to add site to file:// URI whitelist: ") +
+                                   NS_ConvertASCIItoUTF16(site);
+                console->LogStringMessage(msg.get());
+            }
+        }
+    }
 }
 
 nsresult

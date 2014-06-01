@@ -10,6 +10,7 @@
 #include "jit/BaselineJIT.h"
 #include "jit/CompileInfo.h"
 #include "jit/IonSpewer.h"
+#include "jit/mips/Simulator-mips.h"
 #include "jit/Recover.h"
 #include "jit/RematerializedFrame.h"
 
@@ -1261,6 +1262,10 @@ jit::BailoutIonToBaseline(JSContext *cx, JitActivation *activation, IonBailoutIt
                           bool invalidate, BaselineBailoutInfo **bailoutInfo,
                           const ExceptionBailoutInfo *excInfo)
 {
+    // The Baseline frames we will reconstruct on the heap are not rooted, so GC
+    // must be suppressed here.
+    JS_ASSERT(cx->mainThread().suppressGC);
+
     JS_ASSERT(bailoutInfo != nullptr);
     JS_ASSERT(*bailoutInfo == nullptr);
 
@@ -1341,6 +1346,10 @@ jit::BailoutIonToBaseline(JSContext *cx, JitActivation *activation, IonBailoutIt
 
     if (!snapIter.initIntructionResults(instructionResults))
         return BAILOUT_RETURN_FATAL_ERROR;
+
+#ifdef TRACK_SNAPSHOTS
+    snapIter.spewBailingFrom();
+#endif
 
     RootedFunction callee(cx, iter.maybeCallee());
     RootedScript scr(cx, iter.script());
@@ -1445,7 +1454,7 @@ jit::BailoutIonToBaseline(JSContext *cx, JitActivation *activation, IonBailoutIt
     bool overRecursed = false;
     BaselineBailoutInfo *info = builder.info();
     uint8_t *newsp = info->incomingStack - (info->copyStackTop - info->copyStackBottom);
-#ifdef JS_ARM_SIMULATOR
+#if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
     if (Simulator::Current()->overRecursed(uintptr_t(newsp)))
         overRecursed = true;
 #else

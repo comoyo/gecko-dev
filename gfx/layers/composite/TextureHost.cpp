@@ -9,6 +9,7 @@
 #include "gfx2DGlue.h"                  // for ToIntSize
 #include "mozilla/gfx/2D.h"             // for DataSourceSurface, Factory
 #include "mozilla/ipc/Shmem.h"          // for Shmem
+#include "mozilla/layers/CompositableTransactionParent.h" // for CompositableParentManager
 #include "mozilla/layers/Compositor.h"  // for Compositor
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
 #include "mozilla/layers/ImageDataSerializer.h"
@@ -43,7 +44,7 @@ namespace layers {
 class TextureParent : public PTextureParent
 {
 public:
-  TextureParent(ISurfaceAllocator* aAllocator);
+  TextureParent(CompositableParentManager* aManager);
 
   ~TextureParent();
 
@@ -51,34 +52,39 @@ public:
             const TextureFlags& aFlags);
 
   void CompositorRecycle();
+
+  void SendFenceHandleIfPresent();
+
   virtual bool RecvClientRecycle() MOZ_OVERRIDE;
 
-  virtual bool RecvRemoveTexture() MOZ_OVERRIDE;
+  virtual bool RecvClearTextureHostSync() MOZ_OVERRIDE;
 
-  virtual bool RecvRemoveTextureSync() MOZ_OVERRIDE;
+  virtual bool RecvRemoveTexture() MOZ_OVERRIDE;
 
   TextureHost* GetTextureHost() { return mTextureHost; }
 
   void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
 
-  ISurfaceAllocator* mAllocator;
+  void ClearTextureHost();
+
+  CompositableParentManager* mCompositableManager;
   RefPtr<TextureHost> mWaitForClientRecycle;
   RefPtr<TextureHost> mTextureHost;
 };
 
 // static
 PTextureParent*
-TextureHost::CreateIPDLActor(ISurfaceAllocator* aAllocator,
+TextureHost::CreateIPDLActor(CompositableParentManager* aManager,
                              const SurfaceDescriptor& aSharedData,
                              TextureFlags aFlags)
 {
   if (aSharedData.type() == SurfaceDescriptor::TSurfaceDescriptorMemory &&
-      !aAllocator->IsSameProcess())
+      !aManager->IsSameProcess())
   {
     NS_ERROR("A client process is trying to peek at our address space using a MemoryTexture!");
     return nullptr;
   }
-  TextureParent* actor = new TextureParent(aAllocator);
+  TextureParent* actor = new TextureParent(aManager);
   if (!actor->Init(aSharedData, aFlags)) {
     delete actor;
     return nullptr;
@@ -112,6 +118,32 @@ PTextureParent*
 TextureHost::GetIPDLActor()
 {
   return mActor;
+}
+
+// static
+void
+TextureHost::SendFenceHandleIfPresent(PTextureParent* actor)
+{
+  TextureParent* parent = static_cast<TextureParent*>(actor);
+  parent->SendFenceHandleIfPresent();
+}
+
+FenceHandle
+TextureHost::GetAndResetReleaseFenceHandle()
+{
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+  TextureHostOGL* hostOGL = this->AsHostOGL();
+  if (!hostOGL) {
+    return FenceHandle();
+  }
+
+  android::sp<android::Fence> fence = hostOGL->GetAndResetReleaseFence();
+  if (fence.get() && fence->isValid()) {
+    FenceHandle handle = FenceHandle(fence);
+    return handle;
+  }
+#endif
+  return FenceHandle();
 }
 
 // implemented in TextureHostOGL.cpp
@@ -604,8 +636,8 @@ size_t MemoryTextureHost::GetBufferSize()
   return std::numeric_limits<size_t>::max();
 }
 
-TextureParent::TextureParent(ISurfaceAllocator* aAllocator)
-: mAllocator(aAllocator)
+TextureParent::TextureParent(CompositableParentManager* aCompositableManager)
+: mCompositableManager(aCompositableManager)
 {
   MOZ_COUNT_CTOR(TextureParent);
 }
@@ -627,26 +659,36 @@ void
 TextureParent::CompositorRecycle()
 {
   mTextureHost->ClearRecycleCallback();
+  SendFenceHandleIfPresent();
 
-  MaybeFenceHandle handle = null_t();
+  if (mTextureHost->GetFlags() & TextureFlags::RECYCLE) {
+    mozilla::unused << SendCompositorRecycle();
+    // Don't forget to prepare for the next reycle
+    // if TextureClient request it.
+    mWaitForClientRecycle = mTextureHost;
+  }
+}
+
+void
+TextureParent::SendFenceHandleIfPresent()
+{
 #if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
   if (mTextureHost) {
     TextureHostOGL* hostOGL = mTextureHost->AsHostOGL();
+    if (!hostOGL) {
+      return;
+    }
     android::sp<android::Fence> fence = hostOGL->GetAndResetReleaseFence();
     if (fence.get() && fence->isValid()) {
-      handle = FenceHandle(fence);
       // HWC might not provide Fence.
       // In this case, HWC implicitly handles buffer's fence.
+
+      FenceHandle handle = FenceHandle(fence);
+      RefPtr<FenceDeliveryTracker> tracker = new FenceDeliveryTracker(handle);
+      mCompositableManager->SendFenceHandle(tracker, this, handle);
     }
   }
 #endif
-  mozilla::unused << SendCompositorRecycle(handle);
-
-  // Don't forget to prepare for the next reycle
-  // if TextureClient request it.
-  if (mTextureHost->GetFlags() & TextureFlags::RECYCLE) {
-    mWaitForClientRecycle = mTextureHost;
-  }
 }
 
 bool
@@ -667,7 +709,7 @@ TextureParent::Init(const SurfaceDescriptor& aSharedData,
                     const TextureFlags& aFlags)
 {
   mTextureHost = TextureHost::Create(aSharedData,
-                                     mAllocator,
+                                     mCompositableManager,
                                      aFlags);
   if (mTextureHost) {
     mTextureHost->mActor = this;
@@ -687,20 +729,15 @@ TextureParent::RecvRemoveTexture()
 }
 
 bool
-TextureParent::RecvRemoveTextureSync()
+TextureParent::RecvClearTextureHostSync()
 {
-  // we don't need to send a reply in the synchronous case since the child side
-  // has the guarantee that this message has been handled synchronously.
-  return PTextureParent::Send__delete__(this);
+  ClearTextureHost();
+  return true;
 }
 
 void
 TextureParent::ActorDestroy(ActorDestroyReason why)
 {
-  if (!mTextureHost) {
-    return;
-  }
-
   switch (why) {
   case AncestorDeletion:
   case Deletion:
@@ -709,6 +746,16 @@ TextureParent::ActorDestroy(ActorDestroyReason why)
     break;
   case FailedConstructor:
     NS_RUNTIMEABORT("FailedConstructor isn't possible in PTexture");
+  }
+
+  ClearTextureHost();
+}
+
+void
+TextureParent::ClearTextureHost()
+{
+  if (!mTextureHost) {
+    return;
   }
 
   if (mTextureHost->GetFlags() & TextureFlags::RECYCLE) {

@@ -71,27 +71,36 @@ dnl ========================================================
 USE_PTHREADS=
 _PTHREAD_LDFLAGS=""
 
-dnl Do not allow a separate objdir build if a srcdir build exists.
+dnl Do not allow objdir == srcdir builds
 dnl ==============================================================
 _topsrcdir=`cd $srcdir; pwd`
 _objdir=`pwd`
 
-if test "$_topsrcdir" != "$_objdir"
+if test "$_topsrcdir" = "$_objdir"
 then
-  # Check for a couple representative files in the source tree
-  _conflict_files=
-  for file in $_topsrcdir/Makefile $_topsrcdir/config/autoconf.mk; do
-    if test -f $file; then
-      _conflict_files="$_conflict_files $file"
-    fi
+  echo "  ***"
+  echo "  * Building directly in the main source directory is not allowed."
+  echo "  *"
+  echo "  * To build, you must run configure from a separate directory"
+  echo "  * (referred to as an object directory)."
+  echo "  ***"
+  exit 1
+fi
+
+# Check for a couple representative files in the source tree
+_conflict_files=
+for file in $_topsrcdir/Makefile $_topsrcdir/config/autoconf.mk; do
+  if test -f $file; then
+    _conflict_files="$_conflict_files $file"
+  fi
+done
+if test "$_conflict_files"; then
+  echo "***"
+  echo "*   Your source tree contains these files:"
+  for file in $_conflict_files; do
+    echo "*         $file"
   done
-  if test "$_conflict_files"; then
-    echo "***"
-    echo "*   Your source tree contains these files:"
-    for file in $_conflict_files; do
-      echo "*         $file"
-    done
-    cat 1>&2 <<-EOF
+  cat 1>&2 <<-EOF
 	*   This indicates that you previously built in the source tree.
 	*   A source tree build can confuse the separate objdir build.
 	*
@@ -100,9 +109,8 @@ then
 	*     2. gmake distclean
 	***
 	EOF
-    exit 1
-    break
-  fi
+  exit 1
+  break
 fi
 MOZ_BUILD_ROOT=`pwd`
 
@@ -1154,6 +1162,7 @@ if test "$GNU_CC"; then
     _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Wall -Wpointer-arith -Wdeclaration-after-statement"
     MOZ_C_SUPPORTS_WARNING(-W, error=return-type, ac_c_has_werror_return_type)
     MOZ_C_SUPPORTS_WARNING(-W, error=int-to-pointer-cast, ac_c_has_werror_int_to_pointer_cast)
+    MOZ_C_SUPPORTS_WARNING(-W, type-limits, ac_c_has_wtype_limits)
     MOZ_C_SUPPORTS_WARNING(-W, empty-body, ac_c_has_wempty_body)
     MOZ_C_SUPPORTS_WARNING(-W, sign-compare, ac_c_has_sign_compare)
 
@@ -1969,19 +1978,16 @@ dnl Configure JIT support
 case "$target" in
 i?86-*)
     ENABLE_ION=1
-    ENABLE_YARR_JIT=1
     AC_DEFINE(JS_CPU_X86)
     AC_DEFINE(JS_NUNBOX32)
     ;;
 x86_64*-*)
     ENABLE_ION=1
-    ENABLE_YARR_JIT=1
     AC_DEFINE(JS_CPU_X64)
     AC_DEFINE(JS_PUNBOX64)
     ;;
 arm*-*)
     ENABLE_ION=1
-    ENABLE_YARR_JIT=1
     AC_DEFINE(JS_CPU_ARM)
     AC_DEFINE(JS_NUNBOX32)
     ;;
@@ -1990,7 +1996,18 @@ sparc*-*)
 dnl ENABLE_ION=0
     AC_DEFINE(JS_CPU_SPARC)
     AC_DEFINE(JS_NUNBOX32)
+    else
+    AC_DEFINE(JS_CPU_SPARC64)
+    AC_DEFINE(JS_PUNBOX64)
     fi
+    ;;
+powerpc64-*)
+    AC_DEFINE(JS_CPU_PPC64)
+    AC_DEFINE(JS_PUNBOX64)
+    ;;
+powerpc-*)
+    AC_DEFINE(JS_CPU_PPC)
+    AC_DEFINE(JS_NUNBOX32)
     ;;
 mips*-*)
     AC_DEFINE(JS_CPU_MIPS)
@@ -2002,22 +2019,12 @@ MOZ_ARG_DISABLE_BOOL(ion,
 [  --disable-ion      Disable use of the IonMonkey JIT],
   ENABLE_ION= )
 
-MOZ_ARG_DISABLE_BOOL(yarr-jit,
-[  --disable-yarr-jit    Disable YARR JIT support],
-  ENABLE_YARR_JIT= )
-
 AC_SUBST(ENABLE_METHODJIT_SPEW)
 
 AC_SUBST(ENABLE_ION)
 
 if test "$ENABLE_ION"; then
     AC_DEFINE(JS_ION)
-fi
-
-AC_SUBST(ENABLE_YARR_JIT)
-
-if test "$ENABLE_YARR_JIT"; then
-    AC_DEFINE(ENABLE_YARR_JIT)
 fi
 
 if test -n "$COMPILE_ENVIRONMENT"; then
@@ -2085,15 +2092,22 @@ MOZ_CXX11
 dnl Check for .hidden assembler directive and visibility attribute.
 dnl Borrowed from glibc configure.in
 dnl ===============================================================
-if test "$GNU_CC"; then
+if test "$GNU_CC" -a "$OS_TARGET" != WINNT; then
   AC_DEFINE(HAVE_VISIBILITY_HIDDEN_ATTRIBUTE)
   AC_DEFINE(HAVE_VISIBILITY_ATTRIBUTE)
-  case "${OS_TARGET}" in
-  Darwin|Android)
+  case "$OS_TARGET" in
+  Darwin)
     VISIBILITY_FLAGS='-fvisibility=hidden'
     ;;
   *)
-    VISIBILITY_FLAGS='-I$(DIST)/system_wrappers -include $(topsrcdir)/config/gcc_hidden.h'
+    case $GCC_VERSION in
+    4.4*|4.6*)
+      VISIBILITY_FLAGS='-I$(DIST)/system_wrappers -include $(topsrcdir)/config/gcc_hidden_dso_handle.h'
+      ;;
+    *)
+      VISIBILITY_FLAGS='-I$(DIST)/system_wrappers -include $(topsrcdir)/config/gcc_hidden.h'
+      ;;
+    esac
     WRAP_SYSTEM_INCLUDES=1
     ;;
   esac
@@ -2982,6 +2996,20 @@ if test "$ENABLE_TRACE_LOGGING"; then
 fi
 
 dnl ========================================================
+dnl = Enable yarr regexp engine
+dnl ========================================================
+MOZ_ARG_ENABLE_BOOL(yarr,
+[  --enable-yarr   Enable yarr regexp engine],
+    ENABLE_YARR=1,
+    ENABLE_YARR= )
+
+AC_SUBST(ENABLE_YARR)
+
+if test "$ENABLE_YARR"; then
+    AC_DEFINE(JS_YARR)
+fi
+
+dnl ========================================================
 dnl = Enable any treating of compile warnings as errors
 dnl ========================================================
 MOZ_ARG_DISABLE_BOOL(warnings-as-errors,
@@ -3662,14 +3690,14 @@ else
     fi
     AC_SUBST(CL_INCLUDES_PREFIX)
     rm -f dummy-hello.c
+
+    dnl Make sure that the build system can handle non-ASCII characters
+    dnl in environment variables to prevent it from breaking silently on
+    dnl non-English systems.
+    NONASCII=$'\241\241'
+    AC_SUBST(NONASCII)
   fi
 fi
-
-dnl Make sure that the build system can handle non-ASCII characters
-dnl in environment variables to prevent it from breking silently on
-dnl non-English systems.
-NONASCII=$'\241\241'
-AC_SUBST(NONASCII)
 
 dnl ========================================================
 dnl = Disable -fstrict-aliasing with GCC 4.4 and earlier.
@@ -4018,6 +4046,8 @@ AC_SUBST(TOOLCHAIN_PREFIX)
 
 
 if test -n "$JS_STANDALONE"; then
+MOZ_APP_NAME="mozjs"
+MOZ_APP_VERSION="$MOZILLA_SYMBOLVERSION"
 JS_LIBRARY_NAME="mozjs-$MOZILLA_SYMBOLVERSION"
 else
 JS_LIBRARY_NAME="mozjs"

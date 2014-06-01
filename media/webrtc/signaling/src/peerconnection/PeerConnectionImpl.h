@@ -38,6 +38,9 @@
 #include "mozilla/dom/RTCStatsReportBinding.h"
 #include "nsIPrincipal.h"
 #include "mozilla/PeerIdentity.h"
+#ifndef USE_FAKE_MEDIA_STREAMS
+#include "DOMMediaStream.h"
+#endif
 #endif
 
 namespace test {
@@ -73,7 +76,6 @@ namespace dom {
 class RTCConfiguration;
 class MediaConstraintsInternal;
 class MediaStreamTrack;
-class RTCStatsReportInternal;
 
 #ifdef USE_FAKE_PCOBSERVER
 typedef test::AFakePCObserver PeerConnectionObserver;
@@ -170,8 +172,12 @@ class RTCStatsQuery {
     explicit RTCStatsQuery(bool internalStats);
     ~RTCStatsQuery();
 
-    mozilla::dom::RTCStatsReportInternal report;
+    nsAutoPtr<mozilla::dom::RTCStatsReportInternal> report;
     std::string error;
+    // A timestamp to help with telemetry.
+    mozilla::TimeStamp iceStartTime;
+    // Just for convenience, maybe integrate into the report later
+    bool failed;
 
   private:
     friend class PeerConnectionImpl;
@@ -198,6 +204,7 @@ class PeerConnectionImpl MOZ_FINAL : public nsISupports,
 #ifdef MOZILLA_INTERNAL_API
                                      public mozilla::DataChannelConnection::DataConnectionListener,
                                      public nsNSSShutDownObject,
+                                     public DOMMediaStream::PrincipalChangeObserver,
 #endif
                                      public sigslot::has_slots<>
 {
@@ -239,8 +246,6 @@ public:
   void onCallEvent(const OnCallEventArgs &args);
 
   // DataConnection observers
-  void NotifyConnection();
-  void NotifyClosedConnection();
   void NotifyDataChannel(already_AddRefed<mozilla::DataChannel> aChannel);
 
   // Get the media object
@@ -435,15 +440,6 @@ public:
     delete tmp;
   }
 
-  NS_IMETHODIMP ReadyState(mozilla::dom::PCImplReadyState* aState);
-
-  mozilla::dom::PCImplReadyState ReadyState()
-  {
-    mozilla::dom::PCImplReadyState state;
-    ReadyState(&state);
-    return state;
-  }
-
   NS_IMETHODIMP SignalingState(mozilla::dom::PCImplSignalingState* aState);
 
   mozilla::dom::PCImplSignalingState SignalingState()
@@ -553,6 +549,10 @@ public:
       RTCStatsQuery *query);
 
   static nsresult ExecuteStatsQuery_s(RTCStatsQuery *query);
+
+  // for monitoring changes in stream ownership
+  // PeerConnectionMedia can't do it because it doesn't know about principals
+  virtual void PrincipalChanged(DOMMediaStream* aMediaStream) MOZ_OVERRIDE;
 #endif
 
 private:
@@ -567,7 +567,6 @@ private:
   NS_IMETHODIMP EnsureDataConnection(uint16_t aNumstreams);
 
   nsresult CloseInt();
-  void ChangeReadyState(mozilla::dom::PCImplReadyState aReadyState);
   nsresult CheckApiState(bool assert_ice_ready) const;
   void CheckThread() const {
     NS_ABORT_IF_FALSE(CheckThreadInt(), "Wrong thread");
@@ -629,7 +628,6 @@ private:
 
   // The call
   mozilla::ScopedDeletePtr<Internal> mInternal;
-  mozilla::dom::PCImplReadyState mReadyState;
   mozilla::dom::PCImplSignalingState mSignalingState;
 
   // ICE State
