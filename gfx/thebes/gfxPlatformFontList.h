@@ -189,6 +189,8 @@ public:
         mUserFontSetList.RemoveEntry(aUserFontSet);
     }
 
+    static const gfxFontEntry::ScriptRange sComplexScriptRanges[];
+
 protected:
     class MemoryReporter MOZ_FINAL : public nsIMemoryReporter
     {
@@ -261,9 +263,6 @@ protected:
 
     // load the bad underline blacklist from pref.
     void LoadBadUnderlineList();
-
-    // explicitly set fixed-pitch flag for all faces
-    void SetFixedPitch(const nsAString& aFamilyName);
 
     void GenerateFontListKey(const nsAString& aKeyName, nsAString& aResult);
 

@@ -6,8 +6,10 @@ Components.utils.import("resource://gre/modules/NetUtil.jsm");
 
 let tmp = {};
 Components.utils.import("resource://gre/modules/AddonManager.jsm", tmp);
+Components.utils.import("resource://gre/modules/Log.jsm", tmp);
 let AddonManager = tmp.AddonManager;
 let AddonManagerPrivate = tmp.AddonManagerPrivate;
+let Log = tmp.Log;
 
 var pathParts = gTestPath.split("/");
 // Drop the test filename
@@ -124,17 +126,16 @@ registerCleanupFunction(function() {
   checkOpenWindows("Addons:Compatibility");
   checkOpenWindows("Addons:Install");
 
-  // We can for now know that getAllInstalls actually calls its callback before
-  // it returns so this will complete before the next test start.
-  AddonManager.getAllInstalls(function(aInstalls) {
-    for (let install of aInstalls) {
-      if (install instanceof MockInstall)
-        continue;
+  return new Promise((resolve, reject) => AddonManager.getAllInstalls(resolve))
+    .then(aInstalls => {
+      for (let install of aInstalls) {
+        if (install instanceof MockInstall)
+          continue;
 
-      ok(false, "Should not have seen an install of " + install.sourceURI.spec + " in state " + install.state);
-      install.cancel();
-    }
-  });
+        ok(false, "Should not have seen an install of " + install.sourceURI.spec + " in state " + install.state);
+        install.cancel();
+      }
+    });
 });
 
 function log_exceptions(aCallback, ...aArgs) {
@@ -158,11 +159,18 @@ function add_test(test) {
 }
 
 function run_next_test() {
+  // Make sure we're not calling run_next_test from inside an add_task() test
+  // We're inside the browser_test.js 'testScope' here
+  if (this.__tasks) {
+    throw new Error("run_next_test() called from an add_task() test function. " +
+                    "run_next_test() should not be called from inside add_task() " +
+                    "under any circumstances!");
+  }
   if (gTestsRun > 0)
     info("Test " + gTestsRun + " took " + (Date.now() - gTestStart) + "ms");
 
   if (gPendingTests.length == 0) {
-    end_test();
+    executeSoon(end_test);
     return;
   }
 
@@ -174,7 +182,7 @@ function run_next_test() {
     info("Running test " + gTestsRun);
 
   gTestStart = Date.now();
-  log_exceptions(test);
+  executeSoon(() => log_exceptions(test));
 }
 
 function get_addon_file_url(aFilename) {
@@ -336,6 +344,7 @@ function open_manager(aView, aCallback, aLoadCallback, aLongerTimeout) {
     }
   });
 
+  // The promise resolves with the manager window, so it is passed to the callback
   return log_callback(p, aCallback);
 }
 
@@ -347,13 +356,19 @@ function close_manager(aManagerWindow, aCallback, aLongerTimeout) {
     is(aManagerWindow.location, MANAGER_URI, "Should be closing window with correct URI");
 
     aManagerWindow.addEventListener("unload", function() {
-      info("Manager window unloaded");
-      this.removeEventListener("unload", arguments.callee, false);
-      resolve();
+      try {
+        dump("Manager window unload handler");
+        this.removeEventListener("unload", arguments.callee, false);
+        resolve();
+      } catch(e) {
+        reject(e);
+      }
     }, false);
   });
 
+  info("Telling manager window to close");
   aManagerWindow.close();
+  info("Manager window close() call returned");
 
   return log_callback(p, aCallback);
 }
@@ -424,12 +439,12 @@ function is_hidden(aElement) {
 
 function is_element_visible(aElement, aMsg) {
   isnot(aElement, null, "Element should not be null, when checking visibility");
-  ok(!is_hidden(aElement), aMsg);
+  ok(!is_hidden(aElement), aMsg || (aElement + " should be visible"));
 }
 
 function is_element_hidden(aElement, aMsg) {
   isnot(aElement, null, "Element should not be null, when checking visibility");
-  ok(is_hidden(aElement), aMsg);
+  ok(is_hidden(aElement), aMsg || (aElement + " should be hidden"));
 }
 
 /**
@@ -576,6 +591,7 @@ function MockProvider(aUseAsyncCallbacks, aTypes) {
   this.addons = [];
   this.installs = [];
   this.callbackTimers = [];
+  this.timerLocations = new Map();
   this.useAsyncCallbacks = (aUseAsyncCallbacks === undefined) ? true : aUseAsyncCallbacks;
   this.types = (aTypes === undefined) ? [{
     id: "extension",
@@ -599,6 +615,7 @@ MockProvider.prototype = {
   started: null,
   apiDelay: 10,
   callbackTimers: null,
+  timerLocations: null,
   useAsyncCallbacks: null,
   types: null,
 
@@ -608,6 +625,7 @@ MockProvider.prototype = {
    * Register this provider with the AddonManager
    */
   register: function MP_register() {
+    info("Registering mock add-on provider");
     AddonManagerPrivate.registerProvider(this, this.types);
   },
 
@@ -615,6 +633,7 @@ MockProvider.prototype = {
    * Unregister this provider with the AddonManager
    */
   unregister: function MP_unregister() {
+    info("Unregistering mock add-on provider");
     AddonManagerPrivate.unregisterProvider(this);
   },
 
@@ -776,9 +795,23 @@ MockProvider.prototype = {
    * Called when the provider should shutdown.
    */
   shutdown: function MP_shutdown() {
-    for (let timer of this.callbackTimers)
-      timer.cancel();
+    if (this.callbackTimers.length) {
+      info("MockProvider: pending callbacks at shutdown(): calling immediately");
+    }
+    while (this.callbackTimers.length > 0) {
+      // When we notify the callback timer, it removes itself from our array
+      let timer = this.callbackTimers[0];
+      try {
+        let setAt = this.timerLocations.get(timer);
+        info("Notifying timer set at " + (setAt || "unknown location"));
+        timer.callback.notify(timer);
+        timer.cancel();
+      } catch(e) {
+        info("Timer notify failed: " + e);
+      }
+    }
     this.callbackTimers = [];
+    this.timerLocations = null;
 
     this.started = false;
   },
@@ -961,18 +994,26 @@ MockProvider.prototype = {
    */
   _delayCallback: function MP_delayCallback(aCallback, ...aArgs) {
     if (!this.useAsyncCallbacks) {
-      aCallback.apply(null, params);
+      aCallback(...aArgs);
       return;
     }
 
-    var timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+    let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
     // Need to keep a reference to the timer, so it doesn't get GC'ed
-    var pos = this.callbackTimers.length;
     this.callbackTimers.push(timer);
-    var self = this;
-    timer.initWithCallback(function() {
-      self.callbackTimers.splice(pos, 1);
-      aCallback.apply(null, aArgs);
+    // Capture a stack trace where the timer was set
+    // needs the 'new Error' hack until bug 1007656
+    this.timerLocations.set(timer, Log.stackTrace(new Error("dummy")));
+    timer.initWithCallback(() => {
+      let idx = this.callbackTimers.indexOf(timer);
+      if (idx == -1) {
+        dump("MockProvider._delayCallback lost track of timer set at "
+             + (this.timerLocations.get(timer) || "unknown location") + "\n");
+      } else {
+        this.callbackTimers.splice(idx, 1);
+      }
+      this.timerLocations.delete(timer);
+      aCallback(...aArgs);
     }, this.apiDelay, timer.TYPE_ONE_SHOT);
   }
 };

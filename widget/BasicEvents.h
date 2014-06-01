@@ -120,6 +120,8 @@ enum nsEventStructType
 // HiDPI mode.
 #define NS_PLUGIN_RESOLUTION_CHANGED     (NS_WINDOW_START + 69)
 
+#define NS_LANGUAGECHANGE                (NS_WINDOW_START + 70)
+
 #define NS_MOUSE_MESSAGE_START          300
 #define NS_MOUSE_MOVE                   (NS_MOUSE_MESSAGE_START)
 #define NS_MOUSE_BUTTON_UP              (NS_MOUSE_MESSAGE_START + 1)
@@ -888,6 +890,7 @@ public:
 
 enum Modifier
 {
+  MODIFIER_NONE       = 0x0000,
   MODIFIER_ALT        = 0x0001,
   MODIFIER_ALTGRAPH   = 0x0002,
   MODIFIER_CAPSLOCK   = 0x0004,
@@ -959,6 +962,19 @@ public:
     result->AssignInputEventData(*this, true);
     result->mFlags = mFlags;
     return result;
+  }
+
+
+  /**
+   * Returns a modifier of "Accel" virtual modifier which is used for shortcut
+   * key.
+   */
+  static Modifier AccelModifier();
+
+  // true indicates the accel key on the environment is down
+  bool IsAccel() const
+  {
+    return ((modifiers & AccelModifier()) != 0);
   }
 
   // true indicates the shift key is down

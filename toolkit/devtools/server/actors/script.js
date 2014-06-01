@@ -14,7 +14,8 @@ const { DebuggerServer } = require("devtools/server/main");
 const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
 const { dbg_assert, dumpn, update } = DevToolsUtils;
 const { SourceMapConsumer, SourceMapGenerator } = require("source-map");
-const { all, defer, resolve } = promise;
+const { defer, resolve, reject, all } = require("devtools/toolkit/deprecated-sync-thenables");
+const {CssLogic} = require("devtools/styleinspector/css-logic");
 
 Cu.import("resource://gre/modules/NetUtil.jsm");
 
@@ -37,7 +38,7 @@ let addonManager = null;
  * about them.
  */
 function mapURIToAddonID(uri, id) {
-  if (Services.appinfo.ID == B2G_ID) {
+  if ((Services.appinfo.ID || undefined) == B2G_ID) {
     return false;
   }
 
@@ -114,24 +115,16 @@ BreakpointStore.prototype = {
       if (!this._breakpoints[url][line]) {
         this._breakpoints[url][line] = [];
       }
-      if(this._breakpoints[url][line][column]) {
-        updating = true;
-      }
       this._breakpoints[url][line][column] = aBreakpoint;
     } else {
       // Add a breakpoint that breaks on the whole line.
       if (!this._wholeLineBreakpoints[url]) {
         this._wholeLineBreakpoints[url] = [];
       }
-      if(this._wholeLineBreakpoints[url][line]) {
-        updating = true;
-      }
       this._wholeLineBreakpoints[url][line] = aBreakpoint;
     }
 
-    if (!updating) {
-      this._size++;
-    }
+    this._size++;
   },
 
   /**
@@ -515,6 +508,8 @@ function ThreadActor(aHooks, aGlobal)
   };
 
   this._gripDepth = 0;
+  this._threadLifetimePool = null;
+  this._tabClosed = false;
 }
 
 /**
@@ -686,9 +681,7 @@ ThreadActor.prototype = {
    */
   globalManager: {
     findGlobals: function () {
-      const { gDevToolsExtensions: {
-        getContentGlobals
-      } } = Cu.import("resource://gre/modules/devtools/DevToolsExtensions.jsm", {});
+      const { getContentGlobals } = require("devtools/server/content-globals");
 
       this.globalDebugObject = this._addDebuggees(this.global);
 
@@ -893,7 +886,10 @@ ThreadActor.prototype = {
       reportError(e, "Got an exception during TA__pauseAndRespond: ");
     }
 
-    return undefined;
+    // If the browser tab has been closed, terminate the debuggee script
+    // instead of continuing. Executing JS after the content window is gone is
+    // a bad idea.
+    return this._tabClosed ? null : undefined;
   },
 
   /**
@@ -957,7 +953,15 @@ ThreadActor.prototype = {
   },
 
   _makeOnStep: function ({ thread, pauseAndRespond, startFrame,
-                           startLocation }) {
+                           startLocation, steppingType }) {
+    // Breaking in place: we should always pause.
+    if (steppingType === "break") {
+      return function () {
+        return pauseAndRespond(this);
+      };
+    }
+
+    // Otherwise take what a "step" means into consideration.
     return function () {
       // onStep is called with 'this' set to the current frame.
 
@@ -1002,19 +1006,20 @@ ThreadActor.prototype = {
   /**
    * Define the JS hook functions for stepping.
    */
-  _makeSteppingHooks: function (aStartLocation) {
+  _makeSteppingHooks: function (aStartLocation, steppingType) {
     // Bind these methods and state because some of the hooks are called
     // with 'this' set to the current frame. Rather than repeating the
     // binding in each _makeOnX method, just do it once here and pass it
     // in to each function.
     const steppingHookState = {
       pauseAndRespond: (aFrame, onPacket=(k)=>k) => {
-        this._pauseAndRespond(aFrame, { type: "resumeLimit" }, onPacket);
+        return this._pauseAndRespond(aFrame, { type: "resumeLimit" }, onPacket);
       },
       createValueGrip: this.createValueGrip.bind(this),
       thread: this,
       startFrame: this.youngestFrame,
-      startLocation: aStartLocation
+      startLocation: aStartLocation,
+      steppingType: steppingType
     };
 
     return {
@@ -1035,7 +1040,7 @@ ThreadActor.prototype = {
    */
   _handleResumeLimit: function (aRequest) {
     let steppingType = aRequest.resumeLimit.type;
-    if (["step", "next", "finish"].indexOf(steppingType) == -1) {
+    if (["break", "step", "next", "finish"].indexOf(steppingType) == -1) {
       return reject({ error: "badParameterType",
                       message: "Unknown resumeLimit type" });
     }
@@ -1043,7 +1048,8 @@ ThreadActor.prototype = {
     const generatedLocation = getFrameLocation(this.youngestFrame);
     return this.sources.getOriginalLocation(generatedLocation)
       .then(originalLocation => {
-        const { onEnterFrame, onPop, onStep } = this._makeSteppingHooks(originalLocation);
+        const { onEnterFrame, onPop, onStep } = this._makeSteppingHooks(originalLocation,
+                                                                        steppingType);
 
         // Make sure there is still a frame on the stack if we are to continue
         // stepping.
@@ -1053,6 +1059,7 @@ ThreadActor.prototype = {
             case "step":
               this.dbg.onEnterFrame = onEnterFrame;
               // Fall through.
+            case "break":
             case "next":
               if (stepFrame.script) {
                   stepFrame.onStep = onStep;
@@ -1811,7 +1818,7 @@ ThreadActor.prototype = {
         }
 
         // There will be no tagName if the event listener is set on the window.
-        let selector = node.tagName ? findCssSelector(node) : "window";
+        let selector = node.tagName ? CssLogic.findCssSelector(node) : "window";
         let nodeDO = this.globalDebugObject.makeDebuggeeValue(node);
         listenerForm.node = {
           selector: selector,
@@ -3041,6 +3048,7 @@ let stringifiers = {
  */
 function ObjectActor(aObj, aThreadActor)
 {
+  dbg_assert(!aObj.optimizedOut, "Should not create object actors for optimized out values!");
   this.obj = aObj;
   this.threadActor = aThreadActor;
 }
@@ -3638,7 +3646,18 @@ DebuggerServer.ObjectActorPreviewers = {
 
     let raw = obj.unsafeDereference();
     let items = aGrip.preview.items = [];
-    for (let item of Set.prototype.values.call(raw)) {
+    // We currently lack XrayWrappers for Set, so when we iterate over
+    // the values, the temporary iterator objects get created in the target
+    // compartment. However, we _do_ have Xrays to Object now, so we end up
+    // Xraying those temporary objects, and filtering access to |it.value|
+    // based on whether or not it's Xrayable and/or callable, which breaks
+    // the for/of iteration.
+    //
+    // This code is designed to handle untrusted objects, so we can safely
+    // waive Xrays on the iterable, and relying on the Debugger machinery to
+    // make sure we handle the resulting objects carefully.
+    for (let item of Cu.waiveXrays(Set.prototype.values.call(raw))) {
+      item = Cu.unwaiveXrays(item);
       item = makeDebuggeeValueIfNeeded(obj, item);
       items.push(threadActor.createValueGrip(item));
       if (items.length == OBJECT_PREVIEW_MAX_ITEMS) {
@@ -4552,10 +4571,18 @@ EnvironmentActor.prototype = {
     }
     for each (let name in parameterNames) {
       let arg = {};
+
+      let value = this.obj.getVariable(name);
+      // The slot is optimized out.
+      // FIXME: Need actual UI, bug 941287.
+      if (value && value.optimizedOut) {
+        continue;
+      }
+
       // TODO: this part should be removed in favor of the commented-out part
       // below when getVariableDescriptor lands (bug 725815).
       let desc = {
-        value: this.obj.getVariable(name),
+        value: value,
         configurable: false,
         writable: true,
         enumerable: true
@@ -4584,22 +4611,22 @@ EnvironmentActor.prototype = {
         continue;
       }
 
+      let value = this.obj.getVariable(name);
+      // The slot is optimized out or arguments on a dead scope.
+      // FIXME: Need actual UI, bug 941287.
+      if (value && (value.optimizedOut || value.missingArguments)) {
+        continue;
+      }
+
       // TODO: this part should be removed in favor of the commented-out part
       // below when getVariableDescriptor lands.
       let desc = {
+        value: value,
         configurable: false,
         writable: true,
         enumerable: true
       };
-      try {
-        desc.value = this.obj.getVariable(name);
-      } catch (e) {
-        // Avoid "Debugger scope is not live" errors for |arguments|, introduced
-        // in bug 746601.
-        if (name != "arguments") {
-          throw e;
-        }
-      }
+
       //let desc = this.obj.getVariableDescriptor(name);
       let descForm = {
         enumerable: true,
@@ -4609,8 +4636,8 @@ EnvironmentActor.prototype = {
         descForm.value = this.threadActor.createValueGrip(desc.value);
         descForm.writable = desc.writable;
       } else {
-        descForm.get = this.threadActor.createValueGrip(desc.get);
-        descForm.set = this.threadActor.createValueGrip(desc.set);
+        descForm.get = this.threadActor.createValueGrip(desc.get || undefined);
+        descForm.set = this.threadActor.createValueGrip(desc.set || undefined);
       }
       bindings.variables[name] = descForm;
     }
@@ -4800,33 +4827,6 @@ update(AddonThreadActor.prototype, {
   // A constant prefix that will be used to form the actor ID by the server.
   actorPrefix: "addonThread",
 
-  onAttach: function(aRequest) {
-    if (!this.attached) {
-      Services.obs.addObserver(this, "chrome-document-global-created", false);
-      Services.obs.addObserver(this, "content-document-global-created", false);
-    }
-    return ThreadActor.prototype.onAttach.call(this, aRequest);
-  },
-
-  disconnect: function() {
-    if (this.attached) {
-      Services.obs.removeObserver(this, "content-document-global-created");
-      Services.obs.removeObserver(this, "chrome-document-global-created");
-    }
-    return ThreadActor.prototype.disconnect.call(this);
-  },
-
-  /**
-   * Called when a new DOM document global is created. Check if the DOM was
-   * loaded from an add-on and if so make the window a debuggee.
-   */
-  observe: function(aSubject, aTopic, aData) {
-    let id = {};
-    if (mapURIToAddonID(aSubject.location, id) && id.value === this.addonID) {
-      this.dbg.addDebuggee(aSubject.defaultView);
-    }
-  },
-
   /**
    * Override the eligibility check for scripts and sources to make
    * sure every script and source with a URL is stored when debugging
@@ -4937,11 +4937,6 @@ update(AddonThreadActor.prototype, {
 
     return false;
   }
-});
-
-AddonThreadActor.prototype.requestTypes = Object.create(ThreadActor.prototype.requestTypes);
-update(AddonThreadActor.prototype.requestTypes, {
-  "attach": AddonThreadActor.prototype.onAttach
 });
 
 exports.AddonThreadActor = AddonThreadActor;
@@ -5503,83 +5498,6 @@ function reportError(aError, aPrefix="") {
   let msg = aPrefix + aError.message + ":\n" + aError.stack;
   Cu.reportError(msg);
   dumpn(msg);
-}
-
-// The following are copied here verbatim from css-logic.js, until we create a
-// server-friendly helper module.
-
-/**
- * Find a unique CSS selector for a given element
- * @returns a string such that ele.ownerDocument.querySelector(reply) === ele
- * and ele.ownerDocument.querySelectorAll(reply).length === 1
- */
-function findCssSelector(ele) {
-  var document = ele.ownerDocument;
-  if (ele.id && document.getElementById(ele.id) === ele) {
-    return '#' + ele.id;
-  }
-
-  // Inherently unique by tag name
-  var tagName = ele.tagName.toLowerCase();
-  if (tagName === 'html') {
-    return 'html';
-  }
-  if (tagName === 'head') {
-    return 'head';
-  }
-  if (tagName === 'body') {
-    return 'body';
-  }
-
-  if (ele.parentNode == null) {
-    console.log('danger: ' + tagName);
-  }
-
-  // We might be able to find a unique class name
-  var selector, index, matches;
-  if (ele.classList.length > 0) {
-    for (var i = 0; i < ele.classList.length; i++) {
-      // Is this className unique by itself?
-      selector = '.' + ele.classList.item(i);
-      matches = document.querySelectorAll(selector);
-      if (matches.length === 1) {
-        return selector;
-      }
-      // Maybe it's unique with a tag name?
-      selector = tagName + selector;
-      matches = document.querySelectorAll(selector);
-      if (matches.length === 1) {
-        return selector;
-      }
-      // Maybe it's unique using a tag name and nth-child
-      index = positionInNodeList(ele, ele.parentNode.children) + 1;
-      selector = selector + ':nth-child(' + index + ')';
-      matches = document.querySelectorAll(selector);
-      if (matches.length === 1) {
-        return selector;
-      }
-    }
-  }
-
-  // So we can be unique w.r.t. our parent, and use recursion
-  index = positionInNodeList(ele, ele.parentNode.children) + 1;
-  selector = findCssSelector(ele.parentNode) + ' > ' +
-          tagName + ':nth-child(' + index + ')';
-
-  return selector;
-};
-
-/**
- * Find the position of [element] in [nodeList].
- * @returns an index of the match, or -1 if there is no match
- */
-function positionInNodeList(element, nodeList) {
-  for (var i = 0; i < nodeList.length; i++) {
-    if (element === nodeList[i]) {
-      return i;
-    }
-  }
-  return -1;
 }
 
 /**

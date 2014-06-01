@@ -33,6 +33,7 @@ class gfxImageSurface;
 namespace mozilla {
 namespace layers {
 
+class AsyncTransactionTracker;
 class ContentClient;
 class CompositableForwarder;
 class ISurfaceAllocator;
@@ -78,28 +79,6 @@ public:
   virtual bool AllocateForYCbCr(gfx::IntSize aYSize,
                                 gfx::IntSize aCbCrSize,
                                 StereoMode aStereoMode) = 0;
-};
-
-/**
- * Holds the shared data of a TextureClient, to be destroyed later.
- *
- * TextureClient's destructor initiates the destruction sequence of the
- * texture client/host pair. If the shared data is to be deallocated on the
- * host side, there is nothing to do.
- * On the other hand, if the client data must be deallocated on the client
- * side, the CompositableClient will ask the TextureClient to drop its shared
- * data in the form of a TextureClientData object. This data will be kept alive
- * until the host side confirms that it is not using the data anymore and that
- * it is completely safe to deallocate the shared data.
- *
- * See:
- *  - The PTexture IPDL protocol
- *  - CompositableChild in TextureClient.cpp
- */
-class TextureClientData {
-public:
-  virtual void DeallocateSharedData(ISurfaceAllocator* allocator) = 0;
-  virtual ~TextureClientData() {}
 };
 
 /**
@@ -320,11 +299,14 @@ public:
   }
 
   /**
-   * Wait until the current buffer is no longer being read.
-   *
-   * Platform support is necessary. gonk JB supports this function.
+   * Set AsyncTransactionTracker of RemoveTextureFromCompositableAsync() transaction.
    */
-  virtual void WaitReleaseFence() {}
+  virtual void SetRemoveFromCompositableTracker(AsyncTransactionTracker* aTracker) {}
+
+  /**
+   * This function waits until the buffer is no longer being used.
+   */
+  virtual void WaitForBufferOwnership() {}
 
 private:
   /**
@@ -343,16 +325,6 @@ protected:
    * anymore. This usually means it will soon be destroyed.
    */
   void MarkInvalid() { mValid = false; }
-
-  /**
-   * Drop the shared data into a TextureClientData object and mark this
-   * TextureClient as invalid.
-   *
-   * The TextureClient must not hold any reference to the shared data
-   * after this method has been called.
-   * The TextureClientData is owned by the caller.
-   */
-  virtual TextureClientData* DropTextureData() = 0;
 
   /**
    * Should only be called *once* per texture, in TextureClient::InitIPDLActor.
@@ -470,8 +442,6 @@ public:
 
   virtual bool IsAllocated() const MOZ_OVERRIDE { return mAllocated; }
 
-  virtual TextureClientData* DropTextureData() MOZ_OVERRIDE;
-
   virtual bool HasInternalBuffer() const MOZ_OVERRIDE { return true; }
 
   mozilla::ipc::Shmem& GetShmem() { return mShmem; }
@@ -505,8 +475,6 @@ public:
   virtual bool IsAllocated() const MOZ_OVERRIDE { return mBuffer != nullptr; }
 
   virtual bool HasInternalBuffer() const MOZ_OVERRIDE { return true; }
-
-  virtual TextureClientData* DropTextureData() MOZ_OVERRIDE;
 
 protected:
   uint8_t* mBuffer;

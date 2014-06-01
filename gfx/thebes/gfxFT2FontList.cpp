@@ -430,7 +430,7 @@ CreateNamedFontEntry(FT_Face aFace, const char* aFilename, uint8_t aIndex)
     nsAutoString fontName;
     AppendUTF8toUTF16(aFace->family_name, fontName);
     if (aFace->style_name && strcmp("Regular", aFace->style_name)) {
-        fontName.AppendLiteral(" ");
+        fontName.Append(' ');
         AppendUTF8toUTF16(aFace->style_name, fontName);
     }
     return FT2FontEntry::CreateFontEntry(aFace, aFilename, aIndex, fontName);
@@ -462,6 +462,17 @@ FT2FontEntry::CairoFontFace()
     return mFontFace;
 }
 
+// Copied/modified from similar code in gfxMacPlatformFontList.mm:
+// Complex scripts will not render correctly unless Graphite or OT
+// layout tables are present.
+// For OpenType, we also check that the GSUB table supports the relevant
+// script tag, to avoid using things like Arial Unicode MS for Lao (it has
+// the characters, but lacks OpenType support).
+
+// TODO: consider whether we should move this to gfxFontEntry and do similar
+// cmap-masking on all platforms to avoid using fonts that won't shape
+// properly.
+
 nsresult
 FT2FontEntry::ReadCMAP(FontInfoData *aFontInfoData)
 {
@@ -480,6 +491,28 @@ FT2FontEntry::ReadCMAP(FontInfoData *aFontInfoData)
         rv = gfxFontUtils::ReadCMAP(buffer.Elements(), buffer.Length(),
                                     *charmap, mUVSOffset,
                                     unicodeFont, symbolFont);
+    }
+
+    if (NS_SUCCEEDED(rv) && !HasGraphiteTables()) {
+        // We assume a Graphite font knows what it's doing,
+        // and provides whatever shaping is needed for the
+        // characters it supports, so only check/clear the
+        // complex-script ranges for non-Graphite fonts
+
+        // for layout support, check for the presence of opentype layout tables
+        bool hasGSUB = HasFontTable(TRUETYPE_TAG('G','S','U','B'));
+
+        for (const ScriptRange* sr = gfxPlatformFontList::sComplexScriptRanges;
+             sr->rangeStart; sr++) {
+            // check to see if the cmap includes complex script codepoints
+            if (charmap->TestRange(sr->rangeStart, sr->rangeEnd)) {
+                // We check for GSUB here, as GPOS alone would not be ok.
+                if (hasGSUB && SupportsScriptInGSUB(sr->tags)) {
+                    continue;
+                }
+                charmap->ClearRange(sr->rangeStart, sr->rangeEnd);
+            }
+        }
     }
 
     mHasCmapTable = NS_SUCCEEDED(rv);
@@ -1162,7 +1195,7 @@ gfxFT2FontList::FindFonts()
             bool moreFiles = handle != INVALID_HANDLE_VALUE;
             while (moreFiles) {
                 nsAutoString filePath(path);
-                filePath.AppendLiteral("\\");
+                filePath.Append('\\');
                 filePath.Append(results.cFileName);
                 AppendFacesFromFontFile(NS_ConvertUTF16toUTF8(filePath));
                 moreFiles = FindNextFile(handle, &results);
@@ -1209,7 +1242,7 @@ gfxFT2FontList::FindFonts()
     } else {
         root = NS_LITERAL_CSTRING("/system");
     }
-    root.Append("/fonts");
+    root.AppendLiteral("/fonts");
 
     FindFontsInDir(root, &fnc);
 

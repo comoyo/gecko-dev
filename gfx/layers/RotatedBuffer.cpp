@@ -95,7 +95,6 @@ RotatedBuffer::DrawBufferQuadrant(gfx::DrawTarget* aTarget,
 
   gfx::Point quadrantTranslation(quadrantRect.x, quadrantRect.y);
 
-  MOZ_ASSERT(aOperator == CompositionOp::OP_OVER || aOperator == CompositionOp::OP_SOURCE);
   // direct2d is much slower when using OP_SOURCE so use OP_OVER and
   // (maybe) a clear instead. Normally we need to draw in a single operation
   // (to avoid flickering) but direct2d is ok since it defers rendering.
@@ -692,7 +691,7 @@ RotatedContentBuffer::BeginPaint(ThebesLayer* aLayer,
 }
 
 DrawTarget*
-RotatedContentBuffer::BorrowDrawTargetForPainting(const PaintState& aPaintState,
+RotatedContentBuffer::BorrowDrawTargetForPainting(PaintState& aPaintState,
                                                   DrawIterator* aIter /* = nullptr */)
 {
   if (aPaintState.mMode == SurfaceMode::SURFACE_NONE) {
@@ -704,12 +703,16 @@ RotatedContentBuffer::BorrowDrawTargetForPainting(const PaintState& aPaintState,
   if (!result) {
     return nullptr;
   }
-  const nsIntRegion* drawPtr = &aPaintState.mRegionToDraw;
+  nsIntRegion* drawPtr = &aPaintState.mRegionToDraw;
   if (aIter) {
     // The iterators draw region currently only contains the bounds of the region,
     // this makes it the precise region.
     aIter->mDrawRegion.And(aIter->mDrawRegion, aPaintState.mRegionToDraw);
     drawPtr = &aIter->mDrawRegion;
+  }
+  if (result->GetType() == BackendType::DIRECT2D ||
+      result->GetType() == BackendType::DIRECT2D1_1) {
+    drawPtr->SimplifyOutwardByArea(100 * 100);
   }
 
   if (aPaintState.mMode == SurfaceMode::SURFACE_COMPONENT_ALPHA) {

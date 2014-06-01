@@ -275,6 +275,17 @@ public:
     return PL_DHashTableSizeOfExcludingThis(&mTable, nullptr, mallocSizeOf);
   }
 
+  /**
+   * Like SizeOfExcludingThis, but includes sizeof(*this).
+   */
+  size_t SizeOfIncludingThis(SizeOfEntryExcludingThisFun sizeOfEntryExcludingThis,
+                             mozilla::MallocSizeOf mallocSizeOf,
+                             void *userArg = nullptr) const
+  {
+    return mallocSizeOf(this) +
+        SizeOfExcludingThis(sizeOfEntryExcludingThis, mallocSizeOf, userArg);
+  }
+
 #ifdef DEBUG
   /**
    * Mark the table as constant after initialization.
@@ -374,7 +385,7 @@ nsTHashtable<EntryType>::nsTHashtable(
 {
   // aOther shouldn't touch mTable after this, because we've stolen the table's
   // pointers but not overwitten them.
-  MOZ_MAKE_MEM_UNDEFINED(aOther.mTable, sizeof(aOther.mTable));
+  MOZ_MAKE_MEM_UNDEFINED(&aOther.mTable, sizeof(aOther.mTable));
 
   // Indicate that aOther is not initialized.  This will make its destructor a
   // nop, which is what we want.

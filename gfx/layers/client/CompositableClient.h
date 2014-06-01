@@ -12,22 +12,70 @@
 #include "mozilla/Assertions.h"         // for MOZ_CRASH
 #include "mozilla/RefPtr.h"             // for TemporaryRef, RefCounted
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat
+#include "mozilla/layers/AsyncTransactionTracker.h" // for AsyncTransactionTracker
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/LayersTypes.h"  // for LayersBackend
+#include "mozilla/layers/TextureClient.h"  // for TextureClient
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 
 namespace mozilla {
 namespace layers {
 
 class CompositableClient;
-class TextureClient;
 class BufferTextureClient;
 class ImageBridgeChild;
 class CompositableForwarder;
 class CompositableChild;
 class SurfaceDescriptor;
-class TextureClientData;
 class PCompositableChild;
+
+/**
+ * Handle RemoveTextureFromCompositableAsync() transaction.
+ */
+class RemoveTextureFromCompositableTracker : public AsyncTransactionTracker {
+public:
+  RemoveTextureFromCompositableTracker(CompositableClient* aCompositableClient)
+    : mCompositableClient(aCompositableClient)
+  {
+    MOZ_COUNT_CTOR(RemoveTextureFromCompositableTracker);
+  }
+
+  ~RemoveTextureFromCompositableTracker()
+  {
+    MOZ_COUNT_DTOR(RemoveTextureFromCompositableTracker);
+  }
+
+  virtual void Complete() MOZ_OVERRIDE
+  {
+    // The TextureClient's recycling is postponed until the transaction
+    // complete.
+    mTextureClient = nullptr;
+    mCompositableClient = nullptr;
+  }
+
+  virtual void Cancel() MOZ_OVERRIDE
+  {
+    mTextureClient = nullptr;
+    mCompositableClient = nullptr;
+  }
+
+  virtual void SetTextureClient(TextureClient* aTextureClient) MOZ_OVERRIDE
+  {
+    mTextureClient = aTextureClient;
+  }
+
+  virtual void SetReleaseFenceHandle(FenceHandle& aReleaseFenceHandle) MOZ_OVERRIDE
+  {
+    if (mTextureClient) {
+      mTextureClient->SetReleaseFenceHandle(aReleaseFenceHandle);
+    }
+  }
+
+private:
+  RefPtr<CompositableClient> mCompositableClient;
+  RefPtr<TextureClient> mTextureClient;
+};
+
 /**
  * CompositableClient manages the texture-specific logic for composite layers,
  * independently of the layer. It is the content side of a CompositableClient/
@@ -145,6 +193,15 @@ public:
    */
   virtual void ClearCachedResources() {}
 
+  /**
+   * Should be called when deataching a TextureClient from a Compositable, because
+   * some platforms need to do some extra book keeping when this happens (for
+   * example to properly keep track of fences on Gonk).
+   *
+   * See AutoRemoveTexture to automatically invoke this at the end of a scope.
+   */
+  virtual void RemoveTexture(TextureClient* aTexture);
+
   static CompositableClient* FromIPDLActor(PCompositableChild* aActor);
 
   /**
@@ -161,6 +218,12 @@ public:
 
   void InitIPDLActor(PCompositableChild* aActor, uint64_t aAsyncID = 0);
 
+  static void TransactionCompleteted(PCompositableChild* aActor, uint64_t aTransactionId);
+
+  static void HoldUntilComplete(PCompositableChild* aActor, AsyncTransactionTracker* aTracker);
+
+  static uint64_t GetTrackersHolderId(PCompositableChild* aActor);
+
 protected:
   CompositableChild* mCompositableChild;
   CompositableForwarder* mForwarder;
@@ -169,6 +232,29 @@ protected:
   TextureFlags mTextureFlags;
 
   friend class CompositableChild;
+};
+
+/**
+ * Helper to call RemoveTexture at the end of a scope.
+ */
+struct AutoRemoveTexture
+{
+  AutoRemoveTexture(CompositableClient* aCompositable,
+                    TextureClient* aTexture = nullptr)
+    : mTexture(aTexture)
+    , mCompositable(aCompositable)
+  {}
+
+  ~AutoRemoveTexture()
+  {
+    if (mCompositable && mTexture) {
+      mCompositable->RemoveTexture(mTexture);
+    }
+  }
+
+  RefPtr<TextureClient> mTexture;
+private:
+  CompositableClient* mCompositable;
 };
 
 } // namespace

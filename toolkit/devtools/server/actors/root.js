@@ -6,10 +6,11 @@
 
 "use strict";
 
-const { Ci } = require("chrome");
+const { Ci, Cu } = require("chrome");
 const Services = require("Services");
 const { ActorPool, appendExtraActors, createExtraActors } = require("devtools/server/actors/common");
 const { DebuggerServer } = require("devtools/server/main");
+const { dumpProtocolSpec } = require("devtools/server/protocol");
 
 /* Root actor for the remote debugging protocol. */
 
@@ -97,6 +98,26 @@ RootActor.prototype = {
   constructor: RootActor,
   applicationType: "browser",
 
+  traits: {
+    sources: true,
+    editOuterHTML: true,
+    // Whether the server-side highlighter actor exists and can be used to
+    // remotely highlight nodes (see server/actors/highlighter.js)
+    highlightable: true,
+    // Whether the inspector actor implements the getImageDataFromURL
+    // method that returns data-uris for image URLs. This is used for image
+    // tooltips for instance
+    urlToImageDataResolver: true,
+    networkMonitor: true,
+    // Whether the storage inspector actor to inspect cookies, etc.
+    storageInspector: true,
+    // Whether storage inspector is read only
+    storageInspectorReadOnly: true,
+    // Whether conditional breakpoints are supported
+    conditionalBreakpoints: true,
+    bulk: true
+  },
+
   /**
    * Return a 'hello' packet as specified by the Remote Debugging Protocol.
    */
@@ -106,24 +127,7 @@ RootActor.prototype = {
       applicationType: this.applicationType,
       /* This is not in the spec, but it's used by tests. */
       testConnectionPrefix: this.conn.prefix,
-      traits: {
-        sources: true,
-        editOuterHTML: true,
-        // Wether the server-side highlighter actor exists and can be used to
-        // remotely highlight nodes (see server/actors/highlighter.js)
-        highlightable: true,
-        // Wether the inspector actor implements the getImageDataFromURL
-        // method that returns data-uris for image URLs. This is used for image
-        // tooltips for instance
-        urlToImageDataResolver: true,
-        networkMonitor: true,
-        // Wether the storage inspector actor to inspect cookies, etc.
-        storageInspector: true,
-        // Wether storage inspector is read only
-        storageInspectorReadOnly: true,
-        // Wether conditional breakpoints are supported
-        conditionalBreakpoints: true
-      }
+      traits: this.traits
     };
   },
 
@@ -290,12 +294,10 @@ RootActor.prototype = {
      * Request packets are frozen. Copy aRequest, so that
      * DebuggerServerConnection.onPacket can attach a 'from' property.
      */
-    return JSON.parse(JSON.stringify(aRequest));
+    return Cu.cloneInto(aRequest, {});
   },
 
-  onProtocolDescription: function (aRequest) {
-    return protocol.dumpProtocolSpec()
-  },
+  onProtocolDescription: dumpProtocolSpec,
 
   /* Support for DebuggerServer.addGlobalActor. */
   _createExtraActors: createExtraActors,

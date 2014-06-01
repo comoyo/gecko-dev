@@ -353,7 +353,7 @@ nsMediaQuery::AppendToString(nsAString& aString) const
   for (uint32_t i = 0, i_end = mExpressions.Length(); i < i_end; ++i) {
     if (i > 0 || !mTypeOmitted)
       aString.AppendLiteral(" and ");
-    aString.AppendLiteral("(");
+    aString.Append('(');
 
     const nsMediaExpression &expr = mExpressions[i];
     if (expr.mRange == nsMediaExpression::eMin) {
@@ -406,7 +406,7 @@ nsMediaQuery::AppendToString(nsAString& aString) const
                          "bad unit");
             array->Item(0).AppendToString(eCSSProperty_z_index, aString,
                                           nsCSSValue::eNormalized);
-            aString.AppendLiteral("/");
+            aString.Append('/');
             array->Item(1).AppendToString(eCSSProperty_z_index, aString,
                                           nsCSSValue::eNormalized);
           }
@@ -441,7 +441,7 @@ nsMediaQuery::AppendToString(nsAString& aString) const
       }
     }
 
-    aString.AppendLiteral(")");
+    aString.Append(')');
   }
 }
 
@@ -1120,8 +1120,6 @@ nsCSSStyleSheet::TraverseInner(nsCycleCollectionTraversalCallback &cb)
   }
 }
 
-DOMCI_DATA(CSSStyleSheet, nsCSSStyleSheet)
-
 // QueryInterface implementation for nsCSSStyleSheet
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsCSSStyleSheet)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
@@ -1130,7 +1128,6 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsCSSStyleSheet)
   NS_INTERFACE_MAP_ENTRY(nsIDOMCSSStyleSheet)
   NS_INTERFACE_MAP_ENTRY(nsICSSLoaderObserver)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIStyleSheet)
-  NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(CSSStyleSheet)
   if (aIID.Equals(NS_GET_IID(nsCSSStyleSheet)))
     foundInterface = reinterpret_cast<nsISupports*>(this);
   else
@@ -1615,47 +1612,30 @@ nsCSSStyleSheet::DidDirty()
 nsresult
 nsCSSStyleSheet::SubjectSubsumesInnerPrincipal()
 {
-  // Get the security manager and do the subsumes check
-  nsIScriptSecurityManager *securityManager =
-    nsContentUtils::GetSecurityManager();
+  nsCOMPtr<nsIPrincipal> subjectPrincipal = nsContentUtils::SubjectPrincipal();
+  if (subjectPrincipal->Subsumes(mInner->mPrincipal)) {
+    return NS_OK;
+  }
 
-  nsCOMPtr<nsIPrincipal> subjectPrincipal;
-  nsresult rv = securityManager->GetSubjectPrincipal(getter_AddRefs(subjectPrincipal));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (!subjectPrincipal) {
+  // Allow access only if CORS mode is not NONE
+  if (GetCORSMode() == CORS_NONE) {
     return NS_ERROR_DOM_SECURITY_ERR;
   }
 
-  bool subsumes;
-  rv = subjectPrincipal->Subsumes(mInner->mPrincipal, &subsumes);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (subsumes) {
-    return NS_OK;
+  // Now make sure we set the principal of our inner to the
+  // subjectPrincipal.  That means we need a unique inner, of
+  // course.  But we don't want to do that if we're not complete
+  // yet.  Luckily, all the callers of this method throw anyway if
+  // not complete, so we can just do that here too.
+  if (!mInner->mComplete) {
+    return NS_ERROR_DOM_INVALID_ACCESS_ERR;
   }
-  
-  if (!nsContentUtils::IsCallerChrome()) {
-    // Allow access only if CORS mode is not NONE
-    if (GetCORSMode() == CORS_NONE) {
-      return NS_ERROR_DOM_SECURITY_ERR;
-    }
 
-    // Now make sure we set the principal of our inner to the
-    // subjectPrincipal.  That means we need a unique inner, of
-    // course.  But we don't want to do that if we're not complete
-    // yet.  Luckily, all the callers of this method throw anyway if
-    // not complete, so we can just do that here too.
-    if (!mInner->mComplete) {
-      return NS_ERROR_DOM_INVALID_ACCESS_ERR;
-    }
+  WillDirty();
 
-    WillDirty();
+  mInner->mPrincipal = subjectPrincipal;
 
-    mInner->mPrincipal = subjectPrincipal;
-
-    DidDirty();
-  }
+  DidDirty();
 
   return NS_OK;
 }

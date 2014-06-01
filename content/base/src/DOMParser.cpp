@@ -143,6 +143,8 @@ already_AddRefed<nsIDocument>
 DOMParser::ParseFromBuffer(const Uint8Array& aBuf, uint32_t aBufLen,
                            SupportedType aType, ErrorResult& rv)
 {
+  aBuf.ComputeLengthAndData();
+
   if (aBufLen > aBuf.Length()) {
     rv.Throw(NS_ERROR_XPC_NOT_ENOUGH_ELEMENTS_IN_ARRAY);
     return nullptr;
@@ -386,29 +388,10 @@ DOMParser::Constructor(const GlobalObject& aOwner,
 DOMParser::Constructor(const GlobalObject& aOwner,
                        ErrorResult& rv)
 {
-  nsCOMPtr<nsIPrincipal> prin;
-  nsCOMPtr<nsIURI> documentURI;
-  nsCOMPtr<nsIURI> baseURI;
-  // No arguments; use the subject principal
-  nsIScriptSecurityManager* secMan = nsContentUtils::GetSecurityManager();
-  if (!secMan) {
-    rv.Throw(NS_ERROR_UNEXPECTED);
-    return nullptr;
-  }
-
-  rv = secMan->GetSubjectPrincipal(getter_AddRefs(prin));
-  if (rv.Failed()) {
-    return nullptr;
-  }
-
-  // We're called from JS; there better be a subject principal, really.
-  if (!prin) {
-    rv.Throw(NS_ERROR_UNEXPECTED);
-    return nullptr;
-  }
-
   nsRefPtr<DOMParser> domParser = new DOMParser(aOwner.GetAsSupports());
-  rv = domParser->InitInternal(aOwner.GetAsSupports(), prin, documentURI, baseURI);
+  rv = domParser->InitInternal(aOwner.GetAsSupports(),
+                               nsContentUtils::SubjectPrincipal(),
+                               nullptr, nullptr);
   if (rv.Failed()) {
     return nullptr;
   }
@@ -464,24 +447,8 @@ DOMParser::Init(nsIPrincipal* aPrincipal, nsIURI* aDocumentURI,
   nsIScriptContext* scriptContext = GetScriptContextFromJSContext(cx);
 
   nsCOMPtr<nsIPrincipal> principal = aPrincipal;
-
   if (!principal && !aDocumentURI) {
-    nsIScriptSecurityManager* secMan = nsContentUtils::GetSecurityManager();
-    if (!secMan) {
-      rv.Throw(NS_ERROR_UNEXPECTED);
-      return;
-    }
-
-    rv = secMan->GetSubjectPrincipal(getter_AddRefs(principal));
-    if (rv.Failed()) {
-      return;
-    }
-
-    // We're called from JS; there better be a subject principal, really.
-    if (!principal) {
-      rv.Throw(NS_ERROR_UNEXPECTED);
-      return;
-    }
+    principal = nsContentUtils::SubjectPrincipal();
   }
 
   rv = Init(principal, aDocumentURI, aBaseURI,

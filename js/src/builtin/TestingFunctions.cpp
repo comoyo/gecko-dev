@@ -445,7 +445,7 @@ GCPreserveCode(JSContext *cx, unsigned argc, jsval *vp)
         return false;
     }
 
-    cx->runtime()->gc.alwaysPreserveCode = true;
+    cx->runtime()->gc.setAlwaysPreserveCode();
 
     args.rval().setUndefined();
     return true;
@@ -510,7 +510,14 @@ SelectForGC(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
+    /*
+     * The selectedForMarking set is intended to be manually marked at slice
+     * start to detect missing pre-barriers. It is invalid for nursery things
+     * to be in the set, so evict the nursery before adding items.
+     */
     JSRuntime *rt = cx->runtime();
+    MinorGC(rt, JS::gcreason::EVICT_NURSERY);
+
     for (unsigned i = 0; i < args.length(); i++) {
         if (args[i].isObject()) {
             if (!rt->gc.selectedForMarking.append(&args[i].toObject()))
@@ -1570,7 +1577,7 @@ WorkerThreadCount(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 #ifdef JS_THREADSAFE
-    args.rval().setInt32(cx->runtime()->useHelperThreads() ? WorkerThreadState().threadCount : 0);
+    args.rval().setInt32(WorkerThreadState().threadCount);
 #else
     args.rval().setInt32(0);
 #endif
@@ -1603,6 +1610,42 @@ DisableTraceLogger(JSContext *cx, unsigned argc, jsval *vp)
     TraceLogger *logger = TraceLoggerForMainThread(cx->runtime());
     args.rval().setBoolean(TraceLoggerDisable(logger));
 
+    return true;
+}
+
+#ifdef DEBUG
+static bool
+DumpObject(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    RootedObject obj(cx);
+    if (!JS_ConvertArguments(cx, args, "o", obj.address()))
+        return false;
+
+    js_DumpObject(obj);
+
+    args.rval().setUndefined();
+    return true;
+}
+#endif
+
+static bool
+ReportOutOfMemory(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    JS_ReportOutOfMemory(cx);
+    cx->clearPendingException();
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+ReportLargeAllocationFailure(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    void *buf = cx->runtime()->onOutOfMemoryCanGC(NULL, JSRuntime::LARGE_ALLOCATION);
+    js_free(buf);
+    args.rval().setUndefined();
     return true;
 }
 
@@ -1875,6 +1918,23 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("stopTraceLogger", DisableTraceLogger, 0, 0,
 "stopTraceLogger()",
 "  Stop logging the mainThread."),
+
+    JS_FN_HELP("reportOutOfMemory", ReportOutOfMemory, 0, 0,
+"reportOutOfMemory()",
+"  Report OOM, then clear the exception and return undefined. For crash testing."),
+
+    JS_FN_HELP("reportLargeAllocationFailure", ReportLargeAllocationFailure, 0, 0,
+"reportLargeAllocationFailure()",
+"  Call the large allocation failure callback, as though a large malloc call failed,\n"
+"  then return undefined. In Gecko, this sends a memory pressure notification, which\n"
+"  can free up some memory."),
+
+#ifdef DEBUG
+    JS_FN_HELP("dumpObject", DumpObject, 1, 0,
+"dumpObject()",
+"  Dump an internal representation of an object."),
+#endif
+
     JS_FS_HELP_END
 };
 

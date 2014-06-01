@@ -25,10 +25,10 @@
 #include "nsRect.h"                     // for nsIntRect
 #include "nsString.h"                   // for nsAutoCString
 
-using namespace mozilla::gfx;
-
 namespace mozilla {
 namespace layers {
+
+using namespace mozilla::gfx;
 
 ImageLayerComposite::ImageLayerComposite(LayerManagerComposite* aManager)
   : ImageLayer(aManager, nullptr)
@@ -100,6 +100,7 @@ ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
 
   EffectChain effectChain(this);
   LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(mMaskLayer, effectChain);
+  AddBlendModeEffect(effectChain);
 
   gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
   mImageHost->SetCompositor(mCompositor);

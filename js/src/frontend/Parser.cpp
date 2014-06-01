@@ -1202,7 +1202,7 @@ Parser<FullParseHandler>::makeDefIntoUse(Definition *dn, ParseNode *pn, JSAtom *
 template <typename ParseHandler>
 struct BindData
 {
-    BindData(ExclusiveContext *cx) : let(cx) {}
+    explicit BindData(ExclusiveContext *cx) : let(cx) {}
 
     typedef bool
     (*Binder)(BindData *data, HandlePropertyName name, Parser<ParseHandler> *parser);
@@ -1214,7 +1214,7 @@ struct BindData
     Binder          binder;     /* binder, discriminates u */
 
     struct LetData {
-        LetData(ExclusiveContext *cx) : blockObj(cx) {}
+        explicit LetData(ExclusiveContext *cx) : blockObj(cx) {}
         VarContext varContext;
         RootedStaticBlockObject blockObj;
         unsigned   overflow;
@@ -3227,7 +3227,7 @@ struct AddLetDecl
 {
     uint32_t blockid;
 
-    AddLetDecl(uint32_t blockid) : blockid(blockid) {}
+    explicit AddLetDecl(uint32_t blockid) : blockid(blockid) {}
 
     bool operator()(TokenStream &ts, ParseContext<FullParseHandler> *pc,
                     HandleStaticBlockObject blockObj, const Shape &shape, JSAtom *)
@@ -6914,7 +6914,7 @@ Parser<ParseHandler>::newRegExp()
     if (!res)
         return null();
 
-    reobj = RegExpObject::create(context, res, chars, length, flags, &tokenStream);
+    reobj = RegExpObject::create(context, res, chars, length, flags, &tokenStream, alloc);
     if (!reobj)
         return null();
 

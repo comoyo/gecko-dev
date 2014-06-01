@@ -39,6 +39,7 @@
 #include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/dom/HTMLTemplateElement.h"
 #include "mozilla/dom/HTMLContentElement.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TextDecoder.h"
 #include "mozilla/dom/TouchEvent.h"
 #include "mozilla/dom/ShadowRoot.h"
@@ -113,7 +114,7 @@
 #include "nsIFormControl.h"
 #include "nsIForm.h"
 #include "nsIFragmentContentSink.h"
-#include "nsIFrame.h"
+#include "nsContainerFrame.h"
 #include "nsIHTMLDocument.h"
 #include "nsIIdleService.h"
 #include "nsIImageLoadingContent.h"
@@ -195,6 +196,8 @@ const char kLoadAsData[] = "loadAsData";
 
 nsIXPConnect *nsContentUtils::sXPConnect;
 nsIScriptSecurityManager *nsContentUtils::sSecurityManager;
+nsIPrincipal *nsContentUtils::sSystemPrincipal;
+nsIPrincipal *nsContentUtils::sNullSubjectPrincipal;
 nsIParserService *nsContentUtils::sParserService = nullptr;
 nsNameSpaceManager *nsContentUtils::sNameSpaceManager;
 nsIIOService *nsContentUtils::sIOService;
@@ -232,7 +235,6 @@ bool nsContentUtils::sInitialized = false;
 bool nsContentUtils::sIsFullScreenApiEnabled = false;
 bool nsContentUtils::sTrustedFullScreenOnly = true;
 bool nsContentUtils::sFullscreenApiIsContentOnly = false;
-bool nsContentUtils::sIsIdleObserverAPIEnabled = false;
 bool nsContentUtils::sIsPerformanceTimingEnabled = false;
 bool nsContentUtils::sIsResourceTimingEnabled = false;
 
@@ -376,8 +378,9 @@ nsContentUtils::Init()
     return NS_ERROR_FAILURE;
   NS_ADDREF(sSecurityManager);
 
-  // Getting the first context can trigger GC, so do this non-lazily.
-  sXPConnect->InitSafeJSContext();
+  sSecurityManager->GetSystemPrincipal(&sSystemPrincipal);
+  MOZ_ASSERT(sSystemPrincipal);
+  NS_ADDREF(sNullSubjectPrincipal = new nsNullPrincipal());
 
   nsresult rv = CallGetService(NS_IOSERVICE_CONTRACTID, &sIOService);
   if (NS_FAILED(rv)) {
@@ -430,8 +433,6 @@ nsContentUtils::Init()
 
   Preferences::AddBoolVarCache(&sTrustedFullScreenOnly,
                                "full-screen-api.allow-trusted-requests-only");
-
-  sIsIdleObserverAPIEnabled = Preferences::GetBool("dom.idle-observers-api.enabled", true);
 
   Preferences::AddBoolVarCache(&sIsPerformanceTimingEnabled,
                                "dom.enable_performance", true);
@@ -1434,6 +1435,8 @@ nsContentUtils::Shutdown()
   NS_IF_RELEASE(sConsoleService);
   sXPConnect = nullptr;
   NS_IF_RELEASE(sSecurityManager);
+  NS_IF_RELEASE(sSystemPrincipal);
+  NS_IF_RELEASE(sNullSubjectPrincipal);
   NS_IF_RELEASE(sParserService);
   NS_IF_RELEASE(sIOService);
   NS_IF_RELEASE(sLineBreaker);
@@ -1514,14 +1517,7 @@ nsContentUtils::CheckSameOrigin(const nsINode* aTrustedNode,
 {
   MOZ_ASSERT(aTrustedNode);
   MOZ_ASSERT(unTrustedNode);
-
-  bool isSystem = false;
-  nsresult rv = sSecurityManager->SubjectPrincipalIsSystem(&isSystem);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (isSystem) {
-    // we're running as system, grant access to the node.
-
+  if (IsCallerChrome()) {
     return NS_OK;
   }
 
@@ -1578,45 +1574,19 @@ nsContentUtils::CanCallerAccess(nsIDOMNode *aNode)
 bool
 nsContentUtils::CanCallerAccess(nsINode* aNode)
 {
-  // XXXbz why not check the IsCapabilityEnabled thing up front, and not bother
-  // with the system principal games?  But really, there should be a simpler
-  // API here, dammit.
-  nsCOMPtr<nsIPrincipal> subjectPrincipal;
-  nsresult rv = sSecurityManager->GetSubjectPrincipal(getter_AddRefs(subjectPrincipal));
-  NS_ENSURE_SUCCESS(rv, false);
-
-  if (!subjectPrincipal) {
-    // we're running as system, grant access to the node.
-
-    return true;
-  }
-
-  return CanCallerAccess(subjectPrincipal, aNode->NodePrincipal());
+  return CanCallerAccess(SubjectPrincipal(), aNode->NodePrincipal());
 }
 
 // static
 bool
 nsContentUtils::CanCallerAccess(nsPIDOMWindow* aWindow)
 {
-  // XXXbz why not check the IsCapabilityEnabled thing up front, and not bother
-  // with the system principal games?  But really, there should be a simpler
-  // API here, dammit.
-  nsCOMPtr<nsIPrincipal> subjectPrincipal;
-  nsresult rv = sSecurityManager->GetSubjectPrincipal(getter_AddRefs(subjectPrincipal));
-  NS_ENSURE_SUCCESS(rv, false);
-
-  if (!subjectPrincipal) {
-    // we're running as system, grant access to the node.
-
-    return true;
-  }
-
   nsCOMPtr<nsIScriptObjectPrincipal> scriptObject =
     do_QueryInterface(aWindow->IsOuterWindow() ?
                       aWindow->GetCurrentInnerWindow() : aWindow);
   NS_ENSURE_TRUE(scriptObject, false);
 
-  return CanCallerAccess(subjectPrincipal, scriptObject->GetPrincipal());
+  return CanCallerAccess(SubjectPrincipal(), scriptObject->GetPrincipal());
 }
 
 //static
@@ -1718,12 +1688,7 @@ bool
 nsContentUtils::IsCallerChrome()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  bool is_caller_chrome = false;
-  nsresult rv = sSecurityManager->SubjectPrincipalIsSystem(&is_caller_chrome);
-  if (NS_FAILED(rv)) {
-    return false;
-  }
-  if (is_caller_chrome) {
+  if (SubjectPrincipal() == sSystemPrincipal) {
     return true;
   }
 
@@ -2351,22 +2316,50 @@ nsContentUtils::GenerateStateKey(nsIContent* aContent,
 
 // static
 nsIPrincipal*
-nsContentUtils::GetSubjectPrincipal()
+nsContentUtils::SubjectPrincipal()
 {
-  nsCOMPtr<nsIPrincipal> subject;
-  sSecurityManager->GetSubjectPrincipal(getter_AddRefs(subject));
+  JSContext* cx = GetCurrentJSContext();
+  if (!cx) {
+    return GetSystemPrincipal();
+  }
 
-  // When the ssm says the subject is null, that means system principal.
-  if (!subject)
-    sSecurityManager->GetSystemPrincipal(getter_AddRefs(subject));
+  JSCompartment *compartment = js::GetContextCompartment(cx);
 
-  return subject;
+  // When an AutoJSAPI is instantiated, we are in a null compartment until the
+  // first JSAutoCompartment, which is kind of a purgatory as far as permissions
+  // go. It would be nice to just hard-abort if somebody does a security check
+  // in this purgatory zone, but that would be too fragile, since it could be
+  // triggered by random IsCallerChrome() checks 20-levels deep.
+  //
+  // So we want to return _something_ here - and definitely not the System
+  // Principal, since that would make an AutoJSAPI a very dangerous thing to
+  // instantiate.
+  //
+  // The natural thing to return is a null principal. Ideally, we'd return a
+  // different null principal each time, to avoid any unexpected interactions
+  // when the principal accidentally gets inherited somewhere. But
+  // GetSubjectPrincipal doesn't return strong references, so there's no way to
+  // sanely manage the lifetime of multiple null principals.
+  //
+  // So we use a singleton null principal. To avoid it being accidentally
+  // inherited and becoming a "real" subject or object principal, we do a
+  // release-mode assert during compartment creation against using this
+  // principal on an actual global.
+  if (!compartment) {
+    return sNullSubjectPrincipal;
+  }
+
+  JSPrincipals *principals = JS_GetCompartmentPrincipals(compartment);
+  return nsJSPrincipals::get(principals);
 }
 
 // static
 nsIPrincipal*
-nsContentUtils::GetObjectPrincipal(JSObject* aObj)
+nsContentUtils::ObjectPrincipal(JSObject* aObj)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(JS_GetObjectRuntime(aObj) == CycleCollectedJSRuntime::Get()->Runtime());
+
   // This is duplicated from nsScriptSecurityManager. We don't call through there
   // because the API unnecessarily requires a JSContext for historical reasons.
   JSCompartment *compartment = js::GetObjectCompartment(aObj);
@@ -2916,14 +2909,15 @@ nsContentUtils::IsExactSitePermDeny(nsIPrincipal* aPrincipal, const char* aType)
 static const char *gEventNames[] = {"event"};
 static const char *gSVGEventNames[] = {"evt"};
 // for b/w compat, the first name to onerror is still 'event', even though it
-// is actually the error message.  (pre this code, the other 2 were not avail.)
-// XXXmarkh - a quick lxr shows no affected code - should we correct this?
-static const char *gOnErrorNames[] = {"event", "source", "lineno"};
+// is actually the error message
+static const char *gOnErrorNames[] = {"event", "source", "lineno",
+                                      "colno", "error"};
 
 // static
 void
 nsContentUtils::GetEventArgNames(int32_t aNameSpaceID,
                                  nsIAtom *aEventName,
+                                 bool aIsForWindow,
                                  uint32_t *aArgCount,
                                  const char*** aArgArray)
 {
@@ -2934,7 +2928,7 @@ nsContentUtils::GetEventArgNames(int32_t aNameSpaceID,
   // JSEventHandler is what does the arg magic for onerror, and it does
   // not seem to take the namespace into account.  So we let onerror in all
   // namespaces get the 3 arg names.
-  if (aEventName == nsGkAtoms::onerror) {
+  if (aEventName == nsGkAtoms::onerror && aIsForWindow) {
     SET_EVENT_ARG_NAMES(gOnErrorNames);
   } else if (aNameSpaceID == kNameSpaceID_SVG) {
     SET_EVENT_ARG_NAMES(gSVGEventNames);
@@ -3141,11 +3135,7 @@ nsContentUtils::IsChromeDoc(nsIDocument *aDocument)
   if (!aDocument) {
     return false;
   }
-  
-  nsCOMPtr<nsIPrincipal> systemPrincipal;
-  sSecurityManager->GetSystemPrincipal(getter_AddRefs(systemPrincipal));
-
-  return aDocument->NodePrincipal() == systemPrincipal;
+  return aDocument->NodePrincipal() == sSystemPrincipal;
 }
 
 bool
@@ -3899,7 +3889,7 @@ nsContentUtils::CreateContextualFragment(nsINode* aContextNode,
           content->GetAttr(kNameSpaceID_XMLNS, name->LocalName(), uriStr);
 
           // really want something like nsXMLContentSerializer::SerializeAttr
-          tagName.Append(NS_LITERAL_STRING(" xmlns")); // space important
+          tagName.AppendLiteral(" xmlns"); // space important
           if (name->GetPrefix()) {
             tagName.Append(char16_t(':'));
             name->LocalName()->ToString(nameStr);
@@ -3907,8 +3897,9 @@ nsContentUtils::CreateContextualFragment(nsINode* aContextNode,
           } else {
             setDefaultNamespace = true;
           }
-          tagName.Append(NS_LITERAL_STRING("=\"") + uriStr +
-            NS_LITERAL_STRING("\""));
+          tagName.AppendLiteral("=\"");
+          tagName.Append(uriStr);
+          tagName.Append('"');
         }
       }
     }
@@ -3921,8 +3912,9 @@ nsContentUtils::CreateContextualFragment(nsINode* aContextNode,
         // default namespace attr in, so that our kids will be in our
         // namespace.
         info->GetNamespaceURI(uriStr);
-        tagName.Append(NS_LITERAL_STRING(" xmlns=\"") + uriStr +
-                       NS_LITERAL_STRING("\""));
+        tagName.AppendLiteral(" xmlns=\"");
+        tagName.Append(uriStr);
+        tagName.Append('"');
       }
     }
 
@@ -4351,10 +4343,7 @@ nsContentUtils::CheckSecurityBeforeLoad(nsIURI* aURIToLoad,
 {
   NS_PRECONDITION(aLoadingPrincipal, "Must have a loading principal here");
 
-  bool isSystemPrin = false;
-  if (NS_SUCCEEDED(sSecurityManager->IsSystemPrincipal(aLoadingPrincipal,
-                                                       &isSystemPrin)) &&
-      isSystemPrin) {
+  if (aLoadingPrincipal == sSystemPrincipal) {
     return NS_OK;
   }
   
@@ -4393,9 +4382,7 @@ nsContentUtils::CheckSecurityBeforeLoad(nsIURI* aURIToLoad,
 bool
 nsContentUtils::IsSystemPrincipal(nsIPrincipal* aPrincipal)
 {
-  bool isSystem;
-  nsresult rv = sSecurityManager->IsSystemPrincipal(aPrincipal, &isSystem);
-  return NS_SUCCEEDED(rv) && isSystem;
+  return aPrincipal == sSystemPrincipal;
 }
 
 bool
@@ -4408,11 +4395,7 @@ nsContentUtils::IsExpandedPrincipal(nsIPrincipal* aPrincipal)
 nsIPrincipal*
 nsContentUtils::GetSystemPrincipal()
 {
-  nsCOMPtr<nsIPrincipal> sysPrin;
-  DebugOnly<nsresult> rv =
-    sSecurityManager->GetSystemPrincipal(getter_AddRefs(sysPrin));
-  MOZ_ASSERT(NS_SUCCEEDED(rv) && sysPrin);
-  return sysPrin;
+  return sSystemPrincipal;
 }
 
 bool
@@ -4434,7 +4417,7 @@ nsContentUtils::CombineResourcePrincipals(nsCOMPtr<nsIPrincipal>* aResourcePrinc
       subsumes) {
     return false;
   }
-  sSecurityManager->GetSystemPrincipal(getter_AddRefs(*aResourcePrincipal));
+  *aResourcePrincipal = sSystemPrincipal;
   return true;
 }
 
@@ -5071,8 +5054,12 @@ nsContentUtils::CheckForSubFrameDrop(nsIDragSession* aDragSession,
   }
   
   nsIDocument* targetDoc = target->OwnerDoc();
-  nsCOMPtr<nsIWebNavigation> twebnav = do_GetInterface(targetDoc->GetWindow());
-  nsCOMPtr<nsIDocShellTreeItem> tdsti = do_QueryInterface(twebnav);
+  nsPIDOMWindow* targetWin = targetDoc->GetWindow();
+  if (!targetWin) {
+    return true;
+  }
+
+  nsCOMPtr<nsIDocShellTreeItem> tdsti = targetWin->GetDocShell();
   if (!tdsti) {
     return true;
   }
@@ -5643,6 +5630,8 @@ nsContentUtils::WrapNative(JSContext *cx, nsISupports *native,
                            nsWrapperCache *cache, const nsIID* aIID,
                            JS::MutableHandle<JS::Value> vp, bool aAllowWrapping)
 {
+  MOZ_ASSERT(cx == GetCurrentJSContext());
+
   if (!native) {
     vp.setNull();
 
@@ -5662,8 +5651,7 @@ nsContentUtils::WrapNative(JSContext *cx, nsISupports *native,
 
   nsresult rv = NS_OK;
   JS::Rooted<JSObject*> scope(cx, JS::CurrentGlobalOrNull(cx));
-  AutoPushJSContext context(cx);
-  rv = sXPConnect->WrapNativeToJSVal(context, scope, native, cache, aIID,
+  rv = sXPConnect->WrapNativeToJSVal(cx, scope, native, cache, aIID,
                                      aAllowWrapping, vp);
   return rv;
 }
@@ -5914,7 +5902,7 @@ nsContentUtils::FlushLayoutForTree(nsIDOMWindow* aWindow)
         for (; i < i_end; ++i) {
             nsCOMPtr<nsIDocShellTreeItem> item;
             docShell->GetChildAt(i, getter_AddRefs(item));
-            nsCOMPtr<nsIDOMWindow> win = do_GetInterface(item);
+            nsCOMPtr<nsIDOMWindow> win = item->GetWindow();
             if (win) {
                 FlushLayoutForTree(win);
             }
@@ -6106,20 +6094,10 @@ nsContentUtils::GetContentSecurityPolicy(JSContext* aCx,
                                          nsIContentSecurityPolicy** aCSP)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-
-  // Get the security manager
-  nsCOMPtr<nsIScriptSecurityManager> ssm = nsContentUtils::GetSecurityManager();
-
-  if (!ssm) {
-    NS_ERROR("Failed to get security manager service");
-    return false;
-  }
-
-  nsCOMPtr<nsIPrincipal> subjectPrincipal = ssm->GetCxSubjectPrincipal(aCx);
-  NS_ASSERTION(subjectPrincipal, "Failed to get subjectPrincipal");
+  MOZ_ASSERT(aCx == GetCurrentJSContext());
 
   nsCOMPtr<nsIContentSecurityPolicy> csp;
-  nsresult rv = subjectPrincipal->GetCsp(getter_AddRefs(csp));
+  nsresult rv = SubjectPrincipal()->GetCsp(getter_AddRefs(csp));
   if (NS_FAILED(rv)) {
     NS_ERROR("CSP: Failed to get CSP from principal.");
     return false;
@@ -6135,15 +6113,19 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
                                   nsIDocument* aDocument)
 {
   NS_ASSERTION(aDocument, "aDocument should be a valid pointer (not null)");
-  nsCOMPtr<nsIScriptGlobalObject> sgo = do_QueryInterface(aDocument->GetWindow());
-  NS_ENSURE_TRUE(sgo, true);
+  nsCOMPtr<nsIGlobalObject> globalObject =
+    do_QueryInterface(aDocument->GetWindow());
+  if (NS_WARN_IF(!globalObject)) {
+    return true;
+  }
 
-  AutoPushJSContext cx(sgo->GetContext()->GetNativeContext());
-  NS_ENSURE_TRUE(cx, true);
+  AutoJSAPI jsapi;
+  JSContext* cx = jsapi.cx();
+  JSAutoCompartment ac(cx, globalObject->GetGlobalJSObject());
 
   // The pattern has to match the entire value.
   aPattern.Insert(NS_LITERAL_STRING("^(?:"), 0);
-  aPattern.Append(NS_LITERAL_STRING(")$"));
+  aPattern.AppendLiteral(")$");
 
   JS::Rooted<JSObject*> re(cx,
     JS_NewUCRegExpObjectNoStatics(cx,

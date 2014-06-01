@@ -75,7 +75,7 @@ class CodeGeneratorARM : public CodeGeneratorShared
     bool generateEpilogue();
     bool generateOutOfLineCode();
 
-    void emitRoundDouble(const FloatRegister &src, const Register &dest, Label *fail);
+    void emitRoundDouble(FloatRegister src, Register dest, Label *fail);
 
     // Emits a branch that directs control flow to the true block if |cond| is
     // true, and the false block if |cond| is false.
@@ -94,7 +94,7 @@ class CodeGeneratorARM : public CodeGeneratorShared
         emitBranch(cond, ifTrue, ifFalse);
     }
 
-    bool emitTableSwitchDispatch(MTableSwitch *mir, const Register &index, const Register &base);
+    bool emitTableSwitchDispatch(MTableSwitch *mir, Register index, Register base);
 
   public:
     // Instruction visitors.
@@ -145,6 +145,8 @@ class CodeGeneratorARM : public CodeGeneratorShared
     virtual bool visitMathF(LMathF *math);
     virtual bool visitFloor(LFloor *lir);
     virtual bool visitFloorF(LFloorF *lir);
+    virtual bool visitCeil(LCeil *lir);
+    virtual bool visitCeilF(LCeilF *lir);
     virtual bool visitRound(LRound *lir);
     virtual bool visitRoundF(LRoundF *lir);
     virtual bool visitTruncateDToInt32(LTruncateDToInt32 *ins);
@@ -163,7 +165,7 @@ class CodeGeneratorARM : public CodeGeneratorShared
     Register splitTagForTest(const ValueOperand &value);
 
     void storeElementTyped(const LAllocation *value, MIRType valueType, MIRType elementType,
-                           const Register &elements, const LAllocation *index);
+                           Register elements, const LAllocation *index);
 
     bool divICommon(MDiv *mir, Register lhs, Register rhs, Register output, LSnapshot *snapshot,
                     Label &done);

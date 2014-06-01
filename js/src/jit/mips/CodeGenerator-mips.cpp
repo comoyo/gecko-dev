@@ -18,6 +18,7 @@
 #include "jit/MIR.h"
 #include "jit/MIRGraph.h"
 #include "vm/Shape.h"
+#include "vm/TraceLogging.h"
 
 #include "jsscriptinlines.h"
 
@@ -56,9 +57,16 @@ bool
 CodeGeneratorMIPS::generateEpilogue()
 {
     masm.bind(&returnLabel_);
-#if JS_TRACE_LOGGING
-    masm.tracelogStop();
+
+#ifdef JS_TRACE_LOGGING
+    if (!gen->compilingAsmJS() && gen->info().executionMode() == SequentialExecution) {
+        if (!emitTracelogStopEvent(TraceLogger::IonMonkey))
+            return false;
+        if (!emitTracelogScriptStop())
+            return false;
+    }
 #endif
+
     if (gen->compilingAsmJS()) {
         // Pop the stack we allocated at the start of the function.
         masm.freeStack(frameDepth_);
@@ -78,6 +86,9 @@ void
 CodeGeneratorMIPS::branchToBlock(Assembler::FloatFormat fmt, FloatRegister lhs, FloatRegister rhs,
                                  MBasicBlock *mir, Assembler::DoubleCondition cond)
 {
+    // Skip past trivial blocks.
+    mir = skipTrivialBlocks(mir);
+
     Label *label = mir->lir()->label();
     if (Label *oolEntry = labelForBackedgeWithImplicitCheck(mir)) {
         // Note: the backedge is initially a jump to the next instruction.
@@ -1007,7 +1018,7 @@ CodeGeneratorMIPS::visitOutOfLineTableSwitch(OutOfLineTableSwitch *ool)
         return false;
 
     for (size_t i = 0; i < mir->numCases(); i++) {
-        LBlock *caseblock = mir->getCase(i)->lir();
+        LBlock *caseblock = skipTrivialBlocks(mir->getCase(i))->lir();
         Label *caseheader = caseblock->label();
         uint32_t caseoffset = caseheader->offset();
 
@@ -1025,10 +1036,10 @@ CodeGeneratorMIPS::visitOutOfLineTableSwitch(OutOfLineTableSwitch *ool)
 }
 
 bool
-CodeGeneratorMIPS::emitTableSwitchDispatch(MTableSwitch *mir, const Register &index,
-                                           const Register &address)
+CodeGeneratorMIPS::emitTableSwitchDispatch(MTableSwitch *mir, Register index,
+                                           Register address)
 {
-    Label *defaultcase = mir->getDefault()->lir()->label();
+    Label *defaultcase = skipTrivialBlocks(mir->getDefault())->lir()->label();
 
     // Lower value with low value
     if (mir->low() != 0)
@@ -1831,7 +1842,7 @@ CodeGeneratorMIPS::visitLoadElementT(LLoadElementT *load)
 
 void
 CodeGeneratorMIPS::storeElementTyped(const LAllocation *value, MIRType valueType,
-                                     MIRType elementType, const Register &elements,
+                                     MIRType elementType, Register elements,
                                      const LAllocation *index)
 {
     if (index->isConstant()) {

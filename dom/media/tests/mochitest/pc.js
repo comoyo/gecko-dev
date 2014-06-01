@@ -418,9 +418,9 @@ function getNetworkUtils() {
  *        true if this test should run the tests for the "local" side.
  * @param {bool}   [options.is_remote=true]
  *        true if this test should run the tests for the "remote" side.
- * @param {object} [options.config_pc1=undefined]
+ * @param {object} [options.config_local=undefined]
  *        Configuration for the local peer connection instance
- * @param {object} [options.config_pc2=undefined]
+ * @param {object} [options.config_remote=undefined]
  *        Configuration for the remote peer connection instance. If not defined
  *        the configuration from the local instance will be used
  */
@@ -430,6 +430,25 @@ function PeerConnectionTest(options) {
   options.commands = options.commands || commandsPeerConnection;
   options.is_local = "is_local" in options ? options.is_local : true;
   options.is_remote = "is_remote" in options ? options.is_remote : true;
+
+  if (typeof turnServers !== "undefined") {
+    if ((!options.turn_disabled_local) && (turnServers.local)) {
+      if (!options.hasOwnProperty("config_local")) {
+        options.config_local = {};
+      }
+      if (!options.config_local.hasOwnProperty("iceServers")) {
+        options.config_local.iceServers = turnServers.local.iceServers;
+      }
+    }
+    if ((!options.turn_disabled_remote) && (turnServers.remote)) {
+      if (!options.hasOwnProperty("config_remote")) {
+        options.config_remote = {};
+      }
+      if (!options.config_remote.hasOwnProperty("iceServers")) {
+        options.config_remote.iceServers = turnServers.remote.iceServers;
+      }
+    }
+  }
 
   var netTeardownCommand = null;
   if (!isNetworkReady()) {
@@ -453,12 +472,12 @@ function PeerConnectionTest(options) {
   }
 
   if (options.is_local)
-    this.pcLocal = new PeerConnectionWrapper('pcLocal', options.config_pc1);
+    this.pcLocal = new PeerConnectionWrapper('pcLocal', options.config_local);
   else
     this.pcLocal = null;
 
   if (options.is_remote)
-    this.pcRemote = new PeerConnectionWrapper('pcRemote', options.config_pc2 || options.config_pc1);
+    this.pcRemote = new PeerConnectionWrapper('pcRemote', options.config_remote || options.config_local);
   else
     this.pcRemote = null;
 
@@ -493,24 +512,70 @@ function PeerConnectionTest(options) {
 PeerConnectionTest.prototype.close = function PCT_close(onSuccess) {
   info("Closing peer connections. Connection state=" + this.connected);
 
-  function signalingstatechangeClose(state) {
+  var self = this;
+  var closeTimeout = null;
+  var waitingForLocal = false;
+  var waitingForRemote = false;
+  var everythingClosed = false;
+
+  function verifyClosed() {
+    if ((self.waitingForLocal || self.waitingForRemote) ||
+      (self.pcLocal && (self.pcLocal.signalingState !== "closed")) ||
+      (self.pcRemote && (self.pcRemote.signalingState !== "closed"))) {
+      info("still waiting for closure");
+    }
+    else if (!everythingClosed) {
+      info("No closure pending");
+      if (self.pcLocal) {
+        is(self.pcLocal.signalingState, "closed", "pcLocal is in 'closed' state");
+      }
+      if (self.pcRemote) {
+        is(self.pcRemote.signalingState, "closed", "pcRemote is in 'closed' state");
+      }
+      clearTimeout(closeTimeout);
+      self.connected = false;
+      everythingClosed = true;
+      onSuccess();
+    }
+  }
+
+  function signalingstatechangeLocalClose(state) {
     info("'onsignalingstatechange' event '" + state + "' received");
     is(state, "closed", "onsignalingstatechange event is closed");
+    self.waitingForLocal = false;
+    verifyClosed();
   }
 
-  // There is no onclose event for the remote peer existent yet. So close it
-  // side-by-side with the local peer.
-  if (this.pcLocal) {
-    this.pcLocal.onsignalingstatechange = signalingstatechangeClose;
-    this.pcLocal.close();
+  function signalingstatechangeRemoteClose(state) {
+    info("'onsignalingstatechange' event '" + state + "' received");
+    is(state, "closed", "onsignalingstatechange event is closed");
+    self.waitingForRemote = false;
+    verifyClosed();
   }
-  if (this.pcRemote) {
-    this.pcRemote.onsignalingstatechange = signalingstatechangeClose;
-    this.pcRemote.close();
-  }
-  this.connected = false;
 
-  onSuccess();
+  function closeEverything() {
+    if ((self.pcLocal) && (self.pcLocal.signalingState !== "closed")) {
+      info("Closing pcLocal");
+      self.pcLocal.onsignalingstatechange = signalingstatechangeLocalClose;
+      self.waitingForLocal = true;
+      self.pcLocal.close();
+    }
+    if ((self.pcRemote) && (self.pcRemote.signalingState !== "closed")) {
+      info("Closing pcRemote");
+      self.pcRemote.onsignalingstatechange = signalingstatechangeRemoteClose;
+      self.waitingForRemote = true;
+      self.pcRemote.close();
+    }
+    verifyClosed();
+  }
+
+  closeTimeout = setTimeout(function() {
+    ok(false, "Closing PeerConnections timed out!");
+    // it is not a success, but the show must go on
+    onSuccess();
+  }, 60000);
+
+  closeEverything();
 };
 
 /**
@@ -595,10 +660,10 @@ function PCT_setLocalDescription(peer, desc, stateExpected, onSuccess) {
   }
 
   peer.onsignalingstatechange = function (state) {
-    //info(peer + ": 'onsignalingstatechange' event registered, signalingState: " + peer.signalingState);
     info(peer + ": 'onsignalingstatechange' event '" + state + "' received");
     if(stateExpected === state && eventFired == false) {
       eventFired = true;
+      peer.setLocalDescStableEventDate = new Date();
       check_next_test();
     } else {
       ok(false, "This event has either already fired or there has been a " +
@@ -609,6 +674,7 @@ function PCT_setLocalDescription(peer, desc, stateExpected, onSuccess) {
 
   peer.setLocalDescription(desc, function () {
     stateChanged = true;
+    peer.setLocalDescDate = new Date();
     check_next_test();
   });
 };
@@ -665,6 +731,7 @@ function PCT_setRemoteDescription(peer, desc, stateExpected, onSuccess) {
     info(peer + ": 'onsignalingstatechange' event '" + state + "' received");
     if(stateExpected === state && eventFired == false) {
       eventFired = true;
+      peer.setRemoteDescStableEventDate = new Date();
       check_next_test();
     } else {
       ok(false, "This event has either already fired or there has been a " +
@@ -675,6 +742,7 @@ function PCT_setRemoteDescription(peer, desc, stateExpected, onSuccess) {
 
   peer.setRemoteDescription(desc, function () {
     stateChanged = true;
+    peer.setRemoteDescDate = new Date();
     check_next_test();
   });
 };
@@ -707,9 +775,9 @@ PeerConnectionTest.prototype.teardown = function PCT_teardown() {
  *        Optional options for the peer connection test
  * @param {object} [options.commands=commandsDataChannel]
  *        Commands to run for the test
- * @param {object} [options.config_pc1=undefined]
+ * @param {object} [options.config_local=undefined]
  *        Configuration for the local peer connection instance
- * @param {object} [options.config_pc2=undefined]
+ * @param {object} [options.config_remote=undefined]
  *        Configuration for the remote peer connection instance. If not defined
  *        the configuration from the local instance will be used
  */
@@ -1228,15 +1296,6 @@ PeerConnectionWrapper.prototype = {
   },
 
   /**
-   * Returns the readyState.
-   *
-   * @returns {string}
-   */
-  get readyState() {
-    return this._pc.readyState;
-  },
-
-  /**
    * Returns the remote description.
    *
    * @returns {object} The remote description
@@ -1664,7 +1723,7 @@ PeerConnectionWrapper.prototype = {
     var addStreamTimeout = null;
 
     function _checkMediaTracks(constraintsRemote, onSuccess) {
-      if (self.addStreamTimeout === null) {
+      if (self.addStreamTimeout !== null) {
         clearTimeout(self.addStreamTimeout);
       }
 
@@ -1697,11 +1756,6 @@ PeerConnectionWrapper.prototype = {
       onSuccess();
     }
 
-    function __checkMediaTracksTimeout(onSuccess) {
-      ok(false, self + " checkMediaTracks() timed out waiting for onaddstream event to fire");
-      onSuccess();
-    }
-
     // we have to do this check as the onaddstream never fires if the remote
     // stream has no track at all!
     var expectedRemoteTracks =
@@ -1719,7 +1773,8 @@ PeerConnectionWrapper.prototype = {
         _checkMediaTracks(constraintsRemote, onSuccess);
       };
       addStreamTimeout = setTimeout(function () {
-        self._checkMediaTracksTimeout(onSuccess);
+        ok(false, self + " checkMediaTracks() timed out waiting for onaddstream event to fire");
+        onSuccess();
       }, 60000);
     }
   },

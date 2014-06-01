@@ -48,6 +48,7 @@ class GlobalWorkerThreadState
     typedef Vector<AsmJSParallelTask*, 0, SystemAllocPolicy> AsmJSParallelTaskVector;
     typedef Vector<ParseTask*, 0, SystemAllocPolicy> ParseTaskVector;
     typedef Vector<SourceCompressionTask*, 0, SystemAllocPolicy> SourceCompressionTaskVector;
+    typedef Vector<GCHelperState *, 0, SystemAllocPolicy> GCHelperStateVector;
 
     // List of available threads, or null if the thread state has not been initialized.
     WorkerThread *threads;
@@ -80,6 +81,9 @@ class GlobalWorkerThreadState
 
     // Source compression worklist.
     SourceCompressionTaskVector compressionWorklist_;
+
+    // Runtimes which have sweeping / allocating work to do.
+    GCHelperStateVector gcHelperWorklist_;
 
   public:
     GlobalWorkerThreadState();
@@ -150,10 +154,16 @@ class GlobalWorkerThreadState
         return compressionWorklist_;
     }
 
+    GCHelperStateVector &gcHelperWorklist() {
+        JS_ASSERT(isLocked());
+        return gcHelperWorklist_;
+    }
+
     bool canStartAsmJSCompile();
     bool canStartIonCompile();
     bool canStartParseTask();
     bool canStartCompressionTask();
+    bool canStartGCHelperTask();
 
     uint32_t harvestFailedAsmJSJobs() {
         JS_ASSERT(isLocked());
@@ -240,8 +250,11 @@ struct WorkerThread
     /* Any source being compressed on this thread. */
     SourceCompressionTask *compressionTask;
 
+    /* Any GC state for background sweeping or allocating being performed. */
+    GCHelperState *gcHelperState;
+
     bool idle() const {
-        return !ionBuilder && !asmData && !parseTask && !compressionTask;
+        return !ionBuilder && !asmData && !parseTask && !compressionTask && !gcHelperState;
     }
 
     void destroy();
@@ -250,6 +263,7 @@ struct WorkerThread
     void handleIonWorkload();
     void handleParseWorkload();
     void handleCompressionWorkload();
+    void handleGCHelperWorkload();
 
     static void ThreadMain(void *arg);
     void threadLoop();
@@ -370,7 +384,7 @@ struct AsmJSParallelTask
     jit::LIRGraph *lir;     // Passed from worker to main thread.
     unsigned compileTime;
 
-    AsmJSParallelTask(size_t defaultChunkSize)
+    explicit AsmJSParallelTask(size_t defaultChunkSize)
       : runtime(nullptr), lifo(defaultChunkSize), func(nullptr), mir(nullptr), lir(nullptr), compileTime(0)
     { }
 
@@ -444,6 +458,7 @@ OffThreadParsingMustWaitForGC(JSRuntime *rt);
 struct SourceCompressionTask
 {
     friend class ScriptSource;
+    friend class WorkerThread;
 
 #ifdef JS_THREADSAFE
     // Thread performing the compression.
@@ -455,16 +470,24 @@ struct SourceCompressionTask
     ExclusiveContext *cx;
 
     ScriptSource *ss;
-    const jschar *chars;
-    bool oom;
 
     // Atomic flag to indicate to a worker thread that it should abort
     // compression on the source.
     mozilla::Atomic<bool, mozilla::Relaxed> abort_;
 
+    // Stores the result of the compression.
+    enum ResultType {
+        OOM,
+        Aborted,
+        Success
+    } result;
+    void *compressed;
+    size_t compressedBytes;
+
   public:
     explicit SourceCompressionTask(ExclusiveContext *cx)
-      : cx(cx), ss(nullptr), chars(nullptr), oom(false), abort_(false)
+      : cx(cx), ss(nullptr), abort_(false),
+        result(OOM), compressed(nullptr), compressedBytes(0)
     {
 #ifdef JS_THREADSAFE
         workerThread = nullptr;
@@ -476,13 +499,11 @@ struct SourceCompressionTask
         complete();
     }
 
-    bool work();
+    ResultType work();
     bool complete();
     void abort() { abort_ = true; }
     bool active() const { return !!ss; }
     ScriptSource *source() { return ss; }
-    const jschar *uncompressedChars() { return chars; }
-    void setOOM() { oom = true; }
 };
 
 } /* namespace js */

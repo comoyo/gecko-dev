@@ -219,9 +219,9 @@ nsImageFrame::DestroyFrom(nsIFrame* aDestructRoot)
 
 
 void
-nsImageFrame::Init(nsIContent*      aContent,
-                   nsIFrame*        aParent,
-                   nsIFrame*        aPrevInFlow)
+nsImageFrame::Init(nsIContent*       aContent,
+                   nsContainerFrame* aParent,
+                   nsIFrame*         aPrevInFlow)
 {
   nsSplittableFrame::Init(aContent, aParent, aPrevInFlow);
 
@@ -797,7 +797,7 @@ nsImageFrame::GetIntrinsicRatio()
   return mIntrinsicRatio;
 }
 
-nsresult
+void
 nsImageFrame::Reflow(nsPresContext*          aPresContext,
                      nsHTMLReflowMetrics&     aMetrics,
                      const nsHTMLReflowState& aReflowState,
@@ -900,7 +900,6 @@ nsImageFrame::Reflow(nsPresContext*          aPresContext,
                   ("exit nsImageFrame::Reflow: size=%d,%d",
                   aMetrics.Width(), aMetrics.Height()));
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aMetrics);
-  return NS_OK;
 }
 
 bool
@@ -1782,6 +1781,10 @@ nsImageFrame::List(FILE* out, const char* aPrefix, uint32_t aFlags) const
 int
 nsImageFrame::GetLogicalSkipSides(const nsHTMLReflowState* aReflowState) const
 {
+  if (MOZ_UNLIKELY(StyleBorder()->mBoxDecorationBreak ==
+                     NS_STYLE_BOX_DECORATION_BREAK_CLONE)) {
+    return 0;
+  }
   int skip = 0;
   if (nullptr != GetPrevInFlow()) {
     skip |= LOGICAL_SIDE_B_START;

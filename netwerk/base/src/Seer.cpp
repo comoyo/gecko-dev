@@ -788,7 +788,7 @@ Seer::EnsureInitStorage()
   BeginTransaction();
 
   nsRefPtr<SeerCommitTimerInitEvent> event = new SeerCommitTimerInitEvent();
-  NS_DispatchToMainThread(event, NS_DISPATCH_NORMAL);
+  NS_DispatchToMainThread(event);
 
   return NS_OK;
 }
@@ -920,7 +920,7 @@ ExtractOrigin(nsIURI *uri, nsAutoCString &s)
   s.AppendLiteral("://");
   s.Append(host);
   if (port != -1) {
-    s.AppendLiteral(":");
+    s.Append(':');
     s.AppendInt(port);
   }
 }
@@ -2297,6 +2297,10 @@ Seer::Reset()
 
   if (!mInitialized) {
     return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  if (!mEnabled) {
+    return NS_OK;
   }
 
   nsRefPtr<SeerResetEvent> event = new SeerResetEvent();

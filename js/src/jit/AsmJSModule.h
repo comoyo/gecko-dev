@@ -299,7 +299,7 @@ class AsmJSModule
         PropertyName *name_;
       public:
         Name() : name_(nullptr) {}
-        Name(PropertyName *name) : name_(name) {}
+        MOZ_IMPLICIT Name(PropertyName *name) : name_(name) {}
         PropertyName *name() const { return name_; }
         PropertyName *&name() { return name_; }
         size_t serializedSize() const;
@@ -823,6 +823,7 @@ class AsmJSModule
     }
 
     void restoreToInitialState(ArrayBufferObject *maybePrevBuffer, ExclusiveContext *cx);
+    void setAutoFlushICacheRange();
     void staticallyLink(ExclusiveContext *cx);
 
     uint8_t *codeBase() const {

@@ -53,12 +53,28 @@ XPCOMUtils.defineLazyServiceGetter(Svc, 'mime',
                                    '@mozilla.org/mime;1',
                                    'nsIMIMEService');
 
+function getContainingBrowser(domWindow) {
+  return domWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                  .getInterface(Ci.nsIWebNavigation)
+                  .QueryInterface(Ci.nsIDocShell)
+                  .chromeEventHandler;
+}
+
 function getChromeWindow(domWindow) {
-  var containingBrowser = domWindow.QueryInterface(Ci.nsIInterfaceRequestor)
-                                   .getInterface(Ci.nsIWebNavigation)
-                                   .QueryInterface(Ci.nsIDocShell)
-                                   .chromeEventHandler;
-  return containingBrowser.ownerDocument.defaultView;
+  return getContainingBrowser(domWindow).ownerDocument.defaultView;
+}
+
+function getFindBar(domWindow) {
+  var browser = getContainingBrowser(domWindow);
+  try {
+    var tabbrowser = browser.getTabBrowser();
+    var tab = tabbrowser._getTabForBrowser(browser);
+    return tabbrowser.getFindBar(tab);
+  } catch (e) {
+    // FF22 has no _getTabForBrowser, and FF24 has no getFindBar
+    var chromeWindow = browser.ownerDocument.defaultView;
+    return chromeWindow.gFindBar;
+  }
 }
 
 function setBoolPref(pref, value) {
@@ -142,6 +158,10 @@ function getLocalizedString(strings, id, property) {
   if (id in strings)
     return strings[id][property];
   return id;
+}
+
+function makeContentReadable(obj, window) {
+  return Cu.cloneInto(obj, window);
 }
 
 // PDF data storage
@@ -274,9 +294,10 @@ ChromeActions.prototype = {
       var listener = {
         extListener: null,
         onStartRequest: function(aRequest, aContext) {
-          this.extListener = extHelperAppSvc.doContent((data.isAttachment ? '' :
-                                                        'application/pdf'),
-                                aRequest, frontWindow, false);
+          this.extListener = extHelperAppSvc.doContent(
+            (data.isAttachment ? 'application/octet-stream' :
+                                 'application/pdf'),
+            aRequest, frontWindow, false);
           this.extListener.onStartRequest(aRequest, aContext);
         },
         onStopRequest: function(aRequest, aContext, aStatusCode) {
@@ -316,11 +337,13 @@ ChromeActions.prototype = {
     return getBoolPref(PREF_PREFIX + '.pdfBugEnabled', false);
   },
   supportsIntegratedFind: function() {
-    // Integrated find is only supported when we're not in a frame and when the
-    // new find events code exists.
-    return this.domWindow.frameElement === null &&
-           getChromeWindow(this.domWindow).gFindBar &&
-           'updateControlState' in getChromeWindow(this.domWindow).gFindBar;
+    // Integrated find is only supported when we're not in a frame
+    if (this.domWindow.frameElement !== null) {
+      return false;
+    }
+    // ... and when the new find events code exists.
+    var findBar = getFindBar(this.domWindow);
+    return findBar && ('updateControlState' in findBar);
   },
   supportsDocumentFonts: function() {
     var prefBrowser = getIntPref('browser.display.use_document_fonts', 1);
@@ -437,8 +460,7 @@ ChromeActions.prototype = {
         (findPreviousType !== 'undefined' && findPreviousType !== 'boolean')) {
       return;
     }
-    getChromeWindow(this.domWindow).gFindBar
-                                   .updateControlState(result, findPrevious);
+    getFindBar(this.domWindow).updateControlState(result, findPrevious);
   },
   setPreferences: function(prefs, sendResponse) {
     var defaultBranch = Services.prefs.getDefaultBranch(PREF_PREFIX + '.');
@@ -668,7 +690,7 @@ var StandardChromeActions = (function StandardChromeActionsClosure() {
   return StandardChromeActions;
 })();
 
-// Event listener to trigger chrome privedged code.
+// Event listener to trigger chrome privileged code.
 function RequestListener(actions) {
   this.actions = actions;
 }
@@ -686,21 +708,18 @@ RequestListener.prototype.receive = function(event) {
   }
   if (sync) {
     var response = actions[action].call(this.actions, data);
-    var detail = event.detail;
-    detail.__exposedProps__ = {response: 'r'};
-    detail.response = response;
+    event.detail.response = response;
   } else {
     var response;
-    if (!event.detail.callback) {
+    if (!event.detail.responseExpected) {
       doc.documentElement.removeChild(message);
       response = null;
     } else {
       response = function sendResponse(response) {
         try {
           var listener = doc.createEvent('CustomEvent');
-          listener.initCustomEvent('pdf.js.response', true, false,
-                                   {response: response,
-                                    __exposedProps__: {response: 'r'}});
+          let detail = makeContentReadable({response: response}, doc.defaultView);
+          listener.initCustomEvent('pdf.js.response', true, false, detail);
           return message.dispatchEvent(listener);
         } catch (e) {
           // doc is no longer accessible because the requestor is already
@@ -743,13 +762,13 @@ FindEventManager.prototype.handleEvent = function(e) {
   var contentWindow = this.contentWindow;
   // Only forward the events if they are for our dom window.
   if (chromeWindow.gBrowser.selectedBrowser.contentWindow === contentWindow) {
-    var detail = e.detail;
-    detail.__exposedProps__ = {
-      query: 'r',
-      caseSensitive: 'r',
-      highlightAll: 'r',
-      findPrevious: 'r'
+    var detail = {
+      query: e.detail.query,
+      caseSensitive: e.detail.caseSensitive,
+      highlightAll: e.detail.highlightAll,
+      findPrevious: e.detail.findPrevious
     };
+    detail = makeContentReadable(detail, contentWindow);
     var forward = contentWindow.document.createEvent('CustomEvent');
     forward.initCustomEvent(e.type, true, true, detail);
     contentWindow.dispatchEvent(forward);
@@ -916,7 +935,8 @@ PdfStreamConverter.prototype = {
         }, false, true);
         if (actions.supportsIntegratedFind()) {
           var chromeWindow = getChromeWindow(domWindow);
-          var findEventManager = new FindEventManager(chromeWindow.gFindBar,
+          var findBar = getFindBar(domWindow);
+          var findEventManager = new FindEventManager(findBar,
                                                       domWindow,
                                                       chromeWindow);
           findEventManager.bind();
@@ -958,3 +978,4 @@ PdfStreamConverter.prototype = {
     delete this.binaryStream;
   }
 };
+

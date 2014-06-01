@@ -115,12 +115,11 @@ public:
     virtual bool RecvMoveFocus(const bool& aForward) MOZ_OVERRIDE;
     virtual bool RecvEvent(const RemoteDOMEvent& aEvent) MOZ_OVERRIDE;
     virtual bool RecvReplyKeyEvent(const WidgetKeyboardEvent& event);
-    virtual bool RecvPRenderFrameConstructor(PRenderFrameParent* actor) MOZ_OVERRIDE;
-    virtual bool RecvInitRenderFrame(PRenderFrameParent* aFrame,
-                                     ScrollingBehavior* scrolling,
-                                     TextureFactoryIdentifier* identifier,
-                                     uint64_t* layersId,
-                                     bool *aSuccess) MOZ_OVERRIDE;
+    virtual bool RecvPRenderFrameConstructor(PRenderFrameParent* aActor,
+                                             ScrollingBehavior* aScrolling,
+                                             TextureFactoryIdentifier* aFactoryIdentifier,
+                                             uint64_t* aLayersId,
+                                             bool* aSuccess) MOZ_OVERRIDE;
     virtual bool RecvBrowserFrameOpenWindow(PBrowserParent* aOpener,
                                             const nsString& aURL,
                                             const nsString& aName,
@@ -169,7 +168,7 @@ public:
                                      const int32_t& aCause,
                                      const int32_t& aFocusChange) MOZ_OVERRIDE;
     virtual bool RecvRequestFocus(const bool& aCanRaise) MOZ_OVERRIDE;
-    virtual bool RecvSetCursor(const uint32_t& aValue) MOZ_OVERRIDE;
+    virtual bool RecvSetCursor(const uint32_t& aValue, const bool& aForce) MOZ_OVERRIDE;
     virtual bool RecvSetBackgroundColor(const nscolor& aValue) MOZ_OVERRIDE;
     virtual bool RecvSetStatus(const uint32_t& aType, const nsString& aStatus) MOZ_OVERRIDE;
     virtual bool RecvIsParentWindowMainWidgetVisible(bool* aIsVisible);
@@ -199,6 +198,7 @@ public:
     void Show(const nsIntSize& size);
     void UpdateDimensions(const nsRect& rect, const nsIntSize& size);
     void UpdateFrame(const layers::FrameMetrics& aFrameMetrics);
+    void UIResolutionChanged();
     void AcknowledgeScrollUpdate(const ViewID& aScrollId, const uint32_t& aScrollGeneration);
     void HandleDoubleTap(const CSSPoint& aPoint,
                          int32_t aModifiers,
@@ -328,7 +328,10 @@ protected:
     bool AllowContentIME();
     nsIntPoint GetChildProcessOffset();
 
-    virtual PRenderFrameParent* AllocPRenderFrameParent() MOZ_OVERRIDE;
+    virtual PRenderFrameParent* AllocPRenderFrameParent(ScrollingBehavior* aScrolling,
+                                                        TextureFactoryIdentifier* aTextureFactoryIdentifier,
+                                                        uint64_t* aLayersId,
+                                                        bool* aSuccess) MOZ_OVERRIDE;
     virtual bool DeallocPRenderFrameParent(PRenderFrameParent* aFrame) MOZ_OVERRIDE;
 
     // IME
@@ -378,8 +381,8 @@ private:
     // |aOutTargetGuid| will contain the identifier
     // of the APZC instance that handled the event. aOutTargetGuid may be
     // null.
-    void MaybeForwardEventToRenderFrame(WidgetInputEvent& aEvent,
-                                        ScrollableLayerGuid* aOutTargetGuid);
+    nsEventStatus MaybeForwardEventToRenderFrame(WidgetInputEvent& aEvent,
+                                                 ScrollableLayerGuid* aOutTargetGuid);
     // The offset for the child process which is sampled at touch start. This
     // means that the touch events are relative to where the frame was at the
     // start of the touch. We need to look for a better solution to this

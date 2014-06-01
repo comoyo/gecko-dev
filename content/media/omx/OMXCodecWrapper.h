@@ -254,9 +254,13 @@ public:
    * before calling Encode() and GetNextEncodedFrame().
    * aBlobFormat specifies output blob format provided by encoder. It can be
    * AVC_MP4 or AVC_NAL.
+   * Configure sets up most format value to values appropriate for camera use.
+   * ConfigureDirect lets the caller determine all the defaults.
    */
   nsresult Configure(int aWidth, int aHeight, int aFrameRate,
                      BlobFormat aBlobFormat = BlobFormat::AVC_MP4);
+  nsresult ConfigureDirect(sp<AMessage>& aFormat,
+                           BlobFormat aBlobFormat = BlobFormat::AVC_MP4);
 
   /**
    * Encode a aWidth pixels wide and aHeight pixels tall video frame of
@@ -273,10 +277,10 @@ public:
 #endif
 
   /**
-   * Get current AVC codec config blob. The output format depends on the
-   * aBlobFormat argument given when Configure() was called.
+   * Ask codec to generate an instantaneous decoding refresh (IDR) frame
+   * (defined in ISO/IEC 14496-10).
    */
-  nsresult GetCodecConfig(nsTArray<uint8_t>* aOutputBuf);
+  nsresult RequestIDRFrame();
 
 protected:
   virtual status_t AppendDecoderConfig(nsTArray<uint8_t>* aOutputBuf,
@@ -303,7 +307,6 @@ private:
     , mWidth(0)
     , mHeight(0)
     , mBlobFormat(BlobFormat::AVC_MP4)
-    , mHasConfigBlob(false)
   {}
 
   // For creator function to access hidden constructor.
@@ -312,7 +315,6 @@ private:
   int mWidth;
   int mHeight;
   BlobFormat mBlobFormat;
-  bool mHasConfigBlob;
 };
 
 } // namespace android

@@ -49,7 +49,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "gCrashReporter",
                                    "nsICrashReporter");
 
 const FILE_CACHE                = "experiments.json";
-const OBSERVER_TOPIC            = "experiments-changed";
+const EXPERIMENTS_CHANGED_TOPIC = "experiments-changed";
 const MANIFEST_VERSION          = 1;
 const CACHE_VERSION             = 1;
 
@@ -114,6 +114,7 @@ let gLogAppenderDump = null;
 let gPolicyCounter = 0;
 let gExperimentsCounter = 0;
 let gExperimentEntryCounter = 0;
+let gPreviousProviderCounter = 0;
 
 // Tracks active AddonInstall we know about so we can deny external
 // installs.
@@ -335,11 +336,14 @@ Experiments.Policy.prototype = {
 };
 
 function AlreadyShutdownError(message="already shut down") {
+  Error.call(this, message);
+  let error = new Error();
   this.name = "AlreadyShutdownError";
   this.message = message;
+  this.stack = error.stack;
 }
 
-AlreadyShutdownError.prototype = new Error();
+AlreadyShutdownError.prototype = Object.create(Error.prototype);
 AlreadyShutdownError.prototype.constructor = AlreadyShutdownError;
 
 /**
@@ -378,6 +382,10 @@ Experiments.Experiments = function (policy=new Experiments.Policy()) {
 
   this._shutdown = false;
 
+  // We need to tell when we first evaluated the experiments to fire an
+  // experiments-changed notification when we only loaded completed experiments.
+  this._firstEvaluate = true;
+
   this.init();
 };
 
@@ -402,22 +410,19 @@ Experiments.Experiments.prototype = {
 
     this._registerWithAddonManager();
 
-    let deferred = Promise.defer();
-
     this._loadTask = this._loadFromCache();
-    this._loadTask.then(
+
+    return this._loadTask.then(
       () => {
         this._log.trace("_loadTask finished ok");
         this._loadTask = null;
-        this._run().then(deferred.resolve, deferred.reject);
+        return this._run();
       },
       (e) => {
         this._log.error("_loadFromCache caught error: " + e);
-        deferred.reject(e);
+        throw e;
       }
     );
-
-    return deferred.promise;
   },
 
   /**
@@ -464,7 +469,7 @@ Experiments.Experiments.prototype = {
     this._log.info("Completed uninitialization.");
   }),
 
-  _registerWithAddonManager: function () {
+  _registerWithAddonManager: function (previousExperimentsProvider) {
     this._log.trace("Registering instance with Addon Manager.");
 
     AddonManager.addAddonListener(this);
@@ -474,15 +479,15 @@ Experiments.Experiments.prototype = {
       // The properties of this AddonType should be kept in sync with the
       // experiment AddonType registered in XPIProvider.
       this._log.trace("Registering previous experiment add-on provider.");
-      gAddonProvider = new Experiments.PreviousExperimentProvider(this, [
+      gAddonProvider = previousExperimentsProvider || new Experiments.PreviousExperimentProvider(this);
+      AddonManagerPrivate.registerProvider(gAddonProvider, [
           new AddonManagerPrivate.AddonType("experiment",
                                             URI_EXTENSION_STRINGS,
                                             STRING_TYPE_NAME,
                                             AddonManager.VIEW_TYPE_LIST,
                                             11000,
                                             AddonManager.TYPE_UI_HIDE_EMPTY),
-        ]);
-      AddonManagerPrivate.registerProvider(gAddonProvider);
+      ]);
     }
 
   },
@@ -498,6 +503,15 @@ Experiments.Experiments.prototype = {
 
     AddonManager.removeInstallListener(this);
     AddonManager.removeAddonListener(this);
+  },
+
+  /*
+   * Change the PreviousExperimentsProvider that this instance uses.
+   * For testing only.
+   */
+  _setPreviousExperimentsProvider: function (provider) {
+    this._unregisterWithAddonManager();
+    this._registerWithAddonManager(provider);
   },
 
   /**
@@ -656,18 +670,22 @@ Experiments.Experiments.prototype = {
     this._log.trace("_run");
     this._checkForShutdown();
     if (!this._mainTask) {
-      this._mainTask = Task.spawn(this._main.bind(this));
-      this._mainTask.then(
-        () => {
-          this._log.trace("_main finished, scheduling next run");
-          this._mainTask = null;
-          this._scheduleNextRun();
-        },
-        (e) => {
+      this._mainTask = Task.spawn(function*() {
+        try {
+          yield this._main();
+        } catch (e) {
           this._log.error("_main caught error: " + e);
+          return;
+        } finally {
           this._mainTask = null;
         }
-      );
+        this._log.trace("_main finished, scheduling next run");
+        try {
+          yield this._scheduleNextRun();
+        } catch (ex if ex instanceof AlreadyShutdownError) {
+          // We error out of tasks after shutdown via that exception.
+        }
+      }.bind(this));
     }
     return this._mainTask;
   },
@@ -984,6 +1002,17 @@ Experiments.Experiments.prototype = {
     this._dirty = true;
   },
 
+  getActiveExperimentID: function() {
+    if (!this._experiments) {
+      return null;
+    }
+    let e = this._getActiveExperiment();
+    if (!e) {
+      return null;
+    }
+    return e.id;
+  },
+
   _getActiveExperiment: function () {
     let enabled = [experiment for ([,experiment] of this._experiments) if (experiment._enabled)];
 
@@ -1150,12 +1179,17 @@ Experiments.Experiments.prototype = {
 
     gPrefs.set(PREF_ACTIVE_EXPERIMENT, activeExperiment != null);
 
-    if (activeChanged) {
-      Services.obs.notifyObservers(null, OBSERVER_TOPIC, null);
+    if (activeChanged || this._firstEvaluate) {
+      Services.obs.notifyObservers(null, EXPERIMENTS_CHANGED_TOPIC, null);
+      this._firstEvaluate = false;
     }
 
     if ("@mozilla.org/toolkit/crash-reporter;1" in Cc && activeExperiment) {
-      gCrashReporter.annotateCrashReport("ActiveExperiment", activeExperiment.id);
+      try {
+        gCrashReporter.annotateCrashReport("ActiveExperiment", activeExperiment.id);
+      } catch (e) {
+        // It's ok if crash reporting is disabled.
+      }
     }
   },
 
@@ -1970,7 +2004,7 @@ ExperimentsProvider.prototype = Object.freeze({
   ],
 
   _OBSERVERS: [
-    OBSERVER_TOPIC,
+    EXPERIMENTS_CHANGED_TOPIC,
   ],
 
   postInit: function () {
@@ -1991,7 +2025,7 @@ ExperimentsProvider.prototype = Object.freeze({
 
   observe: function (subject, topic, data) {
     switch (topic) {
-      case OBSERVER_TOPIC:
+      case EXPERIMENTS_CHANGED_TOPIC:
         this.recordLastActiveExperiment();
         break;
     }
@@ -2040,26 +2074,40 @@ ExperimentsProvider.prototype = Object.freeze({
  */
 this.Experiments.PreviousExperimentProvider = function (experiments) {
   this._experiments = experiments;
+  this._experimentList = [];
+  this._log = Log.repository.getLoggerWithMessagePrefix(
+    "Browser.Experiments.Experiments",
+    "PreviousExperimentProvider #" + gPreviousProviderCounter++ + "::");
 }
 
 this.Experiments.PreviousExperimentProvider.prototype = Object.freeze({
-  startup: function () {},
-  shutdown: function () {},
+  startup: function () {
+    this._log.trace("startup()");
+    Services.obs.addObserver(this, EXPERIMENTS_CHANGED_TOPIC, false);
+  },
+
+  shutdown: function () {
+    this._log.trace("shutdown()");
+    Services.obs.removeObserver(this, EXPERIMENTS_CHANGED_TOPIC);
+  },
+
+  observe: function (subject, topic, data) {
+    switch (topic) {
+      case EXPERIMENTS_CHANGED_TOPIC:
+        this._updateExperimentList();
+        break;
+    }
+  },
 
   getAddonByID: function (id, cb) {
-    this._getPreviousExperiments().then((experiments) => {
-      for (let experiment of experiments) {
-        if (experiment.id == id) {
-          cb(new PreviousExperimentAddon(experiment));
-          return;
-        }
+    for (let experiment of this._experimentList) {
+      if (experiment.id == id) {
+        cb(new PreviousExperimentAddon(experiment));
+        return;
       }
+    }
 
-      cb(null);
-    },
-    (error) => {
-      cb(null);
-    });
+    cb(null);
   },
 
   getAddonsByTypes: function (types, cb) {
@@ -2068,17 +2116,45 @@ this.Experiments.PreviousExperimentProvider.prototype = Object.freeze({
       return;
     }
 
-    this._getPreviousExperiments().then((experiments) => {
-      cb([new PreviousExperimentAddon(e) for (e of experiments)]);
-    },
-    (error) => {
-      cb([]);
-    });
+    cb([new PreviousExperimentAddon(e) for (e of this._experimentList)]);
   },
 
-  _getPreviousExperiments: function () {
+  _updateExperimentList: function () {
     return this._experiments.getExperiments().then((experiments) => {
-      return Promise.resolve([e for (e of experiments) if (!e.active)]);
+      let list = [e for (e of experiments) if (!e.active)];
+
+      let newMap = new Map([[e.id, e] for (e of list)]);
+      let oldMap = new Map([[e.id, e] for (e of this._experimentList)]);
+
+      let added = [e.id for (e of list) if (!oldMap.has(e.id))];
+      let removed = [e.id for (e of this._experimentList) if (!newMap.has(e.id))];
+
+      for (let id of added) {
+        this._log.trace("updateExperimentList() - adding " + id);
+        let wrapper = new PreviousExperimentAddon(newMap.get(id));
+        AddonManagerPrivate.callInstallListeners("onExternalInstall", null, wrapper, null, false);
+        AddonManagerPrivate.callAddonListeners("onInstalling", wrapper, false);
+      }
+
+      for (let id of removed) {
+        this._log.trace("updateExperimentList() - removing " + id);
+        let wrapper = new PreviousExperimentAddon(oldMap.get(id));
+        AddonManagerPrivate.callAddonListeners("onUninstalling", plugin, false);
+      }
+
+      this._experimentList = list;
+
+      for (let id of added) {
+        let wrapper = new PreviousExperimentAddon(newMap.get(id));
+        AddonManagerPrivate.callAddonListeners("onInstalled", wrapper);
+      }
+
+      for (let id of removed) {
+        let wrapper = new PreviousExperimentAddon(oldMap.get(id));
+        AddonManagerPrivate.callAddonListeners("onUninstalled", wrapper);
+      }
+
+      return this._experimentList;
     });
   },
 });

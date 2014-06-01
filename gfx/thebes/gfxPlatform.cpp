@@ -7,6 +7,7 @@
 #define FORCE_PR_LOG /* Allow logging in the release build */
 #endif
 
+#include "mozilla/layers/AsyncTransactionTracker.h" // for AsyncTransactionTracker
 #include "mozilla/layers/CompositorChild.h"
 #include "mozilla/layers/CompositorParent.h"
 #include "mozilla/layers/ImageBridgeChild.h"
@@ -335,6 +336,8 @@ gfxPlatform::Init()
 
     gGfxPlatformPrefsLock = new Mutex("gfxPlatform::gGfxPlatformPrefsLock");
 
+    AsyncTransactionTrackersHolder::Initialize();
+
     /* Initialize the GfxInfo service.
      * Note: we can't call functions on GfxInfo that depend
      * on gPlatform until after it has been initialized
@@ -496,14 +499,6 @@ gfxPlatform::Shutdown()
     // WebGL on Optimus.
     mozilla::gl::GLContextProviderEGL::Shutdown();
 #endif
-
-    // This will block this thread untill the ImageBridge protocol is completely
-    // deleted.
-    ImageBridgeChild::ShutDown();
-#ifdef MOZ_WIDGET_GONK
-    SharedBufferManagerChild::ShutDown();
-#endif
-    CompositorParent::ShutDown();
 
     delete gGfxPlatformPrefsLock;
 
@@ -734,6 +729,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     surf.mFormat = format;
     surf.mType = NativeSurfaceType::D3D10_TEXTURE;
     surf.mSurface = static_cast<gfxD2DSurface*>(aSurface)->GetTexture();
+    surf.mSize = ToIntSize(aSurface->GetSize());
     mozilla::gfx::DrawTarget *dt = static_cast<mozilla::gfx::DrawTarget*>(aSurface->GetData(&kDrawTarget));
     if (dt) {
       dt->Flush();
@@ -748,6 +744,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     surf.mFormat = format;
     surf.mType = NativeSurfaceType::CAIRO_SURFACE;
     surf.mSurface = aSurface->CairoSurface();
+    surf.mSize = ToIntSize(aSurface->GetSize());
     srcBuffer = aTarget->CreateSourceSurfaceFromNativeSurface(surf);
 
     if (srcBuffer) {
@@ -1172,7 +1169,7 @@ AppendGenericFontFromPref(nsString& aFonts, nsIAtom *aLangGroup, const char *aGe
         genericDotLang = Preferences::GetCString(prefName.get());
     }
 
-    genericDotLang.AppendLiteral(".");
+    genericDotLang.Append('.');
     genericDotLang.Append(langGroupString);
 
     // fetch font.name.xxx value
@@ -1222,7 +1219,7 @@ bool gfxPlatform::ForEachPrefFont(eFontPrefLang aLangArray[], uint32_t aLangArra
         prefName.Append(langGroup);
         nsAdoptingCString genericDotLang = Preferences::GetCString(prefName.get());
 
-        genericDotLang.AppendLiteral(".");
+        genericDotLang.Append('.');
         genericDotLang.Append(langGroup);
 
         // fetch font.name.xxx value
@@ -1991,6 +1988,7 @@ gfxPlatform::OptimalFormatForContent(gfxContentType aContent)
  * not have any effect until we restart.
  */
 static bool sLayersSupportsD3D9 = false;
+static bool sLayersSupportsD3D11 = false;
 static bool sBufferRotationCheckPref = true;
 static bool sPrefBrowserTabsRemoteAutostart = false;
 
@@ -2012,6 +2010,7 @@ InitLayersAccelerationPrefs()
 #ifdef XP_WIN
     if (gfxPrefs::LayersAccelerationForceEnabled()) {
       sLayersSupportsD3D9 = true;
+      sLayersSupportsD3D11 = true;
     } else {
       nsCOMPtr<nsIGfxInfo> gfxInfo = do_GetService("@mozilla.org/gfx/info;1");
       if (gfxInfo) {
@@ -2019,6 +2018,11 @@ InitLayersAccelerationPrefs()
         if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_9_LAYERS, &status))) {
           if (status == nsIGfxInfo::FEATURE_NO_INFO) {
             sLayersSupportsD3D9 = true;
+          }
+        }
+        if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS, &status))) {
+          if (status == nsIGfxInfo::FEATURE_NO_INFO) {
+            sLayersSupportsD3D11 = true;
           }
         }
       }
@@ -2057,6 +2061,15 @@ gfxPlatform::CanUseDirect3D9()
   // safe to init the prefs etc. from here.
   MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
   return sLayersSupportsD3D9;
+}
+
+bool
+gfxPlatform::CanUseDirect3D11()
+{
+  // this function is called from the compositor thread, so it is not
+  // safe to init the prefs etc. from here.
+  MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
+  return sLayersSupportsD3D11;
 }
 
 bool

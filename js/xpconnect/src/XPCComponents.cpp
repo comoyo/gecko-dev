@@ -13,6 +13,7 @@
 #include "nsJSUtils.h"
 #include "mozJSComponentLoader.h"
 #include "nsContentUtils.h"
+#include "JavaScriptParent.h"
 #include "jsfriendapi.h"
 #include "js/StructuredClone.h"
 #include "mozilla/Attributes.h"
@@ -26,6 +27,8 @@
 #include "nsIDOMFile.h"
 #include "nsIDOMFileList.h"
 #include "nsWindowMemoryReporter.h"
+#include "nsDOMClassInfo.h"
+#include "ShimInterfaceInfo.h"
 
 using namespace mozilla;
 using namespace JS;
@@ -303,9 +306,12 @@ nsXPCComponents_Interfaces::NewResolve(nsIXPConnectWrappedNative *wrapper,
 
     // we only allow interfaces by name here
     if (name.encodeLatin1(cx, str) && name.ptr()[0] != '{') {
-        nsCOMPtr<nsIInterfaceInfo> info;
-        XPTInterfaceInfoManager::GetSingleton()->
-            GetInfoForName(name.ptr(), getter_AddRefs(info));
+        nsCOMPtr<nsIInterfaceInfo> info =
+            ShimInterfaceInfo::MaybeConstruct(name.ptr(), cx);
+        if (!info) {
+            XPTInterfaceInfoManager::GetSingleton()->
+                GetInfoForName(name.ptr(), getter_AddRefs(info));
+        }
         if (!info)
             return NS_OK;
 
@@ -1486,8 +1492,7 @@ nsXPCComponents_ID::CallOrConstruct(nsIXPConnectWrappedNative *wrapper,
 
     // Do the security check if necessary
 
-    nsIXPCSecurityManager* sm = nsXPConnect::XPConnect()->GetDefaultSecurityManager();
-    if (sm && NS_FAILED(sm->CanCreateInstance(cx, nsJSID::GetCID()))) {
+    if (NS_FAILED(nsXPConnect::SecurityManager()->CanCreateInstance(cx, nsJSID::GetCID()))) {
         // the security manager vetoed. It should have set an exception.
         *_retval = false;
         return NS_OK;
@@ -1850,8 +1855,7 @@ nsXPCComponents_Exception::CallOrConstruct(nsIXPConnectWrappedNative *wrapper,
 
     // Do the security check if necessary
 
-    nsIXPCSecurityManager* sm = xpc->GetDefaultSecurityManager();
-    if (sm && NS_FAILED(sm->CanCreateInstance(cx, Exception::GetCID()))) {
+    if (NS_FAILED(nsXPConnect::SecurityManager()->CanCreateInstance(cx, Exception::GetCID()))) {
         // the security manager vetoed. It should have set an exception.
         *_retval = false;
         return NS_OK;
@@ -2143,7 +2147,7 @@ nsXPCConstructor::CallOrConstruct(nsIXPConnectWrappedNative *wrapper,JSContext *
 
     JS::Rooted<JS::Value> arg(cx, ObjectValue(*iidObj));
     RootedValue rval(cx);
-    if (!JS_CallFunctionName(cx, cidObj, "createInstance", arg, &rval) ||
+    if (!JS_CallFunctionName(cx, cidObj, "createInstance", JS::HandleValueArray(arg), &rval) ||
         rval.isPrimitive()) {
         // createInstance will have thrown an exception
         *_retval = false;
@@ -2359,8 +2363,7 @@ nsXPCComponents_Constructor::CallOrConstruct(nsIXPConnectWrappedNative *wrapper,
 
     // Do the security check if necessary
 
-    nsIXPCSecurityManager* sm = xpc->GetDefaultSecurityManager();
-    if (sm && NS_FAILED(sm->CanCreateInstance(cx, nsXPCConstructor::GetCID()))) {
+    if (NS_FAILED(nsXPConnect::SecurityManager()->CanCreateInstance(cx, nsXPCConstructor::GetCID()))) {
         // the security manager vetoed. It should have set an exception.
         *_retval = false;
         return NS_OK;
@@ -2722,6 +2725,18 @@ nsXPCComponents_Utils::Import(const nsACString& registryLocation,
     return moduleloader->Import(registryLocation, targetObj, cx, optionalArgc, retval);
 }
 
+/* boolean isModuleLoaded (in AUTF8String registryLocation);
+ */
+NS_IMETHODIMP
+nsXPCComponents_Utils::IsModuleLoaded(const nsACString& registryLocation, bool *retval)
+{
+    nsCOMPtr<xpcIJSModuleLoader> moduleloader =
+        do_GetService(MOZJSCOMPONENTLOADER_CONTRACTID);
+    if (!moduleloader)
+        return NS_ERROR_FAILURE;
+    return moduleloader->IsModuleLoaded(registryLocation, retval);
+}
+
 /* unload (in AUTF8String registryLocation);
  */
 NS_IMETHODIMP
@@ -2783,6 +2798,22 @@ NS_IMETHODIMP
 nsXPCComponents_Utils::ForceCC()
 {
     nsJSContext::CycleCollectNow();
+    return NS_OK;
+}
+
+/* void finishCC(); */
+NS_IMETHODIMP
+nsXPCComponents_Utils::FinishCC()
+{
+    nsCycleCollector_finishAnyCurrentCollection();
+    return NS_OK;
+}
+
+/* void ccSlice(in long long budget); */
+NS_IMETHODIMP
+nsXPCComponents_Utils::CcSlice(int64_t budget)
+{
+    nsJSContext::RunCycleCollectorWorkSlice(budget);
     return NS_OK;
 }
 
@@ -2913,7 +2944,7 @@ nsXPCComponents_Utils::GetGlobalForObject(HandleValue object,
         return NS_ERROR_FAILURE;
 
     // Outerize if necessary.
-    if (JSObjectOp outerize = js::GetObjectClass(obj)->ext.outerObject)
+    if (js::ObjectOp outerize = js::GetObjectClass(obj)->ext.outerObject)
       obj = outerize(cx, obj);
 
     retval.setObject(*obj);
@@ -3077,6 +3108,17 @@ nsXPCComponents_Utils::IsDeadWrapper(HandleValue obj, bool *out)
     // wrapper, meaning that, if passed to another compartment, we'll generate
     // a CCW for it. Make sure that IsDeadWrapper sees through the confusion.
     *out = JS_IsDeadWrapper(js::CheckedUnwrap(&obj.toObject()));
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXPCComponents_Utils::IsCrossProcessWrapper(HandleValue obj, bool *out)
+{
+    *out = false;
+    if (obj.isPrimitive())
+        return NS_ERROR_INVALID_ARG;
+
+    *out = jsipc::IsCPOW(js::CheckedUnwrap(&obj.toObject()));
     return NS_OK;
 }
 
@@ -3341,7 +3383,7 @@ nsXPCComponents_Utils::GetIncumbentGlobal(HandleValue aCallback,
     // Invoke the callback, if passed.
     if (aCallback.isObject()) {
         RootedValue ignored(aCx);
-        if (!JS_CallFunctionValue(aCx, JS::NullPtr(), aCallback, globalVal, &ignored))
+        if (!JS_CallFunctionValue(aCx, JS::NullPtr(), aCallback, JS::HandleValueArray(globalVal), &ignored))
             return NS_ERROR_FAILURE;
     }
 
@@ -3613,7 +3655,7 @@ nsXPCComponents_Utils::GetObjectPrincipal(HandleValue val, JSContext *cx,
     obj = js::CheckedUnwrap(obj);
     MOZ_ASSERT(obj);
 
-    nsCOMPtr<nsIPrincipal> prin = nsContentUtils::GetObjectPrincipal(obj);
+    nsCOMPtr<nsIPrincipal> prin = nsContentUtils::ObjectPrincipal(obj);
     prin.forget(result);
     return NS_OK;
 }

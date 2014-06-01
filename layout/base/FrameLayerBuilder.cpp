@@ -26,7 +26,7 @@
 #include "GeckoProfiler.h"
 #include "mozilla/gfx/Tools.h"
 #include "mozilla/gfx/2D.h"
-#include "mozilla/Preferences.h"
+#include "gfxPrefs.h"
 
 #include <algorithm>
 
@@ -1472,6 +1472,11 @@ ContainerState::CreateOrRecycleThebesLayer(const nsIFrame* aAnimatedGeometryRoot
     if (!FuzzyEqual(data->mXScale, mParameters.mXScale, 0.00001f) ||
         !FuzzyEqual(data->mYScale, mParameters.mYScale, 0.00001f) ||
         data->mAppUnitsPerDevPixel != mAppUnitsPerDevPixel) {
+#ifdef MOZ_DUMP_PAINTING
+    if (nsLayoutUtils::InvalidationDebuggingIsEnabled()) {
+      printf_stderr("Recycled layer %p changed scale\n", layer.get());
+    }
+#endif
       InvalidateEntireThebesLayer(layer, aAnimatedGeometryRoot);
 #ifndef MOZ_ANDROID_OMTC
       didResetScrollPositionForLayerPixelAlignment = true;
@@ -1835,6 +1840,9 @@ AddTransformedBoundsToRegion(const nsIntRegion& aRegion,
                              nsIntRegion* aDest)
 {
   nsIntRect bounds = aRegion.GetBounds();
+  if (bounds.IsEmpty()) {
+    return;
+  }
   gfxRect transformed =
     aTransform.TransformBounds(gfxRect(bounds.x, bounds.y, bounds.width, bounds.height));
   transformed.RoundOut();
@@ -2302,7 +2310,7 @@ static void
 DumpPaintedImage(nsDisplayItem* aItem, gfxASurface* aSurf)
 {
   nsCString string(aItem->Name());
-  string.Append("-");
+  string.Append('-');
   string.AppendInt((uint64_t)aItem);
   fprintf_stderr(gfxUtils::sDumpPaintFile, "array[\"%s\"]=\"", string.BeginReading());
   aSurf->DumpAsDataURL(gfxUtils::sDumpPaintFile);
@@ -3107,7 +3115,9 @@ ChooseScaleAndSetTransform(FrameLayerBuilder* aLayerBuilder,
     // Set any matrix entries close to integers to be those exact integers.
     // This protects against floating-point inaccuracies causing problems
     // in the checks below.
-    transform.NudgeToIntegers();
+    // We use the fixed epsilon version here because we don't want the nudging
+    // to depend on the scroll position.
+    transform.NudgeToIntegersFixedEpsilon();
   }
   gfxMatrix transform2d;
   if (aContainerFrame &&
@@ -3705,14 +3715,7 @@ FrameLayerBuilder::PaintItems(nsTArray<ClippedDisplayItem>& aItems,
  */
 static bool ShouldDrawRectsSeparately(gfxContext* aContext, DrawRegionClip aClip)
 {
-  static bool sPaintRectsSeparately;
-  static bool sPaintRectsSeparatelyPrefCached = false;
-  if (!sPaintRectsSeparatelyPrefCached) {
-    mozilla::Preferences::AddBoolVarCache(&sPaintRectsSeparately, "layout.paint_rects_separately", false);
-    sPaintRectsSeparatelyPrefCached = true;
-  }
-
-  if (!sPaintRectsSeparately ||
+  if (!gfxPrefs::LayoutPaintRectsSeparately() ||
       aContext->IsCairo() ||
       aClip == DrawRegionClip::CLIP_NONE) {
     return false;
@@ -3854,6 +3857,14 @@ FrameLayerBuilder::DrawThebesLayer(ThebesLayer* aLayer,
   }
 
   if (presContext->GetPaintFlashing()) {
+    gfxContextAutoSaveRestore save(aContext);
+    if (shouldDrawRectsSeparately) {
+      if (aClip == DrawRegionClip::DRAW_SNAPPED) {
+        gfxUtils::ClipToRegionSnapped(aContext, aRegionToDraw);
+      } else if (aClip == DrawRegionClip::DRAW) {
+        gfxUtils::ClipToRegion(aContext, aRegionToDraw);
+      }
+    }
     FlashPaint(aContext);
   }
 

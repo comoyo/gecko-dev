@@ -107,6 +107,7 @@ BaselineCompiler::compile()
         return Method_Error;
 
     Linker linker(masm);
+    AutoFlushICache afc("Baseline");
     JitCode *code = linker.newCode<CanGC>(cx, JSC::BASELINE_CODE);
     if (!code)
         return Method_Error;
@@ -349,7 +350,7 @@ BaselineCompiler::emitPrologue()
 
     // Record the offset of the prologue, because Ion can bailout before
     // the scope chain is initialized.
-    prologueOffset_ = masm.currentOffset();
+    prologueOffset_ = CodeOffsetLabel(masm.currentOffset());
 
     // Initialize the scope chain before any operation that may
     // call into the VM and trigger a GC.
@@ -379,7 +380,7 @@ BaselineCompiler::emitEpilogue()
 {
     // Record the offset of the epilogue, so we can do early return from
     // Debugger handlers during on-stack recompile.
-    epilogueOffset_ = masm.currentOffset();
+    epilogueOffset_ = CodeOffsetLabel(masm.currentOffset());
 
     masm.bind(&return_);
 
@@ -453,7 +454,7 @@ BaselineCompiler::emitIC(ICStub *stub, ICEntry::Kind kind)
 
     CodeOffsetLabel patchOffset;
     EmitCallIC(&patchOffset, masm);
-    entry->setReturnOffset(masm.currentOffset());
+    entry->setReturnOffset(CodeOffsetLabel(masm.currentOffset()));
     if (!addICLoadLabel(patchOffset))
         return false;
 
@@ -549,7 +550,7 @@ BaselineCompiler::emitDebugPrologue()
         masm.bind(&done);
     }
 
-    postDebugPrologueOffset_ = masm.currentOffset();
+    postDebugPrologueOffset_ = CodeOffsetLabel(masm.currentOffset());
 
     return true;
 }
@@ -725,7 +726,7 @@ BaselineCompiler::emitDebugTrap()
 
     // Add an IC entry for the return offset -> pc mapping.
     ICEntry icEntry(script->pcToOffset(pc), ICEntry::Kind_DebugTrap);
-    icEntry.setReturnOffset(masm.currentOffset());
+    icEntry.setReturnOffset(CodeOffsetLabel(masm.currentOffset()));
     if (!icEntries_.append(icEntry))
         return false;
 
@@ -2519,15 +2520,36 @@ BaselineCompiler::emitCall()
     uint32_t argc = GET_ARGC(pc);
 
     frame.syncStack(0);
-    masm.mov(ImmWord(argc), R0.scratchReg());
+    masm.move32(Imm32(argc), R0.scratchReg());
 
     // Call IC
-    ICCall_Fallback::Compiler stubCompiler(cx, /* isConstructing = */ JSOp(*pc) == JSOP_NEW);
+    ICCall_Fallback::Compiler stubCompiler(cx, /* isConstructing = */ JSOp(*pc) == JSOP_NEW,
+                                           /* isSpread = */ false);
     if (!emitOpIC(stubCompiler.getStub(&stubSpace_)))
         return false;
 
     // Update FrameInfo.
     frame.popn(argc + 2);
+    frame.push(R0);
+    return true;
+}
+
+bool
+BaselineCompiler::emitSpreadCall()
+{
+    JS_ASSERT(IsCallPC(pc));
+
+    frame.syncStack(0);
+    masm.move32(Imm32(1), R0.scratchReg());
+
+    // Call IC
+    ICCall_Fallback::Compiler stubCompiler(cx, /* isConstructing = */ JSOp(*pc) == JSOP_SPREADNEW,
+                                           /* isSpread = */ true);
+    if (!emitOpIC(stubCompiler.getStub(&stubSpace_)))
+        return false;
+
+    // Update FrameInfo.
+    frame.popn(3);
     frame.push(R0);
     return true;
 }
@@ -2560,6 +2582,24 @@ bool
 BaselineCompiler::emit_JSOP_EVAL()
 {
     return emitCall();
+}
+
+bool
+BaselineCompiler::emit_JSOP_SPREADCALL()
+{
+    return emitSpreadCall();
+}
+
+bool
+BaselineCompiler::emit_JSOP_SPREADNEW()
+{
+    return emitSpreadCall();
+}
+
+bool
+BaselineCompiler::emit_JSOP_SPREADEVAL()
+{
+    return emitSpreadCall();
 }
 
 typedef bool (*ImplicitThisFn)(JSContext *, HandleObject, HandlePropertyName,

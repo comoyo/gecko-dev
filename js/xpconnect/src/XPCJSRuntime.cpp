@@ -408,7 +408,7 @@ static bool
 PrincipalImmuneToScriptPolicy(nsIPrincipal* aPrincipal)
 {
     // System principal gets a free pass.
-    if (XPCWrapper::GetSecurityManager()->IsSystemPrincipal(aPrincipal))
+    if (nsXPConnect::SecurityManager()->IsSystemPrincipal(aPrincipal))
         return true;
 
     // nsExpandedPrincipal gets a free pass.
@@ -449,12 +449,11 @@ Scriptability::Scriptability(JSCompartment *c) : mScriptBlocks(0)
     // If we're not immune, we should have a real principal with a codebase URI.
     // Check the URI against the new-style domain policy.
     if (!mImmuneToScriptPolicy) {
-        nsIScriptSecurityManager* ssm = XPCWrapper::GetSecurityManager();
         nsCOMPtr<nsIURI> codebase;
         nsresult rv = prin->GetURI(getter_AddRefs(codebase));
         bool policyAllows;
         if (NS_SUCCEEDED(rv) && codebase &&
-            NS_SUCCEEDED(ssm->PolicyAllowsScript(codebase, &policyAllows)))
+            NS_SUCCEEDED(nsXPConnect::SecurityManager()->PolicyAllowsScript(codebase, &policyAllows)))
         {
             mScriptBlockedByPolicy = !policyAllows;
         } else {
@@ -815,7 +814,10 @@ XPCJSRuntime::CustomGCCallback(JSGCStatus status)
 }
 
 /* static */ void
-XPCJSRuntime::FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status, bool isCompartmentGC)
+XPCJSRuntime::FinalizeCallback(JSFreeOp *fop,
+                               JSFinalizeStatus status,
+                               bool isCompartmentGC,
+                               void *data)
 {
     XPCJSRuntime* self = nsXPConnect::GetRuntimeInstance();
     if (!self)
@@ -1387,8 +1389,7 @@ XPCJSRuntime::InterruptCallback(JSContext *cx)
     // returning to the event loop. See how long it's been, and what the limit
     // is.
     TimeDuration duration = TimeStamp::NowLoRes() - self->mSlowScriptCheckpoint;
-    bool chrome =
-      nsContentUtils::IsSystemPrincipal(nsContentUtils::GetSubjectPrincipal());
+    bool chrome = nsContentUtils::IsCallerChrome();
     const char *prefName = chrome ? "dom.max_chrome_script_run_time"
                                   : "dom.max_script_run_time";
     int32_t limit = Preferences::GetInt(prefName, chrome ? 20 : 10);
@@ -1435,8 +1436,8 @@ XPCJSRuntime::InterruptCallback(JSContext *cx)
     return true;
 }
 
-/* static */ void
-XPCJSRuntime::OutOfMemoryCallback(JSContext *cx)
+void
+XPCJSRuntime::CustomOutOfMemoryCallback()
 {
     if (!Preferences::GetBool("memory.dump_reports_on_oom")) {
         return;
@@ -1451,6 +1452,15 @@ XPCJSRuntime::OutOfMemoryCallback(JSContext *cx)
     // If this fails, it fails silently.
     dumper->DumpMemoryInfoToTempDir(NS_LITERAL_STRING("due-to-JS-OOM"),
                                     /* minimizeMemoryUsage = */ false);
+}
+
+void
+XPCJSRuntime::CustomLargeAllocationFailureCallback()
+{
+    nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
+    if (os) {
+        os->NotifyObservers(nullptr, "memory-pressure", MOZ_UTF16("heap-minimize"));
+    }
 }
 
 size_t
@@ -1552,6 +1562,7 @@ ReloadPrefsCallback(const char *pref, void *data)
     bool useBaseline = Preferences::GetBool(JS_OPTIONS_DOT_STR "baselinejit") && !safeMode;
     bool useIon = Preferences::GetBool(JS_OPTIONS_DOT_STR "ion") && !safeMode;
     bool useAsmJS = Preferences::GetBool(JS_OPTIONS_DOT_STR "asmjs") && !safeMode;
+    bool useNativeRegExp = Preferences::GetBool(JS_OPTIONS_DOT_STR "native_regexp") && !safeMode;
 
     bool parallelParsing = Preferences::GetBool(JS_OPTIONS_DOT_STR "parallel_parsing");
     bool parallelIonCompilation = Preferences::GetBool(JS_OPTIONS_DOT_STR
@@ -1564,7 +1575,8 @@ ReloadPrefsCallback(const char *pref, void *data)
 
     JS::RuntimeOptionsRef(rt).setBaseline(useBaseline)
                              .setIon(useIon)
-                           .  setAsmJS(useAsmJS);
+                             .setAsmJS(useAsmJS)
+                             .setNativeRegExp(useNativeRegExp);
 
     JS_SetParallelParsingEnabled(rt, parallelParsing);
     JS_SetParallelIonCompilationEnabled(rt, parallelIonCompilation);
@@ -1581,7 +1593,7 @@ XPCJSRuntime::~XPCJSRuntime()
     // one final GC, which can call back into the runtime with various
     // callback if we aren't careful. Null out the relevant callbacks.
     js::SetActivityCallback(Runtime(), nullptr, nullptr);
-    JS_SetFinalizeCallback(Runtime(), nullptr);
+    JS_RemoveFinalizeCallback(Runtime(), FinalizeCallback);
 
     // Clear any pending exception.  It might be an XPCWrappedJS, and if we try
     // to destroy it later we will crash.
@@ -2137,7 +2149,7 @@ ReportCompartmentStats(const JS::CompartmentStats &cStats,
 
     ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("regexp-compartment"),
         cStats.regexpCompartment,
-        "The regexp compartment.");
+        "The regexp compartment and regexp data.");
 
     ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("debuggees-set"),
         cStats.debuggeesSet,
@@ -2305,9 +2317,11 @@ ReportJSRuntimeExplicitTreeStats(const JS::RuntimeStats &rtStats,
         "Transient data (mostly parse nodes) held by the JSRuntime during "
         "compilation.");
 
+#ifdef JS_YARR
     RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/regexp-data"),
         KIND_NONHEAP, rtStats.runtime.regexpData,
         "Regexp JIT data.");
+#endif
 
     RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/interpreter-stack"),
         KIND_HEAP, rtStats.runtime.interpreterStack,
@@ -3031,7 +3045,7 @@ static const JSWrapObjectCallbacks WrapObjectCallbacks = {
 };
 
 XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
-   : CycleCollectedJSRuntime(nullptr, 32L * 1024L * 1024L, JS_USE_HELPER_THREADS),
+   : CycleCollectedJSRuntime(nullptr, 32L * 1024L * 1024L),
    mJSContextStack(new XPCJSContextStack(MOZ_THIS_IN_INITIALIZER_LIST())),
    mCallContext(nullptr),
    mAutoRoots(nullptr),
@@ -3158,7 +3172,7 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     JS_SetDestroyCompartmentCallback(runtime, CompartmentDestroyedCallback);
     JS_SetCompartmentNameCallback(runtime, CompartmentNameCallback);
     mPrevGCSliceCallback = JS::SetGCSliceCallback(runtime, GCSliceCallback);
-    JS_SetFinalizeCallback(runtime, FinalizeCallback);
+    JS_AddFinalizeCallback(runtime, FinalizeCallback, nullptr);
     JS_SetWrapObjectCallbacks(runtime, &WrapObjectCallbacks);
     js::SetPreserveWrapperCallback(runtime, PreserveWrapper);
 #ifdef MOZ_CRASHREPORTER
@@ -3173,7 +3187,6 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     js::SetActivityCallback(runtime, ActivityCallback, this);
     js::SetCTypesActivityCallback(runtime, CTypesActivityCallback);
     JS_SetInterruptCallback(runtime, InterruptCallback);
-    JS::SetOutOfMemoryCallback(runtime, OutOfMemoryCallback);
 
     // The JS engine needs to keep the source code around in order to implement
     // Function.prototype.toSource(). It'd be nice to not have to do this for

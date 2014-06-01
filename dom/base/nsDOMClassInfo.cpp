@@ -35,7 +35,6 @@
 #include "nsXPCOM.h"
 #include "nsISupportsPrimitives.h"
 #include "nsIXPConnect.h"
-#include "nsIXPCSecurityManager.h"
 #include "xptcall.h"
 #include "nsTArray.h"
 #include "nsDocument.h" // nsDOMStyleSheetList
@@ -103,7 +102,6 @@
 #include "nsIDOMMozCSSKeyframesRule.h"
 #include "nsIDOMCSSPageRule.h"
 #include "nsIDOMCSSStyleRule.h"
-#include "nsIDOMCSSStyleSheet.h"
 #include "nsIDOMXULCommandDispatcher.h"
 #include "nsIControllers.h"
 #include "nsIBoxObject.h"
@@ -118,8 +116,6 @@
 #include "nsIDOMNSXPathExpression.h"
 #include "nsIDOMXPathNSResolver.h"
 #include "nsIDOMXPathResult.h"
-
-#include "nsIDOMSVGNumber.h"
 
 // Storage includes
 #include "nsIDOMStorage.h"
@@ -143,10 +139,6 @@
 #include "nsIDOMSmsFilter.h"
 #include "nsIDOMSmsSegmentInfo.h"
 #include "nsIDOMMozMobileMessageThread.h"
-
-#ifdef MOZ_B2G_RIL
-#include "nsIDOMMobileConnection.h"
-#endif // MOZ_B2G_RIL
 
 #ifdef MOZ_B2G_FM
 #include "FMRadio.h"
@@ -311,8 +303,6 @@ static nsDOMClassInfoData sClassInfoData[] = {
                            DOM_DEFAULT_SCRIPTABLE_FLAGS)
   NS_DEFINE_CLASSINFO_DATA(CSSNameSpaceRule, nsDOMGenericSH,
                            DOM_DEFAULT_SCRIPTABLE_FLAGS)
-  NS_DEFINE_CLASSINFO_DATA(CSSStyleSheet, nsDOMGenericSH,
-                           DOM_DEFAULT_SCRIPTABLE_FLAGS)
 
   // XUL classes
 #ifdef MOZ_XUL
@@ -352,10 +342,6 @@ static nsDOMClassInfoData sClassInfoData[] = {
                            DOM_DEFAULT_SCRIPTABLE_FLAGS)
 
   NS_DEFINE_CLASSINFO_DATA(CSSSupportsRule, nsDOMGenericSH,
-                           DOM_DEFAULT_SCRIPTABLE_FLAGS)
-
-  // other SVG classes
-  NS_DEFINE_CLASSINFO_DATA(SVGNumber, nsDOMGenericSH,
                            DOM_DEFAULT_SCRIPTABLE_FLAGS)
 
   NS_DEFINE_CLASSINFO_DATA(WindowUtils, nsDOMGenericSH,
@@ -412,11 +398,6 @@ static nsDOMClassInfoData sClassInfoData[] = {
 
   NS_DEFINE_CLASSINFO_DATA(MozMobileMessageThread, nsDOMGenericSH,
                            DOM_DEFAULT_SCRIPTABLE_FLAGS)
-
-#ifdef MOZ_B2G_RIL
-  NS_DEFINE_CLASSINFO_DATA(MozMobileConnection, nsDOMGenericSH,
-                           DOM_DEFAULT_SCRIPTABLE_FLAGS)
-#endif
 
   NS_DEFINE_CLASSINFO_DATA(CSSFontFaceRule, nsDOMGenericSH,
                            DOM_DEFAULT_SCRIPTABLE_FLAGS)
@@ -495,10 +476,6 @@ bool nsDOMClassInfo::sIsInitialized = false;
 
 jsid nsDOMClassInfo::sLocation_id        = JSID_VOID;
 jsid nsDOMClassInfo::sConstructor_id     = JSID_VOID;
-jsid nsDOMClassInfo::sLength_id          = JSID_VOID;
-jsid nsDOMClassInfo::sItem_id            = JSID_VOID;
-jsid nsDOMClassInfo::sNamedItem_id       = JSID_VOID;
-jsid nsDOMClassInfo::sEnumerate_id       = JSID_VOID;
 jsid nsDOMClassInfo::sTop_id             = JSID_VOID;
 jsid nsDOMClassInfo::sDocument_id        = JSID_VOID;
 jsid nsDOMClassInfo::sWrappedJSObject_id = JSID_VOID;
@@ -570,14 +547,6 @@ WrapNative(JSContext *cx, nsISupports *native,
   return WrapNative(cx, native, nullptr, nullptr, vp, aAllowWrapping);
 }
 
-static inline nsresult
-WrapNative(JSContext *cx, nsISupports *native,
-           nsWrapperCache *cache, bool aAllowWrapping,
-           JS::MutableHandle<JS::Value> vp)
-{
-  return WrapNative(cx, native, cache, nullptr, vp, aAllowWrapping);
-}
-
 // Helper to handle torn-down inner windows.
 static inline nsresult
 SetParentToWindow(nsGlobalWindow *win, JSObject **parent)
@@ -613,10 +582,6 @@ nsDOMClassInfo::DefineStaticJSVals(JSContext *cx)
 
   SET_JSID_TO_STRING(sLocation_id,        cx, "location");
   SET_JSID_TO_STRING(sConstructor_id,     cx, "constructor");
-  SET_JSID_TO_STRING(sLength_id,          cx, "length");
-  SET_JSID_TO_STRING(sItem_id,            cx, "item");
-  SET_JSID_TO_STRING(sNamedItem_id,       cx, "namedItem");
-  SET_JSID_TO_STRING(sEnumerate_id,       cx, "enumerateProperties");
   SET_JSID_TO_STRING(sTop_id,             cx, "top");
   SET_JSID_TO_STRING(sDocument_id,        cx, "document");
   SET_JSID_TO_STRING(sWrappedJSObject_id, cx, "wrappedJSObject");
@@ -925,10 +890,6 @@ nsDOMClassInfo::Init()
     DOM_CLASSINFO_MAP_ENTRY(nsIDOMCSSRule)
   DOM_CLASSINFO_MAP_END
 
-  DOM_CLASSINFO_MAP_BEGIN(CSSStyleSheet, nsIDOMCSSStyleSheet)
-    DOM_CLASSINFO_MAP_ENTRY(nsIDOMCSSStyleSheet)
-  DOM_CLASSINFO_MAP_END
-
 #ifdef MOZ_XUL
   DOM_CLASSINFO_MAP_BEGIN(XULCommandDispatcher, nsIDOMXULCommandDispatcher)
     DOM_CLASSINFO_MAP_ENTRY(nsIDOMXULCommandDispatcher)
@@ -986,13 +947,6 @@ nsDOMClassInfo::Init()
 
   DOM_CLASSINFO_MAP_BEGIN(CSSSupportsRule, nsIDOMCSSSupportsRule)
     DOM_CLASSINFO_MAP_ENTRY(nsIDOMCSSSupportsRule)
-  DOM_CLASSINFO_MAP_END
-
-  // The SVG document
-
-  // other SVG classes
-  DOM_CLASSINFO_MAP_BEGIN(SVGNumber, nsIDOMSVGNumber)
-    DOM_CLASSINFO_MAP_ENTRY(nsIDOMSVGNumber)
   DOM_CLASSINFO_MAP_END
 
   DOM_CLASSINFO_MAP_BEGIN(XSLTProcessor, nsIXSLTProcessor)
@@ -1057,13 +1011,6 @@ nsDOMClassInfo::Init()
   DOM_CLASSINFO_MAP_BEGIN(MozMobileMessageThread, nsIDOMMozMobileMessageThread)
      DOM_CLASSINFO_MAP_ENTRY(nsIDOMMozMobileMessageThread)
   DOM_CLASSINFO_MAP_END
-
-#ifdef MOZ_B2G_RIL
-  DOM_CLASSINFO_MAP_BEGIN(MozMobileConnection, nsIDOMMozMobileConnection)
-     DOM_CLASSINFO_MAP_ENTRY(nsIDOMMozMobileConnection)
-     DOM_CLASSINFO_MAP_ENTRY(nsIDOMEventTarget)
-  DOM_CLASSINFO_MAP_END
-#endif // MOZ_B2G_RIL
 
   DOM_CLASSINFO_MAP_BEGIN(CSSFontFaceRule, nsIDOMCSSFontFaceRule)
     DOM_CLASSINFO_MAP_ENTRY(nsIDOMCSSFontFaceRule)
@@ -1742,9 +1689,6 @@ nsDOMClassInfo::ShutDown()
 
   sLocation_id        = JSID_VOID;
   sConstructor_id     = JSID_VOID;
-  sLength_id          = JSID_VOID;
-  sItem_id            = JSID_VOID;
-  sEnumerate_id       = JSID_VOID;
   sTop_id             = JSID_VOID;
   sDocument_id        = JSID_VOID;
   sWrappedJSObject_id = JSID_VOID;
@@ -1821,8 +1765,17 @@ nsWindowSH::PostCreate(nsIXPConnectWrappedNative *wrapper,
   const NativeProperties* eventTargetProperties =
     EventTargetBinding::sNativePropertyHooks->mNativeProperties.regular;
 
-  return DefineWebIDLBindingPropertiesOnXPCObject(cx, window, windowProperties, true) &&
-         DefineWebIDLBindingPropertiesOnXPCObject(cx, window, eventTargetProperties, true) ?
+  if (!DefineWebIDLBindingUnforgeablePropertiesOnXPCObject(cx, window, windowProperties) ||
+      !DefineWebIDLBindingUnforgeablePropertiesOnXPCObject(cx, window, eventTargetProperties)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (!GlobalPropertiesAreOwn()) {
+    return NS_OK;
+  }
+
+  return DefineWebIDLBindingPropertiesOnXPCObject(cx, window, windowProperties) &&
+         DefineWebIDLBindingPropertiesOnXPCObject(cx, window, eventTargetProperties) ?
          NS_OK : NS_ERROR_FAILURE;
 }
 
@@ -2021,47 +1974,11 @@ DefineInterfaceConstants(JSContext *cx, JS::Handle<JSObject*> obj, const nsIID *
 
   JS::Rooted<JS::Value> v(cx);
   for (i = parent_constant_count; i < constant_count; i++) {
-    const nsXPTConstant *c = nullptr;
+    nsXPIDLCString name;
+    rv = if_info->GetConstant(i, &v, getter_Copies(name));
+    NS_ENSURE_TRUE(NS_SUCCEEDED(rv), rv);
 
-    rv = if_info->GetConstant(i, &c);
-    NS_ENSURE_TRUE(NS_SUCCEEDED(rv) && c, rv);
-
-    uint16_t type = c->GetType().TagPart();
-
-    v.setUndefined();
-    switch (type) {
-      case nsXPTType::T_I8:
-      case nsXPTType::T_U8:
-      {
-        v.setInt32(c->GetValue()->val.u8);
-        break;
-      }
-      case nsXPTType::T_I16:
-      case nsXPTType::T_U16:
-      {
-        v.setInt32(c->GetValue()->val.u16);
-        break;
-      }
-      case nsXPTType::T_I32:
-      {
-        v = JS_NumberValue(c->GetValue()->val.i32);
-        break;
-      }
-      case nsXPTType::T_U32:
-      {
-        v = JS_NumberValue(c->GetValue()->val.u32);
-        break;
-      }
-      default:
-      {
-#ifdef DEBUG
-        NS_ERROR("Non-numeric constant found in interface.");
-#endif
-        continue;
-      }
-    }
-
-    if (!::JS_DefineProperty(cx, obj, c->GetName(), v,
+    if (!::JS_DefineProperty(cx, obj, name, v,
                              JSPROP_ENUMERATE | JSPROP_READONLY |
                              JSPROP_PERMANENT,
                              JS_PropertyStub, JS_StrictPropertyStub)) {
@@ -2746,6 +2663,18 @@ nsWindowSH::NameStructEnabled(JSContext* aCx, nsGlobalWindow *aWin,
          OldBindingConstructorEnabled(nameStruct, aWin, aCx);
 }
 
+#ifdef RELEASE_BUILD
+#define USE_CONTROLLERS_SHIM
+#endif
+
+#ifdef USE_CONTROLLERS_SHIM
+static const JSClass ControllersShimClass = {
+    "XULControllers", 0,
+    JS_PropertyStub,   JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
+    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, nullptr
+};
+#endif
+
 // static
 nsresult
 nsWindowSH::GlobalResolve(nsGlobalWindow *aWin, JSContext *cx,
@@ -2755,6 +2684,23 @@ nsWindowSH::GlobalResolve(nsGlobalWindow *aWin, JSContext *cx,
   if (id == XPCJSRuntime::Get()->GetStringID(XPCJSRuntime::IDX_COMPONENTS)) {
     return LookupComponentsShim(cx, obj, aWin, desc);
   }
+
+#ifdef USE_CONTROLLERS_SHIM
+  if (id == XPCJSRuntime::Get()->GetStringID(XPCJSRuntime::IDX_CONTROLLERS) &&
+      !xpc::IsXrayWrapper(obj) &&
+      !nsContentUtils::IsSystemPrincipal(aWin->GetPrincipal()))
+  {
+    if (aWin->GetDoc()) {
+      aWin->GetDoc()->WarnOnceAbout(nsIDocument::eWindow_Controllers);
+    }
+    JS::Rooted<JSObject*> shim(cx, JS_NewObject(cx, &ControllersShimClass, JS::NullPtr(), obj));
+    if (NS_WARN_IF(!shim)) {
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
+    FillPropertyDescriptor(desc, obj, JS::ObjectValue(*shim), /* readOnly = */ false);
+    return NS_OK;
+  }
+#endif
 
   nsScriptNameSpaceManager *nameSpaceManager = GetNameSpaceManager();
   NS_ENSURE_TRUE(nameSpaceManager, NS_ERROR_NOT_INITIALIZED);

@@ -128,6 +128,8 @@ namespace jit {
     _(YarrCompile)                                    \
     _(YarrInterpret)                                  \
     _(YarrJIT)                                        \
+    _(IrregexpCompile)                                \
+    _(IrregexpExecute)                                \
     _(VM)                                             \
                                                       \
     /* Specific passes during ion compilation */      \
@@ -148,7 +150,6 @@ namespace jit {
     _(EliminateRedundantChecks)                       \
     _(GenerateLIR)                                    \
     _(RegisterAllocation)                             \
-    _(UnsplitEdges)                                   \
     _(GenerateCode)                                   \
 
 class AutoTraceLog;
@@ -203,8 +204,14 @@ class ContinuousSpace {
         return data()[currentId()];
     }
 
-    bool ensureSpaceBeforeAdd(uint32_t count = 1) {
+    bool hasSpaceForAdd(uint32_t count = 1) {
         if (next_ + count <= capacity_)
+            return true;
+        return false;
+    }
+
+    bool ensureSpaceBeforeAdd(uint32_t count = 1) {
+        if (hasSpaceForAdd(count))
             return true;
 
         uint32_t nCapacity = capacity_ * 2;

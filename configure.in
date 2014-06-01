@@ -2163,7 +2163,7 @@ ia64*-hpux*)
         LIBS="$LIBS kernel32.lib user32.lib gdi32.lib winmm.lib wsock32.lib advapi32.lib secur32.lib netapi32.lib"
         MOZ_DEBUG_LDFLAGS='-DEBUG -DEBUGTYPE:CV'
         WARNINGS_AS_ERRORS='-WX'
-        MOZ_OPTIMIZE_FLAGS='-O1'
+        MOZ_OPTIMIZE_FLAGS='-O1 -Oi'
         MOZ_FIX_LINK_PATHS=
         MOZ_COMPONENT_NSPR_LIBS='$(NSPR_LIBS)'
         LDFLAGS="$LDFLAGS -LARGEADDRESSAWARE -NXCOMPAT"
@@ -2547,15 +2547,22 @@ AC_LANG_C
 dnl Check for .hidden assembler directive and visibility attribute.
 dnl Borrowed from glibc configure.in
 dnl ===============================================================
-if test "$GNU_CC"; then
+if test "$GNU_CC" -a "$OS_TARGET" != WINNT; then
   AC_DEFINE(HAVE_VISIBILITY_HIDDEN_ATTRIBUTE)
   AC_DEFINE(HAVE_VISIBILITY_ATTRIBUTE)
-  case "${OS_TARGET}" in
-  Darwin|Android)
+  case "$OS_TARGET" in
+  Darwin)
     VISIBILITY_FLAGS='-fvisibility=hidden'
     ;;
   *)
-    VISIBILITY_FLAGS='-I$(DIST)/system_wrappers -include $(topsrcdir)/config/gcc_hidden.h'
+    case $GCC_VERSION in
+    4.4*|4.6*)
+      VISIBILITY_FLAGS='-I$(DIST)/system_wrappers -include $(topsrcdir)/config/gcc_hidden_dso_handle.h'
+      ;;
+    *)
+      VISIBILITY_FLAGS='-I$(DIST)/system_wrappers -include $(topsrcdir)/config/gcc_hidden.h'
+      ;;
+    esac
     WRAP_SYSTEM_INCLUDES=1
     ;;
   esac
@@ -3201,7 +3208,6 @@ if test "$ac_cv_cpp_dynamic_cast_void_ptr" = yes ; then
    AC_DEFINE(HAVE_CPP_DYNAMIC_CAST_TO_VOID_PTR)
 fi
 
-
 dnl note that this one is reversed - if the test fails, then
 dnl we require implementations of unused virtual methods. Which
 dnl really blows because it means we'll have useless vtable
@@ -3540,6 +3546,17 @@ MOZ_ARG_DISABLE_BOOL(unified-compilation,
     MOZ_DISABLE_UNIFIED_COMPILATION=)
 AC_SUBST(MOZ_DISABLE_UNIFIED_COMPILATION)
 
+dnl ========================================================
+dnl Multiprocess Firefox Nightly Testing UI
+dnl To be removed in Bug 1003313
+dnl ========================================================
+if test -z "$NIGHTLY_BUILD"; then
+    E10S_TESTING_ONLY=1
+fi
+
+AC_SUBST(E10S_TESTING_ONLY)
+
+dnl ========================================================
 dnl system libevent Support
 dnl ========================================================
 MOZ_ARG_WITH_STRING(system-libevent,
@@ -4033,6 +4050,19 @@ if test -z "$MOZ_GOOGLE_API_KEY"; then
     MOZ_GOOGLE_API_KEY=no-google-api-key
 fi
 AC_SUBST(MOZ_GOOGLE_API_KEY)
+
+# Allow specifying a Bing API key file that contains the client ID and the
+# secret key to be used for the Bing Translation API requests.
+MOZ_ARG_WITH_STRING(bing-api-keyfile,
+[  --with-bing-api-keyfile=file   Use the client id and secret key contained in the given keyfile for Bing API requests],
+ [MOZ_BING_API_CLIENTID=`cat $withval | cut -f 1 -d " "`
+  MOZ_BING_API_KEY=`cat $withval | cut -f 2 -d " "`])
+if test -z "$MOZ_BING_API_CLIENTID"; then
+    MOZ_BING_API_CLIENTID=no-bing-api-clientid
+    MOZ_BING_API_KEY=no-bing-api-key
+fi
+AC_SUBST(MOZ_BING_API_CLIENTID)
+AC_SUBST(MOZ_BING_API_KEY)
 
 # Allow the application to influence configure with a confvars.sh script.
 AC_MSG_CHECKING([if app-specific confvars.sh exists])
@@ -5785,14 +5815,25 @@ if test -n "$MOZ_ANGLE_RENDERER"; then
     if test -n "$WINDOWSSDKDIR"; then
       MOZ_D3DCOMPILER_VISTA_DLL_PATH="$WINDOWSSDKDIR/Redist/D3D/$MOZ_D3D_CPU_SUFFIX/$MOZ_D3DCOMPILER_VISTA_DLL"
       if test -f "$MOZ_D3DCOMPILER_VISTA_DLL_PATH"; then
-        MOZ_HAS_WINSDK_WITH_D3D=1
         AC_MSG_RESULT([Found MOZ_D3DCOMPILER_VISTA_DLL_PATH: $MOZ_D3DCOMPILER_VISTA_DLL_PATH])
+        MOZ_HAS_WINSDK_WITH_D3D=1
       else
         AC_MSG_RESULT([MOZ_D3DCOMPILER_VISTA_DLL_PATH doesn't exist: $MOZ_D3DCOMPILER_VISTA_DLL_PATH])
+        AC_MSG_ERROR([Windows SDK at "$WINDOWSSDKDIR" appears broken. Try updating to MozillaBuild 1.9 final or higher.])
+        MOZ_D3DCOMPILER_VISTA_DLL_PATH=
       fi
     else
-      AC_MSG_RESULT([WINDOWSSDKDIR is missing.])
+      AC_MSG_RESULT([Windows SDK not found.])
     fi
+  fi
+
+  if test -z "$MOZ_D3DCOMPILER_VISTA_DLL_PATH"; then
+    MOZ_D3DCOMPILER_VISTA_DLL=
+  fi
+
+  # On mingw, check if headers are provided by toolchain.
+  if test -n "$GNU_CC"; then
+    MOZ_CHECK_HEADER(d3d10.h, MOZ_HAS_WINSDK_WITH_D3D=1)
   fi
 
   ######################################
@@ -5811,7 +5852,7 @@ if test -n "$MOZ_ANGLE_RENDERER"; then
      test -f "$MOZ_DIRECTX_SDK_PATH"/lib/$MOZ_D3D_CPU_SUFFIX/dxguid.lib ; then
     AC_MSG_RESULT([Found DirectX SDK via registry, using $MOZ_DIRECTX_SDK_PATH])
   else
-    AC_MSG_RESULT([Couldn't find the DirectX SDK.])
+    AC_MSG_RESULT([DirectX SDK not found.])
     MOZ_DIRECTX_SDK_PATH=
   fi
 
@@ -5830,21 +5871,21 @@ if test -n "$MOZ_ANGLE_RENDERER"; then
 
     if test -n "$MOZ_D3DX9_VERSION" ; then
       MOZ_D3DCOMPILER_XP_CAB=`find "$MOZ_DIRECTX_SDK_PATH"/Redist -name *D3DCompiler_${MOZ_D3DX9_VERSION}_${MOZ_D3D_CPU_SUFFIX}.cab | head -n1`
-      MOZ_D3DCOMPILER_XP_DLL=D3DCompiler_$MOZ_D3DX9_VERSION.dll
+
+      if test -n "$MOZ_D3DCOMPILER_XP_CAB"; then
+        MOZ_D3DCOMPILER_XP_DLL=D3DCompiler_$MOZ_D3DX9_VERSION.dll
+      else
+        AC_MSG_RESULT([Couldn't find a CAB containing the D3D compiler DLL.])
+        AC_MSG_ERROR([DirectX SDK at "$MOZ_DIRECTX_SDK_PATH" appears broken.])
+        MOZ_DIRECTX_SDK_PATH=
+      fi
     else
       AC_MSG_RESULT([Couldn't determine the D3DX9 version for the DirectX SDK.])
-    fi
-
-    if test -z "$MOZ_D3DCOMPILER_XP_CAB"; then
-      AC_MSG_RESULT([Couldn't find a CAB containing the D3D compiler DLL.])
       MOZ_DIRECTX_SDK_PATH=
-      MOZ_D3DCOMPILER_XP_DLL=
     fi
   else
     AC_MSG_RESULT([Couldn't find an acceptable DirectX SDK for ANGLE, needed for d3dcompiler_43.])
     AC_MSG_RESULT([  Either ignore, install DirectX SDK (June 2010 version or newer), or reconfigure with --disable-webgl.])
-    MOZ_DIRECTX_SDK_PATH=
-    MOZ_D3DCOMPILER_XP_DLL=
   fi
 
   ######################################
@@ -6262,7 +6303,7 @@ MOZ_ARG_DISABLE_BOOL(webapp-runtime,
 [  --disable-webapp-runtime  Disable Web App Runtime],
     MOZ_WEBAPP_RUNTIME=,
     MOZ_WEBAPP_RUNTIME=1)
-if test "$MOZ_WIDGET_TOOLKIT" != "windows" -a "$MOZ_WIDGET_TOOLKIT" != "cocoa" -a "$MOZ_WIDGET_TOOLKIT" != "gtk2"; then
+if test "$MOZ_WIDGET_TOOLKIT" != "windows" -a "$MOZ_WIDGET_TOOLKIT" != "cocoa" -a -z "$MOZ_WIDGET_GTK" ; then
     MOZ_WEBAPP_RUNTIME=
 fi
 if test "$OS_ARCH" = "WINNT" -a -z "$MAKENSISU" -a -n "$CROSS_COMPILE"; then
@@ -6309,6 +6350,19 @@ if test -n "$MOZ_MAINTENANCE_SERVICE"; then
   else
     AC_MSG_ERROR([Can only build with --enable-maintenance-service with a Windows target])
   fi
+fi
+
+dnl ========================================================
+dnl Bundled fonts on desktop platforms
+dnl ========================================================
+
+MOZ_ARG_ENABLE_BOOL(bundled-fonts,
+[  --enable-bundled-fonts  Enable support for bundled fonts on desktop platforms],
+    MOZ_BUNDLED_FONTS=1,
+    MOZ_BUNDLED_FONTS=)
+
+if test -n "$MOZ_BUNDLED_FONTS"; then
+  AC_DEFINE(MOZ_BUNDLED_FONTS)
 fi
 
 dnl ========================================================
@@ -6922,6 +6976,10 @@ fi
 dnl ========================================================
 dnl = Enable dynamic replacement of malloc implementation
 dnl ========================================================
+if test -n "$NIGHTLY_BUILD" -a -n "$MOZ_MEMORY"; then
+  # Enable on central for the debugging opportunities it adds.
+  MOZ_REPLACE_MALLOC=1
+fi
 MOZ_ARG_ENABLE_BOOL(replace-malloc,
 [  --enable-replace-malloc   Enable ability to dynamically replace the malloc implementation],
     MOZ_REPLACE_MALLOC=1,
@@ -7507,15 +7565,6 @@ fi
 AC_SUBST(MOZ_B2G_CAMERA)
 
 dnl ========================================================
-dnl = Enable Support B2G-specific changes to the NSS
-dnl = certificate trust database.
-dnl ========================================================
-if test -n "$MOZ_B2G_CERTDATA"; then
-    AC_DEFINE(MOZ_B2G_CERTDATA)
-fi
-AC_SUBST(MOZ_B2G_CERTDATA)
-
-dnl ========================================================
 dnl = Enable Support for Payment API
 dnl ========================================================
 if test -n "$MOZ_PAY"; then
@@ -7628,6 +7677,19 @@ if test "$MOZ_CHROME_FILE_FORMAT" != "jar" &&
     test "$MOZ_CHROME_FILE_FORMAT" != "omni"; then
     AC_MSG_ERROR([--enable-chrome-format must be set to either jar, flat, or omni])
 fi
+
+dnl ========================================================
+dnl = Enable Support for devtools webide
+dnl ========================================================
+MOZ_ARG_ENABLE_BOOL(devtools-webide,
+[  --enable-devtools-webide Set compile flags necessary for compiling devtools webide ],
+MOZ_DEVTOOLS_WEBIDE=1,
+MOZ_DEVTOOLS_WEBIDE= )
+
+if test -n "$MOZ_DEVTOOLS_WEBIDE"; then
+    AC_DEFINE(MOZ_DEVTOOLS_WEBIDE)
+fi
+AC_SUBST(MOZ_DEVTOOLS_WEBIDE)
 
 dnl =========================================================
 dnl Omnijar packaging (bug 552121)
@@ -7867,14 +7929,14 @@ else
     fi
     AC_SUBST(CL_INCLUDES_PREFIX)
     rm -f dummy-hello.c
+
+    dnl Make sure that the build system can handle non-ASCII characters
+    dnl in environment variables to prevent it from breaking silently on
+    dnl non-English systems.
+    NONASCII=$'\241\241'
+    AC_SUBST(NONASCII)
   fi
 fi
-
-dnl Make sure that the build system can handle non-ASCII characters
-dnl in environment variables to prevent it from breking silently on
-dnl non-English systems.
-NONASCII=$'\241\241'
-AC_SUBST(NONASCII)
 
 dnl ========================================================
 dnl =
@@ -8388,6 +8450,12 @@ dnl Build Captive Portal Detector if required
 AC_SUBST(MOZ_CAPTIVEDETECT)
 if test -n "$MOZ_CAPTIVEDETECT"; then
   AC_DEFINE(MOZ_CAPTIVEDETECT)
+fi
+
+dnl Build second screen and casting features for external devices if required
+AC_SUBST(MOZ_DEVICES)
+if test -n "$MOZ_DEVICES"; then
+  AC_DEFINE(MOZ_DEVICES)
 fi
 
 dnl ========================================================
@@ -8977,6 +9045,8 @@ else
 fi
 AC_SUBST(JS_SHARED_LIBRARY)
 
+AC_SUBST(UPLOAD_EXTRA_FILES)
+
 MOZ_CREATE_CONFIG_STATUS()
 
 # No need to run subconfigures when building with LIBXUL_SDK_DIR
@@ -9067,7 +9137,13 @@ if test -z "$MOZ_NATIVE_JEMALLOC" -a "$MOZ_MEMORY" && test -n "$MOZ_JEMALLOC3" -
     mkdir -p memory/jemalloc
   fi
 
+  dnl jemalloc's configure uses $srcdir in AC_CONFIG_HEADERS, which syntax uses
+  dnl colons, conflicting with the windows-style path in $srcdir.
+  dnl Turn it into a msys path just for jemalloc's configure
+  _save_srcdir="$srcdir"
+  srcdir=`cd $srcdir; pwd`
   AC_OUTPUT_SUBDIRS(memory/jemalloc/src)
+  srcdir="$_save_srcdir"
   cache_file="$_save_cache_file"
   ac_configure_args="$_SUBDIR_CONFIG_ARGS"
 fi

@@ -217,19 +217,19 @@ static void str_escape(const char * original, nsAFlatCString& aResult)
         switch (*p)
         {
             case '\n':
-                aResult.Append("\\n");
+                aResult.AppendLiteral("\\n");
                 break;
 
             case '\r':
-                aResult.Append("\\r");
+                aResult.AppendLiteral("\\r");
                 break;
 
             case '\\':
-                aResult.Append("\\\\");
+                aResult.AppendLiteral("\\\\");
                 break;
 
             case '\"':
-                aResult.Append("\\\"");
+                aResult.AppendLiteral("\\\"");
                 break;
 
             default:
@@ -333,7 +333,7 @@ pref_savePref(PLDHashTable *table, PLDHashEntryHdr *heh, uint32_t i, void *arg)
 
     nsAutoCString prefValue;
     nsAutoCString prefPrefix;
-    prefPrefix.Assign(NS_LITERAL_CSTRING("user_pref(\""));
+    prefPrefix.AssignLiteral("user_pref(\"");
 
     // where we're getting our pref from
     PrefValue* sourcePref;
@@ -346,7 +346,7 @@ pref_savePref(PLDHashTable *table, PLDHashEntryHdr *heh, uint32_t i, void *arg)
         sourcePref = &pref->userPref;
     } else {
         if (argData->saveTypes == SAVE_ALL_AND_DEFAULTS) {
-            prefPrefix.Assign(NS_LITERAL_CSTRING("pref(\""));
+            prefPrefix.AssignLiteral("pref(\"");
             sourcePref = &pref->defaultPref;
         }
         else
@@ -576,10 +576,6 @@ pref_DeleteItem(PLDHashTable *table, PLDHashEntryHdr *heh, uint32_t i, void *arg
 nsresult
 PREF_DeleteBranch(const char *branch_name)
 {
-#ifndef MOZ_B2G
-    MOZ_ASSERT(NS_IsMainThread());
-#endif
-
     int len = (int)strlen(branch_name);
 
     if (!gHashTable.ops)
@@ -647,10 +643,6 @@ pref_ClearUserPref(PLDHashTable *table, PLDHashEntryHdr *he, uint32_t,
 nsresult
 PREF_ClearAllUserPrefs()
 {
-#ifndef MOZ_B2G
-    MOZ_ASSERT(NS_IsMainThread());
-#endif
-
     if (!gHashTable.ops)
         return NS_ERROR_NOT_INITIALIZED;
 
@@ -730,10 +722,6 @@ static void pref_SetValue(PrefValue* existingValue, uint16_t *existingFlags,
 
 PrefHashEntry* pref_HashTableLookup(const void *key)
 {
-#ifndef MOZ_B2G
-    MOZ_ASSERT(NS_IsMainThread());
-#endif
-
     PrefHashEntry* result =
         static_cast<PrefHashEntry*>(PL_DHashTableOperate(&gHashTable, key, PL_DHASH_LOOKUP));
 
@@ -745,10 +733,6 @@ PrefHashEntry* pref_HashTableLookup(const void *key)
 
 nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, uint32_t flags)
 {
-#ifndef MOZ_B2G
-    MOZ_ASSERT(NS_IsMainThread());
-#endif
-
     if (!gHashTable.ops)
         return NS_ERROR_OUT_OF_MEMORY;
 

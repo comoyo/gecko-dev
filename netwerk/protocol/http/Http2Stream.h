@@ -81,12 +81,13 @@ public:
   void SetCountAsActive(bool aStatus) { mCountAsActive = aStatus ? 1 : 0; }
   bool CountAsActive() { return mCountAsActive; }
 
-  void SetAllHeadersReceived(bool aStatus) { mAllHeadersReceived = aStatus ? 1 : 0; }
+  void SetAllHeadersReceived();
   bool AllHeadersReceived() { return mAllHeadersReceived; }
 
   void UpdateTransportSendEvents(uint32_t count);
   void UpdateTransportReadEvents(uint32_t count);
 
+  // NS_ERROR_ABORT terminates stream, other failure terminates session
   nsresult ConvertResponseHeaders(Http2Decompressor *, nsACString &, nsACString &);
   nsresult ConvertPushHeaders(Http2Decompressor *, nsACString &, nsACString &);
 
@@ -234,7 +235,8 @@ private:
   // place the fin flag on the last data packet instead of waiting
   // for a stream closed indication. Relying on stream close results
   // in an extra 0-length runt packet and seems to have some interop
-  // problems with the google servers.
+  // problems with the google servers. Connect does rely on stream
+  // close by setting this to the max value.
   int64_t                      mRequestBodyLenRemaining;
 
   uint32_t                     mPriority;
@@ -267,6 +269,15 @@ private:
 
   // For Http2Push
   Http2PushedStream *mPushSource;
+
+/// connect tunnels
+public:
+  bool IsTunnel() { return mIsTunnel; }
+private:
+  void ClearTransactionsBlockedOnTunnel();
+  void MapStreamToHttpConnection();
+
+  bool mIsTunnel;
 };
 
 } // namespace mozilla::net

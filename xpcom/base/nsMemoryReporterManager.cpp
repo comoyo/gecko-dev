@@ -215,8 +215,9 @@ static nsresult
 GetKinfoVmentrySelf(int64_t* aPrss, uint64_t* aMaxreg)
 {
   int cnt;
-  struct kinfo_vmentry *vmmap, *kve;
-  if ((vmmap = kinfo_getvmmap(getpid(), &cnt)) == nullptr) {
+  struct kinfo_vmentry* vmmap;
+  struct kinfo_vmentry* kve;
+  if (!(vmmap = kinfo_getvmmap(getpid(), &cnt))) {
     return NS_ERROR_FAILURE;
   }
   if (aPrss) {
@@ -680,7 +681,7 @@ NS_IMPL_ISUPPORTS(PageFaultsHardReporter, nsIMemoryReporter)
 static int64_t
 HeapOverheadRatio(jemalloc_stats_t* aStats)
 {
-  return (int64_t) 10000 *
+  return (int64_t)10000 *
     (aStats->waste + aStats->bookkeeping + aStats->page_cache) /
     ((double)aStats->allocated);
 }
@@ -710,13 +711,21 @@ public:
     // because KIND_HEAP memory means "counted in heap-allocated", which
     // this is not.
     rv = MOZ_COLLECT_REPORT(
+      "explicit/heap-overhead/bin-unused", KIND_NONHEAP, UNITS_BYTES,
+      stats.bin_unused,
+"Bytes reserved for bins of fixed-size allocations which do not correspond to "
+"an active allocation.");
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = MOZ_COLLECT_REPORT(
       "explicit/heap-overhead/waste", KIND_NONHEAP, UNITS_BYTES,
       stats.waste,
 "Committed bytes which do not correspond to an active allocation and which the "
 "allocator is not intentionally keeping alive (i.e., not 'heap-bookkeeping' or "
-"'heap-page-cache').  Although the allocator will waste some space under any "
-"circumstances, a large value here may indicate that the heap is highly "
-"fragmented, or that allocator is performing poorly for some other reason.");
+"'heap-page-cache' or 'heap-bin-unused').  Although the allocator will waste "
+"some space under any circumstances, a large value here may indicate that the "
+"heap is highly fragmented, or that allocator is performing poorly for some "
+"other reason.");
     NS_ENSURE_SUCCESS(rv, rv);
 
     rv = MOZ_COLLECT_REPORT(
@@ -750,6 +759,21 @@ public:
 "Ratio of committed, unused bytes to allocated bytes; i.e., "
 "'heap-overhead' / 'heap-allocated'.  This measures the overhead of "
 "the heap allocator relative to amount of memory allocated.");
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = MOZ_COLLECT_REPORT(
+      "heap-mapped", KIND_OTHER, UNITS_BYTES, stats.mapped,
+      "Amount of memory currently mapped.");
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = MOZ_COLLECT_REPORT(
+      "heap-chunksize", KIND_OTHER, UNITS_BYTES, stats.chunksize,
+      "Size of chunks.");
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = MOZ_COLLECT_REPORT(
+      "heap-chunks", KIND_OTHER, UNITS_COUNT, (stats.mapped / stats.chunksize),
+      "Number of chunks currently mapped.");
     NS_ENSURE_SUCCESS(rv, rv);
 
     return NS_OK;
@@ -799,15 +823,15 @@ public:
     dmd::SizeOf(&sizes);
 
 #define REPORT(_path, _amount, _desc)                                         \
-    do {                                                                      \
-      nsresult rv;                                                            \
-      rv = aHandleReport->Callback(EmptyCString(), NS_LITERAL_CSTRING(_path), \
-                                   KIND_HEAP, UNITS_BYTES, _amount,           \
-                                   NS_LITERAL_CSTRING(_desc), aData);         \
-      if (NS_WARN_IF(NS_FAILED(rv))) {                                        \
-        return rv;                                                            \
-      }                                                                       \
-    } while (0)
+  do {                                                                        \
+    nsresult rv;                                                              \
+    rv = aHandleReport->Callback(EmptyCString(), NS_LITERAL_CSTRING(_path),   \
+                                 KIND_HEAP, UNITS_BYTES, _amount,             \
+                                 NS_LITERAL_CSTRING(_desc), aData);           \
+    if (NS_WARN_IF(NS_FAILED(rv))) {                                          \
+      return rv;                                                              \
+    }                                                                         \
+  } while (0)
 
     REPORT("explicit/dmd/stack-traces/used",
            sizes.mStackTracesUsed,
@@ -1042,7 +1066,7 @@ nsMemoryReporterManager::GetReportsExtended(
 nsresult
 nsMemoryReporterManager::StartGettingReports()
 {
-  GetReportsState *s = mGetReportsState;
+  GetReportsState* s = mGetReportsState;
 
   // Get reports for this process.
   GetReportsForThisProcessExtended(s->mHandleReport, s->mHandleReportData,
@@ -1060,7 +1084,7 @@ typedef nsCOMArray<nsIMemoryReporter> MemoryReporterArray;
 static PLDHashOperator
 StrongEnumerator(nsRefPtrHashKey<nsIMemoryReporter>* aElem, void* aData)
 {
-  MemoryReporterArray *allReporters = static_cast<MemoryReporterArray*>(aData);
+  MemoryReporterArray* allReporters = static_cast<MemoryReporterArray*>(aData);
   allReporters->AppendElement(aElem->GetKey());
   return PL_DHASH_NEXT;
 }
@@ -1068,7 +1092,7 @@ StrongEnumerator(nsRefPtrHashKey<nsIMemoryReporter>* aElem, void* aData)
 static PLDHashOperator
 WeakEnumerator(nsPtrHashKey<nsIMemoryReporter>* aElem, void* aData)
 {
-  MemoryReporterArray *allReporters = static_cast<MemoryReporterArray*>(aData);
+  MemoryReporterArray* allReporters = static_cast<MemoryReporterArray*>(aData);
   allReporters->AppendElement(aElem->GetKey());
   return PL_DHASH_NEXT;
 }
@@ -1263,8 +1287,7 @@ nsMemoryReporterManager::RegisterReporterHelper(
   }
 
   if (mStrongReporters->Contains(aReporter) ||
-      mWeakReporters->Contains(aReporter))
-  {
+      mWeakReporters->Contains(aReporter)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -1402,7 +1425,9 @@ class Int64Wrapper MOZ_FINAL : public nsISupports
 {
 public:
   NS_DECL_ISUPPORTS
-  Int64Wrapper() : mValue(0) { }
+  Int64Wrapper() : mValue(0)
+  {
+  }
   int64_t mValue;
 };
 
@@ -1424,10 +1449,9 @@ public:
     // create artificial (i.e. deterministic) reporters -- which allows us
     // to precisely test nsMemoryReporterManager.explicit -- but we can't
     // do that for distinguished amounts.
-    if (aPath.Equals("heap-allocated") ||
+    if (aPath.EqualsLiteral("heap-allocated") ||
         (aKind == nsIMemoryReporter::KIND_NONHEAP &&
-         PromiseFlatCString(aPath).Find("explicit") == 0))
-    {
+         PromiseFlatCString(aPath).Find("explicit") == 0)) {
       Int64Wrapper* wrappedInt64 = static_cast<Int64Wrapper*>(aWrappedExplicit);
       wrappedInt64->mValue += aAmount;
     }
@@ -1510,14 +1534,15 @@ nsMemoryReporterManager::GetResidentFast(int64_t* aAmount)
 }
 
 /*static*/
-int64_t nsMemoryReporterManager::ResidentFast()
+int64_t
+nsMemoryReporterManager::ResidentFast()
 {
 #ifdef HAVE_VSIZE_AND_RESIDENT_REPORTERS
-    int64_t amount;
-    ResidentFastDistinguishedAmount(&amount);
-    return amount;
+  int64_t amount;
+  ResidentFastDistinguishedAmount(&amount);
+  return amount;
 #else
-    return 0;
+  return 0;
 #endif
 }
 
@@ -1642,6 +1667,28 @@ nsMemoryReporterManager::GetHasMozMallocUsableSize(bool* aHas)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsMemoryReporterManager::GetIsDMDEnabled(bool* aIsEnabled)
+{
+#ifdef MOZ_DMD
+  *aIsEnabled = true;
+#else
+  *aIsEnabled = false;
+#endif
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMemoryReporterManager::GetIsDMDRunning(bool* aIsRunning)
+{
+#ifdef MOZ_DMD
+  *aIsRunning = dmd::IsRunning();
+#else
+  *aIsRunning = false;
+#endif
+  return NS_OK;
+}
+
 namespace {
 
 /**
@@ -1658,7 +1705,8 @@ public:
   MinimizeMemoryUsageRunnable(nsIRunnable* aCallback)
     : mCallback(aCallback)
     , mRemainingIters(sNumIters)
-  {}
+  {
+  }
 
   NS_IMETHOD Run()
   {
@@ -1744,14 +1792,14 @@ nsMemoryReporterManager::SizeOfTab(nsIDOMWindow* aTopWindow,
   TimeStamp t3 = TimeStamp::Now();
 
   *aTotalSize = 0;
-  #define DO(aN, n) { *aN = (n); *aTotalSize += (n); }
+#define DO(aN, n) { *aN = (n); *aTotalSize += (n); }
   DO(aJSObjectsSize, jsObjectsSize);
   DO(aJSStringsSize, jsStringsSize);
   DO(aJSOtherSize,   jsOtherSize);
   DO(aDomSize,       jsPrivateSize + domSize);
   DO(aStyleSize,     styleSize);
   DO(aOtherSize,     otherSize);
-  #undef DO
+#undef DO
 
   *aJSMilliseconds    = (t2 - t1).ToMilliseconds();
   *aNonJSMilliseconds = (t3 - t2).ToMilliseconds();

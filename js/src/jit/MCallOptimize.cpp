@@ -98,15 +98,15 @@ IonBuilder::inlineNativeCall(CallInfo &callInfo, JSFunction *target)
         return inlineMathFunction(callInfo, MMathFunction::ExpM1);
     if (native == js::math_cosh)
         return inlineMathFunction(callInfo, MMathFunction::CosH);
-    if (native == js::math_sin)
+    if (native == js::math_sinh)
         return inlineMathFunction(callInfo, MMathFunction::SinH);
-    if (native == js::math_tan)
+    if (native == js::math_tanh)
         return inlineMathFunction(callInfo, MMathFunction::TanH);
     if (native == js::math_acosh)
         return inlineMathFunction(callInfo, MMathFunction::ACosH);
-    if (native == js::math_asin)
+    if (native == js::math_asinh)
         return inlineMathFunction(callInfo, MMathFunction::ASinH);
-    if (native == js::math_atan)
+    if (native == js::math_atanh)
         return inlineMathFunction(callInfo, MMathFunction::ATanH);
     if (native == js::math_sign)
         return inlineMathFunction(callInfo, MMathFunction::Sign);
@@ -163,6 +163,8 @@ IonBuilder::inlineNativeCall(CallInfo &callInfo, JSFunction *target)
         return inlineHaveSameClass(callInfo);
     if (native == intrinsic_ToObject)
         return inlineToObject(callInfo);
+    if (native == intrinsic_ToInteger)
+        return inlineToInteger(callInfo);
 
     // TypedObject intrinsics.
     if (native == intrinsic_ObjectIsTypedObject)
@@ -651,7 +653,14 @@ IonBuilder::inlineMathFloor(CallInfo &callInfo)
     // Math.floor(int(x)) == int(x)
     if (argType == MIRType_Int32 && returnType == MIRType_Int32) {
         callInfo.setImplicitlyUsedUnchecked();
-        current->push(callInfo.getArg(0));
+        // The int operand may be something which bails out if the actual value
+        // is not in the range of the result type of the MIR. We need to tell
+        // the optimizer to preserve this bailout even if the final result is
+        // fully truncated.
+        MLimitedTruncate *ins = MLimitedTruncate::New(alloc(), callInfo.getArg(0),
+                                                      MDefinition::IndirectTruncate);
+        current->add(ins);
+        current->push(ins);
         return InliningStatus_Inlined;
     }
 
@@ -689,22 +698,22 @@ IonBuilder::inlineMathCeil(CallInfo &callInfo)
     // Math.ceil(int(x)) == int(x)
     if (argType == MIRType_Int32 && returnType == MIRType_Int32) {
         callInfo.setImplicitlyUsedUnchecked();
-        current->push(callInfo.getArg(0));
+        // The int operand may be something which bails out if the actual value
+        // is not in the range of the result type of the MIR. We need to tell
+        // the optimizer to preserve this bailout even if the final result is
+        // fully truncated.
+        MLimitedTruncate *ins = MLimitedTruncate::New(alloc(), callInfo.getArg(0),
+                                                      MDefinition::IndirectTruncate);
+        current->add(ins);
+        current->push(ins);
         return InliningStatus_Inlined;
     }
 
     if (IsFloatingPointType(argType) && returnType == MIRType_Int32) {
-        // Math.ceil(x) == -Math.floor(-x)
         callInfo.setImplicitlyUsedUnchecked();
-        MConstant *minusOne = MConstant::New(alloc(), DoubleValue(-1.0));
-        current->add(minusOne);
-        MMul *mul = MMul::New(alloc(), callInfo.getArg(0), minusOne, argType);
-        current->add(mul);
-        MFloor *floor = MFloor::New(alloc(), mul);
-        current->add(floor);
-        MMul *result = MMul::New(alloc(), floor, minusOne, MIRType_Int32);
-        current->add(result);
-        current->push(result);
+        MCeil *ins = MCeil::New(alloc(), callInfo.getArg(0));
+        current->add(ins);
+        current->push(ins);
         return InliningStatus_Inlined;
     }
 
@@ -734,7 +743,14 @@ IonBuilder::inlineMathRound(CallInfo &callInfo)
     // Math.round(int(x)) == int(x)
     if (argType == MIRType_Int32 && returnType == MIRType_Int32) {
         callInfo.setImplicitlyUsedUnchecked();
-        current->push(callInfo.getArg(0));
+        // The int operand may be something which bails out if the actual value
+        // is not in the range of the result type of the MIR. We need to tell
+        // the optimizer to preserve this bailout even if the final result is
+        // fully truncated.
+        MLimitedTruncate *ins = MLimitedTruncate::New(alloc(), callInfo.getArg(0),
+                                                      MDefinition::IndirectTruncate);
+        current->add(ins);
+        current->push(ins);
         return InliningStatus_Inlined;
     }
 
@@ -1881,6 +1897,24 @@ IonBuilder::inlineToObject(CallInfo &callInfo)
 }
 
 IonBuilder::InliningStatus
+IonBuilder::inlineToInteger(CallInfo &callInfo)
+{
+    if (callInfo.argc() != 1 || callInfo.constructing())
+        return InliningStatus_NotInlined;
+
+    // Only fast-path if we know the input is in integer in the int32 range.
+    if (getInlineReturnType() != MIRType_Int32)
+        return InliningStatus_NotInlined;
+
+    callInfo.setImplicitlyUsedUnchecked();
+
+    MToInt32 *toInt32 = MToInt32::New(alloc(), callInfo.getArg(0));
+    current->add(toInt32);
+    current->push(toInt32);
+    return InliningStatus_Inlined;
+}
+
+IonBuilder::InliningStatus
 IonBuilder::inlineBailout(CallInfo &callInfo)
 {
     callInfo.setImplicitlyUsedUnchecked();
@@ -1915,20 +1949,31 @@ IonBuilder::inlineAssertFloat32(CallInfo &callInfo)
 IonBuilder::InliningStatus
 IonBuilder::inlineBoundFunction(CallInfo &nativeCallInfo, JSFunction *target)
 {
-    JSFunction *scriptedTarget = &(target->getBoundFunctionTarget()->as<JSFunction>());
-    JSRuntime *runtime = scriptedTarget->runtimeFromMainThread();
+     if (!target->getBoundFunctionTarget()->is<JSFunction>())
+         return InliningStatus_NotInlined;
 
-    if (gc::IsInsideNursery(runtime, scriptedTarget))
+    JSFunction *scriptedTarget = &(target->getBoundFunctionTarget()->as<JSFunction>());
+
+    // Don't optimize if we're constructing and the callee is not a
+    // constructor, so that CallKnown does not have to handle this case
+    // (it should always throw).
+    if (nativeCallInfo.constructing() && !scriptedTarget->isInterpretedConstructor() &&
+        !scriptedTarget->isNativeConstructor())
+    {
+        return InliningStatus_NotInlined;
+    }
+
+    if (gc::IsInsideNursery(scriptedTarget))
         return InliningStatus_NotInlined;
 
     for (size_t i = 0; i < target->getBoundFunctionArgumentCount(); i++) {
         const Value val = target->getBoundFunctionArgument(i);
-        if (val.isObject() && gc::IsInsideNursery(runtime, &val.toObject()))
+        if (val.isObject() && gc::IsInsideNursery(&val.toObject()))
             return InliningStatus_NotInlined;
     }
 
     const Value thisVal = target->getBoundFunctionThis();
-    if (thisVal.isObject() && gc::IsInsideNursery(runtime, &thisVal.toObject()))
+    if (thisVal.isObject() && gc::IsInsideNursery(&thisVal.toObject()))
         return InliningStatus_NotInlined;
 
     size_t argc = target->getBoundFunctionArgumentCount() + nativeCallInfo.argc();

@@ -245,6 +245,10 @@ public:
   virtual void RemoveTextureFromCompositable(CompositableClient* aCompositable,
                                              TextureClient* aTexture) MOZ_OVERRIDE;
 
+  virtual void RemoveTextureFromCompositableAsync(AsyncTransactionTracker* aAsyncTransactionTracker,
+                                                  CompositableClient* aCompositable,
+                                                  TextureClient* aTexture) MOZ_OVERRIDE;
+
   virtual void RemoveTexture(TextureClient* aTexture) MOZ_OVERRIDE;
 
   /**
@@ -292,12 +296,21 @@ public:
   bool EndTransaction(InfallibleTArray<EditReply>* aReplies,
                       const nsIntRegion& aRegionToClear,
                       bool aScheduleComposite,
+                      uint32_t aPaintSequenceNumber,
                       bool* aSent);
 
   /**
    * Set an actor through which layer updates will be pushed.
    */
   void SetShadowManager(PLayerTransactionChild* aShadowManager);
+
+  void StopReceiveAsyncParentMessge();
+
+  void ClearCachedResources();
+
+  void Composite();
+
+  void SendPendingAsyncMessge();
 
   /**
    * True if this is forwarding to a LayerManagerComposite.

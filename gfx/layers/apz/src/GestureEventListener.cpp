@@ -180,22 +180,34 @@ nsEventStatus GestureEventListener::HandleInputTouchMultiStart()
   return rv;
 }
 
+bool GestureEventListener::MoveDistanceIsLarge()
+{
+  ScreenIntPoint delta = mLastTouchInput.mTouches[0].mScreenPoint - mTouchStartPosition;
+  return (NS_hypot(delta.x, delta.y) > AsyncPanZoomController::GetTouchStartTolerance());
+}
+
 nsEventStatus GestureEventListener::HandleInputTouchMove()
 {
   nsEventStatus rv = nsEventStatus_eIgnore;
 
   switch (mState) {
   case GESTURE_NONE:
-  case GESTURE_LONG_TOUCH_DOWN:
     // Ignore this input signal as the corresponding events get handled by APZC
+    break;
+
+  case GESTURE_LONG_TOUCH_DOWN:
+    if (MoveDistanceIsLarge()) {
+      // So that we don't fire a long-tap-up if the user moves around after a
+      // long-tap
+      SetState(GESTURE_NONE);
+    }
     break;
 
   case GESTURE_FIRST_SINGLE_TOUCH_DOWN:
   case GESTURE_FIRST_SINGLE_TOUCH_MAX_TAP_DOWN:
   case GESTURE_SECOND_SINGLE_TOUCH_DOWN: {
     // If we move too much, bail out of the tap.
-    ScreenIntPoint delta = mLastTouchInput.mTouches[0].mScreenPoint - mTouchStartPosition;
-    if (NS_hypot(delta.x, delta.y) > AsyncPanZoomController::GetTouchStartTolerance()) {
+    if (MoveDistanceIsLarge()) {
       CancelLongTapTimeoutTask();
       CancelMaxTapTimeoutTask();
       SetState(GESTURE_NONE);
@@ -221,9 +233,9 @@ nsEventStatus GestureEventListener::HandleInputTouchMove()
                                    currentSpan,
                                    mLastTouchInput.modifiers);
 
-      mAsyncPanZoomController->HandleGestureEvent(pinchEvent);
+      rv = mAsyncPanZoomController->HandleGestureEvent(pinchEvent);
     }
-    rv = nsEventStatus_eConsumeNoDefault;
+
     mPreviousSpan = currentSpan;
     break;
   }
@@ -245,8 +257,7 @@ nsEventStatus GestureEventListener::HandleInputTouchMove()
                                  mPreviousSpan,
                                  mLastTouchInput.modifiers);
 
-    mAsyncPanZoomController->HandleGestureEvent(pinchEvent);
-    rv = nsEventStatus_eConsumeNoDefault;
+    rv = mAsyncPanZoomController->HandleGestureEvent(pinchEvent);
     mPreviousSpan = currentSpan;
 
     break;
@@ -263,6 +274,10 @@ nsEventStatus GestureEventListener::HandleInputTouchMove()
 
 nsEventStatus GestureEventListener::HandleInputTouchEnd()
 {
+  // We intentionally do not pass apzc return statuses up since
+  // it may cause apzc stay in the touching state even after
+  // gestures are completed (please see Bug 1013378 for reference).
+
   nsEventStatus rv = nsEventStatus_eIgnore;
 
   switch (mState) {
@@ -332,7 +347,9 @@ nsEventStatus GestureEventListener::HandleInputTouchEnd()
                                    mLastTouchInput.modifiers);
       mAsyncPanZoomController->HandleGestureEvent(pinchEvent);
     }
+
     rv = nsEventStatus_eConsumeNoDefault;
+
     break;
 
   default:

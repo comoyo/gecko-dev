@@ -478,14 +478,11 @@ public:
 
   // Returns the subject principal. Guaranteed to return non-null. May only
   // be called when nsContentUtils is initialized.
-  static nsIPrincipal* GetSubjectPrincipal();
+  static nsIPrincipal* SubjectPrincipal();
 
-  // Returns the principal of the given JS object. This should never be null
-  // for any object in the XPConnect runtime.
-  //
-  // In general, being interested in the principal of an object is enough to
-  // guarantee that the return value is non-null.
-  static nsIPrincipal* GetObjectPrincipal(JSObject* aObj);
+  // Returns the prinipal of the given JS object. This may only be called on
+  // the main thread for objects from the main thread's JSRuntime.
+  static nsIPrincipal* ObjectPrincipal(JSObject* aObj);
 
   static nsresult GenerateStateKey(nsIContent* aContent,
                                    const nsIDocument* aDocument,
@@ -714,9 +711,10 @@ public:
    * Returns the appropriate event argument names for the specified
    * namespace and event name.  Added because we need to switch between
    * SVG's "evt" and the rest of the world's "event", and because onerror
-   * takes 3 args.
+   * on window takes 5 args.
    */
   static void GetEventArgNames(int32_t aNameSpaceID, nsIAtom *aEventName,
+                               bool aIsForWindow,
                                uint32_t *aArgCount, const char*** aArgNames);
 
   /**
@@ -1337,6 +1335,12 @@ public:
   static nsIPrincipal* GetSystemPrincipal();
 
   /**
+   * Gets the null subject principal singleton. This is only useful for
+   * assertions.
+   */
+  static nsIPrincipal* GetNullSubjectPrincipal() { return sNullSubjectPrincipal; }
+
+  /**
    * *aResourcePrincipal is a principal describing who may access the contents
    * of a resource. The resource can only be consumed by a principal that
    * subsumes *aResourcePrincipal. MAKE SURE THAT NOTHING EVER ACTS WITH THE
@@ -1831,11 +1835,6 @@ public:
    */
   static bool IsFullscreenApiContentOnly();
 
-  /**
-   * Returns true if the idle observers API is enabled.
-   */
-  static bool IsIdleObserverAPIEnabled() { return sIsIdleObserverAPIEnabled; }
-
   /*
    * Returns true if the performance timing APIs are enabled.
    */
@@ -2170,6 +2169,8 @@ private:
   static nsIXPConnect *sXPConnect;
 
   static nsIScriptSecurityManager *sSecurityManager;
+  static nsIPrincipal *sSystemPrincipal;
+  static nsIPrincipal *sNullSubjectPrincipal;
 
   static nsIParserService *sParserService;
 
@@ -2222,7 +2223,6 @@ private:
   static bool sTrustedFullScreenOnly;
   static bool sFullscreenApiIsContentOnly;
   static uint32_t sHandlingInputTimeout;
-  static bool sIsIdleObserverAPIEnabled;
   static bool sIsPerformanceTimingEnabled;
   static bool sIsResourceTimingEnabled;
 

@@ -264,6 +264,7 @@ void CacheEntry::AsyncOpen(nsICacheEntryOpenCallback* aCallback, uint32_t aFlags
     this, StateString(mState), aFlags, aCallback));
 
   bool readonly = aFlags & nsICacheStorage::OPEN_READONLY;
+  bool bypassIfBusy = aFlags & nsICacheStorage::OPEN_BYPASS_IF_BUSY;
   bool truncate = aFlags & nsICacheStorage::OPEN_TRUNCATE;
   bool priority = aFlags & nsICacheStorage::OPEN_PRIORITY;
   bool multithread = aFlags & nsICacheStorage::CHECK_MULTITHREADED;
@@ -275,7 +276,7 @@ void CacheEntry::AsyncOpen(nsICacheEntryOpenCallback* aCallback, uint32_t aFlags
 
   mozilla::MutexAutoLock lock(mLock);
 
-  RememberCallback(callback);
+  RememberCallback(callback, bypassIfBusy);
 
   // Load() opens the lock
   if (Load(truncate, priority)) {
@@ -459,7 +460,14 @@ already_AddRefed<CacheEntryHandle> CacheEntry::ReopenTruncated(bool aMemoryOnly,
   newEntry->TransferCallbacks(*this);
   mCallbacks.Clear();
 
-  return handle.forget();
+  // Must return a new write handle, since the consumer is expected to
+  // write to this newly recreated entry.  The |handle| is only a common
+  // reference counter and doesn't revert entry state back when write
+  // fails and also doesn't update the entry frecency.  Not updating
+  // frecency causes entries to not be purged from our memory pools.
+  nsRefPtr<CacheEntryHandle> writeHandle =
+    newEntry->NewWriteHandle();
+  return writeHandle.forget();
 }
 
 void CacheEntry::TransferCallbacks(CacheEntry & aFromEntry)
@@ -484,11 +492,19 @@ void CacheEntry::TransferCallbacks(CacheEntry & aFromEntry)
   }
 }
 
-void CacheEntry::RememberCallback(Callback const& aCallback)
+void CacheEntry::RememberCallback(Callback & aCallback, bool aBypassIfBusy)
 {
-  LOG(("CacheEntry::RememberCallback [this=%p, cb=%p]", this, aCallback.mCallback.get()));
-
   mLock.AssertCurrentThreadOwns();
+
+  LOG(("CacheEntry::RememberCallback [this=%p, cb=%p, state=%s]",
+    this, aCallback.mCallback.get(), StateString(mState)));
+
+  if (aBypassIfBusy && (mState == WRITING || mState == REVALIDATING)) {
+    LOG(("  writing or revalidating, callback wants to bypass cache"));
+    aCallback.mNotWanted = true;
+    InvokeAvailableCallback(aCallback);
+    return;
+  }
 
   mCallbacks.AppendElement(aCallback);
 }
@@ -770,7 +786,7 @@ CacheEntryHandle* CacheEntry::NewWriteHandle()
   mozilla::MutexAutoLock lock(mLock);
 
   BackgroundOp(Ops::FRECENCYUPDATE);
-  return (mWriter = new CacheEntryHandle(this));
+  return (mWriter = NewHandle());
 }
 
 void CacheEntry::OnHandleClosed(CacheEntryHandle const* aHandle)

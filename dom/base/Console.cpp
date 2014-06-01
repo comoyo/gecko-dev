@@ -141,7 +141,7 @@ public:
   ConsoleCallData()
     : mMethodName(Console::MethodLog)
     , mPrivate(false)
-    , mTimeStamp(JS_Now())
+    , mTimeStamp(JS_Now() / PR_USEC_PER_MSEC)
     , mMonotonicTimer(0)
   {
     MOZ_COUNT_CTOR(ConsoleCallData);
@@ -232,7 +232,7 @@ public:
     AutoSyncLoopHolder syncLoop(mWorkerPrivate);
     mSyncLoopTarget = syncLoop.EventTarget();
 
-    if (NS_FAILED(NS_DispatchToMainThread(this, NS_DISPATCH_NORMAL))) {
+    if (NS_FAILED(NS_DispatchToMainThread(this))) {
       JS_ReportError(cx,
                      "Failed to dispatch to main thread for the Console API!");
       return false;
@@ -900,17 +900,27 @@ Console::Method(JSContext* aCx, MethodName aMethodName,
   }
 
   // Monotonic timer for 'time' and 'timeEnd'
-  if ((aMethodName == MethodTime || aMethodName == MethodTimeEnd) && mWindow) {
-    nsGlobalWindow *win = static_cast<nsGlobalWindow*>(mWindow.get());
-    MOZ_ASSERT(win);
+  if ((aMethodName == MethodTime || aMethodName == MethodTimeEnd)) {
+    if (mWindow) {
+      nsGlobalWindow *win = static_cast<nsGlobalWindow*>(mWindow.get());
+      MOZ_ASSERT(win);
 
-    ErrorResult rv;
-    nsRefPtr<nsPerformance> performance = win->GetPerformance(rv);
-    if (rv.Failed()) {
-      return;
+      ErrorResult rv;
+      nsRefPtr<nsPerformance> performance = win->GetPerformance(rv);
+      if (rv.Failed()) {
+        return;
+      }
+
+      callData->mMonotonicTimer = performance->Now();
+    } else {
+      WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+      MOZ_ASSERT(workerPrivate);
+
+      TimeDuration duration =
+        mozilla::TimeStamp::Now() - workerPrivate->CreationTimeStamp();
+
+      callData->mMonotonicTimer = duration.ToMilliseconds();
     }
-
-    callData->mMonotonicTimer = performance->Now();
   }
 
   // The operation is completed. RAII class has to be disabled.
@@ -1429,13 +1439,13 @@ void
 Console::MakeFormatString(nsCString& aFormat, int32_t aInteger,
                           int32_t aMantissa, char aCh)
 {
-  aFormat.Append("%");
+  aFormat.Append('%');
   if (aInteger >= 0) {
     aFormat.AppendInt(aInteger);
   }
 
   if (aMantissa >= 0) {
-    aFormat.Append(".");
+    aFormat.Append('.');
     aFormat.AppendInt(aMantissa);
   }
 
@@ -1579,7 +1589,7 @@ Console::IncreaseCounter(JSContext* aCx, const ConsoleStackEntry& aFrame,
 
   if (key.IsEmpty()) {
     key.Append(aFrame.mFilename);
-    key.Append(NS_LITERAL_STRING(":"));
+    key.Append(':');
     key.AppendInt(aFrame.mLineNumber);
   }
 

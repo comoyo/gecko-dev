@@ -24,26 +24,25 @@ using namespace js::gc;
 JS::Zone::Zone(JSRuntime *rt)
   : JS::shadow::Zone(rt, &rt->gc.marker),
     allocator(this),
-    ionUsingBarriers_(false),
-    active(false),
-    gcScheduled(false),
-    gcState(NoGC),
-    gcPreserveCode(false),
+    types(this),
+    compartments(),
+    gcGrayRoots(),
+    gcHeapGrowthFactor(3.0),
+    gcMallocBytes(0),
+    gcMallocGCTriggered(false),
     gcBytes(0),
     gcTriggerBytes(0),
-    gcHeapGrowthFactor(3.0),
+    data(nullptr),
     isSystem(false),
     usedByExclusiveThread(false),
     scheduledForDestruction(false),
     maybeAlive(true),
-    gcMallocBytes(0),
-    gcMallocGCTriggered(false),
-    gcGrayRoots(),
-    data(nullptr),
-    types(this)
-#ifdef JS_ION
-    , jitZone_(nullptr)
-#endif
+    active(false),
+    jitZone_(nullptr),
+    gcState_(NoGC),
+    gcScheduled_(false),
+    gcPreserveCode_(false),
+    ionUsingBarriers_(false)
 {
     /* Ensure that there are no vtables to mess us up here. */
     JS_ASSERT(reinterpret_cast<JS::shadow::Zone *>(this) ==
@@ -61,6 +60,11 @@ Zone::~Zone()
 #ifdef JS_ION
     js_delete(jitZone_);
 #endif
+}
+
+bool Zone::init()
+{
+    return gcZoneGroupEdges.init();
 }
 
 void
@@ -199,7 +203,7 @@ Zone::discardJitCode(FreeOp *fop)
             // well to preserve them.
             if (script->hasParallelIonScript()) {
                 if (jit::ShouldPreserveParallelJITCode(runtimeFromMainThread(), script)) {
-                    script->parallelIonScript()->purgeCaches(this);
+                    script->parallelIonScript()->purgeCaches();
                     script->baselineScript()->setActive();
                 } else {
                     jit::FinishInvalidation<ParallelExecution>(fop, script);
@@ -248,12 +252,6 @@ Zone::createJitZone(JSContext *cx)
 #endif
 
 JS::Zone *
-js::ZoneOfObject(const JSObject &obj)
-{
-    return obj.zone();
-}
-
-JS::Zone *
 js::ZoneOfObjectFromAnyThread(const JSObject &obj)
 {
     return obj.zoneFromAnyThread();
@@ -267,4 +265,13 @@ Zone::hasMarkedCompartments()
             return true;
     }
     return false;
+}
+
+JS::Zone *
+js::ZoneOfValue(const JS::Value &value)
+{
+    JS_ASSERT(value.isMarkable());
+    if (value.isObject())
+        return value.toObject().zone();
+    return static_cast<js::gc::Cell *>(value.toGCThing())->tenuredZone();
 }
