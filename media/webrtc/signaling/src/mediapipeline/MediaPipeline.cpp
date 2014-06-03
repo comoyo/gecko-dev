@@ -1325,7 +1325,7 @@ void GenericReceiveListener::AddSelf(MediaSegment* segment) {
 MediaPipelineReceiveAudio::PipelineListener::PipelineListener(
     SourceMediaStream * source, TrackID track_id,
     const RefPtr<MediaSessionConduit>& conduit)
-  : GenericReceiveListener(source, track_id, 16000), // XXX rate assumption
+  : GenericReceiveListener(source, track_id, 8000), // XXX rate assumption
     conduit_(conduit)
 {
   MOZ_ASSERT(track_rate_%100 == 0);
