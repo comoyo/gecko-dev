@@ -277,6 +277,7 @@ pref("media.peerconnection.video.min_bitrate", 200);
 pref("media.peerconnection.video.start_bitrate", 300);
 pref("media.peerconnection.video.max_bitrate", 2000);
 pref("media.peerconnection.video.h261_enabled", true);
+pref("media.peerconnection.video.h261_force_keyframes", true);
 pref("media.peerconnection.video.h261_force_quality", false);
 pref("media.peerconnection.video.h261_forced_quality", 10);
 pref("media.peerconnection.video.vp8_enabled", true);

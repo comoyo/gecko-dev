@@ -128,7 +128,15 @@ int H261EncoderImpl::InitEncode(const VideoCodec* inst,
   encoded_image_._buffer = new uint8_t[size];
 
   frame_width_ = frame_height_ = 0;
-  force_iframe_ = false;
+
+  force_keyframes_ = false;
+#ifdef MOZILLA_INTERNAL_API
+  if (mozilla::Preferences::GetBool(
+      "media.peerconnection.video.h261_force_keyframes")) {
+    force_keyframes_ = true;
+  }
+#endif
+
   capture_width_ = capture_height_ = 0;
   video_quality_ = DEFAULT_ENCODER_QUALITY;
   num_frames_prev_second_render_ = 0;
@@ -333,7 +341,7 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
       return WEBRTC_VIDEO_CODEC_ERR_PARAMETER;
   }
 
-  if (frame_type == kKeyFrame || encoding_size_changed_) {
+  if (force_keyframes_ || frame_type == kKeyFrame || encoding_size_changed_) {
     frame_type = kKeyFrame;
     encoder_->FastUpdatePicture();
   }
