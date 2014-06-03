@@ -193,6 +193,7 @@ int VoEExternalMediaImpl::ExternalRecordingInsertData(
         return -1;
     }
     if ((16000 != samplingFreqHz) && (32000 != samplingFreqHz) &&
+        (8000 != samplingFreqHz) &&
         (48000 != samplingFreqHz) && (44100 != samplingFreqHz))
     {
          shared_->SetLastError(VE_INVALID_ARGUMENT, kTraceError,
@@ -366,6 +367,7 @@ int VoEExternalMediaImpl::ExternalPlayoutGetData(
         return -1;
     }
     if ((16000 != samplingFreqHz) && (32000 != samplingFreqHz) &&
+        (8000 != samplingFreqHz) &&
         (48000 != samplingFreqHz) && (44100 != samplingFreqHz))
     {
         shared_->SetLastError(VE_INVALID_ARGUMENT, kTraceError,
