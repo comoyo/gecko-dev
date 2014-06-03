@@ -613,6 +613,10 @@ sip_config_video_supported_codecs_get (rtp_ptype aSupportedCodecs[],
         //codec_mask = vcmGetVideoCodecList(DSP_ENCODEONLY);
         codec_mask = vcmGetVideoCodecList(VCM_DSP_IGNORE);
     }
+    if ( codec_mask & VCM_CODEC_RESOURCE_H261) {
+      aSupportedCodecs[count] = RTP_H261;
+      ++count;
+    }
 #ifdef WEBRTC_GONK
     if ( codec_mask & VCM_CODEC_RESOURCE_H264) {
       if (vcmGetVideoMaxSupportedPacketizationMode() == 1) {
@@ -621,10 +625,6 @@ sip_config_video_supported_codecs_get (rtp_ptype aSupportedCodecs[],
       }
       aSupportedCodecs[count] = RTP_H264_P0;
       count++;
-    }
-    if ( codec_mask & VCM_CODEC_RESOURCE_H261) {
-      aSupportedCodecs[count] = RTP_H261;
-      ++count;
     }
     if ( codec_mask & VCM_CODEC_RESOURCE_VP8) {
       aSupportedCodecs[count] = RTP_VP8;
