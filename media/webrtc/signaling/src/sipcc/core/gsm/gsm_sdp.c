@@ -4683,6 +4683,7 @@ gsmsdp_negotiate_rtcp_fb (cc_sdp_t *cc_sdp_p,
          */
         switch (codec) {
             /* Really should be all video codecs... */
+            case RTP_H261:
             case RTP_VP8:
             case RTP_H263:
             case RTP_H264_P0:

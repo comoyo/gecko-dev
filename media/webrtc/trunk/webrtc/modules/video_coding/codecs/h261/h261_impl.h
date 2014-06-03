@@ -102,7 +102,7 @@ class H261EncoderImpl : public H261Encoder {
   VideoCodec codec_;
   P64Encoder* encoder_;
   bool inited_;
-  bool force_iframe_;
+  bool force_keyframes_;
   bool encoding_size_changed_;
   int video_quality_;
   int frame_width_, frame_height_;
