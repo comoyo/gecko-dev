@@ -258,6 +258,8 @@ pref("media.getusermedia.aec", 1);
 #endif
 pref("media.peerconnection.video.h261_enabled", false);
 pref("media.peerconnection.video.vp8_enabled", true);
+pref("media.peerconnection.video.vp8_force_bitrate", false);
+pref("media.peerconnection.video.vp8_forced_bitrate_kbps", 1000);
 pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.default_iceservers", "[{\"url\": \"stun:stun.services.mozilla.com\"}]");
 pref("media.peerconnection.trickle_ice", true);

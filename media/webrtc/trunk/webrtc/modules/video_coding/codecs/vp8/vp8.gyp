@@ -28,6 +28,9 @@
       'cflags_mozilla': [
         '$(NSPR_CFLAGS)',
       ],
+      'defines' : [
+        'MOZILLA_INTERNAL_API',
+      ],
       'conditions': [
         ['build_libvpx==1', {
           'dependencies': [

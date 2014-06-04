@@ -33,6 +33,10 @@
 
 #include "nsDebug.h"
 
+#ifdef MOZILLA_INTERNAL_API
+#include "mozilla/Preferences.h"
+#endif
+
 enum { kVp8ErrorPropagationTh = 30 };
 
 namespace webrtc {
@@ -92,8 +96,20 @@ int VP8EncoderImpl::Release() {
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
-int VP8EncoderImpl::SetRates(uint32_t new_bitrate_kbit,
-                             uint32_t new_framerate) {
+int VP8EncoderImpl::SetRates(uint32_t no_new_bitrate_kbit,
+                             uint32_t no_new_framerate) {
+  uint32_t new_bitrate_kbit = no_new_bitrate_kbit;
+  uint32_t new_framerate = no_new_framerate;
+#ifdef MOZILLA_INTERNAL_API
+  if (mozilla::Preferences::GetBool(
+          "media.peerconnection.video.vp8_force_bitrate")) {
+    new_bitrate_kbit = mozilla::Preferences::GetInt(
+        "media.peerconnection.video.vp8_forced_bitrate_kbps", no_new_bitrate_kbit);
+    new_bitrate_kbit = std::max((uint32_t) 1, new_bitrate_kbit);
+    new_framerate = 30;
+  }
+#endif
+
   if (!inited_) {
     return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
   }
@@ -485,6 +501,10 @@ int VP8EncoderImpl::GetEncodedPartitions(const I420VideoFrame& input_image) {
     encoded_image_.capture_time_ms_ = input_image.render_time_ms();
     encoded_image_._encodedHeight = raw_->h;
     encoded_image_._encodedWidth = raw_->w;
+    printf_stderr("##### VP8 Encoder :: Encoded Frame. %dx%d, %dkb.",
+                  encoded_image_._encodedWidth,
+                  encoded_image_._encodedHeight,
+                  encoded_image_._length * 8 / 1000);
     encoded_complete_callback_->Encoded(encoded_image_, &codec_specific,
                                       &frag_info);
   }
