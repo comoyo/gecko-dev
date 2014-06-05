@@ -27,6 +27,8 @@
 #include "GonkCameraHwMgr.h"
 #include "GonkCameraParameters.h"
 
+#include "prenv.h"
+
 namespace android {
   class GonkCameraHardware;
   class MediaProfiles;
@@ -138,12 +140,36 @@ protected:
 
   int32_t RationalizeRotation(int32_t aRotation);
 
+  inline bool timeToDropFrame() {
+    if (!mForcedPreviewFps)
+        return false;
+
+    PRIntervalTime now = PR_IntervalNow();
+    uint32_t usBetweenFrames = 1000 * 1000 / mForcedPreviewFps;
+    PRIntervalTime timeSinceLastFrame = now - mLastPreviewFrameTime;
+    DOM_CAMERA_LOGI("%s: fps: %d, usBetweenFrames: %u, timeSinceLastFrame: %u",
+                    __FUNCTION__,
+                    mForcedPreviewFps,
+                    usBetweenFrames,
+                    PR_IntervalToMicroseconds(timeSinceLastFrame));
+
+    if (PR_IntervalToMicroseconds(timeSinceLastFrame) < usBetweenFrames) {
+      return true;
+    }
+
+    mLastPreviewFrameTime = now;
+    return false;
+  }
+
+  PRIntervalTime            mLastPreviewFrameTime;
+
   android::sp<android::GonkCameraHardware> mCameraHw;
 
   Size                      mLastPictureSize;
   Size                      mLastThumbnailSize;
   Size                      mLastRecorderSize;
   uint32_t                  mPreviewFps;
+  uint32_t                  mForcedPreviewFps;
   bool                      mResumePreviewAfterTakingPicture;
   bool                      mFlashSupported;
   bool                      mLuminanceSupported;

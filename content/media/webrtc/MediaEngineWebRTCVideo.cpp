@@ -12,6 +12,10 @@
 #include "MediaTrackConstraints.h"
 #include "GeckoProfiler.h"
 
+#ifdef MOZILLA_INTERNAL_API
+#include "mozilla/Preferences.h"
+#endif
+
 #ifdef MOZ_B2G_CAMERA
 #include "GrallocImages.h"
 #include "libyuv.h"
@@ -756,6 +760,10 @@ MediaEngineWebRTCVideoSource::StartImpl(webrtc::CaptureCapability aCapability) {
   config.mMode = ICameraControl::kPictureMode;
   config.mPreviewSize.width = aCapability.width;
   config.mPreviewSize.height = aCapability.height;
+#ifdef MOZILLA_INTERNAL_API
+  config.mForcedPreviewFps = Preferences::GetInt("media.navigator.video.default_fps",
+                                                 aCapability.maxFPS);
+#endif
   mCameraControl->Start(&config);
   mCameraControl->Set(CAMERA_PARAM_PICTURE_SIZE, config.mPreviewSize);
 

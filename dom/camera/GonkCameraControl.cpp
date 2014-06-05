@@ -62,9 +62,11 @@ using namespace android;
 // Construct nsGonkCameraControl on the main thread.
 nsGonkCameraControl::nsGonkCameraControl(uint32_t aCameraId)
   : CameraControlImpl(aCameraId)
+  , mLastPreviewFrameTime(0)
   , mLastPictureSize({0, 0})
   , mLastThumbnailSize({0, 0})
   , mPreviewFps(30)
+  , mForcedPreviewFps(0)
   , mResumePreviewAfterTakingPicture(false) // XXXmikeh - see bug 950102
   , mFlashSupported(false)
   , mLuminanceSupported(false)
@@ -233,6 +235,10 @@ nsGonkCameraControl::SetConfigurationInternal(const Configuration& aConfig)
   mCurrentConfiguration.mRecorderProfile = aConfig.mRecorderProfile;
   if (aConfig.mMode == kVideoMode) {
     mCurrentConfiguration.mPreviewSize = mLastRecorderSize;
+  }
+
+  if (aConfig.mForcedPreviewFps) {
+    mForcedPreviewFps = aConfig.mForcedPreviewFps;
   }
 
   OnConfigurationChange();
@@ -1671,6 +1677,9 @@ nsGonkCameraControl::GetRecorderProfileManagerImpl()
 void
 nsGonkCameraControl::OnNewPreviewFrame(layers::TextureClient* aBuffer)
 {
+  if (timeToDropFrame())
+    return;
+
   nsRefPtr<Image> frame = mImageContainer->CreateImage(ImageFormat::GRALLOC_PLANAR_YCBCR);
 
   GrallocImage* videoImage = static_cast<GrallocImage*>(frame.get());

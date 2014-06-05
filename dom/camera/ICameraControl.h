@@ -142,6 +142,7 @@ public:
     Mode      mMode;
     Size      mPreviewSize;
     nsString  mRecorderProfile;
+    uint32_t  mForcedPreviewFps;
   };
 
   struct Point {
