@@ -406,6 +406,17 @@ public:
 #ifdef MOZILLA_INTERNAL_API
   const PeerIdentity* GetPeerIdentity() const { return mPeerIdentity; }
   nsresult SetPeerIdentity(const nsAString& peerIdentity);
+
+  const std::string& GetIdAsAscii() const
+  {
+    return mName;
+  }
+
+  nsresult GetId(nsAString& id)
+  {
+    id = NS_ConvertASCIItoUTF16(mName.c_str());
+    return NS_OK;
+  }
 #endif
 
   // this method checks to see if we've made a promise to protect media.
@@ -527,6 +538,10 @@ public:
   // Called when OnLocal/RemoteDescriptionSuccess/Error
   // is called to start the list over.
   void ClearSdpParseErrorMessages();
+
+  void OnAddIceCandidateError() {
+    ++mAddCandidateErrorCount;
+  }
 
   // Called to retreive the list of parsing errors.
   const std::vector<std::string> &GetSdpParseErrors();
@@ -707,6 +722,7 @@ private:
 
   // Holder for error messages from parsing SDP
   std::vector<std::string> mSDPParseErrorMessages;
+  unsigned int mAddCandidateErrorCount;
 
   bool mTrickle;
 

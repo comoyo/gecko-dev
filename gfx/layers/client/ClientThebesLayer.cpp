@@ -28,12 +28,16 @@
 namespace mozilla {
 namespace layers {
 
+PRLogModuleInfo* gTilingLog;
+
 using namespace mozilla::gfx;
 
 void
 ClientThebesLayer::PaintThebes()
 {
-  PROFILER_LABEL("ClientThebesLayer", "PaintThebes");
+  PROFILER_LABEL("ClientThebesLayer", "PaintThebes",
+    js::ProfileEntry::Category::GRAPHICS);
+
   NS_ASSERTION(ClientManager()->InDrawing(),
                "Can only draw in drawing phase");
   
@@ -141,6 +145,9 @@ ClientLayerManager::CreateThebesLayerWithHint(ThebesLayerCreationHint aHint)
       (AsShadowForwarder()->GetCompositorBackendType() == LayersBackend::LAYERS_OPENGL ||
        AsShadowForwarder()->GetCompositorBackendType() == LayersBackend::LAYERS_D3D9 ||
        AsShadowForwarder()->GetCompositorBackendType() == LayersBackend::LAYERS_D3D11)) {
+    if (!gTilingLog) {
+      gTilingLog = PR_NewLogModule("tiling");
+    }
     if (gfxPrefs::LayersUseSimpleTiles()) {
       nsRefPtr<SimpleClientTiledThebesLayer> layer =
         new SimpleClientTiledThebesLayer(this);

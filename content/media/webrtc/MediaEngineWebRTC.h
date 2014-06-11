@@ -43,6 +43,8 @@
 #include "webrtc/voice_engine/include/voe_call_report.h"
 
 // Video Engine
+// conflicts with #include of scoped_ptr.h
+#undef FF
 #include "webrtc/video_engine/include/vie_base.h"
 #include "webrtc/video_engine/include/vie_codec.h"
 #include "webrtc/video_engine/include/vie_render.h"
@@ -356,8 +358,7 @@ private:
   NullTransport *mNullTransport;
 };
 
-class MediaEngineWebRTC : public MediaEngine,
-                          public webrtc::TraceCallback
+class MediaEngineWebRTC : public MediaEngine
 {
 public:
   MediaEngineWebRTC(MediaEnginePrefs &aPrefs);
@@ -368,9 +369,6 @@ public:
 
   virtual void EnumerateVideoDevices(nsTArray<nsRefPtr<MediaEngineVideoSource> >*);
   virtual void EnumerateAudioDevices(nsTArray<nsRefPtr<MediaEngineAudioSource> >*);
-
-  // Webrtc trace callbacks for proxying to NSPR
-  virtual void Print(webrtc::TraceLevel level, const char* message, int length);
 
 private:
   ~MediaEngineWebRTC() {

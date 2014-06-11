@@ -138,6 +138,7 @@ function MarionetteServerConnection(aPrefix, aTransport, aServer)
   this.currentFrameElement = null;
   this.testName = null;
   this.mozBrowserClose = null;
+  this.statusbarHeight = null;
 }
 
 MarionetteServerConnection.prototype = {
@@ -424,7 +425,12 @@ MarionetteServerConnection.prototype = {
   whenBrowserStarted: function MDA_whenBrowserStarted(win, newSession) {
     try {
       if (!Services.prefs.getBoolPref("marionette.contentListener") || !newSession) {
-        this.curBrowser.loadFrameScript(FRAME_SCRIPT, win);
+        try {
+          this.curBrowser.loadFrameScript(FRAME_SCRIPT, win);
+        } catch (e) {
+          logger.info("failed loading frame script due to" + e.toString());
+          throw e;
+        }
       }
     }
     catch (e) {
@@ -571,9 +577,7 @@ MarionetteServerConnection.prototype = {
       "platformVersion": Services.appinfo.platformVersion,
 
       // Supported features
-      "cssSelectorsEnabled": true,
       "handlesAlerts": false,
-      "javascriptEnabled": true,
       "nativeEvents": false,
       "rotatable": isB2G,
       "secureSsl": false,
@@ -2438,6 +2442,12 @@ MarionetteServerConnection.prototype = {
         globalMessageManager.broadcastAsyncMessage(
           "MarionetteMainListener:emitTouchEvent", message.json);
         return;
+      case "Marionette:setStatusbarHeight":
+        //NOTE: If we had content<->content communication, this wouldn't be needed
+        this.statusbarHeight = message.json.height;
+        return;
+      case "Marionette:getStatusbarHeight":
+        return [this.statusbarHeight];
     }
   }
 };

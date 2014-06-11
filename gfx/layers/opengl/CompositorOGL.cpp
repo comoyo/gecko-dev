@@ -114,6 +114,15 @@ CompositorOGL::CreateContext()
   }
 #endif
 
+  // Allow to create offscreen GL context for main Layer Manager
+  if (!context && PR_GetEnv("MOZ_LAYERS_PREFER_OFFSCREEN")) {
+    SurfaceCaps caps = SurfaceCaps::ForRGB();
+    caps.preserve = false;
+    caps.bpp16 = gfxPlatform::GetPlatform()->GetOffscreenFormat() == gfxImageFormat::RGB16_565;
+    context = GLContextProvider::CreateOffscreen(gfxIntSize(mSurfaceSize.width,
+                                                            mSurfaceSize.height), caps);
+  }
+
   if (!context)
     context = gl::GLContextProvider::CreateForWindow(mWidget);
 
@@ -308,16 +317,27 @@ CompositorOGL::Initialize()
     0.0f, 0.0f, 0.0f, 0.0f,
     1.0f, 0.0f, 0.0f, 0.0f,
     0.0f, 1.0f, 0.0f, 0.0f,
+    1.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 1.0f, 0.0f, 0.0f,
     1.0f, 1.0f, 0.0f, 0.0f,
+
     0.0f, 0.0f, 0.0f, 1.0f,
     1.0f, 0.0f, 0.0f, 1.0f,
     0.0f, 1.0f, 0.0f, 1.0f,
+    1.0f, 0.0f, 0.0f, 1.0f,
+    0.0f, 1.0f, 0.0f, 1.0f,
     1.0f, 1.0f, 0.0f, 1.0f,
+
     0.0f, 0.0f, 0.0f, 2.0f,
     1.0f, 0.0f, 0.0f, 2.0f,
     0.0f, 1.0f, 0.0f, 2.0f,
+    1.0f, 0.0f, 0.0f, 2.0f,
+    0.0f, 1.0f, 0.0f, 2.0f,
     1.0f, 1.0f, 0.0f, 2.0f,
+
     0.0f, 0.0f, 0.0f, 3.0f,
+    1.0f, 0.0f, 0.0f, 3.0f,
+    0.0f, 1.0f, 0.0f, 3.0f,
     1.0f, 0.0f, 0.0f, 3.0f,
     0.0f, 1.0f, 0.0f, 3.0f,
     1.0f, 1.0f, 0.0f, 3.0f,
@@ -560,9 +580,15 @@ CompositorOGL::PrepareViewport(const gfx::IntSize& aSize,
   // Matrix to transform (0, 0, aWidth, aHeight) to viewport space (-1.0, 1.0,
   // 2, 2) and flip the contents.
   Matrix viewMatrix;
-  viewMatrix.Translate(-1.0, 1.0);
-  viewMatrix.Scale(2.0f / float(aSize.width), 2.0f / float(aSize.height));
-  viewMatrix.Scale(1.0f, -1.0f);
+  if (mGLContext->IsOffscreen()) {
+    // In case of rendering via GL Offscreen context, disable Y-Flipping
+    viewMatrix.Translate(-1.0, -1.0);
+    viewMatrix.Scale(2.0f / float(aSize.width), 2.0f / float(aSize.height));
+  } else {
+    viewMatrix.Translate(-1.0, 1.0);
+    viewMatrix.Scale(2.0f / float(aSize.width), 2.0f / float(aSize.height));
+    viewMatrix.Scale(1.0f, -1.0f);
+  }
 
   viewMatrix = aWorldTransform * viewMatrix;
 
@@ -674,7 +700,9 @@ CompositorOGL::BeginFrame(const nsIntRegion& aInvalidRegion,
                           Rect *aClipRectOut,
                           Rect *aRenderBoundsOut)
 {
-  PROFILER_LABEL("CompositorOGL", "BeginFrame");
+  PROFILER_LABEL("CompositorOGL", "BeginFrame",
+    js::ProfileEntry::Category::GRAPHICS);
+
   MOZ_ASSERT(!mFrameInProgress, "frame still in progress (should have called EndFrame or AbortFrame");
 
   LayerScope::BeginFrame(mGLContext, PR_Now());
@@ -973,11 +1001,16 @@ CompositorOGL::DrawQuad(const Rect& aRect,
                         Float aOpacity,
                         const gfx::Matrix4x4 &aTransform)
 {
-  PROFILER_LABEL("CompositorOGL", "DrawQuad");
+  PROFILER_LABEL("CompositorOGL", "DrawQuad",
+    js::ProfileEntry::Category::GRAPHICS);
+
   MOZ_ASSERT(mFrameInProgress, "frame not started");
 
   IntRect intClipRect;
   aClipRect.ToIntRect(&intClipRect);
+  if (!mTarget) {
+    intClipRect.MoveBy(mRenderOffset.x, mRenderOffset.y);
+  }
 
   gl()->fScissor(intClipRect.x, FlipY(intClipRect.y + intClipRect.height),
                  intClipRect.width, intClipRect.height);
@@ -1244,7 +1277,9 @@ CompositorOGL::DrawQuad(const Rect& aRect,
 void
 CompositorOGL::EndFrame()
 {
-  PROFILER_LABEL("CompositorOGL", "EndFrame");
+  PROFILER_LABEL("CompositorOGL", "EndFrame",
+    js::ProfileEntry::Category::GRAPHICS);
+
   MOZ_ASSERT(mCurrentRenderTarget == mWindowRenderTarget, "Rendering target not properly restored");
 
 #ifdef MOZ_DUMP_PAINTING
@@ -1519,7 +1554,9 @@ CompositorOGL::BindAndDrawQuads(ShaderProgramOGL *aProg,
     aProg->SetTextureRects(aTextureRects);
   }
 
-  mGLContext->fDrawArrays(LOCAL_GL_TRIANGLE_STRIP, 0, 4 * aQuads);
+  // We are using GL_TRIANGLES here because the Mac Intel drivers fail to properly
+  // process uniform arrays with GL_TRIANGLE_STRIP. Go figure.
+  mGLContext->fDrawArrays(LOCAL_GL_TRIANGLES, 0, 6 * aQuads);
 }
 
 GLuint

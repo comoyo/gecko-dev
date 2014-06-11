@@ -4,6 +4,20 @@
 
 %include ../../../shared/incontentprefs/preferences.css
 
+prefpane .groupbox-title {
+  background: none;
+  margin-bottom: 0;
+}
+
+tabs {
+  padding-right: 0;
+  padding-left: 0;
+}
+
+tab[selected] {
+  text-shadow: none;
+}
+
 menulist:not([editable="true"]) > menupopup > menuitem[checked="true"]::before,
 menulist:not([editable="true"]) > menupopup > menuitem[selected="true"]::before {
   display: none;
@@ -13,6 +27,13 @@ menulist:not([editable="true"]) > .menulist-dropmarker {
   display: -moz-box;
   margin-top: 1px;
   margin-bottom: 1px;
+}
+
+menulist > menupopup menu,
+menulist > menupopup menuitem,
+button[type="menu"] > menupopup menu,
+button[type="menu"] > menupopup menuitem {
+  -moz-padding-end: 34px;
 }
 
 .help-button > .button-box > .button-icon {

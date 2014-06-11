@@ -1260,8 +1260,6 @@ ScanTypeObject(GCMarker *gcmarker, types::TypeObject *type)
     if (type->hasNewScript()) {
         PushMarkStack(gcmarker, type->newScript()->fun);
         PushMarkStack(gcmarker, type->newScript()->templateObject);
-    } else if (type->hasTypedObject()) {
-        PushMarkStack(gcmarker, type->typedObject()->descrHeapPtr());
     }
 
     if (type->interpretedFunction)
@@ -1287,8 +1285,6 @@ gc::MarkChildren(JSTracer *trc, types::TypeObject *type)
     if (type->hasNewScript()) {
         MarkObject(trc, &type->newScript()->fun, "type_new_function");
         MarkObject(trc, &type->newScript()->templateObject, "type_new_template");
-    } else if (type->hasTypedObject()) {
-        MarkObject(trc, &type->typedObject()->descrHeapPtr(), "type_heap_ptr");
     }
 
     if (type->interpretedFunction)
@@ -1604,7 +1600,7 @@ GCMarker::drainMarkStack(SliceBudget &budget)
 
     struct AutoCheckCompartment {
         JSRuntime *runtime;
-        AutoCheckCompartment(JSRuntime *rt) : runtime(rt) {
+        explicit AutoCheckCompartment(JSRuntime *rt) : runtime(rt) {
             JS_ASSERT(!rt->gc.strictCompartmentChecking);
             runtime->gc.strictCompartmentChecking = true;
         }

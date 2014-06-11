@@ -41,12 +41,11 @@
 #include "nsDOMFile.h"
 #include "nsGlobalWindow.h"
 
-#include "mozilla/Preferences.h"
-
 /* Using WebRTC backend on Desktops (Mac, Windows, Linux), otherwise default */
 #include "MediaEngineDefault.h"
 #if defined(MOZ_WEBRTC)
 #include "MediaEngineWebRTC.h"
+#include "browser_logging/WebRtcLog.h"
 #endif
 
 #ifdef MOZ_B2G
@@ -62,12 +61,12 @@
 // XXX Workaround for bug 986974 to maintain the existing broken semantics
 template<>
 struct nsIMediaDevice::COMTypeInfo<mozilla::VideoDevice, void> {
-  static const nsIID kIID NS_HIDDEN;
+  static const nsIID kIID;
 };
 const nsIID nsIMediaDevice::COMTypeInfo<mozilla::VideoDevice, void>::kIID = NS_IMEDIADEVICE_IID;
 template<>
 struct nsIMediaDevice::COMTypeInfo<mozilla::AudioDevice, void> {
-  static const nsIID kIID NS_HIDDEN;
+  static const nsIID kIID;
 };
 const nsIID nsIMediaDevice::COMTypeInfo<mozilla::AudioDevice, void>::kIID = NS_IMEDIADEVICE_IID;
 
@@ -1576,6 +1575,10 @@ MediaManager::GetUserMedia(bool aPrivileged,
                                                                 callID, c, isHTTPS);
     obs->NotifyObservers(req, "getUserMedia:request", nullptr);
   }
+
+#ifdef MOZ_WEBRTC
+  EnableWebRtcLog();
+#endif
 
   return NS_OK;
 }

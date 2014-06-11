@@ -151,7 +151,7 @@ PRLogModuleInfo *signalingLogInfo() {
 // XXX Workaround for bug 998092 to maintain the existing broken semantics
 template<>
 struct nsISupportsWeakReference::COMTypeInfo<nsSupportsWeakReference, void> {
-  static const nsIID kIID NS_HIDDEN;
+  static const nsIID kIID;
 };
 const nsIID nsISupportsWeakReference::COMTypeInfo<nsSupportsWeakReference, void>::kIID = NS_ISUPPORTSWEAKREFERENCE_IID;
 
@@ -374,6 +374,7 @@ public:
         break;
 
       case ADDICECANDIDATEERROR:
+        mPC->OnAddIceCandidateError();
         mObserver->OnAddIceCandidateError(mCode, ObString(mReason.c_str()), rv);
         break;
 
@@ -495,6 +496,7 @@ PeerConnectionImpl::PeerConnectionImpl(const GlobalObject* aGlobal)
   , mNumAudioStreams(0)
   , mNumVideoStreams(0)
   , mHaveDataStream(false)
+  , mAddCandidateErrorCount(0)
   , mTrickle(true) // TODO(ekr@rtfm.com): Use pref
 {
 #ifdef MOZILLA_INTERNAL_API
@@ -730,6 +732,7 @@ PeerConnectionImpl::Initialize(PeerConnectionObserver& aObserver,
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aThread);
   mThread = do_QueryInterface(aThread);
+  CheckThread();
 
   mPCObserver = do_GetWeakReference(&aObserver);
 
@@ -1963,6 +1966,16 @@ PeerConnectionImpl::IceConnectionStateChange_m(PCImplIceConnectionState aState)
                               timeDelta.ToMilliseconds());
       }
     }
+
+    if (isSucceeded(aState)) {
+      Telemetry::Accumulate(
+          Telemetry::WEBRTC_ICE_ADD_CANDIDATE_ERRORS_GIVEN_SUCCESS,
+          mAddCandidateErrorCount);
+    } else if (isFailed(aState)) {
+      Telemetry::Accumulate(
+          Telemetry::WEBRTC_ICE_ADD_CANDIDATE_ERRORS_GIVEN_FAILURE,
+          mAddCandidateErrorCount);
+    }
   }
 #endif
 
@@ -2236,6 +2249,7 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
         NS_LITERAL_STRING("audio_") : NS_LITERAL_STRING("video_");
     idstr.AppendInt(mp.trackid());
 
+    // Gather pipeline stats.
     switch (mp.direction()) {
       case MediaPipeline::TRANSMIT: {
         nsString localId = NS_LITERAL_STRING("outbound_rtp_") + idstr;
@@ -2291,6 +2305,26 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
           s.mIsRemote = false;
           s.mPacketsSent.Construct(mp.rtp_packets_sent());
           s.mBytesSent.Construct(mp.rtp_bytes_sent());
+
+          // Lastly, fill in video encoder stats if this is video
+          if (!isAudio) {
+            double framerateMean;
+            double framerateStdDev;
+            double bitrateMean;
+            double bitrateStdDev;
+            uint32_t droppedFrames;
+            if (mp.Conduit()->GetVideoEncoderStats(&framerateMean,
+                                                   &framerateStdDev,
+                                                   &bitrateMean,
+                                                   &bitrateStdDev,
+                                                   &droppedFrames)) {
+              s.mFramerateMean.Construct(framerateMean);
+              s.mFramerateStdDev.Construct(framerateStdDev);
+              s.mBitrateMean.Construct(bitrateMean);
+              s.mBitrateStdDev.Construct(bitrateStdDev);
+              s.mDroppedFrames.Construct(droppedFrames);
+            }
+          }
           query->report->mOutboundRTPStreamStats.Value().AppendElement(s);
         }
         break;
@@ -2354,6 +2388,25 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
                                        &avSyncDelta)) {
             s.mMozJitterBufferDelay.Construct(jitterBufferDelay);
             s.mMozAvSyncDelay.Construct(avSyncDelta);
+          }
+        }
+        // Lastly, fill in video decoder stats if this is video
+        if (!isAudio) {
+          double framerateMean;
+          double framerateStdDev;
+          double bitrateMean;
+          double bitrateStdDev;
+          uint32_t discardedPackets;
+          if (mp.Conduit()->GetVideoDecoderStats(&framerateMean,
+                                                 &framerateStdDev,
+                                                 &bitrateMean,
+                                                 &bitrateStdDev,
+                                                 &discardedPackets)) {
+            s.mFramerateMean.Construct(framerateMean);
+            s.mFramerateStdDev.Construct(framerateStdDev);
+            s.mBitrateMean.Construct(bitrateMean);
+            s.mBitrateStdDev.Construct(bitrateStdDev);
+            s.mDiscardedPackets.Construct(discardedPackets);
           }
         }
         query->report->mInboundRTPStreamStats.Value().AppendElement(s);
