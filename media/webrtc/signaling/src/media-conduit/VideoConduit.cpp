@@ -1281,6 +1281,9 @@ WebrtcVideoConduit::CodecConfigToWebRTCCodec(const VideoCodecConfig* codecInfo,
   if (codecInfo->mName == "H264_P0" || codecInfo->mName == "H264_P1") {
     cinst.codecType = webrtc::kVideoCodecH264;
     PL_strncpyz(cinst.plName, "H264", sizeof(cinst.plName));
+  } else if (codecInfo->mName == "H261") {
+    cinst.codecType = webrtc::kVideoCodecH261;
+    PL_strncpyz(cinst.plName, "H261", sizeof(cinst.plName));
   } else if (codecInfo->mName == "VP8") {
     cinst.codecType = webrtc::kVideoCodecVP8;
     PL_strncpyz(cinst.plName, "VP8", sizeof(cinst.plName));
