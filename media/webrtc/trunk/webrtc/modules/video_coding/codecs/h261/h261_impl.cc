@@ -156,7 +156,8 @@ int H261EncoderImpl::InitEncode(const VideoCodec* inst,
 }
 
 const uint8_t* H261EncoderImpl::PackI420Frame(const I420VideoFrame& frame) {
-  PROFILER_LABEL("H261EncoderImpl", "PackI420Frame");
+  PROFILER_LABEL("H261EncoderImpl", "PackI420Frame",
+          js::ProfileEntry::Category::OTHER);
   // If the frame is packed already, don't copy
   if (frame.buffer(kYPlane) + frame.width() * frame.height() == frame.buffer(kUPlane) &&
       frame.buffer(kUPlane) + frame.width() * frame.height() / 2 == frame.buffer(kVPlane)) {
@@ -188,7 +189,8 @@ const uint8_t* H261EncoderImpl::PackI420Frame(const I420VideoFrame& frame) {
 int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
            const CodecSpecificInfo* codec_specific_info,
            const std::vector<VideoFrameType>* frame_types) {
-  PROFILER_LABEL("H261EncoderImpl", "Encode");
+  PROFILER_LABEL("H261EncoderImpl", "Encode",
+          js::ProfileEntry::Category::OTHER);
   TRACE_EVENT1("webrtc", "H261::Encode", "timestamp", input_image.timestamp());
 
   if (!inited_) {
@@ -302,7 +304,8 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
 
   const I420VideoFrame* cropped_image;
   if (cropping_required_) {
-    PROFILER_LABEL("H261EncoderImpl", "Crop");
+    PROFILER_LABEL("H261EncoderImpl", "Crop",
+            js::ProfileEntry::Category::OTHER);
     // XXX(pehrsons) Copying occurs here
     const uint8_t* buffer = PackI420Frame(input_image);
     ConvertToI420(kI420, buffer,
@@ -318,7 +321,8 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
 
   const I420VideoFrame* scaled_image;
   if (scaling_required_) {
-    PROFILER_LABEL("H261EncoderImpl", "Scale");
+    PROFILER_LABEL("H261EncoderImpl", "Scale",
+            js::ProfileEntry::Category::OTHER);
     if (scaler_.Scale(*cropped_image, &scaled_image_) != 0) {
       return WEBRTC_VIDEO_CODEC_ERROR;
     }
@@ -391,7 +395,8 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
 void H261EncoderImpl::SendPacket(uint32_t timestamp,
                                  uint16_t capture_time_ms,
                                  VideoFrameType& frame_type) {
-    PROFILER_LABEL("H261EncoderImpl", "SendPacket");
+    PROFILER_LABEL("H261EncoderImpl", "SendPacket",
+            js::ProfileEntry::Category::OTHER);
     encoded_image_._frameType = frame_type;
     encoded_image_._timeStamp = timestamp;
     encoded_image_.capture_time_ms_ = capture_time_ms;
@@ -513,7 +518,8 @@ int H261DecoderImpl::InitDecode(const VideoCodec* inst, int number_of_cores) {
 }
 
 int H261DecoderImpl::ReportDecodedFrame() {
-  PROFILER_LABEL("H261DecoderImpl", "ReportDecodedFrame");
+  PROFILER_LABEL("H261DecoderImpl", "ReportDecodedFrame",
+          js::ProfileEntry::Category::OTHER);
   ++num_frames_prev_second_render_;
   if (decoded_image_.render_time_ms() / 1000 > prev_second_render_time_ms_ / 1000) {
     printf_stderr("H261 Decoder !! Current framerate = %d", num_frames_prev_second_render_);
@@ -569,7 +575,8 @@ int H261DecoderImpl::Decode(const EncodedImage& input_image,
   if (decoded_complete_callback_ == NULL) {
     return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
   }
-  PROFILER_LABEL("H261DecoderImpl", "Decode");
+  PROFILER_LABEL("H261DecoderImpl", "Decode",
+          js::ProfileEntry::Category::OTHER);
 
   for (int fragment_id = 0; fragment_id < fragmentation->fragmentationVectorSize; ++fragment_id) {
     uint8_t* fragment_buffer = input_image._buffer + fragmentation->fragmentationOffset[fragment_id];

@@ -114,7 +114,8 @@ HighPassFilterImpl::HighPassFilterImpl(const AudioProcessingImpl* apm)
 HighPassFilterImpl::~HighPassFilterImpl() {}
 
 int HighPassFilterImpl::ProcessCaptureAudio(AudioBuffer* audio) {
-  PROFILER_LABEL("HighPassFilterImpl", "ProcessCaptureAudio");
+  PROFILER_LABEL("HighPassFilterImpl", "ProcessCaptureAudio",
+          js::ProfileEntry::Category::OTHER);
   int err = apm_->kNoError;
 
   if (!is_component_enabled()) {

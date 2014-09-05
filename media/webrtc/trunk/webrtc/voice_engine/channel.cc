@@ -4333,7 +4333,8 @@ Channel::InsertExtraRTPPacket(unsigned char payloadType,
 uint32_t
 Channel::Demultiplex(const AudioFrame& audioFrame)
 {
-    PROFILER_LABEL("Channel", "Demultiplex");
+    PROFILER_LABEL("Channel", "Demultiplex",
+            js::ProfileEntry::Category::OTHER);
     WEBRTC_TRACE(kTraceStream, kTraceVoice, VoEId(_instanceId,_channelId),
                  "Channel::Demultiplex()");
     _audioFrame.CopyFrom(audioFrame);
@@ -4401,7 +4402,8 @@ void Channel::Demultiplex(const int16_t* audio_data,
 uint32_t
 Channel::PrepareEncodeAndSend(int mixingFrequency)
 {
-    PROFILER_LABEL("Channel", "PrepareEncodeAndSend");
+    PROFILER_LABEL("Channel", "PrepareEncodeAndSend",
+            js::ProfileEntry::Category::OTHER);
     WEBRTC_TRACE(kTraceStream, kTraceVoice, VoEId(_instanceId,_channelId),
                  "Channel::PrepareEncodeAndSend()");
 

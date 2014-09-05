@@ -997,7 +997,8 @@ MediaEngineWebRTCVideoSource::ConvertPixelFormatToFOURCC(int aFormat)
 
 void
 MediaEngineWebRTCVideoSource::RotateImage(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight) {
-  PROFILER_LABEL("MediaEngineWebRTCVideoSource", "RotateImage");
+  PROFILER_LABEL("MediaEngineWebRTCVideoSource", "RotateImage",
+          js::ProfileEntry::Category::OTHER);
   layers::GrallocImage *nativeImage = static_cast<layers::GrallocImage*>(aImage);
   android::sp<android::GraphicBuffer> graphicBuffer = nativeImage->GetGraphicBuffer();
   void *pMem = nullptr;
@@ -1058,7 +1059,8 @@ MediaEngineWebRTCVideoSource::RotateImage(layers::Image* aImage, uint32_t aWidth
 
 bool
 MediaEngineWebRTCVideoSource::OnNewPreviewFrame(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight) {
-  PROFILER_LABEL("MediaEngineWebRTCVideoSource", "OnNewPreviewFrame");
+  PROFILER_LABEL("MediaEngineWebRTCVideoSource", "OnNewPreviewFrame",
+          js::ProfileEntry::Category::OTHER);
   {
     ReentrantMonitorAutoEnter sync(mCallbackMonitor);
     if (mState == kStopped) {

@@ -154,7 +154,8 @@ MediaStreamGraphImpl::ExtractPendingInput(SourceMediaStream* aStream,
                                           GraphTime aDesiredUpToTime,
                                           bool* aEnsureNextIteration)
 {
-  PROFILER_LABEL("MediaStreamGraphImpl", "ExtractPendingInput");
+  PROFILER_LABEL("MediaStreamGraphImpl", "ExtractPendingInput",
+          js::ProfileEntry::Category::OTHER);
   bool finished;
   {
     MutexAutoLock lock(aStream->mMutex);
@@ -366,6 +367,7 @@ void
 MediaStreamGraphImpl::UpdateCurrentTimeForStreams(GraphTime aPrevCurrentTime, GraphTime aNextCurrentTime)
 {
   PROFILER_LABEL("MediaStreamGraphImpl", "UpdateCurrentTime");
+          js::ProfileEntry::Category::OTHER);
 
   nsTArray<MediaStream*> streamsReadyToFinish;
   nsAutoTArray<bool,800> streamHasOutput;
@@ -744,7 +746,8 @@ MediaStreamGraphImpl::UpdateStreamOrder()
 void
 MediaStreamGraphImpl::RecomputeBlocking(GraphTime aEndBlockingDecisions)
 {
-  PROFILER_LABEL("MediaStreamGraphImpl", "RecomputeBlocking");
+  PROFILER_LABEL("MediaStreamGraphImpl", "RecomputeBlocking",
+          js::ProfileEntry::Category::OTHER);
   bool blockingDecisionsWillChange = false;
 
   STREAM_LOG(PR_LOG_DEBUG+1, ("Media graph %p computing blocking for time %f",
@@ -956,7 +959,8 @@ TrackTicks
 MediaStreamGraphImpl::PlayAudio(MediaStream* aStream,
                                 GraphTime aFrom, GraphTime aTo)
 {
-  PROFILER_LABEL("MediaStreamGraphImpl", "PlayAudio");
+  PROFILER_LABEL("MediaStreamGraphImpl", "PlayAudio",
+          js::ProfileEntry::Category::OTHER);
   MOZ_ASSERT(mRealtime, "Should only attempt to play audio in realtime mode");
 
   TrackTicks ticksWritten = 0;
@@ -1079,7 +1083,8 @@ SetImageToBlackPixel(PlanarYCbCrImage* aImage)
 void
 MediaStreamGraphImpl::PlayVideo(MediaStream* aStream)
 {
-  PROFILER_LABEL("MediaStreamGraphImpl", "PlayVideo");
+  PROFILER_LABEL("MediaStreamGraphImpl", "PlayVideo",
+          js::ProfileEntry::Category::OTHER);
   MOZ_ASSERT(mRealtime, "Should only attempt to play video in realtime mode");
 
   if (aStream->mVideoOutputs.IsEmpty())
@@ -1222,7 +1227,8 @@ MediaStreamGraphImpl::ProduceDataForStreamsBlockByBlock(uint32_t aStreamIndex,
                                                         GraphTime aFrom,
                                                         GraphTime aTo)
 {
-  PROFILER_LABEL("MediaStreamGraphImpl", "ProduceDataForStreamsBlockByBlock");
+  PROFILER_LABEL("MediaStreamGraphImpl", "ProduceDataForStreamsBlockByBlock",
+          js::ProfileEntry::Category::OTHER);
 
   MOZ_ASSERT(aStreamIndex <= mFirstCycleBreaker,
              "Cycle breaker is not AudioNodeStream?");
@@ -2297,7 +2303,8 @@ SourceMediaStream::ResampleAudioToGraphSampleRate(TrackData* aTrackData, MediaSe
       aTrackData->mInputRate == GraphImpl()->AudioSampleRate()) {
     return;
   }
-  PROFILER_LABEL("SourceMediaStream", "ResampleAudioToGraphSampleRate");
+  PROFILER_LABEL("SourceMediaStream", "ResampleAudioToGraphSampleRate",
+          js::ProfileEntry::Category::OTHER);
   AudioSegment* segment = static_cast<AudioSegment*>(aSegment);
   int channels = segment->ChannelCount();
 
@@ -2361,7 +2368,8 @@ void
 SourceMediaStream::NotifyDirectConsumers(TrackData *aTrack,
                                          MediaSegment *aSegment)
 {
-  PROFILER_LABEL("SourceMediaStream", "NotifyDirectConsumers");
+  PROFILER_LABEL("SourceMediaStream", "NotifyDirectConsumers",
+          js::ProfileEntry::Category::OTHER);
   // Call with mMutex locked
   MOZ_ASSERT(aTrack);
 
