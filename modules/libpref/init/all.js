@@ -290,7 +290,7 @@ pref("media.navigator.load_adapt.measure_interval",1000);
 pref("media.navigator.load_adapt.avg_seconds",3);
 pref("media.navigator.load_adapt.high_load","0.90");
 pref("media.navigator.load_adapt.low_load","0.40");
-pref("media.navigator.video.default_fps",30);
+pref("media.navigator.video.default_fps",10);
 pref("media.navigator.video.default_minfps",10);
 
 pref("media.webrtc.debug.trace_mask", 0);
@@ -300,8 +300,8 @@ pref("media.webrtc.debug.log_file", "");
 pref("media.webrtc.debug.aec_dump_max_size", 4194304); // 4MB
 
 #ifdef MOZ_WIDGET_GONK
-pref("media.navigator.video.default_width",320);
-pref("media.navigator.video.default_height",240);
+pref("media.navigator.video.default_width",176);
+pref("media.navigator.video.default_height",144);
 pref("media.peerconnection.enabled", true);
 pref("media.peerconnection.video.enabled", true);
 pref("media.navigator.video.max_fs", 1200); // 640x480 == 1200mb
@@ -316,6 +316,7 @@ pref("media.getusermedia.aec", 4);
 pref("media.peerconnection.video.min_bitrate", 100);
 pref("media.peerconnection.video.start_bitrate", 220);
 pref("media.peerconnection.video.max_bitrate", 1000);
+pref("media.peerconnection.video.h261_forced_quality", 20);
 #else
 pref("media.navigator.video.default_width",0);  // adaptive default
 pref("media.navigator.video.default_height",0); // adaptive default
@@ -334,7 +335,12 @@ pref("media.getusermedia.browser.enabled", true);
 pref("media.peerconnection.video.min_bitrate", 200);
 pref("media.peerconnection.video.start_bitrate", 300);
 pref("media.peerconnection.video.max_bitrate", 2000);
+pref("media.peerconnection.video.h261_forced_quality", 15);
 #endif
+pref("media.peerconnection.video.h261_enabled", true);
+pref("media.peerconnection.video.h261_force_keyframes", true);
+pref("media.peerconnection.video.h261_force_quality", true);
+pref("media.peerconnection.video.vp8_enabled", true);
 pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.default_iceservers", "[{\"url\": \"stun:stun.services.mozilla.com\"}]");
 pref("media.peerconnection.trickle_ice", true);
