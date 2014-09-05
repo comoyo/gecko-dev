@@ -1,4 +1,4 @@
-/* -*- tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,6 +11,12 @@ const Services = require("Services");
 const { ActorPool, appendExtraActors, createExtraActors } = require("devtools/server/actors/common");
 const { DebuggerServer } = require("devtools/server/main");
 const { dumpProtocolSpec } = require("devtools/server/protocol");
+const makeDebugger = require("./utils/make-debugger");
+const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
+
+DevToolsUtils.defineLazyGetter(this, "StyleSheetActor", () => {
+  return require("devtools/server/actors/stylesheets").StyleSheetActor;
+});
 
 /* Root actor for the remote debugging protocol. */
 
@@ -92,6 +98,15 @@ function RootActor(aConnection, aParameters) {
   this._onTabListChanged = this.onTabListChanged.bind(this);
   this._onAddonListChanged = this.onAddonListChanged.bind(this);
   this._extraActors = {};
+
+  // Map of DOM stylesheets to StyleSheetActors
+  this._styleSheetActors = new Map();
+
+  // This creates a Debugger instance for chrome debugging all globals.
+  this.makeDebugger = makeDebugger.bind(null, {
+    findDebuggees: dbg => dbg.findAllGlobals(),
+    shouldAddNewGlobalAsDebuggee: () => true
+  });
 }
 
 RootActor.prototype = {
@@ -104,6 +119,13 @@ RootActor.prototype = {
     // Whether the server-side highlighter actor exists and can be used to
     // remotely highlight nodes (see server/actors/highlighter.js)
     highlightable: true,
+    // Which custom highlighter does the server-side highlighter actor supports?
+    // (see server/actors/highlighter.js)
+    customHighlighters: [
+      "BoxModelHighlighter",
+      "CssTransformHighlighter",
+      "SelectorHighlighter"
+    ],
     // Whether the inspector actor implements the getImageDataFromURL
     // method that returns data-uris for image URLs. This is used for image
     // tooltips for instance
@@ -115,7 +137,13 @@ RootActor.prototype = {
     storageInspectorReadOnly: true,
     // Whether conditional breakpoints are supported
     conditionalBreakpoints: true,
-    bulk: true
+    bulk: true,
+    // Whether the style rule actor implements the modifySelector method
+    // that modifies the rule's selector
+    selectorEditable: true,
+    // Whether the page style actor implements the addNewRule method that
+    // adds new rules to the page
+    addNewRule: true
   },
 
   /**
@@ -139,7 +167,7 @@ RootActor.prototype = {
   /**
    * The (chrome) window, for use by child actors
    */
-  get window() Services.wm.getMostRecentWindow(DebuggerServer.chromeWindowType),
+  get window() isWorker ? null : Services.wm.getMostRecentWindow(DebuggerServer.chromeWindowType),
 
   /**
    * The list of all windows
@@ -206,6 +234,8 @@ RootActor.prototype = {
       this._parameters.onShutdown();
     }
     this._extraActors = null;
+    this._styleSheetActors.clear();
+    this._styleSheetActors = null;
   },
 
   /* The 'listTabs' request and the 'tabListChanged' notification. */
@@ -367,6 +397,28 @@ RootActor.prototype = {
       windowUtils.resumeTimeouts();
       windowUtils.suppressEventHandling(false);
     }
+  },
+
+  /**
+   * Create or return the StyleSheetActor for a style sheet. This method
+   * is here because the Style Editor and Inspector share style sheet actors.
+   *
+   * @param DOMStyleSheet styleSheet
+   *        The style sheet to creat an actor for.
+   * @return StyleSheetActor actor
+   *         The actor for this style sheet.
+   *
+   */
+  createStyleSheetActor: function(styleSheet) {
+    if (this._styleSheetActors.has(styleSheet)) {
+      return this._styleSheetActors.get(styleSheet);
+    }
+    let actor = new StyleSheetActor(styleSheet, this);
+    this._styleSheetActors.set(styleSheet, actor);
+
+    this._globalActorPool.addActor(actor);
+
+    return actor;
   }
 };
 

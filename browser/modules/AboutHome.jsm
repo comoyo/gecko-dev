@@ -241,7 +241,7 @@ let AboutHome = {
         Services.prefs.setBoolPref("browser.rights." + currentVersion + ".shown", true);
       }
 
-      if (target) {
+      if (target && target.messageManager) {
         target.messageManager.sendAsyncMessage("AboutHome:Update", data);
       } else {
         let mm = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
@@ -251,4 +251,13 @@ let AboutHome = {
       Cu.reportError("Error in AboutHome.sendAboutHomeData: " + x);
     });
   },
+
+  /**
+   * Focuses the search input in the page with the given message manager.
+   * @param  messageManager
+   *         The MessageManager object of the selected browser.
+   */
+  focusInput: function (messageManager) {
+    messageManager.sendAsyncMessage("AboutHome:FocusInput");
+  }
 };

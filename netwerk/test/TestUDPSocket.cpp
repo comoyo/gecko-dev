@@ -95,10 +95,12 @@ static bool CheckMessageContent(nsIUDPMessage *aMessage, uint32_t aExpectedConte
  */
 class UDPClientListener : public nsIUDPSocketListener
 {
+protected:
+  virtual ~UDPClientListener();
+
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIUDPSOCKETLISTENER
-  virtual ~UDPClientListener();
   nsresult mResult;
 };
 
@@ -154,11 +156,12 @@ UDPClientListener::OnStopListening(nsIUDPSocket*, nsresult)
  */
 class UDPServerListener : public nsIUDPSocketListener
 {
+protected:
+  virtual ~UDPServerListener();
+
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIUDPSOCKETLISTENER
-
-  virtual ~UDPServerListener();
 
   nsresult mResult;
 };
@@ -221,11 +224,12 @@ UDPServerListener::OnStopListening(nsIUDPSocket*, nsresult)
  */
 class MulticastTimerCallback : public nsITimerCallback
 {
+protected:
+  virtual ~MulticastTimerCallback();
+
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSITIMERCALLBACK
-
-  virtual ~MulticastTimerCallback();
 
   nsresult mResult;
 };
@@ -269,7 +273,7 @@ main(int32_t argc, char *argv[])
   nsRefPtr<UDPServerListener> serverListener = new UDPServerListener();
 
   // Bind server socket to 0.0.0.0
-  rv = server->Init(0, false);
+  rv = server->Init(0, false, true, 0);
   NS_ENSURE_SUCCESS(rv, -1);
   int32_t serverPort;
   server->GetPort(&serverPort);
@@ -277,7 +281,7 @@ main(int32_t argc, char *argv[])
 
   // Bind clinet on arbitrary port
   nsRefPtr<UDPClientListener> clientListener = new UDPClientListener();
-  client->Init(0, false);
+  client->Init(0, false, true, 0);
   client->AsyncListen(clientListener);
 
   // Write data to server

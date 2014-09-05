@@ -48,6 +48,8 @@
       ok(data.s === "hello", "string property");
       ok(data.x.i === 10, "nested property");
       ok(data.f() === 99, "function call");
+      let obj = new data.ctor();
+      ok(obj.a === 3, "constructor call");
       ok(document.title === "Hello, Kitty", "document node");
 
       data.i = 6;
@@ -164,7 +166,7 @@
       let func = message.objects.func;
       let result = func(n => 2*n);
       ok(result == 20, "result == 20");
-      let obj = {a:1};
+      let obj = {a:1, __exposedProps__: {"a": "r"}};
       savedMM.sendAsyncMessage("cpows:from_parent", {}, {obj: obj});
     }
 
@@ -189,7 +191,7 @@
     }
 
     let savedWilldieObj;
-    let wontDie = {f:2};
+    let wontDie = {f:2, __exposedProps__: {"f": "r"}};
     function recvLifetimeTest1(message) {
       let obj = message.objects.obj;
       savedWilldieObj = obj.will_die;

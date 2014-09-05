@@ -42,9 +42,8 @@ function handleTechnologyDiscoveredRE0(msg) {
 
 function testOnPeerReadyRE0() {
   log("Running \'testOnPeerReadyRE0\'");
-  window.navigator.mozSetMessageHandler(
-    "nfc-manager-tech-discovered", handleTechnologyDiscoveredRE0);
-  toggleNFC(true).then(enableRE0);
+  sysMsgHelper.waitForTechDiscovered(handleTechnologyDiscoveredRE0);
+  toggleNFC(true).then(() => NCI.activateRE(emulator.P2P_RE_INDEX_0));
 }
 
 let tests = [

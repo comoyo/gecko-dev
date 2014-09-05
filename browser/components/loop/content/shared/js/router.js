@@ -18,7 +18,7 @@ loop.shared.router = (function(l10n) {
   var BaseRouter = Backbone.Router.extend({
     /**
      * Active view.
-     * @type {loop.shared.views.BaseView}
+     * @type {Object}
      */
     _activeView: undefined,
 
@@ -51,12 +51,38 @@ loop.shared.router = (function(l10n) {
      *
      * @param {loop.shared.views.BaseView} view View.
      */
-    loadView : function(view) {
-      if (this._activeView) {
-        this._activeView.remove();
+    loadView: function(view) {
+      this.clearActiveView();
+      this._activeView = {type: "backbone", view: view.render().show()};
+      this.updateView(this._activeView.view.$el);
+    },
+
+    /**
+     * Renders a React component as current active view.
+     *
+     * @param {React} reactComponent React component.
+     */
+    loadReactComponent: function(reactComponent) {
+      this.clearActiveView();
+      this._activeView = {
+        type: "react",
+        view: React.renderComponent(reactComponent,
+                                    document.querySelector("#main"))
+      };
+    },
+
+    /**
+     * Clears current active view.
+     */
+    clearActiveView: function() {
+      if (!this._activeView) {
+        return;
       }
-      this._activeView = view.render().show();
-      this.updateView(this._activeView.$el);
+      if (this._activeView.type === "react") {
+        React.unmountComponentAtNode(document.querySelector("#main"));
+      } else {
+        this._activeView.view.remove();
+      }
     },
 
     /**
@@ -95,22 +121,32 @@ loop.shared.router = (function(l10n) {
       if (!options.conversation) {
         throw new Error("missing required conversation");
       }
+      if (!options.client) {
+        throw new Error("missing required client");
+      }
       this._conversation = options.conversation;
+      this._client = options.client;
 
-      this.listenTo(this._conversation, "session:ready", this._onSessionReady);
       this.listenTo(this._conversation, "session:ended", this._onSessionEnded);
       this.listenTo(this._conversation, "session:peer-hungup",
                                         this._onPeerHungup);
       this.listenTo(this._conversation, "session:network-disconnected",
                                         this._onNetworkDisconnected);
+      this.listenTo(this._conversation, "session:connection-error",
+                    this._notifyError);
 
       BaseRouter.apply(this, arguments);
     },
 
     /**
-     * Starts the call. This method should be overriden.
+     * Notify the user that the connection was not possible
+     * @param {{code: number, message: string}} error
      */
-    startCall: function() {},
+    _notifyError: function(error) {
+      console.log(error);
+      this._notifier.errorL10n("connection_error_see_console_notification");
+      this.endCall();
+    },
 
     /**
      * Ends the call. This method should be overriden.
@@ -118,17 +154,9 @@ loop.shared.router = (function(l10n) {
     endCall: function() {},
 
     /**
-     * Session is ready.
-     */
-    _onSessionReady: function() {
-      this.startCall();
-    },
-
-    /**
      * Session has ended. Notifies the user and ends the call.
      */
     _onSessionEnded: function() {
-      this._notifier.warnL10n("call_has_ended");
       this.endCall();
     },
 
@@ -141,7 +169,7 @@ loop.shared.router = (function(l10n) {
      * @param {Object} event
      */
     _onPeerHungup: function() {
-      this._notifier.warnL10n("peer_ended_conversation");
+      this._notifier.warnL10n("peer_ended_conversation2");
       this.endCall();
     },
 

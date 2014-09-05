@@ -241,7 +241,7 @@ SetNameOperation(JSContext *cx, JSScript *script, jsbytecode *pc, HandleObject s
      * undeclared global variable. To do this, we call SetPropertyHelper
      * directly and pass Unqualified.
      */
-    if (scope->is<GlobalObject>()) {
+    if (scope->isUnqualifiedVarObj()) {
         JS_ASSERT(!scope->getOps()->setProperty);
         RootedId id(cx, NameToId(name));
         return baseops::SetPropertyHelper<SequentialExecution>(cx, scope, scope, id,
@@ -255,7 +255,7 @@ SetNameOperation(JSContext *cx, JSScript *script, jsbytecode *pc, HandleObject s
 inline bool
 DefVarOrConstOperation(JSContext *cx, HandleObject varobj, HandlePropertyName dn, unsigned attrs)
 {
-    JS_ASSERT(varobj->isVarObj());
+    JS_ASSERT(varobj->isQualifiedVarObj());
 
     RootedShape prop(cx);
     RootedObject obj2(cx);
@@ -352,6 +352,16 @@ GetObjectElementOperation(JSContext *cx, JSOp op, JSObject *objArg, bool wasObje
             RootedObject obj(cx, objArg);
             if (!JSObject::getElement(cx, obj, obj, index, res))
                 return false;
+            objArg = obj;
+            break;
+        }
+
+        if (rref.isSymbol()) {
+            RootedObject obj(cx, objArg);
+            RootedId id(cx, SYMBOL_TO_JSID(rref.toSymbol()));
+            if (!JSObject::getGeneric(cx, obj, obj, id, res))
+                return false;
+
             objArg = obj;
             break;
         }
@@ -511,6 +521,28 @@ InitArrayElemOperation(JSContext *cx, jsbytecode *pc, HandleObject obj, uint32_t
     return true;
 }
 
+static MOZ_ALWAYS_INLINE bool
+ProcessCallSiteObjOperation(JSContext *cx, RootedObject &cso, RootedObject &raw,
+                            RootedValue &rawValue)
+{
+    bool extensible;
+    if (!JSObject::isExtensible(cx, cso, &extensible))
+        return false;
+    if (extensible) {
+        JSAtom *name = cx->names().raw;
+        if (!JSObject::defineProperty(cx, cso, name->asPropertyName(), rawValue,
+                                      nullptr, nullptr, 0))
+        {
+            return false;
+        }
+        if (!JSObject::freeze(cx, raw))
+            return false;
+        if (!JSObject::freeze(cx, cso))
+            return false;
+    }
+    return true;
+}
+
 #define RELATIONAL_OP(OP)                                                     \
     JS_BEGIN_MACRO                                                            \
         /* Optimize for two int-tagged operands (typical loop control). */    \
@@ -530,7 +562,7 @@ InitArrayElemOperation(JSContext *cx, jsbytecode *pc, HandleObject obj, uint32_t
             } else {                                                          \
                 double l, r;                                                  \
                 if (!ToNumber(cx, lhs, &l) || !ToNumber(cx, rhs, &r))         \
-                    return false;;                                            \
+                    return false;                                             \
                 *res = (l OP r);                                              \
             }                                                                 \
         }                                                                     \
@@ -652,20 +684,17 @@ class FastInvokeGuard
     InvokeArgs args_;
     RootedFunction fun_;
     RootedScript script_;
-#ifdef JS_ION
+
     // Constructing an IonContext is pretty expensive due to the TLS access,
     // so only do this if we have to.
     bool useIon_;
-#endif
 
   public:
     FastInvokeGuard(JSContext *cx, const Value &fval)
       : args_(cx)
       , fun_(cx)
       , script_(cx)
-#ifdef JS_ION
       , useIon_(jit::IsIonEnabled(cx))
-#endif
     {
         JS_ASSERT(!InParallelSection());
         initFunction(fval);
@@ -684,7 +713,6 @@ class FastInvokeGuard
     }
 
     bool invoke(JSContext *cx) {
-#ifdef JS_ION
         if (useIon_ && fun_) {
             if (!script_) {
                 script_ = fun_->getOrCreateScript(cx);
@@ -713,7 +741,6 @@ class FastInvokeGuard
                 script_->incUseCount(5);
             }
         }
-#endif
 
         return Invoke(cx, args_);
     }

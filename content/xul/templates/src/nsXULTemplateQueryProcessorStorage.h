@@ -28,6 +28,8 @@ private:
 
     nsCOMArray<nsIAtom> mColumnNames;
 
+    ~nsXULTemplateResultSetStorage() {}
+
 public:
 
     // nsISupports interface
@@ -36,7 +38,7 @@ public:
     // nsISimpleEnumerator interface
     NS_DECL_NSISIMPLEENUMERATOR
 
-    nsXULTemplateResultSetStorage(mozIStorageStatement* aStatement);
+    explicit nsXULTemplateResultSetStorage(mozIStorageStatement* aStatement);
 
     int32_t GetColumnIndex(nsIAtom* aColumnName);
 
@@ -57,6 +59,8 @@ public:
     NS_DECL_NSIXULTEMPLATEQUERYPROCESSOR
 
 private:
+
+    ~nsXULTemplateQueryProcessorStorage() {}
 
     nsCOMPtr<mozIStorageConnection> mStorageConnection;
     bool mGenerationStarted;

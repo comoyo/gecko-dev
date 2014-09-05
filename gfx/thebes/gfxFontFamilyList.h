@@ -52,14 +52,14 @@ struct FontFamilyName MOZ_FINAL {
     {}
 
     // named font family - e.g. Helvetica
-    FontFamilyName(const nsAString& aFamilyName,
-                   QuotedName aQuoted = eUnquotedName) {
+    explicit FontFamilyName(const nsAString& aFamilyName,
+                            QuotedName aQuoted = eUnquotedName) {
         mType = (aQuoted == eQuotedName) ? eFamily_named_quoted : eFamily_named;
         mName = aFamilyName;
     }
 
     // generic font family - e.g. sans-serif
-    FontFamilyName(FontFamilyType aType) {
+    explicit FontFamilyName(FontFamilyType aType) {
         NS_ASSERTION(aType != eFamily_named &&
                      aType != eFamily_named_quoted &&
                      aType != eFamily_none,
@@ -171,17 +171,17 @@ operator==(const FontFamilyName& a, const FontFamilyName& b) {
  * font type is used to preserve the variable font fallback behavior
  */ 
 
-class FontFamilyList MOZ_FINAL {
+class FontFamilyList {
 public:
-    FontFamilyList() : mDefaultFontType(eFamily_none) {
-        MOZ_COUNT_CTOR(FontFamilyList);
+    FontFamilyList()
+        : mDefaultFontType(eFamily_none)
+    {
     }
 
-    FontFamilyList(FontFamilyType aGenericType)
+    explicit FontFamilyList(FontFamilyType aGenericType)
         : mDefaultFontType(eFamily_none)
     {
         Append(FontFamilyName(aGenericType));
-        MOZ_COUNT_CTOR(FontFamilyList);
     }
 
     FontFamilyList(const nsAString& aFamilyName,
@@ -189,17 +189,12 @@ public:
         : mDefaultFontType(eFamily_none)
     {
         Append(FontFamilyName(aFamilyName, aQuoted));
-        MOZ_COUNT_CTOR(FontFamilyList);
     }
 
     FontFamilyList(const FontFamilyList& aOther)
-        : mFontlist(aOther.mFontlist), mDefaultFontType(aOther.mDefaultFontType)
+        : mFontlist(aOther.mFontlist)
+        , mDefaultFontType(aOther.mDefaultFontType)
     {
-        MOZ_COUNT_CTOR(FontFamilyList);
-    }
-
-    ~FontFamilyList() {
-        MOZ_COUNT_DTOR(FontFamilyList);
     }
 
     void Append(const FontFamilyName& aFamilyName) {
@@ -301,8 +296,6 @@ public:
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const {
         return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
     }
-
-    NS_INLINE_DECL_REFCOUNTING(FontFamilyList)
 
 private:
     nsTArray<FontFamilyName>   mFontlist;

@@ -46,11 +46,12 @@
 namespace mozilla {
 namespace layers {
 class DeviceManagerD3D9;
+class ReadbackManagerD3D11;
 }
 }
-class IDirect3DDevice9;
-class ID3D11Device;
-class IDXGIAdapter1;
+struct IDirect3DDevice9;
+struct ID3D11Device;
+struct IDXGIAdapter1;
 
 class nsIMemoryReporter;
 
@@ -60,7 +61,6 @@ struct DCFromContext {
     DCFromContext(gfxContext *aContext) {
         dc = nullptr;
         nsRefPtr<gfxASurface> aSurface = aContext->CurrentSurface();
-        NS_ASSERTION(aSurface || !aContext->IsCairo(), "DCFromContext: null surface");
         if (aSurface &&
             (aSurface->GetType() == gfxSurfaceType::Win32 ||
              aSurface->GetType() == gfxSurfaceType::Win32Printing))
@@ -131,8 +131,6 @@ public:
 
     virtual mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont);
-    virtual already_AddRefed<gfxASurface>
-      GetThebesSurfaceForDrawTarget(mozilla::gfx::DrawTarget *aTarget);
 
     enum RenderMode {
         /* Use GDI and windows surfaces */
@@ -259,6 +257,8 @@ public:
 #endif
     ID3D11Device *GetD3D11Device();
 
+    mozilla::layers::ReadbackManagerD3D11* GetReadbackManager();
+
     static bool IsOptimus();
 
 protected:
@@ -287,6 +287,7 @@ private:
     nsRefPtr<mozilla::layers::DeviceManagerD3D9> mDeviceManager;
     mozilla::RefPtr<ID3D11Device> mD3D11Device;
     bool mD3D11DeviceInitialized;
+    mozilla::RefPtr<mozilla::layers::ReadbackManagerD3D11> mD3D11ReadbackManager;
 
     virtual void GetPlatformCMSOutputProfile(void* &mem, size_t &size);
 

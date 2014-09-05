@@ -89,7 +89,7 @@ class nsHtml5ParserThreadTerminator MOZ_FINAL : public nsIObserver
 {
   public:
     NS_DECL_ISUPPORTS
-    nsHtml5ParserThreadTerminator(nsIThread* aThread)
+    explicit nsHtml5ParserThreadTerminator(nsIThread* aThread)
       : mThread(aThread)
     {}
     NS_IMETHODIMP Observe(nsISupports *, const char *topic, const char16_t *)
@@ -103,6 +103,8 @@ class nsHtml5ParserThreadTerminator MOZ_FINAL : public nsIObserver
       return NS_OK;
     }
   private:
+    ~nsHtml5ParserThreadTerminator() {}
+
     nsCOMPtr<nsIThread> mThread;
 };
 

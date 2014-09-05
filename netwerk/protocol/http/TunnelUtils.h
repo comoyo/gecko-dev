@@ -100,6 +100,7 @@ class TLSFilterTransaction MOZ_FINAL
   , public nsAHttpSegmentWriter
   , public nsITimerCallback
 {
+  ~TLSFilterTransaction();
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSAHTTPTRANSACTION
@@ -111,13 +112,16 @@ public:
                        const char *tlsHost, int32_t tlsPort,
                        nsAHttpSegmentReader *reader,
                        nsAHttpSegmentWriter *writer);
-  ~TLSFilterTransaction();
 
   const nsAHttpTransaction *Transaction() const { return mTransaction.get(); }
   nsresult CommitToSegmentSize(uint32_t size, bool forceCommitment);
   nsresult GetTransactionSecurityInfo(nsISupports **);
   nsresult NudgeTunnel(NudgeTunnelCallback *callback);
   nsresult SetProxiedTransaction(nsAHttpTransaction *aTrans);
+  void     newIODriver(nsIAsyncInputStream *aSocketIn,
+                       nsIAsyncOutputStream *aSocketOut,
+                       nsIAsyncInputStream **outSocketIn,
+                       nsIAsyncOutputStream **outSocketOut);
 
   // nsAHttpTransaction overloads
   nsHttpPipeline *QueryPipeline() MOZ_OVERRIDE;
@@ -175,12 +179,15 @@ public:
   SpdyConnectTransaction(nsHttpConnectionInfo *ci,
                          nsIInterfaceRequestor *callbacks,
                          uint32_t caps,
-                         nsAHttpTransaction *trans,
+                         nsHttpTransaction *trans,
                          nsAHttpConnection *session);
   ~SpdyConnectTransaction();
 
   SpdyConnectTransaction *QuerySpdyConnectTransaction() { return this; }
 
+  // A transaction is forced into plaintext when it is intended to be used as a CONNECT
+  // tunnel but the setup fails. The plaintext only carries the CONNECT error.
+  void ForcePlainText();
   void MapStreamToHttpConnection(nsISocketTransport *aTransport,
                                  nsHttpConnectionInfo *aConnInfo);
 
@@ -215,6 +222,7 @@ private:
   uint32_t             mOutputDataUsed;
   uint32_t             mOutputDataOffset;
 
+  bool                           mForcePlainText;
   TimeStamp                      mTimestampSyn;
   nsRefPtr<nsHttpConnectionInfo> mConnInfo;
 
@@ -226,6 +234,7 @@ private:
   nsRefPtr<SocketTransportShim>  mTunnelTransport;
   nsRefPtr<InputStreamShim>      mTunnelStreamIn;
   nsRefPtr<OutputStreamShim>     mTunnelStreamOut;
+  nsRefPtr<nsHttpTransaction>    mDrivingTransaction;
 };
 
 }} // namespace mozilla::net

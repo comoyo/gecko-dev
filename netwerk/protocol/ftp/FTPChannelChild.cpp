@@ -43,6 +43,10 @@ FTPChannelChild::FTPChannelChild(nsIURI* uri)
   NS_ADDREF(gFtpHandler);
   SetURI(uri);
   mEventQ = new ChannelEventQueue(static_cast<nsIFTPChannel*>(this));
+
+  // We could support thread retargeting, but as long as we're being driven by
+  // IPDL on the main thread it doesn't buy us anything.
+  DisallowThreadRetargeting();
 }
 
 FTPChannelChild::~FTPChannelChild()
@@ -540,7 +544,7 @@ FTPChannelChild::DoFailedAsyncOpen(const nsresult& statusCode)
 class FTPFlushedForDiversionEvent : public ChannelEvent
 {
  public:
-  FTPFlushedForDiversionEvent(FTPChannelChild* aChild)
+  explicit FTPFlushedForDiversionEvent(FTPChannelChild* aChild)
   : mChild(aChild)
   {
     MOZ_RELEASE_ASSERT(aChild);
@@ -597,7 +601,7 @@ FTPChannelChild::RecvDivertMessages()
 class FTPDeleteSelfEvent : public ChannelEvent
 {
  public:
-  FTPDeleteSelfEvent(FTPChannelChild* aChild)
+  explicit FTPDeleteSelfEvent(FTPChannelChild* aChild)
   : mChild(aChild) {}
   void Run() { mChild->DoDeleteSelf(); }
  private:

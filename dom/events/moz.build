@@ -36,6 +36,7 @@ EXPORTS.mozilla.dom += [
     'ClipboardEvent.h',
     'CommandEvent.h',
     'CompositionEvent.h',
+    'CustomEvent.h',
     'DataContainerEvent.h',
     'DataTransfer.h',
     'DeviceMotionEvent.h',
@@ -112,6 +113,7 @@ UNIFIED_SOURCES += [
 
 # nsEventStateManager.cpp should be built separately because of Mac OS X headers.
 SOURCES += [
+    'CustomEvent.cpp',
     'EventStateManager.cpp',
 ]
 
@@ -124,16 +126,16 @@ MSVC_ENABLE_PGO = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
-FINAL_LIBRARY = 'gklayout'
+FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     '/content/base/src',
     '/content/html/content/src',
-    '/content/xml/content/src',
     '/content/xul/content/src',
     '/dom/base',
     '/dom/settings',
-    '/dom/src/storage',
+    '/dom/storage',
     '/dom/workers',
+    '/dom/xml',
     '/js/xpconnect/wrappers',
     '/layout/generic',
     '/layout/xul',
@@ -144,6 +146,3 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     LOCAL_INCLUDES += [
         '/dom/wifi',
     ]
-
-if CONFIG['MOZ_JSDEBUGGER']:
-    DEFINES['MOZ_JSDEBUGGER'] = True

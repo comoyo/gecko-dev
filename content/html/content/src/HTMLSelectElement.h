@@ -17,6 +17,7 @@
 #include "nsCOMPtr.h"
 #include "nsError.h"
 #include "mozilla/dom/HTMLFormElement.h"
+#include "nsContentUtils.h"
 
 class nsContentList;
 class nsIDOMHTMLOptionElement;
@@ -50,10 +51,6 @@ public:
   SelectState()
   {
   }
-  virtual ~SelectState()
-  {
-  }
-
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_SELECT_STATE_IID)
   NS_DECL_ISUPPORTS
 
@@ -73,6 +70,10 @@ public:
   }
 
 private:
+  virtual ~SelectState()
+  {
+  }
+
   nsCheapSet<nsStringHashKey> mValues;
   nsCheapSet<nsUint32HashKey> mIndices;
 };
@@ -136,9 +137,8 @@ public:
 
   using nsIConstraintValidation::GetValidationMessage;
 
-  HTMLSelectElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
-                    FromParser aFromParser = NOT_FROM_PARSER);
-  virtual ~HTMLSelectElement();
+  explicit HTMLSelectElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
+                             FromParser aFromParser = NOT_FROM_PARSER);
 
   NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLSelectElement, select)
 
@@ -158,6 +158,11 @@ public:
   void SetAutofocus(bool aVal, ErrorResult& aRv)
   {
     SetHTMLBoolAttr(nsGkAtoms::autofocus, aVal, aRv);
+  }
+  void GetAutocomplete(DOMString& aValue);
+  void SetAutocomplete(const nsAString& aValue, ErrorResult& aRv)
+  {
+    SetHTMLAttr(nsGkAtoms::autocomplete, aValue, aRv);
   }
   bool Disabled() const
   {
@@ -381,7 +386,7 @@ public:
                                               int32_t aModType) const MOZ_OVERRIDE;
   NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const MOZ_OVERRIDE;
 
-  virtual nsresult Clone(nsINodeInfo* aNodeInfo, nsINode** aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult) const MOZ_OVERRIDE;
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLSelectElement,
                                            nsGenericHTMLFormElementWithState)
@@ -419,6 +424,8 @@ public:
   }
 
 protected:
+  virtual ~HTMLSelectElement();
+
   friend class SafeOptionListMutation;
 
   // Helper Methods
@@ -605,6 +612,7 @@ protected:
 
   /** The options[] array */
   nsRefPtr<HTMLOptionsCollection> mOptions;
+  nsContentUtils::AutocompleteAttrState mAutocompleteAttrState;
   /** false if the parser is in the middle of adding children. */
   bool            mIsDoneAddingChildren;
   /** true if our disabled state has changed from the default **/

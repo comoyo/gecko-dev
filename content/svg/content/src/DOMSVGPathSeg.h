@@ -26,7 +26,7 @@ namespace mozilla {
             "Arg count/array size out of sync")
 
 #define IMPL_SVGPATHSEG_SUBCLASS_COMMON(segName, segType)                     \
-  DOMSVGPathSeg##segName(const float *aArgs)                                  \
+  explicit DOMSVGPathSeg##segName(const float *aArgs)                         \
     : DOMSVGPathSeg()                                                         \
   {                                                                           \
     CHECK_ARG_COUNT_IN_SYNC(segType);                                         \
@@ -208,6 +208,10 @@ protected:
    * animVal items.
    */
   float* InternalItem();
+
+  void InvalidateCachedList() {
+    mList->InternalList().mCachedPath = nullptr;
+  }
 
   virtual float* PtrToMemberArgs() = 0;
 
@@ -542,7 +546,7 @@ class DOMSVGPathSegLinetoHorizontalAbs
   : public DOMSVGPathSeg
 {
 public:
-  DOMSVGPathSegLinetoHorizontalAbs(float x)
+  explicit DOMSVGPathSegLinetoHorizontalAbs(float x)
     : DOMSVGPathSeg()
   {
     mArgs[0] = x;
@@ -561,7 +565,7 @@ class DOMSVGPathSegLinetoHorizontalRel
   : public DOMSVGPathSeg
 {
 public:
-  DOMSVGPathSegLinetoHorizontalRel(float x)
+  explicit DOMSVGPathSegLinetoHorizontalRel(float x)
     : DOMSVGPathSeg()
   {
     mArgs[0] = x;
@@ -580,7 +584,7 @@ class DOMSVGPathSegLinetoVerticalAbs
   : public DOMSVGPathSeg
 {
 public:
-  DOMSVGPathSegLinetoVerticalAbs(float y)
+  explicit DOMSVGPathSegLinetoVerticalAbs(float y)
     : DOMSVGPathSeg()
   {
     mArgs[0] = y;
@@ -599,7 +603,7 @@ class DOMSVGPathSegLinetoVerticalRel
   : public DOMSVGPathSeg
 {
 public:
-  DOMSVGPathSegLinetoVerticalRel(float y)
+  explicit DOMSVGPathSegLinetoVerticalRel(float y)
     : DOMSVGPathSeg()
   {
     mArgs[0] = y;

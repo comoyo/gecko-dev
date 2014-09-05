@@ -22,12 +22,14 @@ namespace mozilla {
 namespace dom {
 
 class ConsoleCallData;
-class ConsoleStackEntry;
+struct ConsoleStackEntry;
 
 class Console MOZ_FINAL : public nsITimerCallback
                         , public nsIObserver
                         , public nsWrapperCache
 {
+  ~Console();
+
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(Console,
@@ -35,8 +37,7 @@ public:
   NS_DECL_NSITIMERCALLBACK
   NS_DECL_NSIOBSERVER
 
-  Console(nsPIDOMWindow* aWindow);
-  ~Console();
+  explicit Console(nsPIDOMWindow* aWindow);
 
   // WebIDL methods
   nsISupports* GetParentObject() const
@@ -64,6 +65,9 @@ public:
 
   void
   Debug(JSContext* aCx, const Sequence<JS::Value>& aData);
+
+  void
+  Table(JSContext* aCx, const Sequence<JS::Value>& aData);
 
   void
   Trace(JSContext* aCx);
@@ -110,6 +114,7 @@ private:
     MethodError,
     MethodException,
     MethodDebug,
+    MethodTable,
     MethodTrace,
     MethodDir,
     MethodGroup,

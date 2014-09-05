@@ -19,7 +19,7 @@ namespace mozilla {
 template<typename T>
 class SharedChannelArrayBuffer : public ThreadSharedObject {
 public:
-  SharedChannelArrayBuffer(nsTArray<nsTArray<T> >* aBuffers)
+  explicit SharedChannelArrayBuffer(nsTArray<nsTArray<T> >* aBuffers)
   {
     mBuffers.SwapElements(*aBuffers);
   }
@@ -131,6 +131,8 @@ struct AudioChunk {
   }
   int ChannelCount() const { return mChannelData.Length(); }
 
+  bool IsMuted() const { return mVolume == 0.0f; }
+
   size_t SizeOfExcludingThisIfUnshared(MallocSizeOf aMallocSizeOf) const
   {
     return SizeOfExcludingThis(aMallocSizeOf, true);
@@ -188,7 +190,7 @@ public:
       AudioChunk& c = *ci;
       // If this chunk is null, don't bother resampling, just alter its duration
       if (c.IsNull()) {
-        c.mDuration *= aOutRate / aInRate;
+        c.mDuration = (c.mDuration * aOutRate) / aInRate;
         mDuration += c.mDuration;
         continue;
       }
@@ -223,7 +225,9 @@ public:
     }
   }
 
-  void ResampleChunks(SpeexResamplerState* aResampler);
+  void ResampleChunks(SpeexResamplerState* aResampler,
+                      uint32_t aInRate,
+                      uint32_t aOutRate);
 
   void AppendFrames(already_AddRefed<ThreadSharedObject> aBuffer,
                     const nsTArray<const float*>& aChannelData,
@@ -270,7 +274,7 @@ public:
     return chunk;
   }
   void ApplyVolume(float aVolume);
-  void WriteTo(uint64_t aID, AudioStream* aOutput, AudioMixer* aMixer = nullptr);
+  void WriteTo(uint64_t aID, AudioMixer& aMixer, uint32_t aChannelCount, uint32_t aSampleRate);
 
   int ChannelCount() {
     NS_WARN_IF_FALSE(!mChunks.IsEmpty(),
@@ -283,6 +287,15 @@ public:
       }
     }
     return 0;
+  }
+
+  bool IsNull() {
+    for (ChunkIterator ci(*this); !ci.IsEnded(); ci.Next()) {
+      if (!ci->IsNull()) {
+        return false;
+      }
+    }
+    return true;
   }
 
   static Type StaticType() { return AUDIO; }

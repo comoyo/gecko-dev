@@ -35,6 +35,7 @@ let AboutReader = function(doc, win) {
   Services.obs.addObserver(this, "Reader:Add", false);
   Services.obs.addObserver(this, "Reader:Remove", false);
   Services.obs.addObserver(this, "Reader:ListStatusReturn", false);
+  Services.obs.addObserver(this, "Gesture:DoubleTap", false);
 
   this._article = null;
 
@@ -59,6 +60,8 @@ let AboutReader = function(doc, win) {
   win.addEventListener("scroll", this, false);
   win.addEventListener("popstate", this, false);
   win.addEventListener("resize", this, false);
+
+  doc.addEventListener("visibilitychange", this, false);
 
   this._setupAllDropdowns();
   this._setupButton("toggle-button", this._onReaderToggle.bind(this));
@@ -196,9 +199,9 @@ AboutReader.prototype = {
         }
         break;
       }
-
       case "Reader:Remove": {
-        if (aData == this._article.url) {
+        let args = JSON.parse(aData);
+        if (args.url == this._article.url) {
           if (this._isReadingListItem != 0) {
             this._isReadingListItem = 0;
             this._updateToggleButton();
@@ -221,6 +224,19 @@ AboutReader.prototype = {
             }
           }
         }
+        break;
+      }
+
+      case "Gesture:DoubleTap": {
+        let args = JSON.parse(aData);
+        let scrollBy;
+        // Arbitary choice of innerHeight - 50 to give some context after scroll
+        if (args.y < (this._win.innerHeight / 2)) {
+          scrollBy = -this._win.innerHeight + 50;
+        } else {
+          scrollBy = this._win.innerHeight - 50;
+        }
+        this._scrollPage(scrollBy);
         break;
       }
     }
@@ -257,12 +273,28 @@ AboutReader.prototype = {
         this._handleDeviceLight(aEvent.value);
         break;
 
+      case "visibilitychange":
+        this._handleVisibilityChange();
+        break;
+
       case "unload":
         Services.obs.removeObserver(this, "Reader:Add");
         Services.obs.removeObserver(this, "Reader:Remove");
         Services.obs.removeObserver(this, "Reader:ListStatusReturn");
+        Services.obs.removeObserver(this, "Gesture:DoubleTap");
         break;
     }
+  },
+
+  _scrollPage: function Reader_scrollPage(scrollByPixels) {
+    let viewport = BrowserApp.selectedTab.getViewport();
+    let newY = Math.min(Math.max(viewport.cssY + scrollByPixels, viewport.cssPageTop), viewport.cssPageBottom);
+    let newRect = new Rect(viewport.cssX, newY, viewport.cssWidth, viewport.cssHeight);
+
+    this._setToolbarVisibility(false);
+    this._setBrowserToolbarVisiblity(false);
+    this._scrolled  = true;
+    ZoomHelper.zoomToRect(newRect, -1, false, false);
   },
 
   _updateToggleButton: function Reader_updateToggleButton() {
@@ -316,7 +348,8 @@ AboutReader.prototype = {
       // In addition to removing the article from the cache (handled in
       // browser.js), sending this message will cause the toggle button to be
       // updated (handled in this file).
-      Services.obs.notifyObservers(null, "Reader:Remove", this._article.url);
+      let json = JSON.stringify({ url: this._article.url, notify: true });
+      Services.obs.notifyObservers(null, "Reader:Remove", json);
 
       UITelemetry.addEvent("unsave.1", "button", null, "reader");
     }
@@ -373,6 +406,29 @@ AboutReader.prototype = {
     this._totalLux -= oldLux;
   },
 
+  _handleVisibilityChange: function Reader_handleVisibilityChange() {
+    let colorScheme = Services.prefs.getCharPref("reader.color_scheme");
+    if (colorScheme != "auto") {
+      return;
+    }
+
+    // Turn off the ambient light sensor if the page is hidden
+    this._enableAmbientLighting(!this._doc.hidden);
+  },
+
+  // Setup or teardown the ambient light tracking system.
+  _enableAmbientLighting: function Reader_enableAmbientLighting(enable) {
+    if (enable) {
+      this._win.addEventListener("devicelight", this, false);
+      this._luxValues = [];
+      this._totalLux = 0;
+    } else {
+      this._win.removeEventListener("devicelight", this, false);
+      delete this._luxValues;
+      delete this._totalLux;
+    }
+  },
+
   _updateColorScheme: function Reader_updateColorScheme(luxValue) {
     // Upper bound value for "dark" color scheme beyond which it changes to "light".
     let upperBoundDark = 50;
@@ -393,7 +449,8 @@ AboutReader.prototype = {
   },
 
   _setColorScheme: function Reader_setColorScheme(newColorScheme) {
-    if (this._colorScheme === newColorScheme)
+    // "auto" is not a real color scheme
+    if (this._colorScheme === newColorScheme || newColorScheme === "auto")
       return;
 
     let bodyClasses = this._doc.body.classList;
@@ -408,16 +465,8 @@ AboutReader.prototype = {
   // Pref values include "dark", "light", and "auto", which automatically switches
   // between light and dark color schemes based on the ambient light level.
   _setColorSchemePref: function Reader_setColorSchemePref(colorSchemePref) {
-    if (colorSchemePref === "auto") {
-      this._win.addEventListener("devicelight", this, false);
-      this._luxValues = [];
-      this._totalLux = 0;
-    } else {
-      this._win.removeEventListener("devicelight", this, false);
-      this._setColorScheme(colorSchemePref);
-      delete this._luxValues;
-      delete this._totalLux;
-    }
+    this._enableAmbientLighting(colorSchemePref === "auto");
+    this._setColorScheme(colorSchemePref);
 
     Services.prefs.setCharPref("reader.color_scheme", colorSchemePref);
   },
@@ -470,8 +519,15 @@ AboutReader.prototype = {
     }
   },
 
-  _toggleToolbarVisibility: function Reader_toggleToolbarVisibility(visible) {
+  _toggleToolbarVisibility: function Reader_toggleToolbarVisibility() {
     this._setToolbarVisibility(!this._getToolbarVisibility());
+  },
+
+  _setBrowserToolbarVisiblity: function Reader_setBrowserToolbarVisiblity(visible) {
+    gChromeWin.sendMessageToJava({
+      type: "BrowserToolbar:Visibility",
+      visible: visible
+    });
   },
 
   _setSystemUIVisibility: function Reader_setSystemUIVisibility(visible) {

@@ -17,24 +17,24 @@ a {
 
 .message {
   display: flex;
-  flex: 0 0 auto;
+  flex: none;
   padding: 0 7px;
   width: 100%;
   box-sizing: border-box;
 }
 
 .message > .timestamp {
-  flex: 0 0 auto;
+  flex: none;
   color: GrayText;
   margin: 4px 6px 0 0;
 }
 
 .message > .indent {
-  flex: 0 0 auto;
+  flex: none;
 }
 
 .message > .icon {
-  flex: 0 0 auto;
+  flex: none;
   margin: 3px 6px 0 0;
   padding: 0 4px;
   height: 1em;
@@ -63,10 +63,14 @@ a {
   margin: 3px;
 }
 
+.message-body-wrapper .table-widget-body {
+  overflow: visible;
+}
+
 /* The red bubble that shows the number of times a message is repeated */
 .message-repeats {
   -moz-user-select: none;
-  flex: 0 0 auto;
+  flex: none;
   margin: 2px 6px;
   padding: 0 6px;
   height: 1.25em;
@@ -84,7 +88,7 @@ a {
 
 .message-location {
   display: flex;
-  flex: 0 0 auto;
+  flex: none;
   align-self: flex-start;
   justify-content: flex-end;
   width: 10em;
@@ -106,7 +110,7 @@ a {
 }
 
 .message-location > .line-number {
-  flex: 0 0 auto;
+  flex: none;
 }
 
 .message-flex-body {
@@ -120,7 +124,7 @@ a {
 
 .message-flex-body > .message-body {
   display: block;
-  flex: 1 1 auto;
+  flex: 1 1 main-size;
   vertical-align: middle;
 }
 
@@ -182,10 +186,6 @@ a {
   -moz-user-focus: normal;
 }
 
-.webconsole-filter-button[checked] {
-  color: white !important;
-}
-
 .webconsole-filter-button > .toolbarbutton-menubutton-button:before {
   content: "";
   display: inline-block;
@@ -201,6 +201,14 @@ a {
 .webconsole-filter-button[category="net"] > .toolbarbutton-menubutton-button:before {
   background-image: linear-gradient(#444444, #000000);
   border-color: #777;
+}
+
+.theme-light .message:hover {
+  background-color: rgba(76, 158, 217, 0.23) !important;
+}
+
+.theme-dark .message:hover {
+  background-color: rgba(29, 79, 115, 0.5) !important;
 }
 
 .theme-light .message[severity=error] {
@@ -219,6 +227,13 @@ a {
   color: hsl(24,85%,39%);
 }
 
+.theme-selected .console-string,
+.theme-selected .cm-number,
+.theme-selected .cm-variable,
+.theme-selected .kind-ArrayLike {
+  color: #f5f7fa !important; /* Selection Text Color */
+}
+
 .message[category=network] > .indent {
   -moz-border-end: solid #000 6px;
 }
@@ -232,11 +247,11 @@ a {
 }
 
 .message[category=network] .method {
-  flex: 0 0 auto;
+  flex: none;
 }
 
 .message[category=network]:not(.navigation-marker) .url {
-  flex: 1 1 auto;
+  flex: 1 1 main-size;
   /* Make sure the URL is very small initially, let flex change width as needed. */
   width: 100px;
   min-width: 5em;
@@ -246,7 +261,7 @@ a {
 }
 
 .message[category=network] .status {
-  flex: 0 0 auto;
+  flex: none;
   -moz-margin-start: 6px;
 }
 
@@ -425,6 +440,10 @@ a {
   border-radius: 3px;
 }
 
+.consoletable {
+  margin: 5px 0 0 0;
+}
+
 .theme-light .message[severity=error] .stacktrace {
   background-color: rgba(255, 255, 255, 0.5);
 }
@@ -450,7 +469,7 @@ a {
 
 .stacktrace .function {
   display: block;
-  flex: 1 1 auto;
+  flex: 1 1 main-size;
 }
 
 .cm-s-mozilla a[class] {
@@ -535,7 +554,7 @@ a {
   .message > .timestamp {
     display: none;
   }
-  .toolbarbutton-text {
+  .hud-console-filter-toolbar .webconsole-filter-button .toolbarbutton-text {
     display: none;
   }
   .hud-console-filter-toolbar .webconsole-filter-button {
@@ -545,8 +564,8 @@ a {
     min-width: 25px;
   }
   .webconsole-filter-button > .toolbarbutton-menubutton-button:before {
-    width: 16px;
-    height: 16px;
+    width: 12px;
+    height: 12px;
     margin-left: 1px;
   }
   .toolbarbutton-menubutton-dropmarker {

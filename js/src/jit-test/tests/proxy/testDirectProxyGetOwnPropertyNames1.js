@@ -1,5 +1,5 @@
 // Forward to the target if the trap is not defined
-var names = Object.getOwnPropertyNames(Proxy(Object.create(Object.create(null, {
+var objAB = Object.create(null, {
     a: {
         enumerable: true,
         configurable: true
@@ -8,7 +8,9 @@ var names = Object.getOwnPropertyNames(Proxy(Object.create(Object.create(null, {
         enumerable: false,
         configurable: true
     }
-}), {
+});
+
+var objCD = Object.create(objAB, {
     c: {
         enumerable: true,
         configurable: true
@@ -17,7 +19,13 @@ var names = Object.getOwnPropertyNames(Proxy(Object.create(Object.create(null, {
         enumerable: false,
         configurable: true
     }
-}), {}));
-assertEq(names.length, 2);
-assertEq(names[0], 'c');
-assertEq(names[1], 'd');
+});
+
+if (typeof Symbol === "function")
+    objCD[Symbol("moon")] = "something";
+for (let p of [new Proxy(objCD, {}), Proxy.revocable(objCD, {}).proxy]) {
+    var names = Object.getOwnPropertyNames(p);
+    assertEq(names.length, 2);
+    assertEq(names[0], 'c');
+    assertEq(names[1], 'd');
+}

@@ -17,7 +17,7 @@ namespace layers {
 
 class ClientTiledThebesLayer;
 
-class SimpleTiledLayerTile;
+struct SimpleTiledLayerTile;
 class SimpleTiledLayerBuffer;
 class SimpleClientTiledThebesLayer;
 class SimpleTiledLayerBuffer;
@@ -61,7 +61,7 @@ struct SimpleTiledLayerTile
   TileDescriptor GetTileDescriptor()
   {
     if (mTileBuffer)
-      return TexturedTileDescriptor(nullptr, mTileBuffer->GetIPDLActor(), 0);
+      return TexturedTileDescriptor(nullptr, mTileBuffer->GetIPDLActor(), null_t(), 0);
 
     NS_NOTREACHED("Unhandled SimpleTiledLayerTile type");
     return PlaceholderTileDescriptor();
@@ -130,6 +130,9 @@ private:
   void ReleaseTile(SimpleTiledLayerTile aTile) { aTile.Release(); }
 
   void SwapTiles(SimpleTiledLayerTile& aTileA, SimpleTiledLayerTile& aTileB) { std::swap(aTileA, aTileB); }
+
+  void PostValidate(const nsIntRegion& aPaintRegion) {}
+  void UnlockTile(SimpleTiledLayerTile aTile) {}
 };
 
 class SimpleTiledContentClient : public CompositableClient
@@ -140,6 +143,7 @@ public:
   SimpleTiledContentClient(SimpleClientTiledThebesLayer* aThebesLayer,
                            ClientLayerManager* aManager);
 
+private:
   ~SimpleTiledContentClient();
 
   virtual TextureInfo GetTextureInfo() const MOZ_OVERRIDE
@@ -159,9 +163,12 @@ class SimpleClientTiledThebesLayer : public ThebesLayer,
   typedef ThebesLayer Base;
 
 public:
-  SimpleClientTiledThebesLayer(ClientLayerManager* const aManager);
+  explicit SimpleClientTiledThebesLayer(ClientLayerManager* const aManager,
+                                        ClientLayerManager::ThebesLayerCreationHint aCreationHint = LayerManager::NONE);
+protected:
   ~SimpleClientTiledThebesLayer();
 
+public:
   // Thebes Layer
   virtual Layer* AsLayer() { return this; }
   virtual void InvalidateRegion(const nsIntRegion& aRegion) {

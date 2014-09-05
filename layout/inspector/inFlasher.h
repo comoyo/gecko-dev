@@ -17,16 +17,17 @@ class nsRenderingContext;
 #define DIR_VERTICAL 0
 #define DIR_HORIZONTAL 1
 
-class inFlasher : public inIFlasher
+class inFlasher MOZ_FINAL : public inIFlasher
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_INIFLASHER
 
   inFlasher();
-  virtual ~inFlasher();
 
 protected:
+  virtual ~inFlasher();
+
   void DrawOutline(nscoord aX, nscoord aY, nscoord aWidth, nscoord aHeight,
                    nsRenderingContext* aRenderContext,
                    bool aDrawBegin, bool aDrawEnd);

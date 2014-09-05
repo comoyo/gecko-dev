@@ -23,7 +23,7 @@ const TEST_DATA = [
 ];
 
 let test = asyncTest(function*() {
-  yield addTab("data:text/html,test rule view live preview on user changes");
+  yield addTab("data:text/html;charset=utf-8,test rule view live preview on user changes");
 
   let style = '#testid {display:block;}';
   let styleNode = addStyle(content.document, style);
@@ -31,7 +31,7 @@ let test = asyncTest(function*() {
   let testElement = getNode("#testid");
 
   let {toolbox, inspector, view} = yield openRuleView();
-  yield selectNode(testElement, inspector);
+  yield selectNode("#testid", inspector);
 
   for (let data of TEST_DATA) {
     yield testLivePreviewData(data, view, testElement);
@@ -40,7 +40,7 @@ let test = asyncTest(function*() {
 
 
 function* testLivePreviewData(data, ruleView, testElement) {
-  let idRuleEditor = ruleView.element.children[1]._ruleEditor;
+  let idRuleEditor = getRuleViewRuleEditor(ruleView, 1);
   let propEditor = idRuleEditor.rule.textProps[0].editor;
 
   info("Focusing the property value inplace-editor");

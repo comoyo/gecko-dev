@@ -1,4 +1,4 @@
-/* -*- tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -166,3 +166,27 @@ ActorPool.prototype = {
 
 exports.ActorPool = ActorPool;
 
+// TODO bug 863089: use Debugger.Script.prototype.getOffsetColumn when it is
+// implemented.
+exports.getOffsetColumn = function getOffsetColumn(aOffset, aScript) {
+  let bestOffsetMapping = null;
+  for (let offsetMapping of aScript.getAllColumnOffsets()) {
+    if (!bestOffsetMapping ||
+        (offsetMapping.offset <= aOffset &&
+         offsetMapping.offset > bestOffsetMapping.offset)) {
+      bestOffsetMapping = offsetMapping;
+    }
+  }
+
+  if (!bestOffsetMapping) {
+    // XXX: Try not to completely break the experience of using the debugger for
+    // the user by assuming column 0. Simultaneously, report the error so that
+    // there is a paper trail if the assumption is bad and the debugging
+    // experience becomes wonky.
+    reportError(new Error("Could not find a column for offset " + aOffset
+                          + " in the script " + aScript));
+    return 0;
+  }
+
+  return bestOffsetMapping.columnNumber;
+}

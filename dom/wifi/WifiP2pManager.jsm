@@ -1,4 +1,4 @@
-/* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set shiftwidth=2 tabstop=2 autoindent cindent expandtab: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -20,8 +20,6 @@ XPCOMUtils.defineLazyServiceGetter(this, "gSysMsgr",
 XPCOMUtils.defineLazyServiceGetter(this, "gNetworkManager",
                                    "@mozilla.org/network/manager;1",
                                    "nsINetworkManager");
-
-const kNetworkInterfaceStateChangedTopic = "network-interface-state-changed";
 
 this.EXPORTED_SYMBOLS = ["WifiP2pManager"];
 
@@ -1476,9 +1474,7 @@ function P2pStateMachine(aP2pCommand, aNetUtil) {
   }
 
   function handleP2pNetworkInterfaceStateChanged() {
-    Services.obs.notifyObservers(_p2pNetworkInterface,
-                                 kNetworkInterfaceStateChangedTopic,
-                                 null);
+    gNetworkManager.updateNetworkInterface(_p2pNetworkInterface);
   }
 
   // Handle 'P2P_GROUP_STARTED' event.

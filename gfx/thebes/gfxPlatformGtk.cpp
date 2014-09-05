@@ -16,6 +16,7 @@
 #include "gfxPangoFonts.h"
 #include "gfxContext.h"
 #include "gfxUserFontSet.h"
+#include "gfxUtils.h"
 #include "gfxFT2FontBase.h"
 
 #include "mozilla/gfx/2D.h"
@@ -92,7 +93,9 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
     // we should try to match
     GdkScreen *gdkScreen = gdk_screen_get_default();
     if (gdkScreen) {
-        if (UseXRender()) {
+        // When forcing Thebes Layers to use image surfaces for content,
+        // force creation of gfxImageSurface surfaces.
+        if (UseXRender() && !UseImageOffscreenSurfaces()) {
             Screen *screen = gdk_x11_screen_get_xscreen(gdkScreen);
             XRenderPictFormat* xrenderFormat =
                 gfxXlibSurface::FindRenderFormat(DisplayOfScreen(screen),
@@ -125,9 +128,7 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
     }
 
     if (newSurface && needsClear) {
-        gfxContext tmpCtx(newSurface);
-        tmpCtx.SetOperator(gfxContext::OPERATOR_CLEAR);
-        tmpCtx.Paint();
+        gfxUtils::ClearThebesSurface(newSurface);
     }
 
     return newSurface.forget();
@@ -250,18 +251,6 @@ gfxPlatformGtk::GetScreenDepth() const
     }
 
     return sDepth;
-}
-
-bool
-gfxPlatformGtk::SupportsOffMainThreadCompositing()
-{
-  // Nightly builds have OMTC support by default for Electrolysis testing.
-#if defined(MOZ_X11) && !defined(NIGHTLY_BUILD)
-  return (PR_GetEnv("MOZ_USE_OMTC") != nullptr) ||
-         (PR_GetEnv("MOZ_OMTC_ENABLED") != nullptr);
-#else
-  return true;
-#endif
 }
 
 void

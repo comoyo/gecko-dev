@@ -15,20 +15,21 @@
 
 using namespace mozilla;
 
-class nsScrollBoxObject : public nsIScrollBoxObject, public nsBoxObject
+class nsScrollBoxObject MOZ_FINAL : public nsIScrollBoxObject,
+                                    public nsBoxObject
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSISCROLLBOXOBJECT
 
   nsScrollBoxObject();
-  virtual ~nsScrollBoxObject();
 
   virtual nsIScrollableFrame* GetScrollFrame() {
     return do_QueryFrame(GetFrame(false));
   }
 
-  /* additional members */
+protected:
+  virtual ~nsScrollBoxObject();
 };
 
 /* Implementation file */

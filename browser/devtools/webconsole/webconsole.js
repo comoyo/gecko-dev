@@ -1,4 +1,4 @@
-/* -*- js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+/* -*- js-indent-level: 2; indent-tabs-mode: nil -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -123,6 +123,7 @@ const LEVELS = {
   info: SEVERITY_INFO,
   log: SEVERITY_LOG,
   trace: SEVERITY_LOG,
+  table: SEVERITY_LOG,
   debug: SEVERITY_LOG,
   dir: SEVERITY_LOG,
   group: SEVERITY_LOG,
@@ -695,6 +696,7 @@ WebConsoleFrame.prototype = {
       }, this);
 
       aButton.setAttribute("checked", someChecked);
+      aButton.setAttribute("aria-pressed", someChecked);
     }, this);
 
     if (!this.owner._browserConsole) {
@@ -834,12 +836,14 @@ WebConsoleFrame.prototype = {
           Array.forEach(buttons, (button) => {
             if (button !== target) {
               button.setAttribute("checked", false);
+              button.setAttribute("aria-pressed", false);
               this._setMenuState(button, false);
             }
           });
           state = true;
         }
         target.setAttribute("checked", state);
+        target.setAttribute("aria-pressed", state);
 
         // This is a filter button with a drop-down, and the user clicked the
         // main part of the button. Go through all the severities and toggle
@@ -888,6 +892,7 @@ WebConsoleFrame.prototype = {
         }
         let toolbarButton = menuPopup.parentNode;
         toolbarButton.setAttribute("checked", someChecked);
+        toolbarButton.setAttribute("aria-pressed", someChecked);
         break;
       }
     }
@@ -1205,6 +1210,11 @@ WebConsoleFrame.prototype = {
       case "assert":
       case "debug": {
         let msg = new Messages.ConsoleGeneric(aMessage);
+        node = msg.init(this.output).render().element;
+        break;
+      }
+      case "table": {
+        let msg = new Messages.ConsoleTable(aMessage);
         node = msg.init(this.output).render().element;
         break;
       }
@@ -1850,7 +1860,7 @@ WebConsoleFrame.prototype = {
     let actor = aHttpActivity.actor;
 
     if (actor) {
-      this.webConsoleClient.getRequestHeaders(actor, function(aResponse) {
+      this.webConsoleClient.getRequestHeaders(actor, (aResponse) => {
         if (aResponse.error) {
           Cu.reportError("WCF_openNetworkPanel getRequestHeaders:" +
                          aResponse.error);
@@ -1860,10 +1870,10 @@ WebConsoleFrame.prototype = {
         aHttpActivity.request.headers = aResponse.headers;
 
         this.webConsoleClient.getRequestCookies(actor, onRequestCookies);
-      }.bind(this));
+      });
     }
 
-    let onRequestCookies = function(aResponse) {
+    let onRequestCookies = (aResponse) => {
       if (aResponse.error) {
         Cu.reportError("WCF_openNetworkPanel getRequestCookies:" +
                        aResponse.error);
@@ -1873,9 +1883,9 @@ WebConsoleFrame.prototype = {
       aHttpActivity.request.cookies = aResponse.cookies;
 
       this.webConsoleClient.getResponseHeaders(actor, onResponseHeaders);
-    }.bind(this);
+    };
 
-    let onResponseHeaders = function(aResponse) {
+    let onResponseHeaders = (aResponse) => {
       if (aResponse.error) {
         Cu.reportError("WCF_openNetworkPanel getResponseHeaders:" +
                        aResponse.error);
@@ -1885,9 +1895,9 @@ WebConsoleFrame.prototype = {
       aHttpActivity.response.headers = aResponse.headers;
 
       this.webConsoleClient.getResponseCookies(actor, onResponseCookies);
-    }.bind(this);
+    };
 
-    let onResponseCookies = function(aResponse) {
+    let onResponseCookies = (aResponse) => {
       if (aResponse.error) {
         Cu.reportError("WCF_openNetworkPanel getResponseCookies:" +
                        aResponse.error);
@@ -1897,9 +1907,9 @@ WebConsoleFrame.prototype = {
       aHttpActivity.response.cookies = aResponse.cookies;
 
       this.webConsoleClient.getRequestPostData(actor, onRequestPostData);
-    }.bind(this);
+    };
 
-    let onRequestPostData = function(aResponse) {
+    let onRequestPostData = (aResponse) => {
       if (aResponse.error) {
         Cu.reportError("WCF_openNetworkPanel getRequestPostData:" +
                        aResponse.error);
@@ -1910,9 +1920,9 @@ WebConsoleFrame.prototype = {
       aHttpActivity.discardRequestBody = aResponse.postDataDiscarded;
 
       this.webConsoleClient.getResponseContent(actor, onResponseContent);
-    }.bind(this);
+    };
 
-    let onResponseContent = function(aResponse) {
+    let onResponseContent = (aResponse) => {
       if (aResponse.error) {
         Cu.reportError("WCF_openNetworkPanel getResponseContent:" +
                        aResponse.error);
@@ -1923,9 +1933,9 @@ WebConsoleFrame.prototype = {
       aHttpActivity.discardResponseBody = aResponse.contentDiscarded;
 
       this.webConsoleClient.getEventTimings(actor, onEventTimings);
-    }.bind(this);
+    };
 
-    let onEventTimings = function(aResponse) {
+    let onEventTimings = (aResponse) => {
       if (aResponse.error) {
         Cu.reportError("WCF_openNetworkPanel getEventTimings:" +
                        aResponse.error);
@@ -1935,9 +1945,9 @@ WebConsoleFrame.prototype = {
       aHttpActivity.timings = aResponse.timings;
 
       openPanel();
-    }.bind(this);
+    };
 
-    let openPanel = function() {
+    let openPanel = () => {
       aNode._netPanel = netPanel;
 
       let panel = netPanel.panel;
@@ -1953,7 +1963,7 @@ WebConsoleFrame.prototype = {
       });
 
       aNode._panelOpen = true;
-    }.bind(this);
+    };
 
     let netPanel = new NetworkPanel(this.popupset, aHttpActivity, this);
     netPanel.linkNode = aNode;
@@ -2911,9 +2921,9 @@ WebConsoleFrame.prototype = {
 
     this._commandController = null;
 
-    let onDestroy = function() {
+    let onDestroy = () => {
       this._destroyer.resolve(null);
-    }.bind(this);
+    };
 
     if (this.proxy) {
       this.proxy.disconnect().then(onDestroy);
@@ -3133,7 +3143,11 @@ JSTerm.prototype = {
       inputContainer.style.display = "none";
     }
     else {
-      this._onPaste = WebConsoleUtils.pasteHandlerGen(this.inputNode, doc.getElementById("webconsole-notificationbox"));
+      let okstring = l10n.getStr("selfxss.okstring");
+      let msg = l10n.getFormatStr("selfxss.msg", [okstring]);
+      this._onPaste = WebConsoleUtils.pasteHandlerGen(this.inputNode,
+                                                      doc.getElementById("webconsole-notificationbox"),
+                                                      msg, okstring);
       this.inputNode.addEventListener("keypress", this._keyPress, false);
       this.inputNode.addEventListener("paste", this._onPaste);
       this.inputNode.addEventListener("drop", this._onPaste);
@@ -3260,6 +3274,12 @@ JSTerm.prototype = {
       return;
     }
 
+    let selectedNodeActor = null;
+    let inspectorSelection = this.hud.owner.getInspectorSelection();
+    if (inspectorSelection) {
+      selectedNodeActor = inspectorSelection.nodeFront.actorID;
+    }
+
     let message = new Messages.Simple(aExecuteString, {
       category: "input",
       severity: "log",
@@ -3267,7 +3287,11 @@ JSTerm.prototype = {
     this.hud.output.addMessage(message);
     let onResult = this._executeResultCallback.bind(this, message, aCallback);
 
-    let options = { frame: this.SELECTED_FRAME };
+    let options = {
+      frame: this.SELECTED_FRAME,
+      selectedNodeActor: selectedNodeActor,
+    };
+
     this.requestEvaluation(aExecuteString, options).then(onResult, onResult);
 
     // Append a new value in the history of executed code, or overwrite the most
@@ -3297,6 +3321,9 @@ JSTerm.prototype = {
    *        user-selected stackframe.
    *        If you do not provide a |frame| the string will be evaluated in the
    *        global content window.
+   *        - selectedNodeActor: tells the NodeActor ID of the current selection in
+   *        the Inspector, if such a selection exists. This is used by helper
+   *        functions that can evaluate on the current selection.
    * @return object
    *         A promise object that is resolved when the server response is
    *         received.
@@ -3322,6 +3349,7 @@ JSTerm.prototype = {
     let evalOptions = {
       bindObjectActor: aOptions.bindObjectActor,
       frameActor: frameActor,
+      selectedNodeActor: aOptions.selectedNodeActor,
     };
 
     this.webConsoleClient.evaluateJS(aString, onResult, evalOptions);
@@ -4017,7 +4045,25 @@ JSTerm.prototype = {
         break;
 
       case Ci.nsIDOMKeyEvent.DOM_VK_HOME:
+        if (this.autocompletePopup.isOpen) {
+          this.autocompletePopup.selectedIndex = 0;
+          aEvent.preventDefault();
+        } else if (this.inputNode.value.length <= 0) {
+          this.hud.outputNode.parentNode.scrollTop = 0;
+          aEvent.preventDefault();
+        }
+        break;
+
       case Ci.nsIDOMKeyEvent.DOM_VK_END:
+        if (this.autocompletePopup.isOpen) {
+          this.autocompletePopup.selectedIndex = this.autocompletePopup.itemCount - 1;
+          aEvent.preventDefault();
+        } else if (this.inputNode.value.length <= 0) {
+          this.hud.outputNode.parentNode.scrollTop = this.hud.outputNode.parentNode.scrollHeight;
+          aEvent.preventDefault();
+        }
+        break;
+
       case Ci.nsIDOMKeyEvent.DOM_VK_LEFT:
         if (this.autocompletePopup.isOpen || this.lastCompletion.value) {
           this.clearCompletion();
@@ -4292,8 +4338,8 @@ JSTerm.prototype = {
 
     if (this._autocompleteQuery && input.startsWith(this._autocompleteQuery)) {
       let filterBy = input;
-      // Find the last non-alphanumeric if exists.
-      let lastNonAlpha = input.match(/[^a-zA-Z0-9][a-zA-Z0-9]*$/);
+      // Find the last non-alphanumeric other than _ or $ if it exists.
+      let lastNonAlpha = input.match(/[^a-zA-Z0-9_$][a-zA-Z0-9_$]*$/);
       // If input contains non-alphanumerics, use the part after the last one
       // to filter the cache
       if (lastNonAlpha) {
@@ -4850,12 +4896,12 @@ WebConsoleConnectionProxy.prototype = {
                                         timeout, Ci.nsITimer.TYPE_ONE_SHOT);
 
     let connPromise = this._connectDefer.promise;
-    connPromise.then(function _onSucess() {
+    connPromise.then(() => {
       this._connectTimer.cancel();
       this._connectTimer = null;
-    }.bind(this), function _onFailure() {
+    }, () => {
       this._connectTimer = null;
-    }.bind(this));
+    });
 
     let client = this.client = this.target.client;
 

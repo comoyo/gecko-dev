@@ -32,7 +32,11 @@ const size_t ArenaShift = 12;
 const size_t ArenaSize = size_t(1) << ArenaShift;
 const size_t ArenaMask = ArenaSize - 1;
 
+#ifdef JS_GC_SMALL_CHUNK_SIZE
+const size_t ChunkShift = 18;
+#else
 const size_t ChunkShift = 20;
+#endif
 const size_t ChunkSize = size_t(1) << ChunkShift;
 const size_t ChunkMask = ChunkSize - 1;
 
@@ -41,8 +45,13 @@ const size_t CellSize = size_t(1) << CellShift;
 const size_t CellMask = CellSize - 1;
 
 /* These are magic constants derived from actual offsets in gc/Heap.h. */
+#ifdef JS_GC_SMALL_CHUNK_SIZE
+const size_t ChunkMarkBitmapOffset = 258104;
+const size_t ChunkMarkBitmapBits = 31744;
+#else
 const size_t ChunkMarkBitmapOffset = 1032352;
 const size_t ChunkMarkBitmapBits = 129024;
+#endif
 const size_t ChunkRuntimeOffset = ChunkSize - sizeof(void*);
 const size_t ChunkLocationOffset = ChunkSize - 2 * sizeof(void*) - sizeof(uint64_t);
 
@@ -55,11 +64,23 @@ static const uint32_t BLACK = 0;
 static const uint32_t GRAY = 1;
 
 /*
- * Constants used to indicate whether a chunk is part of the tenured heap or the
- * nusery.
+ * The "location" field in the Chunk trailer is a bit vector indicting various
+ * roles of the chunk.
+ *
+ * The value 0 for the "location" field is invalid, at least one bit must be
+ * set.
+ *
+ * Some bits preclude others, for example, any "nursery" bit precludes any
+ * "tenured" or "middle generation" bit.
  */
-const uint32_t ChunkLocationNursery = 0;
-const uint32_t ChunkLocationTenuredHeap = 1;
+const uintptr_t ChunkLocationBitNursery = 1;       // Standard GGC nursery
+const uintptr_t ChunkLocationBitTenuredHeap = 2;   // Standard GGC tenured generation
+const uintptr_t ChunkLocationBitPJSNewspace = 4;   // The PJS generational GC's allocation space
+const uintptr_t ChunkLocationBitPJSFromspace = 8;  // The PJS generational GC's fromspace (during GC)
+
+const uintptr_t ChunkLocationAnyNursery = ChunkLocationBitNursery |
+                                          ChunkLocationBitPJSNewspace |
+                                          ChunkLocationBitPJSFromspace;
 
 #ifdef JS_DEBUG
 /* When downcasting, ensure we are actually the right type. */
@@ -76,6 +97,12 @@ AssertGCThingHasType(js::gc::Cell *cell, JSGCTraceKind kind) {}
 namespace JS {
 struct Zone;
 
+/* Default size for the generational nursery in bytes. */
+const uint32_t DefaultNurseryBytes = 16 * 1024 * 1024;
+
+/* Default maximum heap size in bytes to pass to JS_NewRuntime(). */
+const uint32_t DefaultHeapMaxBytes = 32 * 1024 * 1024;
+
 /*
  * We cannot expose the class hierarchy: the implementation is hidden. Instead
  * we provide cast functions with strong debug-mode assertions.
@@ -84,7 +111,7 @@ static MOZ_ALWAYS_INLINE js::gc::Cell *
 AsCell(JSObject *obj)
 {
     js::gc::Cell *cell = reinterpret_cast<js::gc::Cell *>(obj);
-    AssertGCThingHasType(cell, JSTRACE_OBJECT);
+    js::gc::AssertGCThingHasType(cell, JSTRACE_OBJECT);
     return cell;
 }
 
@@ -92,7 +119,7 @@ static MOZ_ALWAYS_INLINE js::gc::Cell *
 AsCell(JSFunction *fun)
 {
     js::gc::Cell *cell = reinterpret_cast<js::gc::Cell *>(fun);
-    AssertGCThingHasType(cell, JSTRACE_OBJECT);
+    js::gc::AssertGCThingHasType(cell, JSTRACE_OBJECT);
     return cell;
 }
 
@@ -100,7 +127,7 @@ static MOZ_ALWAYS_INLINE js::gc::Cell *
 AsCell(JSString *str)
 {
     js::gc::Cell *cell = reinterpret_cast<js::gc::Cell *>(str);
-    AssertGCThingHasType(cell, JSTRACE_STRING);
+    js::gc::AssertGCThingHasType(cell, JSTRACE_STRING);
     return cell;
 }
 
@@ -108,7 +135,15 @@ static MOZ_ALWAYS_INLINE js::gc::Cell *
 AsCell(JSFlatString *flat)
 {
     js::gc::Cell *cell = reinterpret_cast<js::gc::Cell *>(flat);
-    AssertGCThingHasType(cell, JSTRACE_STRING);
+    js::gc::AssertGCThingHasType(cell, JSTRACE_STRING);
+    return cell;
+}
+
+static MOZ_ALWAYS_INLINE js::gc::Cell *
+AsCell(JS::Symbol *sym)
+{
+    js::gc::Cell *cell = reinterpret_cast<js::gc::Cell *>(sym);
+    js::gc::AssertGCThingHasType(cell, JSTRACE_SYMBOL);
     return cell;
 }
 
@@ -116,7 +151,7 @@ static MOZ_ALWAYS_INLINE js::gc::Cell *
 AsCell(JSScript *script)
 {
     js::gc::Cell *cell = reinterpret_cast<js::gc::Cell *>(script);
-    AssertGCThingHasType(cell, JSTRACE_SCRIPT);
+    js::gc::AssertGCThingHasType(cell, JSTRACE_SCRIPT);
     return cell;
 }
 
@@ -134,20 +169,20 @@ struct Zone
     JSTracer *const barrierTracer_;     // A pointer to the JSRuntime's |gcMarker|.
 
   public:
-    bool needsBarrier_;
+    bool needsIncrementalBarrier_;
 
     Zone(JSRuntime *runtime, JSTracer *barrierTracerArg)
       : runtime_(runtime),
         barrierTracer_(barrierTracerArg),
-        needsBarrier_(false)
+        needsIncrementalBarrier_(false)
     {}
 
-    bool needsBarrier() const {
-        return needsBarrier_;
+    bool needsIncrementalBarrier() const {
+        return needsIncrementalBarrier_;
     }
 
     JSTracer *barrierTracer() {
-        MOZ_ASSERT(needsBarrier_);
+        MOZ_ASSERT(needsIncrementalBarrier_);
         MOZ_ASSERT(js::CurrentThreadCanAccessRuntime(runtime_));
         return barrierTracer_;
     }
@@ -225,9 +260,8 @@ IsInsideNursery(const js::gc::Cell *cell)
     addr &= ~js::gc::ChunkMask;
     addr |= js::gc::ChunkLocationOffset;
     uint32_t location = *reinterpret_cast<uint32_t *>(addr);
-    JS_ASSERT(location == gc::ChunkLocationNursery ||
-              location == gc::ChunkLocationTenuredHeap);
-    return location == gc::ChunkLocationNursery;
+    JS_ASSERT(location != 0);
+    return location & ChunkLocationAnyNursery;
 #else
     return false;
 #endif
@@ -240,21 +274,22 @@ IsInsideNursery(const js::gc::Cell *cell)
 namespace JS {
 
 static MOZ_ALWAYS_INLINE Zone *
-GetGCThingZone(void *thing)
+GetTenuredGCThingZone(void *thing)
 {
     MOZ_ASSERT(thing);
+#ifdef JSGC_GENERATIONAL
+    JS_ASSERT(!js::gc::IsInsideNursery((js::gc::Cell *)thing));
+#endif
     return js::gc::GetGCThingArena(thing)->zone;
 }
 
-static MOZ_ALWAYS_INLINE Zone *
-GetObjectZone(JSObject *obj)
-{
-    return GetGCThingZone(obj);
-}
+extern JS_PUBLIC_API(Zone *)
+GetObjectZone(JSObject *obj);
 
 static MOZ_ALWAYS_INLINE bool
 GCThingIsMarkedGray(void *thing)
 {
+    MOZ_ASSERT(thing);
 #ifdef JSGC_GENERATIONAL
     /*
      * GC things residing in the nursery cannot be gray: they have no mark bits.
@@ -270,12 +305,16 @@ GCThingIsMarkedGray(void *thing)
 }
 
 static MOZ_ALWAYS_INLINE bool
-IsIncrementalBarrierNeededOnGCThing(shadow::Runtime *rt, void *thing, JSGCTraceKind kind)
+IsIncrementalBarrierNeededOnTenuredGCThing(shadow::Runtime *rt, void *thing, JSGCTraceKind kind)
 {
-    if (!rt->needsBarrier_)
+    MOZ_ASSERT(thing);
+#ifdef JSGC_GENERATIONAL
+    MOZ_ASSERT(!js::gc::IsInsideNursery((js::gc::Cell *)thing));
+#endif
+    if (!rt->needsIncrementalBarrier())
         return false;
-    JS::Zone *zone = GetGCThingZone(thing);
-    return reinterpret_cast<shadow::Zone *>(zone)->needsBarrier_;
+    JS::Zone *zone = GetTenuredGCThingZone(thing);
+    return reinterpret_cast<shadow::Zone *>(zone)->needsIncrementalBarrier();
 }
 
 } /* namespace JS */

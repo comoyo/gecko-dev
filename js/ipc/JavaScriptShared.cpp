@@ -35,7 +35,7 @@ IdToObjectMap::trace(JSTracer *trc)
 {
     for (Table::Range r(table_.all()); !r.empty(); r.popFront()) {
         DebugOnly<JSObject *> prior = r.front().value().get();
-        JS_CallHeapObjectTracer(trc, &r.front().value(), "ipc-object");
+        JS_CallObjectTracer(trc, &r.front().value(), "ipc-object");
         MOZ_ASSERT(r.front().value() == prior);
     }
 }
@@ -135,7 +135,7 @@ ObjectToIdMap::keyMarkCallback(JSTracer *trc, JSObject *key, void *data)
 {
     Table *table = static_cast<Table*>(data);
     JSObject *prior = key;
-    JS_CallObjectTracer(trc, &key, "ObjectIdCache::table_ key");
+    JS_CallUnbarrieredObjectTracer(trc, &key, "ObjectIdCache::table_ key");
     table->rekeyIfMoved(prior, key);
 }
 
@@ -156,10 +156,16 @@ JavaScriptShared::JavaScriptShared(JSRuntime *rt)
 {
     if (!sLoggingInitialized) {
         sLoggingInitialized = true;
-        Preferences::AddBoolVarCache(&sLoggingEnabled,
-                                     "dom.ipc.cpows.log.enabled", false);
-        Preferences::AddBoolVarCache(&sStackLoggingEnabled,
-                                     "dom.ipc.cpows.log.stack", false);
+
+        if (PR_GetEnv("MOZ_CPOW_LOG")) {
+            sLoggingEnabled = true;
+            sStackLoggingEnabled = true;
+        } else {
+            Preferences::AddBoolVarCache(&sLoggingEnabled,
+                                         "dom.ipc.cpows.log.enabled", false);
+            Preferences::AddBoolVarCache(&sStackLoggingEnabled,
+                                         "dom.ipc.cpows.log.stack", false);
+        }
     }
 }
 
@@ -201,12 +207,7 @@ JavaScriptShared::convertIdToGeckoString(JSContext *cx, JS::HandleId id, nsStrin
     if (!str)
         return false;
 
-    const jschar *chars = JS_GetStringCharsZ(cx, str);
-    if (!chars)
-        return false;
-
-    *to = chars;
-    return true;
+    return AssignJSString(cx, *to, str);
 }
 
 bool
@@ -254,10 +255,10 @@ JavaScriptShared::toVariant(JSContext *cx, JS::HandleValue from, JSVariant *to)
 
       case JSTYPE_STRING:
       {
-        nsDependentJSString dep;
-        if (!dep.init(cx, from))
+        nsAutoJSString autoStr;
+        if (!autoStr.init(cx, from))
             return false;
-        *to = dep;
+        *to = autoStr;
         return true;
       }
 
@@ -399,8 +400,10 @@ JavaScriptShared::findObjectById(JSContext *cx, uint32_t objId)
         }
     }
 
-    // If there's no TabChildGlobal, we use the junk scope.
-    JSAutoCompartment ac(cx, xpc::GetJunkScope());
+    // If there's no TabChildGlobal, we use the junk scope. In the parent we use
+    // the unprivileged junk scope to prevent security vulnerabilities. In the
+    // child we use the privileged junk scope.
+    JSAutoCompartment ac(cx, defaultScope());
     if (!JS_WrapObject(cx, &obj))
         return nullptr;
     return obj;

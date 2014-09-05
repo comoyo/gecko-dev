@@ -78,13 +78,11 @@ CompileRuntime::addressOfInterrupt()
     return &runtime()->interrupt;
 }
 
-#ifdef JS_THREADSAFE
 const void *
 CompileRuntime::addressOfInterruptPar()
 {
     return &runtime()->interruptPar;
 }
-#endif
 
 const void *
 CompileRuntime::addressOfThreadPool()
@@ -105,9 +103,9 @@ CompileRuntime::spsProfiler()
 }
 
 bool
-CompileRuntime::signalHandlersInstalled()
+CompileRuntime::canUseSignalHandlers()
 {
-    return runtime()->signalHandlersInstalled();
+    return runtime()->canUseSignalHandlers();
 }
 
 bool
@@ -193,9 +191,9 @@ CompileZone::get(Zone *zone)
 }
 
 const void *
-CompileZone::addressOfNeedsBarrier()
+CompileZone::addressOfNeedsIncrementalBarrier()
 {
-    return zone()->addressOfNeedsBarrier();
+    return zone()->addressOfNeedsIncrementalBarrier();
 }
 
 const void *
@@ -280,7 +278,7 @@ JitCompileOptions::JitCompileOptions()
 JitCompileOptions::JitCompileOptions(JSContext *cx)
 {
     JS::CompartmentOptions &options = cx->compartment()->options();
-    cloneSingletons_ = options.cloneSingletons(cx);
+    cloneSingletons_ = options.cloneSingletons();
     spsSlowAssertionsEnabled_ = cx->runtime()->spsProfiler.enabled() &&
                                 cx->runtime()->spsProfiler.slowAssertionsEnabled();
 }

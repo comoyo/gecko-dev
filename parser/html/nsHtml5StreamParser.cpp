@@ -117,7 +117,7 @@ class nsHtml5ExecutorFlusher : public nsRunnable
   private:
     nsRefPtr<nsHtml5TreeOpExecutor> mExecutor;
   public:
-    nsHtml5ExecutorFlusher(nsHtml5TreeOpExecutor* aExecutor)
+    explicit nsHtml5ExecutorFlusher(nsHtml5TreeOpExecutor* aExecutor)
       : mExecutor(aExecutor)
     {}
     NS_IMETHODIMP Run()
@@ -134,7 +134,7 @@ class nsHtml5LoadFlusher : public nsRunnable
   private:
     nsRefPtr<nsHtml5TreeOpExecutor> mExecutor;
   public:
-    nsHtml5LoadFlusher(nsHtml5TreeOpExecutor* aExecutor)
+    explicit nsHtml5LoadFlusher(nsHtml5TreeOpExecutor* aExecutor)
       : mExecutor(aExecutor)
     {}
     NS_IMETHODIMP Run()
@@ -933,14 +933,18 @@ nsHtml5StreamParser::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
       mReparseForbidden = true;
       mFeedChardet = false; // can't restart anyway
     }
+  }
 
-    // Attempt to retarget delivery of data (via OnDataAvailable) to the parser
-    // thread, rather than through the main thread.
-    nsCOMPtr<nsIThreadRetargetableRequest> threadRetargetableRequest =
-      do_QueryInterface(mRequest);
-    if (threadRetargetableRequest) {
-      threadRetargetableRequest->RetargetDeliveryTo(mThread);
-    }
+  // Attempt to retarget delivery of data (via OnDataAvailable) to the parser
+  // thread, rather than through the main thread.
+  nsCOMPtr<nsIThreadRetargetableRequest> threadRetargetableRequest =
+    do_QueryInterface(mRequest, &rv);
+  if (threadRetargetableRequest) {
+    rv = threadRetargetableRequest->RetargetDeliveryTo(mThread);
+  }
+
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to retarget HTML data delivery to the parser thread.");
   }
 
   if (mCharsetSource == kCharsetFromParentFrame) {
@@ -1020,7 +1024,7 @@ class nsHtml5RequestStopper : public nsRunnable
   private:
     nsHtml5RefPtr<nsHtml5StreamParser> mStreamParser;
   public:
-    nsHtml5RequestStopper(nsHtml5StreamParser* aStreamParser)
+    explicit nsHtml5RequestStopper(nsHtml5StreamParser* aStreamParser)
       : mStreamParser(aStreamParser)
     {}
     NS_IMETHODIMP Run()
@@ -1406,7 +1410,7 @@ class nsHtml5StreamParserContinuation : public nsRunnable
 private:
   nsHtml5RefPtr<nsHtml5StreamParser> mStreamParser;
 public:
-  nsHtml5StreamParserContinuation(nsHtml5StreamParser* aStreamParser)
+  explicit nsHtml5StreamParserContinuation(nsHtml5StreamParser* aStreamParser)
     : mStreamParser(aStreamParser)
   {}
   NS_IMETHODIMP Run()
@@ -1571,7 +1575,7 @@ class nsHtml5TimerKungFu : public nsRunnable
 private:
   nsHtml5RefPtr<nsHtml5StreamParser> mStreamParser;
 public:
-  nsHtml5TimerKungFu(nsHtml5StreamParser* aStreamParser)
+  explicit nsHtml5TimerKungFu(nsHtml5StreamParser* aStreamParser)
     : mStreamParser(aStreamParser)
   {}
   NS_IMETHODIMP Run()

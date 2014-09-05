@@ -10,14 +10,11 @@
 #include "jit/IonTypes.h"
 #include "js/TypeDecls.h"
 
-#ifdef JS_ION
-
 namespace js {
 namespace jit {
 
 // Longer scripts can only be compiled off thread, as these compilations
 // can be expensive and stall the main thread for too long.
-static const uint32_t MAX_OFF_THREAD_SCRIPT_SIZE = 100 * 1000;
 static const uint32_t MAX_MAIN_THREAD_SCRIPT_SIZE = 2 * 1000;
 static const uint32_t MAX_MAIN_THREAD_LOCALS_AND_ARGS = 256;
 
@@ -28,11 +25,6 @@ enum IonRegisterAllocator {
     RegisterAllocator_Stupid
 };
 
-enum IonGvnKind {
-    GVN_Optimistic,
-    GVN_Pessimistic
-};
-
 struct JitOptions
 {
     bool checkGraphConsistency;
@@ -41,18 +33,18 @@ struct JitOptions
 #endif
     bool checkRangeAnalysis;
     bool compileTryCatch;
+    bool disableScalarReplacement;
     bool disableGvn;
     bool disableLicm;
     bool disableInlining;
     bool disableEdgeCaseAnalysis;
     bool disableRangeAnalysis;
+    bool disableLoopUnrolling;
     bool disableUce;
     bool disableEaa;
     bool eagerCompilation;
     bool forceDefaultIonUsesBeforeCompile;
     uint32_t forcedDefaultIonUsesBeforeCompile;
-    bool forceGvnKind;
-    IonGvnKind forcedGvnKind;
     bool forceRegisterAllocator;
     IonRegisterAllocator forcedRegisterAllocator;
     bool limitScriptSize;
@@ -76,7 +68,5 @@ extern JitOptions js_JitOptions;
 
 } // namespace jit
 } // namespace js
-
-#endif // JS_ION
 
 #endif /* jit_JitOptions_h */

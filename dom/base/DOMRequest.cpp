@@ -7,7 +7,6 @@
 #include "DOMRequest.h"
 
 #include "DOMError.h"
-#include "nsCxPusher.h"
 #include "nsThreadUtils.h"
 #include "DOMCursor.h"
 #include "nsIDOMEvent.h"
@@ -83,7 +82,7 @@ DOMRequest::GetReadyState(nsAString& aReadyState)
 NS_IMETHODIMP
 DOMRequest::GetResult(JS::MutableHandle<JS::Value> aResult)
 {
-  aResult.set(Result());
+  GetResult(nullptr, aResult);
   return NS_OK;
 }
 

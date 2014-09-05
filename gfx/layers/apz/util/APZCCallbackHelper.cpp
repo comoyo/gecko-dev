@@ -10,6 +10,9 @@
 #include "nsLayoutUtils.h"
 #include "nsIDOMElement.h"
 #include "nsIInterfaceRequestorUtils.h"
+#include "nsIContent.h"
+#include "nsIDocument.h"
+#include "nsIDOMWindow.h"
 
 namespace mozilla {
 namespace layers {
@@ -173,7 +176,7 @@ APZCCallbackHelper::UpdateRootFrame(nsIDOMWindowUtils* aUtils,
                                             alignment.width,
                                             alignment.height,
                                             element, 0);
-    CSSRect baseCSS = aMetrics.mCompositionBounds / aMetrics.GetZoomToParent();
+    CSSRect baseCSS = aMetrics.CalculateCompositedRectInCssPixels();
     nsRect base(baseCSS.x * nsPresContext::AppUnitsPerCSSPixel(),
                 baseCSS.y * nsPresContext::AppUnitsPerCSSPixel(),
                 baseCSS.width * nsPresContext::AppUnitsPerCSSPixel(),
@@ -222,7 +225,7 @@ APZCCallbackHelper::UpdateSubFrame(nsIContent* aContent,
                                                alignment.width,
                                                alignment.height,
                                                element, 0);
-        CSSRect baseCSS = aMetrics.mCompositionBounds / aMetrics.GetZoomToParent();
+        CSSRect baseCSS = aMetrics.CalculateCompositedRectInCssPixels();
         nsRect base(baseCSS.x * nsPresContext::AppUnitsPerCSSPixel(),
                     baseCSS.y * nsPresContext::AppUnitsPerCSSPixel(),
                     baseCSS.width * nsPresContext::AppUnitsPerCSSPixel(),

@@ -13,14 +13,13 @@
 #include "gfxRect.h"
 #include "gfxMatrix.h"
 #include "gfxPattern.h"
-#include "gfxPath.h"
 #include "nsTArray.h"
 #include "nsAutoPtr.h"
 
 #include "mozilla/gfx/2D.h"
 
 typedef struct _cairo cairo_t;
-struct GlyphBufferAzure;
+class GlyphBufferAzure;
 template <typename T> class FallibleTArray;
 
 /**
@@ -37,24 +36,20 @@ template <typename T> class FallibleTArray;
  * Note that the gfxContext takes coordinates in device pixels,
  * as opposed to app units.
  */
-class gfxContext {
+class gfxContext MOZ_FINAL {
+    typedef mozilla::gfx::Path Path;
+
     NS_INLINE_DECL_REFCOUNTING(gfxContext)
 
 public:
-    /**
-     * Initialize this context from a surface.
-     */
-    gfxContext(gfxASurface *surface);
 
     /**
      * Initialize this context from a DrawTarget.
      * Strips any transform from aTarget.
      * aTarget will be flushed in the gfxContext's destructor.
      */
-    gfxContext(mozilla::gfx::DrawTarget *aTarget,
-               const mozilla::gfx::Point& aDeviceOffset = mozilla::gfx::Point());
-
-    ~gfxContext();
+    explicit gfxContext(mozilla::gfx::DrawTarget *aTarget,
+                        const mozilla::gfx::Point& aDeviceOffset = mozilla::gfx::Point());
 
     /**
      * Create a new gfxContext wrapping aTarget and preserving aTarget's
@@ -139,14 +134,14 @@ public:
     void ClosePath();
 
     /**
-     * Copies the current path and returns the copy.
+     * Returns the current path.
      */
-    already_AddRefed<gfxPath> CopyPath();
+    mozilla::TemporaryRef<Path> GetPath();
 
     /**
      * Appends the given path to the current path.
      */
-    void SetPath(gfxPath* path);
+    void SetPath(Path* path);
 
     /**
      * Moves the pen to a new point without drawing a line.
@@ -691,8 +686,6 @@ public:
     void ClearFlag(int32_t aFlag) { mFlags &= ~aFlag; }
     int32_t GetFlags() const { return mFlags; }
 
-    bool IsCairo() const { return !mDT; }
-
     // Work out whether cairo will snap inter-glyph spacing to pixels.
     void GetRoundOffsetsToPixels(bool *aRoundX, bool *aRoundY);
 
@@ -709,19 +702,21 @@ public:
     /**
      * Write as a PNG encoded Data URL to stdout.
      */
-    void DumpAsDataURL();
+    void DumpAsDataURI();
 
     /**
      * Copy a PNG encoded Data URL to the clipboard.
      */
-    void CopyAsDataURL();
+    void CopyAsDataURI();
 #endif
 
     static mozilla::gfx::UserDataKey sDontUseAsSourceKey;
 
 private:
+    ~gfxContext();
+
   friend class GeneralPattern;
-  friend struct GlyphBufferAzure;
+  friend class GlyphBufferAzure;
 
   typedef mozilla::gfx::Matrix Matrix;
   typedef mozilla::gfx::DrawTarget DrawTarget;
@@ -730,7 +725,6 @@ private:
   typedef mozilla::gfx::Float Float;
   typedef mozilla::gfx::Rect Rect;
   typedef mozilla::gfx::CompositionOp CompositionOp;
-  typedef mozilla::gfx::Path Path;
   typedef mozilla::gfx::PathBuilder PathBuilder;
   typedef mozilla::gfx::SourceSurface SourceSurface;
   
@@ -798,7 +792,6 @@ private:
   AzureState &CurrentState() { return mStateStack[mStateStack.Length() - 1]; }
   const AzureState &CurrentState() const { return mStateStack[mStateStack.Length() - 1]; }
 
-  cairo_t *mCairo;
   cairo_t *mRefCairo;
   nsRefPtr<gfxASurface> mSurface;
   int32_t mFlags;
@@ -817,7 +810,7 @@ class gfxContextAutoSaveRestore
 public:
   gfxContextAutoSaveRestore() : mContext(nullptr) {}
 
-  gfxContextAutoSaveRestore(gfxContext *aContext) : mContext(aContext) {
+  explicit gfxContextAutoSaveRestore(gfxContext *aContext) : mContext(aContext) {
     mContext->Save();
   }
 
@@ -859,10 +852,12 @@ private:
  */
 class gfxContextPathAutoSaveRestore
 {
+    typedef mozilla::gfx::Path Path;
+
 public:
     gfxContextPathAutoSaveRestore() : mContext(nullptr) {}
 
-    gfxContextPathAutoSaveRestore(gfxContext *aContext, bool aSave = true) : mContext(aContext)
+    explicit gfxContextPathAutoSaveRestore(gfxContext *aContext, bool aSave = true) : mContext(aContext)
     {
         if (aSave)
             Save();       
@@ -887,7 +882,7 @@ public:
     void Save()
     {
         if (!mPath && mContext) {
-            mPath = mContext->CopyPath();
+            mPath = mContext->GetPath();
         }
     }
 
@@ -906,7 +901,7 @@ public:
 private:
     gfxContext *mContext;
 
-    nsRefPtr<gfxPath> mPath;
+    mozilla::RefPtr<Path> mPath;
 };
 
 /**
@@ -922,7 +917,7 @@ public:
     {
     }
 
-    gfxContextMatrixAutoSaveRestore(gfxContext *aContext) :
+    explicit gfxContextMatrixAutoSaveRestore(gfxContext *aContext) :
         mContext(aContext), mMatrix(aContext->CurrentMatrix())
     {
     }
@@ -965,19 +960,9 @@ public:
     gfxContextAutoDisableSubpixelAntialiasing(gfxContext *aContext, bool aDisable)
     {
         if (aDisable) {
-            if (aContext->IsCairo()) {
-                mSurface = aContext->CurrentSurface();
-                if (!mSurface) {
-                  return;
-                }
-                mSubpixelAntialiasingEnabled = mSurface->GetSubpixelAntialiasingEnabled();
-                mSurface->SetSubpixelAntialiasingEnabled(false);
-            } else {
-                mDT = aContext->GetDrawTarget();
-
-                mSubpixelAntialiasingEnabled = mDT->GetPermitSubpixelAA();
-                mDT->SetPermitSubpixelAA(false);
-            }
+            mDT = aContext->GetDrawTarget();
+            mSubpixelAntialiasingEnabled = mDT->GetPermitSubpixelAA();
+            mDT->SetPermitSubpixelAA(false);
         }
     }
     ~gfxContextAutoDisableSubpixelAntialiasing()

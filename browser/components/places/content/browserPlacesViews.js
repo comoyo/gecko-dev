@@ -123,8 +123,15 @@ PlacesViewBase.prototype = {
 
   get selectedNode() {
     if (this._contextMenuShown) {
-      let popup = document.popupNode;
-      return popup._placesNode || popup.parentNode._placesNode || null;
+      let anchor = this._contextMenuShown.triggerNode;
+      if (!anchor)
+        return null;
+
+      if (anchor._placesNode)
+        return this._rootElt == anchor ? null : anchor._placesNode;
+
+      anchor = anchor.parentNode;
+      return this._rootElt == anchor ? null : (anchor._placesNode || null);
     }
     return null;
   },
@@ -190,13 +197,13 @@ PlacesViewBase.prototype = {
   },
 
   buildContextMenu: function PVB_buildContextMenu(aPopup) {
-    this._contextMenuShown = true;
+    this._contextMenuShown = aPopup;
     window.updateCommands("places");
     return this.controller.buildContextMenu(aPopup);
   },
 
   destroyContextMenu: function PVB_destroyContextMenu(aPopup) {
-    this._contextMenuShown = false;
+    this._contextMenuShown = null;
   },
 
   _cleanPopup: function PVB_cleanPopup(aPopup, aDelay) {
@@ -355,7 +362,8 @@ PlacesViewBase.prototype = {
 
       let icon = aPlacesNode.icon;
       if (icon)
-        element.setAttribute("image", icon);
+        element.setAttribute("image",
+                             PlacesUtils.getImageURLForResolution(window, icon));
     }
 
     element._placesNode = aPlacesNode;
@@ -493,7 +501,8 @@ PlacesViewBase.prototype = {
     if (!icon)
       elt.removeAttribute("image");
     else if (icon != elt.getAttribute("image"))
-      elt.setAttribute("image", icon);
+      elt.setAttribute("image",
+                       PlacesUtils.getImageURLForResolution(window, icon));
   },
 
   nodeAnnotationChanged:
@@ -1009,7 +1018,8 @@ PlacesToolbar.prototype = {
       button.setAttribute("label", aChild.title);
       let icon = aChild.icon;
       if (icon)
-        button.setAttribute("image", icon);
+        button.setAttribute("image",
+                            PlacesUtils.getImageURLForResolution(window, icon));
 
       if (PlacesUtils.containerTypes.indexOf(type) != -1) {
         button.setAttribute("type", "menu");
@@ -1833,7 +1843,8 @@ PlacesPanelMenuView.prototype = {
       button.setAttribute("label", aChild.title);
       let icon = aChild.icon;
       if (icon)
-        button.setAttribute("image", icon);
+        button.setAttribute("image",
+                            PlacesUtils.getImageURLForResolution(window, icon));
 
       if (PlacesUtils.containerTypes.indexOf(type) != -1) {
         button.setAttribute("container", "true");

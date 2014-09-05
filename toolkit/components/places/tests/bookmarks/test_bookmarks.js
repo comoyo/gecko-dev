@@ -1,4 +1,4 @@
-/* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -26,9 +26,9 @@ let bookmarksObserver = {
 
     // Ensure that we've created a guid for this item.
     let stmt = DBConn().createStatement(
-      "SELECT guid "
-    + "FROM moz_bookmarks "
-    + "WHERE id = :item_id "
+      `SELECT guid
+       FROM moz_bookmarks
+       WHERE id = :item_id`
     );
     stmt.params.item_id = id;
     do_check_true(stmt.executeStep());

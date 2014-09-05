@@ -40,6 +40,9 @@ LIBRARY_NAME = 'jemalloc'
 
 FORCE_STATIC_LIB = True
 
+if CONFIG['MOZ_GLUE_PROGRAM_LDFLAGS']:
+    SDK_LIBRARY = True
+
 if CONFIG['_MSC_VER']:
     DEFINES['DLLEXPORT'] = True
     LOCAL_INCLUDES += ['src/include/msvc_compat']
@@ -49,6 +52,9 @@ if CONFIG['_MSC_VER']:
 if CONFIG['OS_TARGET'] == 'Linux':
     # For mremap
     DEFINES['_GNU_SOURCE'] = True
+
+if CONFIG['MOZ_NUWA_PROCESS'] and CONFIG['MOZ_JEMALLOC3']:
+    DEFINES['pthread_mutex_lock'] = '__real_pthread_mutex_lock';
 
 DEFINES['abort'] = 'moz_abort'
 

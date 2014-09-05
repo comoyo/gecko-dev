@@ -52,11 +52,11 @@ public class BrowserLocaleManager implements LocaleManager {
 
     // These are volatile because we don't impose restrictions
     // over which thread calls our methods.
-    private volatile Locale currentLocale = null;
+    private volatile Locale currentLocale;
     private volatile Locale systemLocale = Locale.getDefault();
 
     private AtomicBoolean inited = new AtomicBoolean(false);
-    private boolean systemLocaleDidChange = false;
+    private boolean systemLocaleDidChange;
     private BroadcastReceiver receiver;
 
     private static AtomicReference<LocaleManager> instance = new AtomicReference<LocaleManager>();
@@ -205,7 +205,7 @@ public class BrowserLocaleManager implements LocaleManager {
      *
      * If we're currently mirroring the system locale, this method returns the
      * supplied configuration's locale, unless the current activity locale is
-     * correct. , If we're not currently mirroring, this methodupdates the
+     * correct. If we're not currently mirroring, this method updates the
      * configuration object to match the user's currently selected locale, and
      * returns that, unless the current activity locale is correct.
      *

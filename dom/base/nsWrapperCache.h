@@ -167,24 +167,26 @@ public:
    * bits of mFlags to be used by derived classes.
    */
 
-  uint32_t GetFlags() const
+  typedef uint32_t FlagsType;
+
+  FlagsType GetFlags() const
   {
     return mFlags & ~kWrapperFlagsMask;
   }
 
-  bool HasFlag(uint32_t aFlag) const
+  bool HasFlag(FlagsType aFlag) const
   {
     MOZ_ASSERT((aFlag & kWrapperFlagsMask) == 0, "Bad flag mask");
     return !!(mFlags & aFlag);
   }
 
-  void SetFlags(uint32_t aFlagsToSet)
+  void SetFlags(FlagsType aFlagsToSet)
   {
     MOZ_ASSERT((aFlagsToSet & kWrapperFlagsMask) == 0, "Bad flag mask");
     mFlags |= aFlagsToSet;
   }
 
-  void UnsetFlags(uint32_t aFlagsToUnset)
+  void UnsetFlags(FlagsType aFlagsToUnset)
   {
     MOZ_ASSERT((aFlagsToUnset & kWrapperFlagsMask) == 0, "Bad flag mask");
     mFlags &= ~aFlagsToUnset;
@@ -226,7 +228,7 @@ protected:
   void TraceWrapper(JSTracer* aTrc, const char* name)
   {
     if (mWrapper) {
-      JS_CallHeapObjectTracer(aTrc, &mWrapper, name);
+      JS_CallObjectTracer(aTrc, &mWrapper, name);
     }
   }
 
@@ -251,24 +253,24 @@ private:
 
   void TraceWrapperJSObject(JSTracer* aTrc, const char* aName);
 
-  uint32_t GetWrapperFlags() const
+  FlagsType GetWrapperFlags() const
   {
     return mFlags & kWrapperFlagsMask;
   }
 
-  bool HasWrapperFlag(uint32_t aFlag) const
+  bool HasWrapperFlag(FlagsType aFlag) const
   {
     MOZ_ASSERT((aFlag & ~kWrapperFlagsMask) == 0, "Bad wrapper flag bits");
     return !!(mFlags & aFlag);
   }
 
-  void SetWrapperFlags(uint32_t aFlagsToSet)
+  void SetWrapperFlags(FlagsType aFlagsToSet)
   {
     MOZ_ASSERT((aFlagsToSet & ~kWrapperFlagsMask) == 0, "Bad wrapper flag bits");
     mFlags |= aFlagsToSet;
   }
 
-  void UnsetWrapperFlags(uint32_t aFlagsToUnset)
+  void UnsetWrapperFlags(FlagsType aFlagsToUnset)
   {
     MOZ_ASSERT((aFlagsToUnset & ~kWrapperFlagsMask) == 0, "Bad wrapper flag bits");
     mFlags &= ~aFlagsToUnset;
@@ -304,18 +306,22 @@ private:
   enum { kWrapperFlagsMask = (WRAPPER_BIT_PRESERVED | WRAPPER_IS_DOM_BINDING) };
 
   JS::Heap<JSObject*> mWrapper;
-  uint32_t            mFlags;
+  FlagsType           mFlags;
 };
 
 enum { WRAPPER_CACHE_FLAGS_BITS_USED = 2 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsWrapperCache, NS_WRAPPERCACHE_IID)
 
-#define NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY                                   \
+#define NS_WRAPPERCACHE_INTERFACE_TABLE_ENTRY                                 \
   if ( aIID.Equals(NS_GET_IID(nsWrapperCache)) ) {                            \
     *aInstancePtr = static_cast<nsWrapperCache*>(this);                       \
     return NS_OK;                                                             \
   }
+
+#define NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY                                   \
+  NS_WRAPPERCACHE_INTERFACE_TABLE_ENTRY                                       \
+  else
 
 
 // Cycle collector macros for wrapper caches.

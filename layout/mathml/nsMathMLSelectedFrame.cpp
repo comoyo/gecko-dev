@@ -6,6 +6,8 @@
 #include "nsMathMLSelectedFrame.h"
 #include "nsDisplayList.h"
 
+using namespace mozilla;
+
 nsMathMLSelectedFrame::~nsMathMLSelectedFrame()
 {
 }
@@ -104,12 +106,14 @@ nsMathMLSelectedFrame::Reflow(nsPresContext*          aPresContext,
                               nsReflowStatus&          aStatus)
 {
   aStatus = NS_FRAME_COMPLETE;
-  aDesiredSize.Width() = aDesiredSize.Height() = 0;
-  aDesiredSize.SetTopAscent(0);
+  aDesiredSize.ClearSize();
+  aDesiredSize.SetBlockStartAscent(0);
   mBoundingMetrics = nsBoundingMetrics();
   nsIFrame* childFrame = GetSelectedFrame();
   if (childFrame) {
-    nsSize availSize(aReflowState.ComputedWidth(), NS_UNCONSTRAINEDSIZE);
+    WritingMode wm = childFrame->GetWritingMode();
+    LogicalSize availSize = aReflowState.ComputedSize(wm);
+    availSize.BSize(wm) = NS_UNCONSTRAINEDSIZE;
     nsHTMLReflowState childReflowState(aPresContext, aReflowState,
                                        childFrame, availSize);
     ReflowChild(childFrame, aPresContext, aDesiredSize,
@@ -134,8 +138,8 @@ nsMathMLSelectedFrame::Place(nsRenderingContext& aRenderingContext,
     return ReflowError(aRenderingContext, aDesiredSize);
   }
 
-  aDesiredSize.Width() = aDesiredSize.Height() = 0;
-  aDesiredSize.SetTopAscent(0);
+  aDesiredSize.ClearSize();
+  aDesiredSize.SetBlockStartAscent(0);
   mBoundingMetrics = nsBoundingMetrics();
   if (childFrame) {
     GetReflowAndBoundingMetricsFor(childFrame, aDesiredSize, mBoundingMetrics);
@@ -143,7 +147,7 @@ nsMathMLSelectedFrame::Place(nsRenderingContext& aRenderingContext,
       FinishReflowChild(childFrame, PresContext(), aDesiredSize, nullptr, 0, 0, 0);
     }
     mReference.x = 0;
-    mReference.y = aDesiredSize.TopAscent();
+    mReference.y = aDesiredSize.BlockStartAscent();
   }
   aDesiredSize.mBoundingMetrics = mBoundingMetrics;
   return NS_OK;

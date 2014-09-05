@@ -72,23 +72,28 @@ enum nsChangeHint {
   nsChangeHint_ReconstructFrame = 0x400,
 
   /**
-   * The frame's overflow area has changed, either through a change in its
-   * transform or a change in its position. Does not update any descendant
+   * The frame's overflow area has changed. Does not update any descendant
    * frames.
    */
   nsChangeHint_UpdateOverflow = 0x800,
 
   /**
+   * The overflow area of the frame and all of its descendants has changed. This
+   * can happen through a text-decoration change.   
+   */
+  nsChangeHint_UpdateSubtreeOverflow = 0x1000,
+
+  /**
    * The frame's overflow area has changed, through a change in its transform.
    * Does not update any descendant frames.
    */
-  nsChangeHint_UpdatePostTransformOverflow = 0x1000,
+  nsChangeHint_UpdatePostTransformOverflow = 0x2000,
 
   /**
    * The children-only transform of an SVG frame changed, requiring the
    * overflow rects of the frame's immediate children to be updated.
    */
-  nsChangeHint_ChildrenOnlyTransform = 0x2000,
+  nsChangeHint_ChildrenOnlyTransform = 0x4000,
 
   /**
    * The frame's offsets have changed, while its dimensions might have
@@ -100,7 +105,7 @@ enum nsChangeHint {
    * nsChangeHint_UpdateOverflow in order to get the overflow areas of
    * the ancestors updated as well.
    */
-  nsChangeHint_RecomputePosition = 0x4000,
+  nsChangeHint_RecomputePosition = 0x8000,
 
   /**
    * Behaves like ReconstructFrame, but only if the frame has descendants
@@ -108,7 +113,7 @@ enum nsChangeHint {
    * has changed whether the frame is a container for fixed-pos or abs-pos
    * elements, but reframing is otherwise not needed.
    */
-  nsChangeHint_AddOrRemoveTransform = 0x8000,
+  nsChangeHint_AddOrRemoveTransform = 0x10000,
 
   /**
    * This change hint has *no* change handling behavior.  However, it
@@ -116,13 +121,19 @@ enum nsChangeHint {
    * changes, and it's inherited by a child, that might require a reflow
    * due to the border-width change on the child.
    */
-  nsChangeHint_BorderStyleNoneChange = 0x10000,
+  nsChangeHint_BorderStyleNoneChange = 0x20000,
 
   /**
    * SVG textPath needs to be recomputed because the path has changed.
    * This means that the glyph positions of the text need to be recomputed.
    */
-  nsChangeHint_UpdateTextPath = 0x20000
+  nsChangeHint_UpdateTextPath = 0x40000,
+
+  /**
+   * This will schedule an invalidating paint. This is useful if something
+   * has changed which will be invalidated by DLBI.
+   */
+  nsChangeHint_SchedulePaint = 0x80000
 
   // IMPORTANT NOTE: When adding new hints, consider whether you need to
   // add them to NS_HintsNotHandledForDescendantsIn() below.
@@ -223,7 +234,8 @@ inline nsChangeHint NS_HintsNotHandledForDescendantsIn(nsChangeHint aChangeHint)
 #define NS_STYLE_HINT_NONE \
   nsChangeHint(0)
 #define NS_STYLE_HINT_VISUAL \
-  nsChangeHint(nsChangeHint_RepaintFrame | nsChangeHint_SyncFrameView)
+  nsChangeHint(nsChangeHint_RepaintFrame | nsChangeHint_SyncFrameView | \
+               nsChangeHint_SchedulePaint)
 #define nsChangeHint_AllReflowHints                     \
   nsChangeHint(nsChangeHint_NeedReflow |                \
                nsChangeHint_ClearAncestorIntrinsics |   \
@@ -240,9 +252,32 @@ inline nsChangeHint NS_HintsNotHandledForDescendantsIn(nsChangeHint aChangeHint)
  * restyling is necessary, use |nsRestyleHint(0)|.
  */
 enum nsRestyleHint {
-  eRestyle_Self = 0x1,
-  eRestyle_Subtree = 0x2, /* self and descendants */
-  eRestyle_LaterSiblings = 0x4 /* implies "and descendants" */
+  // Rerun selector matching on the element.  If a new style context
+  // results, update the style contexts of descendants.  (Irrelevant if
+  // eRestyle_Subtree is also set, since that implies a superset of the
+  // work.)
+  eRestyle_Self = (1<<0),
+
+  // Rerun selector matching on the element and all of its descendants.
+  eRestyle_Subtree = (1<<1),
+
+  // Rerun selector matching on all later siblings of the element and
+  // all of their descendants.
+  eRestyle_LaterSiblings = (1<<2),
+
+  // Replace the style data coming from CSS transitions without updating
+  // any other style data.  If a new style context results, update style
+  // contexts on the descendants.  (Irrelevant if eRestyle_Self or
+  // eRestyle_Subtree is also set, since those imply a superset of the
+  // work.)
+  eRestyle_CSSTransitions = (1<<3),
+
+  // Replace the style data coming from CSS animations without updating
+  // any other style data.  If a new style context results, update style
+  // contexts on the descendants.  (Irrelevant if eRestyle_Self or
+  // eRestyle_Subtree is also set, since those imply a superset of the
+  // work.)
+  eRestyle_CSSAnimations = (1<<4),
 };
 
 

@@ -1,4 +1,4 @@
-/* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set shiftwidth=2 tabstop=2 autoindent cindent expandtab: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -77,10 +77,10 @@ MozWifiCapabilities.prototype = {
 
 function DOMWifiManager() {
   this.defineEventHandlerGetterSetter("onstatuschange");
-  this.defineEventHandlerGetterSetter("onconnectionInfoUpdate");
+  this.defineEventHandlerGetterSetter("onconnectioninfoupdate");
   this.defineEventHandlerGetterSetter("onenabled");
   this.defineEventHandlerGetterSetter("ondisabled");
-  this.defineEventHandlerGetterSetter("onstationInfoUpdate");
+  this.defineEventHandlerGetterSetter("onstationinfoupdate");
 }
 
 DOMWifiManager.prototype = {
@@ -113,13 +113,14 @@ DOMWifiManager.prototype = {
                       "WifiManager:importCert:Return:OK", "WifiManager:importCert:Return:NO",
                       "WifiManager:getImportedCerts:Return:OK", "WifiManager:getImportedCerts:Return:NO",
                       "WifiManager:deleteCert:Return:OK", "WifiManager:deleteCert:Return:NO",
+                      "WifiManager:setWifiEnabled:Return:OK", "WifiManager:setWifiEnabled:Return:NO",
                       "WifiManager:wifiDown", "WifiManager:wifiUp",
                       "WifiManager:onconnecting", "WifiManager:onassociate",
                       "WifiManager:onconnect", "WifiManager:ondisconnect",
                       "WifiManager:onwpstimeout", "WifiManager:onwpsfail",
-                      "WifiManager:onwpsoverlap", "WifiManager:connectionInfoUpdate",
+                      "WifiManager:onwpsoverlap", "WifiManager:connectioninfoupdate",
                       "WifiManager:onauthenticating", "WifiManager:onconnectingfailed",
-                      "WifiManager:stationInfoUpdate"];
+                      "WifiManager:stationinfoupdate"];
     this.initDOMRequestHelper(aWindow, messages);
     this._mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsISyncMessageSender);
 
@@ -233,6 +234,14 @@ DOMWifiManager.prototype = {
     }
 
     switch (aMessage.name) {
+      case "WifiManager:setWifiEnabled:Return:OK":
+        Services.DOMRequest.fireSuccess(request, msg.data);
+        break;
+
+      case "WifiManager:setWifiEnabled:Return:NO":
+        Services.DOMRequest.fireError(request, "Unable to enable/disable Wifi");
+        break;
+
       case "WifiManager:getNetworks:Return:OK":
         Services.DOMRequest.fireSuccess(request, this._convertWifiNetworks(msg.data));
         break;
@@ -379,7 +388,7 @@ DOMWifiManager.prototype = {
         this._fireStatusChangeEvent();
         break;
 
-      case "WifiManager:connectionInfoUpdate":
+      case "WifiManager:connectioninfoupdate":
         this._lastConnectionInfo = this._convertConnectionInfo(msg);
         this._fireConnectionInfoUpdate(msg);
         break;
@@ -394,7 +403,7 @@ DOMWifiManager.prototype = {
         this._connectionStatus = "authenticating";
         this._fireStatusChangeEvent();
         break;
-      case "WifiManager:stationInfoUpdate":
+      case "WifiManager:stationinfoupdate":
         this._stationNumber = msg.station;
         this._fireStationInfoUpdate(msg);
         break;
@@ -426,10 +435,16 @@ DOMWifiManager.prototype = {
   },
 
   _fireStationInfoUpdate: function onStationInfoUpdate(info) {
-    var evt = new this._window.MozWifiStationInfoEvent("stationInfoUpdate",
+    var evt = new this._window.MozWifiStationInfoEvent("stationinfoupdate",
                                                        { station: this._stationNumber}
                                                       );
     this.__DOM_IMPL__.dispatchEvent(evt);
+  },
+
+  setWifiEnabled: function setWifiEnabled(enabled) {
+    var request = this.createRequest();
+    this._sendMessageForRequest("WifiManager:setWifiEnabled", enabled, request);
+    return request;
   },
 
   getNetworks: function getNetworks() {

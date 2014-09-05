@@ -37,6 +37,11 @@ class AudioNode;
 class MediaStreamTrack;
 class AudioStreamTrack;
 class VideoStreamTrack;
+class AudioTrack;
+class VideoTrack;
+class AudioTrackList;
+class VideoTrackList;
+class MediaTrackListListener;
 }
 
 class MediaStreamDirectListener;
@@ -51,12 +56,16 @@ class DOMMediaStream : public nsIDOMMediaStream,
   typedef dom::MediaStreamTrack MediaStreamTrack;
   typedef dom::AudioStreamTrack AudioStreamTrack;
   typedef dom::VideoStreamTrack VideoStreamTrack;
+  typedef dom::AudioTrack AudioTrack;
+  typedef dom::VideoTrack VideoTrack;
+  typedef dom::AudioTrackList AudioTrackList;
+  typedef dom::VideoTrackList VideoTrackList;
+  typedef dom::MediaTrackListListener MediaTrackListListener;
 
 public:
   typedef uint8_t TrackTypeHints;
 
   DOMMediaStream();
-  virtual ~DOMMediaStream();
 
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(DOMMediaStream)
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
@@ -72,6 +81,8 @@ public:
 
   void GetAudioTracks(nsTArray<nsRefPtr<AudioStreamTrack> >& aTracks);
   void GetVideoTracks(nsTArray<nsRefPtr<VideoStreamTrack> >& aTracks);
+  void GetTracks(nsTArray<nsRefPtr<MediaStreamTrack> >& aTracks);
+  bool HasTrack(const MediaStreamTrack& aTrack) const;
 
   MediaStream* GetStream() const { return mStream; }
 
@@ -88,6 +99,8 @@ public:
    * media at the SourceMediaStream.
    */
   virtual void SetTrackEnabled(TrackID aTrackID, bool aEnabled);
+
+  virtual void StopTrack(TrackID aTrackID);
 
   bool IsFinished();
   /**
@@ -148,7 +161,8 @@ public:
   // Indicate what track types we eventually expect to add to this stream
   enum {
     HINT_CONTENTS_AUDIO = 1 << 0,
-    HINT_CONTENTS_VIDEO = 1 << 1
+    HINT_CONTENTS_VIDEO = 1 << 1,
+    HINT_CONTENTS_UNKNOWN = 1 << 2
   };
   TrackTypeHints GetHintContents() const { return mHintContents; }
   void SetHintContents(TrackTypeHints aHintContents) { mHintContents = aHintContents; }
@@ -177,7 +191,7 @@ public:
 
   class OnTracksAvailableCallback {
   public:
-    OnTracksAvailableCallback(uint8_t aExpectedTracks = 0)
+    explicit OnTracksAvailableCallback(uint8_t aExpectedTracks = 0)
       : mExpectedTracks(aExpectedTracks) {}
     virtual ~OnTracksAvailableCallback() {}
     virtual void NotifyTracksAvailable(DOMMediaStream* aStream) = 0;
@@ -208,11 +222,27 @@ public:
     }
   }
 
+  /**
+   * If loading and playing a MediaStream in a media element, for each
+   * MediaStreamTrack in the MediaStream, create a corresponding AudioTrack or
+   * VideoTrack during the phase of resource fetching.
+   */
+  void ConstructMediaTracks(AudioTrackList* aAudioTrackList,
+                            VideoTrackList* aVideoTrackList);
+
+  virtual void NotifyMediaStreamTrackCreated(MediaStreamTrack* aTrack);
+
+  virtual void NotifyMediaStreamTrackEnded(MediaStreamTrack* aTrack);
+
 protected:
+  virtual ~DOMMediaStream();
+
   void Destroy();
   void InitSourceStream(nsIDOMWindow* aWindow, TrackTypeHints aHintContents);
   void InitTrackUnionStream(nsIDOMWindow* aWindow, TrackTypeHints aHintContents);
   void InitStreamCommon(MediaStream* aStream);
+  already_AddRefed<AudioTrack> CreateAudioTrack(AudioStreamTrack* aStreamTrack);
+  already_AddRefed<VideoTrack> CreateVideoTrack(VideoStreamTrack* aStreamTrack);
 
   void CheckTracksAvailable();
 
@@ -243,6 +273,10 @@ protected:
   uint8_t mTrackTypesAvailable;
   bool mNotifiedOfMediaStreamGraphShutdown;
 
+  // Send notifications to AudioTrackList or VideoTrackList, if this MediaStream
+  // is consumed by a HTMLMediaElement.
+  nsTArray<MediaTrackListListener> mMediaTrackListListeners;
+
 private:
   void NotifyPrincipalChanged();
 
@@ -260,7 +294,6 @@ class DOMLocalMediaStream : public DOMMediaStream,
 {
 public:
   DOMLocalMediaStream() {}
-  virtual ~DOMLocalMediaStream();
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -279,13 +312,16 @@ public:
    */
   static already_AddRefed<DOMLocalMediaStream>
   CreateTrackUnionStream(nsIDOMWindow* aWindow, TrackTypeHints aHintContents = 0);
+
+protected:
+  virtual ~DOMLocalMediaStream();
 };
 
 class DOMAudioNodeMediaStream : public DOMMediaStream
 {
   typedef dom::AudioNode AudioNode;
 public:
-  DOMAudioNodeMediaStream(AudioNode* aNode);
+  explicit DOMAudioNodeMediaStream(AudioNode* aNode);
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(DOMAudioNodeMediaStream, DOMMediaStream)
@@ -297,6 +333,9 @@ public:
   CreateTrackUnionStream(nsIDOMWindow* aWindow,
                          AudioNode* aNode,
                          TrackTypeHints aHintContents = 0);
+
+protected:
+  ~DOMAudioNodeMediaStream();
 
 private:
   // If this object wraps a stream owned by an AudioNode, we need to ensure that

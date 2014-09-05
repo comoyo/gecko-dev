@@ -58,6 +58,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "nsXPCOM.h"
 #include "nsIEventTarget.h"
 #include "nsIUDPSocketChild.h"
+#include "nsProxyRelease.h"
 
 #include "databuffer.h"
 #include "m_cpp_utils.h"
@@ -130,10 +131,6 @@ class NrSocket : public NrSocketBase,
                  public nsASocketHandler {
 public:
   NrSocket() : fd_(nullptr) {}
-  virtual ~NrSocket() {
-    if (fd_)
-      PR_Close(fd_);
-  }
 
   // Implement nsASocket
   virtual void OnSocketReady(PRFileDesc *fd, int16_t outflags);
@@ -165,6 +162,11 @@ public:
   virtual int read(void* buf, size_t maxlen, size_t *len);
 
 private:
+  virtual ~NrSocket() {
+    if (fd_)
+      PR_Close(fd_);
+  }
+
   DISALLOW_COPY_ASSIGN(NrSocket);
 
   PRFileDesc *fd_;
@@ -182,6 +184,7 @@ struct nr_udp_message {
   nsAutoPtr<DataBuffer> data;
 
 private:
+  ~nr_udp_message() {}
   DISALLOW_COPY_ASSIGN(nr_udp_message);
 };
 
@@ -200,8 +203,7 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIUDPSOCKETINTERNAL
 
-  NrSocketIpc(const nsCOMPtr<nsIEventTarget> &main_thread);
-  virtual ~NrSocketIpc() {};
+  explicit NrSocketIpc(const nsCOMPtr<nsIEventTarget> &main_thread);
 
   // Implementations of the NrSocketBase APIs
   virtual int create(nr_transport_addr *addr);
@@ -217,6 +219,8 @@ public:
   virtual int read(void* buf, size_t maxlen, size_t *len);
 
 private:
+  virtual ~NrSocketIpc() {};
+
   DISALLOW_COPY_ASSIGN(NrSocketIpc);
 
   // Main thread executors of the NrSocketBase APIs
@@ -230,7 +234,7 @@ private:
   NrSocketIpcState state_;
   std::queue<RefPtr<nr_udp_message> > received_msgs_;
 
-  nsCOMPtr<nsIUDPSocketChild> socket_child_;
+  nsMainThreadPtrHandle<nsIUDPSocketChild> socket_child_;
   nsCOMPtr<nsIEventTarget> sts_thread_;
   const nsCOMPtr<nsIEventTarget> main_thread_;
   ReentrantMonitor monitor_;

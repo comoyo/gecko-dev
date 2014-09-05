@@ -11,10 +11,9 @@ import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.db.BrowserContract.Combined;
-import org.mozilla.gecko.db.BrowserDB.URLColumns;
+import org.mozilla.gecko.db.BrowserContract.URLColumns;
 import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.favicons.OnFaviconLoadedListener;
-import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.widget.FaviconView;
 
 import android.content.Context;
@@ -197,21 +196,11 @@ public class TwoLinePageRow extends LinearLayout
             final int bookmarkIdIndex = cursor.getColumnIndex(Combined.BOOKMARK_ID);
             if (bookmarkIdIndex != -1) {
                 final long bookmarkId = cursor.getLong(bookmarkIdIndex);
-                final int displayIndex = cursor.getColumnIndex(Combined.DISPLAY);
-
-                final int display;
-                if (displayIndex != -1) {
-                    display = cursor.getInt(displayIndex);
-                } else {
-                    display = Combined.DISPLAY_NORMAL;
-                }
 
                 // The bookmark id will be 0 (null in database) when the url
                 // is not a bookmark.
                 if (bookmarkId == 0) {
                     setPageTypeIcon(NO_ICON);
-                } else if (display == Combined.DISPLAY_READER) {
-                    setPageTypeIcon(R.drawable.ic_url_bar_reader);
                 } else {
                     setPageTypeIcon(R.drawable.ic_url_bar_star);
                 }

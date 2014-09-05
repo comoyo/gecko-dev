@@ -15,7 +15,7 @@
 #include "mozilla/layers/TextureClient.h"  // for TextureClient, etc
 
 namespace mozilla {
-namespace gfx {
+namespace gl {
 class SurfaceStream;
 }
 }
@@ -32,7 +32,7 @@ class CompositableForwarder;
 class SharedTextureClientOGL : public TextureClient
 {
 public:
-  SharedTextureClientOGL(TextureFlags aFlags);
+  explicit SharedTextureClientOGL(TextureFlags aFlags);
 
   ~SharedTextureClientOGL();
 
@@ -60,6 +60,12 @@ public:
     return gfx::SurfaceFormat::UNKNOWN;
   }
 
+  // This TextureClient should not be used in a context where we use CreateSimilar
+  // (ex. component alpha) because the underlying texture data is always created by
+  // an external producer.
+  virtual TemporaryRef<TextureClient>
+  CreateSimilar(TextureFlags, TextureAllocationFlags) const MOZ_OVERRIDE { return nullptr; }
+
   virtual bool AllocateForSurface(gfx::IntSize aSize, TextureAllocationFlags aFlags) MOZ_OVERRIDE
   {
     return false;
@@ -71,48 +77,6 @@ protected:
   gl::SharedTextureShareType mShareType;
   bool mInverted;
   bool mIsLocked;
-};
-
-/**
- * A TextureClient implementation to share SurfaceStream.
- */
-class StreamTextureClientOGL : public TextureClient
-{
-public:
-  StreamTextureClientOGL(TextureFlags aFlags);
-
-  ~StreamTextureClientOGL();
-
-  virtual bool IsAllocated() const MOZ_OVERRIDE;
-
-  virtual bool Lock(OpenMode mode) MOZ_OVERRIDE;
-
-  virtual void Unlock() MOZ_OVERRIDE;
-
-  virtual bool IsLocked() const MOZ_OVERRIDE { return mIsLocked; }
-
-  virtual bool ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor) MOZ_OVERRIDE;
-
-  virtual bool HasInternalBuffer() const MOZ_OVERRIDE { return false; }
-
-  void InitWith(gfx::SurfaceStream* aStream);
-
-  virtual gfx::IntSize GetSize() const { return gfx::IntSize(); }
-
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE
-  {
-    return gfx::SurfaceFormat::UNKNOWN;
-  }
-
-  virtual bool AllocateForSurface(gfx::IntSize aSize, TextureAllocationFlags aFlags) MOZ_OVERRIDE
-  {
-    return false;
-  }
-
-protected:
-  bool mIsLocked;
-  RefPtr<gfx::SurfaceStream> mStream;
-  RefPtr<gl::GLContext> mGL;
 };
 
 } // namespace

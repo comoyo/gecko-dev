@@ -17,15 +17,13 @@ EXPORTS.mozilla += [
     'PublicSSL.h',
 ]
 
-UNIFIED_SOURCES += [
+SOURCES += [
     'CryptoTask.cpp',
     'nsCertificatePrincipal.cpp',
     'nsCertOverrideService.cpp',
     'nsCertPicker.cpp',
     'nsCertVerificationThread.cpp',
     'nsClientAuthRemember.cpp',
-    'nsCMS.cpp',
-    'nsCMSSecureMessage.cpp',
     'nsCrypto.cpp',
     'nsDataSignatureVerifier.cpp',
     'nsKeygenHandler.cpp',
@@ -51,7 +49,6 @@ UNIFIED_SOURCES += [
     'nsProtectedAuthThread.cpp',
     'nsPSMBackgroundThread.cpp',
     'nsRandomGenerator.cpp',
-    'nsRecentBadCerts.cpp',
     'nsSDR.cpp',
     'NSSErrorsService.cpp',
     'nsSSLSocketProvider.cpp',
@@ -76,17 +73,17 @@ SOURCES += [
     'PSMContentListener.cpp',
 ]
 
-if not CONFIG['MOZ_DISABLE_CRYPTOLEGACY']:
-    UNIFIED_SOURCES += [
+if not CONFIG['MOZ_NO_SMART_CARDS']:
+    SOURCES += [
         'nsSmartCardMonitor.cpp',
     ]
 
 if CONFIG['MOZ_XUL']:
-    UNIFIED_SOURCES += [
+    SOURCES += [
         'nsCertTree.cpp',
     ]
 
-UNIFIED_SOURCES += [
+SOURCES += [
     'md4.c',
 ]
 
@@ -106,3 +103,7 @@ DEFINES['SSL_DISABLE_DEPRECATED_CIPHER_SUITE_NAMES'] = 'True'
 DEFINES['NSS_ENABLE_ECC'] = 'True'
 for var in ('DLL_PREFIX', 'DLL_SUFFIX'):
     DEFINES[var] = '"%s"' % CONFIG[var]
+
+USE_LIBS += [
+    'crmf',
+]

@@ -24,7 +24,9 @@
 
 #ifdef XP_WIN
 #include <process.h>
+#ifndef getpid
 #define getpid _getpid
+#endif
 #else
 #include <unistd.h>
 #endif
@@ -56,8 +58,9 @@ class DumpMemoryInfoToTempDirRunnable : public nsRunnable
 {
 public:
   DumpMemoryInfoToTempDirRunnable(const nsAString& aIdentifier,
-                                  bool aMinimizeMemoryUsage)
+                                  bool aAnonymize, bool aMinimizeMemoryUsage)
     : mIdentifier(aIdentifier)
+    , mAnonymize(aAnonymize)
     , mMinimizeMemoryUsage(aMinimizeMemoryUsage)
   {
   }
@@ -66,12 +69,14 @@ public:
   {
     nsCOMPtr<nsIMemoryInfoDumper> dumper =
       do_GetService("@mozilla.org/memory-info-dumper;1");
-    dumper->DumpMemoryInfoToTempDir(mIdentifier, mMinimizeMemoryUsage);
+    dumper->DumpMemoryInfoToTempDir(mIdentifier, mAnonymize,
+                                    mMinimizeMemoryUsage);
     return NS_OK;
   }
 
 private:
   const nsString mIdentifier;
+  const bool mAnonymize;
   const bool mMinimizeMemoryUsage;
 };
 
@@ -112,12 +117,15 @@ public:
   }
 
 private:
+  ~GCAndCCLogDumpRunnable() {}
+
   const nsString mIdentifier;
   const bool mDumpAllTraces;
   const bool mDumpChildProcesses;
 };
 
-NS_IMPL_ISUPPORTS_INHERITED(GCAndCCLogDumpRunnable, nsRunnable, nsIDumpGCAndCCLogsCallback)
+NS_IMPL_ISUPPORTS_INHERITED(GCAndCCLogDumpRunnable, nsRunnable,
+                            nsIDumpGCAndCCLogsCallback)
 
 } // anonymous namespace
 
@@ -157,11 +165,12 @@ static uint8_t sGCAndCCDumpSignum;             // SIGRTMIN + 2
 void doMemoryReport(const uint8_t aRecvSig)
 {
   // Dump our memory reports (but run this on the main thread!).
-  bool doMMUFirst = aRecvSig == sDumpAboutMemoryAfterMMUSignum;
+  bool minimize = aRecvSig == sDumpAboutMemoryAfterMMUSignum;
   LOG("SignalWatcher(sig %d) dispatching memory report runnable.", aRecvSig);
   nsRefPtr<DumpMemoryInfoToTempDirRunnable> runnable =
     new DumpMemoryInfoToTempDirRunnable(/* identifier = */ EmptyString(),
-                                        doMMUFirst);
+                                        /* anonymize = */ false,
+                                        minimize);
   NS_DispatchToMainThread(runnable);
 }
 
@@ -170,10 +179,9 @@ void doGCCCDump(const uint8_t aRecvSig)
   LOG("SignalWatcher(sig %d) dispatching GC/CC log runnable.", aRecvSig);
   // Dump GC and CC logs (from the main thread).
   nsRefPtr<GCAndCCLogDumpRunnable> runnable =
-    new GCAndCCLogDumpRunnable(
-      /* identifier = */ EmptyString(),
-      /* allTraces = */ true,
-      /* dumpChildProcesses = */ true);
+    new GCAndCCLogDumpRunnable(/* identifier = */ EmptyString(),
+                               /* allTraces = */ true,
+                               /* dumpChildProcesses = */ true);
   NS_DispatchToMainThread(runnable);
 }
 
@@ -186,11 +194,13 @@ namespace {
 void
 doMemoryReport(const nsCString& aInputStr)
 {
-  bool doMMUMemoryReport = aInputStr.EqualsLiteral("minimize memory report");
-  LOG("FifoWatcher(command:%s) dispatching memory report runnable.", aInputStr.get());
+  bool minimize = aInputStr.EqualsLiteral("minimize memory report");
+  LOG("FifoWatcher(command:%s) dispatching memory report runnable.",
+      aInputStr.get());
   nsRefPtr<DumpMemoryInfoToTempDirRunnable> runnable =
     new DumpMemoryInfoToTempDirRunnable(/* identifier = */ EmptyString(),
-                                        doMMUMemoryReport);
+                                        /* anonymize = */ false,
+                                        minimize);
   NS_DispatchToMainThread(runnable);
 }
 
@@ -305,12 +315,13 @@ EnsureNonEmptyIdentifier(nsAString& aIdentifier)
 // Use XPCOM refcounting to fire |onFinish| when all reference-holders
 // (remote dump actors or the |DumpGCAndCCLogsToFile| activation itself)
 // have gone away.
-class nsDumpGCAndCCLogsCallbackHolder MOZ_FINAL : public nsIDumpGCAndCCLogsCallback
+class nsDumpGCAndCCLogsCallbackHolder MOZ_FINAL
+  : public nsIDumpGCAndCCLogsCallback
 {
 public:
   NS_DECL_ISUPPORTS
 
-  nsDumpGCAndCCLogsCallbackHolder(nsIDumpGCAndCCLogsCallback* aCallback)
+  explicit nsDumpGCAndCCLogsCallbackHolder(nsIDumpGCAndCCLogsCallback* aCallback)
     : mCallback(aCallback)
   {
   }
@@ -421,7 +432,7 @@ class DumpReportCallback MOZ_FINAL : public nsIHandleReportCallback
 public:
   NS_DECL_ISUPPORTS
 
-  DumpReportCallback(nsGZFileWriter* aWriter)
+  explicit DumpReportCallback(nsGZFileWriter* aWriter)
     : mIsFirst(true)
     , mWriter(aWriter)
   {
@@ -491,6 +502,8 @@ public:
   }
 
 private:
+  ~DumpReportCallback() {}
+
   bool mIsFirst;
   nsRefPtr<nsGZFileWriter> mWriter;
 };
@@ -501,12 +514,12 @@ NS_IMPL_ISUPPORTS(DumpReportCallback, nsIHandleReportCallback)
 
 static void
 MakeFilename(const char* aPrefix, const nsAString& aIdentifier,
-             const char* aSuffix, nsACString& aResult)
+             int aPid, const char* aSuffix, nsACString& aResult)
 {
   aResult = nsPrintfCString("%s-%s-%d.%s",
                             aPrefix,
                             NS_ConvertUTF16toUTF8(aIdentifier).get(),
-                            getpid(), aSuffix);
+                            aPid, aSuffix);
 }
 
 #ifdef MOZ_DMD
@@ -583,6 +596,8 @@ public:
   NS_IMETHOD Callback(nsISupports* aData);
 
 private:
+  ~TempDirMemoryFinishCallback() {}
+
   nsRefPtr<nsGZFileWriter> mrWriter;
   nsCOMPtr<nsIFile> mrTmpFile;
   nsCString mrFilename;
@@ -593,6 +608,7 @@ NS_IMPL_ISUPPORTS(TempDirMemoryFinishCallback, nsIFinishReportingCallback)
 
 NS_IMETHODIMP
 nsMemoryInfoDumper::DumpMemoryInfoToTempDir(const nsAString& aIdentifier,
+                                            bool aAnonymize,
                                             bool aMinimizeMemoryUsage)
 {
   nsString identifier(aIdentifier);
@@ -623,7 +639,8 @@ nsMemoryInfoDumper::DumpMemoryInfoToTempDir(const nsAString& aIdentifier,
   // each process as was the case before bug 946407.  This is so that
   // the get_about_memory.py script in the B2G repository can
   // determine when it's done waiting for files to appear.
-  MakeFilename("unified-memory-report", identifier, "json.gz", mrFilename);
+  MakeFilename("unified-memory-report", identifier, getpid(), "json.gz",
+               mrFilename);
 
   nsCOMPtr<nsIFile> mrTmpFile;
   nsresult rv;
@@ -658,6 +675,7 @@ nsMemoryInfoDumper::DumpMemoryInfoToTempDir(const nsAString& aIdentifier,
     new TempDirMemoryFinishCallback(mrWriter, mrTmpFile, mrFilename, identifier);
   rv = mgr->GetReportsExtended(dumpReport, nullptr,
                                finishReport, nullptr,
+                               aAnonymize,
                                aMinimizeMemoryUsage,
                                identifier);
   return rv;
@@ -665,24 +683,25 @@ nsMemoryInfoDumper::DumpMemoryInfoToTempDir(const nsAString& aIdentifier,
 
 #ifdef MOZ_DMD
 nsresult
-nsMemoryInfoDumper::DumpDMD(const nsAString& aIdentifier)
+nsMemoryInfoDumper::OpenDMDFile(const nsAString& aIdentifier, int aPid,
+                                FILE** aOutFile)
 {
   if (!dmd::IsRunning()) {
+    *aOutFile = nullptr;
     return NS_OK;
   }
-
-  nsresult rv;
 
   // Create a filename like dmd-<identifier>-<pid>.txt.gz, which will be used
   // if DMD is enabled.
   nsCString dmdFilename;
-  MakeFilename("dmd", aIdentifier, "txt.gz", dmdFilename);
+  MakeFilename("dmd", aIdentifier, aPid, "txt.gz", dmdFilename);
 
   // Open a new DMD file named |dmdFilename| in NS_OS_TEMP_DIR for writing,
   // and dump DMD output to it.  This must occur after the memory reporters
   // have been run (above), but before the memory-reports file has been
   // renamed (so scripts can detect the DMD file, if present).
 
+  nsresult rv;
   nsCOMPtr<nsIFile> dmdFile;
   rv = nsDumpUtils::OpenTempFile(dmdFilename,
                                  getter_AddRefs(dmdFile),
@@ -690,22 +709,43 @@ nsMemoryInfoDumper::DumpDMD(const nsAString& aIdentifier)
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
+  rv = dmdFile->OpenANSIFileDesc("wb", aOutFile);
+  NS_WARN_IF(NS_FAILED(rv));
+  return rv;
+}
 
+nsresult
+nsMemoryInfoDumper::DumpDMDToFile(FILE* aFile)
+{
   nsRefPtr<nsGZFileWriter> dmdWriter = new nsGZFileWriter();
-  rv = dmdWriter->Init(dmdFile);
+  nsresult rv = dmdWriter->InitANSIFileDesc(aFile);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
-  // Dump DMD output to the file.
-
+  // Dump DMD's memory reports analysis to the file.
   DMDWriteState state(dmdWriter);
   dmd::Writer w(DMDWrite, &state);
-  dmd::Dump(w);
+  dmd::AnalyzeReports(w);
 
   rv = dmdWriter->Finish();
   NS_WARN_IF(NS_FAILED(rv));
   return rv;
+}
+
+nsresult
+nsMemoryInfoDumper::DumpDMD(const nsAString& aIdentifier)
+{
+  nsresult rv;
+  FILE* dmdFile;
+  rv = OpenDMDFile(aIdentifier, getpid(), &dmdFile);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+  if (!dmdFile) {
+    return NS_OK;
+  }
+  return DumpDMDToFile(dmdFile);
 }
 #endif  // MOZ_DMD
 
@@ -816,6 +856,8 @@ public:
   }
 
 private:
+  ~FinishReportingCallback() {}
+
   nsCOMPtr<nsIFinishDumpingCallback> mFinishDumping;
   nsCOMPtr<nsISupports> mFinishDumpingData;
 };
@@ -826,7 +868,8 @@ NS_IMETHODIMP
 nsMemoryInfoDumper::DumpMemoryReportsToNamedFile(
   const nsAString& aFilename,
   nsIFinishDumpingCallback* aFinishDumping,
-  nsISupports* aFinishDumpingData)
+  nsISupports* aFinishDumpingData,
+  bool aAnonymize)
 {
   MOZ_ASSERT(!aFilename.IsEmpty());
 
@@ -875,7 +918,8 @@ nsMemoryInfoDumper::DumpMemoryReportsToNamedFile(
     new FinishReportingCallback(aFinishDumping, aFinishDumpingData);
   nsCOMPtr<nsIMemoryReporterManager> mgr =
     do_GetService("@mozilla.org/memory-reporter-manager;1");
-  return mgr->GetReports(dumpReport, nullptr, finishReporting, mrWriter);
+  return mgr->GetReports(dumpReport, nullptr, finishReporting, mrWriter,
+                         aAnonymize);
 }
 
 #undef DUMP

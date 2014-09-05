@@ -22,6 +22,7 @@
 #undef CreateEvent
 #undef GetClassName
 #undef GetBinaryType
+#undef RemoveDirectory
 #endif
 
 class nsPresContext;
@@ -61,8 +62,8 @@ public:
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) MOZ_OVERRIDE;
-  virtual nscoord GetMinWidth(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
-  virtual nscoord GetPrefWidth(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
+  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
+  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
   virtual void Reflow(nsPresContext* aPresContext,
                       nsHTMLReflowMetrics& aDesiredSize,
                       const nsHTMLReflowState& aReflowState,
@@ -182,17 +183,17 @@ public:
   nsRect GetPaintedRect(nsDisplayPlugin* aItem);
 
   /**
-   * If aContent has a nsObjectFrame, then prepare it for a DocShell swap.
+   * If aSupports has a nsObjectFrame, then prepare it for a DocShell swap.
    * @see nsSubDocumentFrame::BeginSwapDocShells.
    * There will be a call to EndSwapDocShells after we were moved to the
    * new view tree.
    */
-  static void BeginSwapDocShells(nsIContent* aContent, void*);
+  static void BeginSwapDocShells(nsISupports* aSupports, void*);
   /**
-   * If aContent has a nsObjectFrame, then set it up after a DocShell swap.
+   * If aSupports has a nsObjectFrame, then set it up after a DocShell swap.
    * @see nsSubDocumentFrame::EndSwapDocShells.
    */
-  static void EndSwapDocShells(nsIContent* aContent, void*);
+  static void EndSwapDocShells(nsISupports* aSupports, void*);
 
   nsIWidget* GetWidget() MOZ_OVERRIDE { return mInnerView ? mWidget : nullptr; }
 
@@ -210,7 +211,7 @@ public:
   void SetInstanceOwner(nsPluginInstanceOwner* aOwner);
 
 protected:
-  nsObjectFrame(nsStyleContext* aContext);
+  explicit nsObjectFrame(nsStyleContext* aContext);
   virtual ~nsObjectFrame();
 
   // NOTE:  This frame class does not inherit from |nsLeafFrame|, so
@@ -259,7 +260,7 @@ private:
 
   class PluginEventNotifier : public nsRunnable {
   public:
-    PluginEventNotifier(const nsString &aEventType) : 
+    explicit PluginEventNotifier(const nsString &aEventType) : 
       mEventType(aEventType) {}
     
     NS_IMETHOD Run() MOZ_OVERRIDE;
@@ -318,8 +319,7 @@ public:
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      nsRenderingContext* aCtx) MOZ_OVERRIDE;
   virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
-                                   nsRegion* aVisibleRegion,
-                                   const nsRect& aAllowVisibleRegionExpansion) MOZ_OVERRIDE;
+                                 nsRegion* aVisibleRegion) MOZ_OVERRIDE;
 
   NS_DISPLAY_DECL_NAME("Plugin", TYPE_PLUGIN)
 

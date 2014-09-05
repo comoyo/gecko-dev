@@ -20,7 +20,7 @@
 #include "nsIStringBundle.h"
 #include "nsIURI.h"
 #include "nsNetUtil.h"
-#include "nsXPathResult.h"
+#include "XPathResult.h"
 #include "txExecutionState.h"
 #include "txMozillaTextOutput.h"
 #include "txMozillaXMLOutput.h"
@@ -68,7 +68,7 @@ private:
 class txToFragmentHandlerFactory : public txAOutputHandlerFactory
 {
 public:
-    txToFragmentHandlerFactory(nsIDOMDocumentFragment* aFragment)
+    explicit txToFragmentHandlerFactory(nsIDOMDocumentFragment* aFragment)
         : mFragment(aFragment)
     {
     }
@@ -236,11 +236,11 @@ txToFragmentHandlerFactory::createHandlerWith(txOutputFormat* aFormat,
 class txVariable : public txIGlobalParameter
 {
 public:
-    txVariable(nsIVariant *aValue) : mValue(aValue)
+    explicit txVariable(nsIVariant* aValue) : mValue(aValue)
     {
         NS_ASSERTION(aValue, "missing value");
     }
-    txVariable(txAExprResult* aValue) : mTxValue(aValue)
+    explicit txVariable(txAExprResult* aValue) : mTxValue(aValue)
     {
         NS_ASSERTION(aValue, "missing value");
     }
@@ -470,10 +470,6 @@ txMozillaXSLTProcessor::AddXSLTParam(const nsString& aName,
 
         if (!mRecycler) {
             mRecycler = new txResultRecycler;
-            NS_ENSURE_TRUE(mRecycler, NS_ERROR_OUT_OF_MEMORY);
-
-            rv = mRecycler->init();
-            NS_ENSURE_SUCCESS(rv, rv);
         }
 
         txXSLTParamContext paramContext(&mParamNamespaceMap, *contextNode,
@@ -518,7 +514,7 @@ class nsTransformBlockerEvent : public nsRunnable {
 public:
   nsRefPtr<txMozillaXSLTProcessor> mProcessor;
 
-  nsTransformBlockerEvent(txMozillaXSLTProcessor *processor)
+  explicit nsTransformBlockerEvent(txMozillaXSLTProcessor* processor)
     : mProcessor(processor)
   {}
 
@@ -809,7 +805,7 @@ txMozillaXSLTProcessor::SetParameter(const nsAString & aNamespaceURI,
                     }
                 }
 
-                // Clone the nsXPathResult so that mutations don't affect this
+                // Clone the XPathResult so that mutations don't affect this
                 // variable.
                 nsCOMPtr<nsIXPathResult> clone;
                 rv = xpathResult->Clone(getter_AddRefs(clone));
@@ -1441,7 +1437,7 @@ txVariable::Convert(nsIVariant *aValue, txAExprResult** aResult)
                 JS::Rooted<JSString*> str(cx, JS::ToString(cx, v));
                 NS_ENSURE_TRUE(str, NS_ERROR_FAILURE);
 
-                nsDependentJSString value;
+                nsAutoJSString value;
                 NS_ENSURE_TRUE(value.init(cx, str), NS_ERROR_FAILURE);
 
                 *aResult = new StringResult(value, nullptr);

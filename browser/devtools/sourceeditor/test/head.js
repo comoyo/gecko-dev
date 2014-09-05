@@ -7,6 +7,7 @@
 const { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 const { require } = devtools;
 const Editor  = require("devtools/sourceeditor/editor");
+const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 
 gDevTools.testing = true;
 SimpleTest.registerCleanupFunction(() => {
@@ -50,6 +51,22 @@ function teardown(ed, win) {
   ed.destroy();
   win.close();
   finish();
+}
+
+/**
+ * Some tests may need to import one or more of the test helper scripts.
+ * A test helper script is simply a js file that contains common test code that
+ * is either not common-enough to be in head.js, or that is located in a separate
+ * directory.
+ * The script will be loaded synchronously and in the test's scope.
+ * @param {String} filePath The file path, relative to the current directory.
+ *                 Examples:
+ *                 - "helper_attributes_test_runner.js"
+ *                 - "../../../commandline/test/helpers.js"
+ */
+function loadHelperScript(filePath) {
+  let testDir = gTestPath.substr(0, gTestPath.lastIndexOf("/"));
+  Services.scriptloader.loadSubScript(testDir + "/" + filePath, this);
 }
 
 /**

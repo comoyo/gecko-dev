@@ -16,10 +16,11 @@ const COLLAPSE_INSPECTOR_STRING = L10N.getStr("collapseInspector");
 const INSPECTOR_WIDTH = 300;
 
 // Globals for d3 stuff
-// Width/height in pixels of SVG graph
-// TODO investigate to see how this works in other host types bug 994257
-const WIDTH = 1000;
-const HEIGHT = 400;
+// Default properties of the graph on rerender
+const GRAPH_DEFAULTS = {
+  translate: [20, 20],
+  scale: 1
+};
 
 // Sizes of SVG arrows in graph
 const ARROW_HEIGHT = 5;
@@ -38,7 +39,7 @@ const GENERIC_VARIABLES_VIEW_SETTINGS = {
   editableValueTooltip: "",
   editableNameTooltip: "",
   preventDisableOnChange: true,
-  preventDescriptorModifiers: true,
+  preventDescriptorModifiers: false,
   eval: () => {}
 };
 
@@ -54,6 +55,7 @@ let WebAudioGraphView = {
     this._onThemeChange = this._onThemeChange.bind(this);
     this._onNodeSelect = this._onNodeSelect.bind(this);
     this._onStartContext = this._onStartContext.bind(this);
+    this._onDestroyNode = this._onDestroyNode.bind(this);
 
     this.draw = debounce(this.draw.bind(this), GRAPH_DEBOUNCE_TIMER);
     $('#graph-target').addEventListener('click', this._onGraphNodeClick, false);
@@ -61,6 +63,7 @@ let WebAudioGraphView = {
     window.on(EVENTS.THEME_CHANGE, this._onThemeChange);
     window.on(EVENTS.UI_INSPECTOR_NODE_SET, this._onNodeSelect);
     window.on(EVENTS.START_CONTEXT, this._onStartContext);
+    window.on(EVENTS.DESTROY_NODE, this._onDestroyNode);
   },
 
   /**
@@ -74,6 +77,7 @@ let WebAudioGraphView = {
     window.off(EVENTS.THEME_CHANGE, this._onThemeChange);
     window.off(EVENTS.UI_INSPECTOR_NODE_SET, this._onNodeSelect);
     window.off(EVENTS.START_CONTEXT, this._onStartContext);
+    window.off(EVENTS.DESTROY_NODE, this._onDestroyNode);
   },
 
   /**
@@ -81,15 +85,39 @@ let WebAudioGraphView = {
    * and clears out old content
    */
   resetUI: function () {
-    this.resetGraph();
+    this.clearGraph();
+    this.resetGraphPosition();
   },
 
   /**
    * Clears out the rendered graph, called when resetting the SVG elements to draw again,
    * or when resetting the entire UI tool
    */
-  resetGraph: function () {
+  clearGraph: function () {
     $("#graph-target").innerHTML = "";
+  },
+
+  /**
+   * Moves the graph back to its original scale and translation.
+   */
+  resetGraphPosition: function () {
+    if (this._zoomBinding) {
+      let { translate, scale } = GRAPH_DEFAULTS;
+      // Must set the `zoomBinding` so the next `zoom` event is in sync with
+      // where the graph is visually (set by the `transform` attribute).
+      this._zoomBinding.scale(scale);
+      this._zoomBinding.translate(translate);
+      d3.select("#graph-target")
+        .attr("transform", "translate(" + translate + ") scale(" + scale + ")");
+    }
+  },
+
+  getCurrentScale: function () {
+    return this._zoomBinding ? this._zoomBinding.scale() : null;
+  },
+
+  getCurrentTranslation: function () {
+    return this._zoomBinding ? this._zoomBinding.translate() : null;
   },
 
   /**
@@ -116,30 +144,56 @@ let WebAudioGraphView = {
 
   /**
    * `draw` renders the ViewNodes currently available in `AudioNodes` with `AudioNodeConnections`,
-   * and is throttled to be called at most every `GRAPH_DEBOUNCE_TIMER` milliseconds. Is called
-   * whenever the audio context routing changes, after being debounced.
+   * and `AudioParamConnections` and is throttled to be called at most every
+   * `GRAPH_DEBOUNCE_TIMER` milliseconds. Is called whenever the audio context routing changes,
+   * after being debounced.
    */
   draw: function () {
     // Clear out previous SVG information
-    this.resetGraph();
+    this.clearGraph();
 
     let graph = new dagreD3.Digraph();
+    // An array of duples/tuples of pairs [sourceNode, destNode, param].
+    // `param` is optional, indicating a connection to an AudioParam, rather than
+    // an other AudioNode.
     let edges = [];
 
     AudioNodes.forEach(node => {
       // Add node to graph
-      graph.addNode(node.id, { label: node.type, id: node.id });
+      graph.addNode(node.id, {
+        type: node.type,                        // Just for storing type data
+        label: node.type.replace(/Node$/, ""),  // Displayed in SVG node
+        id: node.id                             // Identification
+      });
 
       // Add all of the connections from this node to the edge array to be added
       // after all the nodes are added, otherwise edges will attempted to be created
       // for nodes that have not yet been added
-      AudioNodeConnections.get(node, []).forEach(dest => edges.push([node, dest]));
+      AudioNodeConnections.get(node, new Set()).forEach(dest => edges.push([node, dest]));
+      let paramConnections = AudioParamConnections.get(node, {});
+      Object.keys(paramConnections).forEach(destId => {
+        let dest = getViewNodeById(destId);
+        let connections = paramConnections[destId] || [];
+        connections.forEach(param => edges.push([node, dest, param]));
+      });
     });
 
-    edges.forEach(([node, dest]) => graph.addEdge(null, node.id, dest.id, {
-      source: node.id,
-      target: dest.id
-    }));
+    edges.forEach(([node, dest, param]) => {
+      let options = {
+        source: node.id,
+        target: dest.id
+      };
+
+      // Only add `label` if `param` specified, as this is an AudioParam connection then.
+      // `label` adds the magic to render with dagre-d3, and `param` is just more explicitly
+      // the param, ignoring implementation details.
+      if (param) {
+        options.label = param;
+        options.param = param;
+      }
+
+      graph.addEdge(null, node.id, dest.id, options);
+    });
 
     let renderer = new dagreD3.Renderer();
 
@@ -149,7 +203,7 @@ let WebAudioGraphView = {
       let svgNodes = oldDrawNodes(graph, root);
       svgNodes.attr("class", (n) => {
         let node = graph.node(n);
-        return "audionode type-" + node.label;
+        return "audionode type-" + node.type;
       });
       svgNodes.attr("data-id", (n) => {
         let node = graph.node(n);
@@ -159,23 +213,38 @@ let WebAudioGraphView = {
     });
 
     // Post-render manipulation of edges
+    // TODO do all of this more efficiently, rather than
+    // using the direct D3 helper utilities to loop over each
+    // edge several times
     let oldDrawEdgePaths = renderer.drawEdgePaths();
     renderer.drawEdgePaths(function(graph, root) {
-      let svgNodes = oldDrawEdgePaths(graph, root);
-      svgNodes.attr("data-source", (n) => {
+      let svgEdges = oldDrawEdgePaths(graph, root);
+      svgEdges.attr("data-source", (n) => {
         let edge = graph.edge(n);
         return edge.source;
       });
-      svgNodes.attr("data-target", (n) => {
+      svgEdges.attr("data-target", (n) => {
         let edge = graph.edge(n);
         return edge.target;
       });
-      return svgNodes;
+      svgEdges.attr("data-param", (n) => {
+        let edge = graph.edge(n);
+        return edge.param ? edge.param : null;
+      });
+      // We have to manually specify the default classes on the edges
+      // as to not overwrite them
+      let defaultClasses = "edgePath enter";
+      svgEdges.attr("class", (n) => {
+        let edge = graph.edge(n);
+        return defaultClasses + (edge.param ? (" param-connection " + edge.param) : "");
+      });
+
+      return svgEdges;
     });
 
     // Override Dagre-d3's post render function by passing in our own.
     // This way we can leave styles out of it.
-    renderer.postRender(function (graph, root) {
+    renderer.postRender((graph, root) => {
       // We have to manually set the marker styling since we cannot
       // do this currently with CSS, although it is in spec for SVG2
       // https://svgwg.org/svg2-draft/painting.html#VertexMarkerProperties
@@ -201,8 +270,15 @@ let WebAudioGraphView = {
           .attr("d", "M 0 0 L 10 5 L 0 10 z");
       }
 
+      // Reselect the previously selected audio node
+      let currentNode = WebAudioInspectorView.getCurrentAudioNode();
+      if (currentNode) {
+        this.focusNode(currentNode.id);
+      }
+
       // Fire an event upon completed rendering
-      window.emit(EVENTS.UI_GRAPH_RENDERED, AudioNodes.length, edges.length);
+      let paramEdgeCount = edges.filter(p => !!p[2]).length;
+      window.emit(EVENTS.UI_GRAPH_RENDERED, AudioNodes.length, edges.length - paramEdgeCount, paramEdgeCount);
     });
 
     let layout = dagreD3.layout().rankDir("LR");
@@ -217,6 +293,10 @@ let WebAudioGraphView = {
           .attr("transform", "translate(" + ev.translate + ") scale(" + ev.scale + ")");
       });
       d3.select("svg").call(this._zoomBinding);
+
+      // Set initial translation and scale -- this puts D3's awareness of
+      // the graph in sync with what the user sees originally.
+      this.resetGraphPosition();
     }
   },
 
@@ -229,6 +309,13 @@ let WebAudioGraphView = {
    * context being created to view so render the graph.
    */
   _onStartContext: function () {
+    this.draw();
+  },
+
+  /**
+   * Called when a node gets GC'd -- redraws the graph.
+   */
+  _onDestroyNode: function () {
     this.draw();
   },
 
@@ -289,12 +376,14 @@ let WebAudioInspectorView = {
     this._onEval = this._onEval.bind(this);
     this._onNodeSelect = this._onNodeSelect.bind(this);
     this._onTogglePaneClick = this._onTogglePaneClick.bind(this);
+    this._onDestroyNode = this._onDestroyNode.bind(this);
 
     this._inspectorPaneToggleButton.addEventListener("mousedown", this._onTogglePaneClick, false);
     this._propsView = new VariablesView($("#properties-tabpanel-content"), GENERIC_VARIABLES_VIEW_SETTINGS);
     this._propsView.eval = this._onEval;
 
     window.on(EVENTS.UI_SELECT_NODE, this._onNodeSelect);
+    window.on(EVENTS.DESTROY_NODE, this._onDestroyNode);
   },
 
   /**
@@ -303,6 +392,7 @@ let WebAudioInspectorView = {
   destroy: function () {
     this._inspectorPaneToggleButton.removeEventListener("mousedown", this._onTogglePaneClick);
     window.off(EVENTS.UI_SELECT_NODE, this._onNodeSelect);
+    window.off(EVENTS.DESTROY_NODE, this._onDestroyNode);
 
     this._inspectorPane = null;
     this._inspectorPaneToggleButton = null;
@@ -383,7 +473,7 @@ let WebAudioInspectorView = {
   /**
    * Returns the current AudioNodeView.
    */
-  getCurrentNode: function () {
+  getCurrentAudioNode: function () {
     return this._currentNode;
   },
 
@@ -404,7 +494,7 @@ let WebAudioInspectorView = {
    */
   _setTitle: function () {
     let node = this._currentNode;
-    let title = node.type + " (" + node.id + ")";
+    let title = node.type.replace(/Node$/, "");
     $("#web-audio-inspector-title").setAttribute("value", title);
   },
 
@@ -424,8 +514,11 @@ let WebAudioInspectorView = {
     // when there are no props i.e. AudioDestinationNode
     this._togglePropertiesView(!!props.length);
 
-    props.forEach(({ param, value }) => {
-      let descriptor = { value: value };
+    props.forEach(({ param, value, flags }) => {
+      let descriptor = {
+        value: value,
+        writable: !flags || !flags.readonly,
+      };
       audioParamsScope.addItem(param, descriptor);
     });
 
@@ -464,13 +557,22 @@ let WebAudioInspectorView = {
     let propName = variable.name;
     let error;
 
-    // Cast value to proper type
-    try {
-      value = JSON.parse(value);
-      error = yield node.actor.setParam(propName, value);
-    }
-    catch (e) {
-      error = e;
+    if (!variable._initialDescriptor.writable) {
+      error = new Error("Variable " + propName + " is not writable.");
+    } else {
+      // Cast value to proper type
+      try {
+        let number = parseFloat(value);
+        if (!isNaN(number)) {
+          value = number;
+        } else {
+          value = JSON.parse(value);
+        }
+        error = yield node.actor.setParam(propName, value);
+      }
+      catch (e) {
+        error = e;
+      }
     }
 
     // TODO figure out how to handle and display set prop errors
@@ -503,12 +605,14 @@ let WebAudioInspectorView = {
   },
 
   /**
-   * Called when `DESTROY_NODE` is fired to remove the node from props view.
-   * TODO bug 994263, dependent on node GC events
+   * Called when `DESTROY_NODE` is fired to remove the node from props view if
+   * it's currently selected.
    */
-  removeNode: Task.async(function* (viewNode) {
-
-  })
+  _onDestroyNode: function (_, id) {
+    if (this._currentNode && this._currentNode.id === id) {
+      this.setCurrentAudioNode(null);
+    }
+  }
 };
 
 /**

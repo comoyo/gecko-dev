@@ -77,7 +77,8 @@ struct gfxFontStyle {
     gfxFontStyle(uint8_t aStyle, uint16_t aWeight, int16_t aStretch,
                  gfxFloat aSize, nsIAtom *aLanguage,
                  float aSizeAdjust, bool aSystemFont,
-                 bool aPrinterFont, bool aSmallCaps,
+                 bool aPrinterFont,
+                 bool aWeightSynthesis, bool aStyleSynthesis,
                  const nsString& aLanguageOverride);
     gfxFontStyle(const gfxFontStyle& aStyle);
 
@@ -112,6 +113,9 @@ struct gfxFontStyle {
     // needs to be done.
     float sizeAdjust;
 
+    // baseline offset, used when simulating sub/superscript glyphs
+    float baselineOffset;
+
     // Language system tag, to override document language;
     // an OpenType "language system" tag represented as a 32-bit integer
     // (see http://www.microsoft.com/typography/otspec/languagetags.htm).
@@ -142,12 +146,22 @@ struct gfxFontStyle {
     // Used to imitate -webkit-font-smoothing: antialiased
     bool useGrayscaleAntialiasing : 1;
 
-    // Font should render as small-caps, using OT feature if available,
-    // otherwise using a synthetic small-caps implementation
-    bool smallCaps : 1;
-
     // The style of font (normal, italic, oblique)
     uint8_t style : 2;
+
+    // Whether synthetic styles are allowed
+    bool allowSyntheticWeight : 1;
+    bool allowSyntheticStyle : 1;
+
+    // some variant features require fallback which complicates the shaping
+    // code, so set up a bool to indicate when shaping with fallback is needed
+    bool noFallbackVariantFeatures : 1;
+
+    // caps variant (small-caps, petite-caps, etc.)
+    uint8_t variantCaps;
+
+    // sub/superscript variant
+    uint8_t variantSubSuper;
 
     // Return the final adjusted font size for the given aspect ratio.
     // Not meant to be called when sizeAdjust = 0.
@@ -165,18 +179,26 @@ struct gfxFontStyle {
 
     int8_t ComputeWeight() const;
 
+    // Adjust this style to simulate sub/superscript (as requested in the
+    // variantSubSuper field) using size and baselineOffset instead.
+    void AdjustForSubSuperscript(int32_t aAppUnitsPerDevPixel);
+
     bool Equals(const gfxFontStyle& other) const {
         return
             (*reinterpret_cast<const uint64_t*>(&size) ==
              *reinterpret_cast<const uint64_t*>(&other.size)) &&
             (style == other.style) &&
-            (smallCaps == other.smallCaps) &&
+            (variantCaps == other.variantCaps) &&
+            (variantSubSuper == other.variantSubSuper) &&
+            (allowSyntheticWeight == other.allowSyntheticWeight) &&
+            (allowSyntheticStyle == other.allowSyntheticStyle) &&
             (systemFont == other.systemFont) &&
             (printerFont == other.printerFont) &&
             (useGrayscaleAntialiasing == other.useGrayscaleAntialiasing) &&
             (weight == other.weight) &&
             (stretch == other.stretch) &&
             (language == other.language) &&
+            (baselineOffset == other.baselineOffset) &&
             (*reinterpret_cast<const uint32_t*>(&sizeAdjust) ==
              *reinterpret_cast<const uint32_t*>(&other.sizeAdjust)) &&
             (featureSettings == other.featureSettings) &&
@@ -245,7 +267,7 @@ class gfxFontEntry {
 public:
     NS_INLINE_DECL_REFCOUNTING(gfxFontEntry)
 
-    gfxFontEntry(const nsAString& aName, bool aIsStandardFace = false);
+    explicit gfxFontEntry(const nsAString& aName, bool aIsStandardFace = false);
 
     // unique name for the face, *not* the family; not necessarily the
     // "real" or user-friendly name, may be an internal identifier
@@ -274,8 +296,14 @@ public:
     bool IgnoreGDEF() const { return mIgnoreGDEF; }
     bool IgnoreGSUB() const { return mIgnoreGSUB; }
 
-    bool SupportsOpenTypeSmallCaps(int32_t aScript);
-    bool SupportsGraphiteSmallCaps();
+    // whether a feature is supported by the font (limited to a small set
+    // of features for which some form of fallback needs to be implemented)
+    bool SupportsOpenTypeFeature(int32_t aScript, uint32_t aFeatureTag);
+    bool SupportsGraphiteFeature(uint32_t aFeatureTag);
+
+    // returns a set containing all input glyph ids for a given feature
+    const hb_set_t*
+    InputsForOpenTypeFeature(int32_t aScript, uint32_t aFeatureTag);
 
     virtual bool IsSymbolFont();
 
@@ -391,7 +419,7 @@ public:
     // Call TryGetMathTable to try to load the Open Type MATH table. The other
     // functions forward the call to the gfxMathTable class. The GetMath...()
     // functions MUST NOT be called unless TryGetMathTable() has returned true.
-    bool     TryGetMathTable(gfxFont* aFont);
+    bool     TryGetMathTable();
     gfxFloat GetMathConstant(MathConstant aConstant);
     bool     GetMathItalicsCorrection(uint32_t aGlyphID,
                                       gfxFloat* aItalicCorrection);
@@ -545,8 +573,6 @@ public:
     bool             mSkipDefaultFeatureSpaceCheck : 1;
     bool             mHasGraphiteTables : 1;
     bool             mCheckedForGraphiteTables : 1;
-    bool             mHasGraphiteSmallCaps : 1;
-    bool             mCheckedForGraphiteSmallCaps : 1;
     bool             mHasCmapTable : 1;
     bool             mGrFaceInitialized : 1;
     bool             mCheckedForColorGlyph : 1;
@@ -568,7 +594,8 @@ public:
     nsTArray<gfxFont*> mFontsUsingSVGGlyphs;
     nsAutoPtr<gfxMathTable> mMathTable;
     nsTArray<gfxFontFeature> mFeatureSettings;
-    nsAutoPtr<nsDataHashtable<nsUint32HashKey,bool>> mSmallCapsSupport;
+    nsAutoPtr<nsDataHashtable<nsUint32HashKey,bool>> mSupportedFeatures;
+    nsAutoPtr<nsDataHashtable<nsUint32HashKey,hb_set_t*>> mFeatureInputs;
     uint32_t         mLanguageOverride;
 
     // Color Layer font support
@@ -703,7 +730,7 @@ private:
         typedef KeyClass::KeyType KeyType;
         typedef KeyClass::KeyTypePointer KeyTypePointer;
 
-        FontTableHashEntry(KeyTypePointer aTag)
+        explicit FontTableHashEntry(KeyTypePointer aTag)
             : KeyClass(aTag)
             , mSharedBlobData(nullptr)
             , mBlob(nullptr)
@@ -739,10 +766,7 @@ private:
 
         void Clear();
 
-        static size_t
-        SizeOfEntryExcludingThis(FontTableHashEntry *aEntry,
-                                 mozilla::MallocSizeOf aMallocSizeOf,
-                                 void* aUserArg);
+        size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
     private:
         static void DeleteFontTableBlobData(void *aBlobData);
@@ -785,7 +809,7 @@ class gfxFontFamily {
 public:
     NS_INLINE_DECL_REFCOUNTING(gfxFontFamily)
 
-    gfxFontFamily(const nsAString& aName) :
+    explicit gfxFontFamily(const nsAString& aName) :
         mName(aName),
         mOtherFamilyNamesInitialized(false),
         mHasOtherFamilyNames(false),
@@ -812,7 +836,11 @@ public:
         {
             aFontEntry->mIgnoreGDEF = true;
         }
-        aFontEntry->mFamilyName = Name();
+        if (aFontEntry->mFamilyName.IsEmpty()) {
+            aFontEntry->mFamilyName = Name();
+        } else {
+            MOZ_ASSERT(aFontEntry->mFamilyName.Equals(Name()));
+        }
         aFontEntry->mSkipDefaultFeatureSpaceCheck = mSkipDefaultFeatureSpaceCheck;
         mAvailableFonts.AppendElement(aFontEntry);
     }
@@ -1085,6 +1113,7 @@ public:
 protected:
     class MemoryReporter MOZ_FINAL : public nsIMemoryReporter
     {
+        ~MemoryReporter() {}
     public:
         NS_DECL_ISUPPORTS
         NS_DECL_NSIMEMORYREPORTER
@@ -1094,6 +1123,7 @@ protected:
     class Observer MOZ_FINAL
         : public nsIObserver
     {
+        ~Observer() {}
     public:
         NS_DECL_ISUPPORTS
         NS_DECL_NSIOBSERVER
@@ -1117,7 +1147,7 @@ protected:
 
         // When constructing a new entry in the hashtable, we'll leave this
         // blank. The caller of Put() will fill this in.
-        HashEntry(KeyTypePointer aStr) : mFont(nullptr) { }
+        explicit HashEntry(KeyTypePointer aStr) : mFont(nullptr) { }
         HashEntry(const HashEntry& toCopy) : mFont(toCopy.mFont) { }
         ~HashEntry() { }
 
@@ -1330,7 +1360,7 @@ protected:
  */
 class gfxGlyphExtents {
 public:
-    gfxGlyphExtents(int32_t aAppUnitsPerDevUnit) :
+    explicit gfxGlyphExtents(int32_t aAppUnitsPerDevUnit) :
         mAppUnitsPerDevUnit(aAppUnitsPerDevUnit) {
         MOZ_COUNT_CTOR(gfxGlyphExtents);
     }
@@ -1380,7 +1410,7 @@ private:
     public:
         // When constructing a new entry in the hashtable, we'll leave this
         // blank. The caller of Put() will fill this in.
-        HashEntry(KeyTypePointer aPtr) : nsUint32HashKey(aPtr) {}
+        explicit HashEntry(KeyTypePointer aPtr) : nsUint32HashKey(aPtr) {}
         HashEntry(const HashEntry& toCopy) : nsUint32HashKey(toCopy) {
           x = toCopy.x; y = toCopy.y; width = toCopy.width; height = toCopy.height;
         }
@@ -1460,7 +1490,7 @@ private:
 
 class gfxFontShaper {
 public:
-    gfxFontShaper(gfxFont *aFont)
+    explicit gfxFontShaper(gfxFont *aFont)
         : mFont(aFont)
     {
         NS_ASSERTION(aFont, "shaper requires a valid font!");
@@ -1471,12 +1501,12 @@ public:
     // Shape a piece of text and store the resulting glyph data into
     // aShapedText. Parameters aOffset/aLength indicate the range of
     // aShapedText to be updated; aLength is also the length of aText.
-    virtual bool ShapeText(gfxContext      *aContext,
+    virtual bool ShapeText(gfxContext     *aContext,
                            const char16_t *aText,
-                           uint32_t         aOffset,
-                           uint32_t         aLength,
-                           int32_t          aScript,
-                           gfxShapedText   *aShapedText) = 0;
+                           uint32_t        aOffset,
+                           uint32_t        aLength,
+                           int32_t         aScript,
+                           gfxShapedText  *aShapedText) = 0;
 
     gfxFont *GetFont() const { return mFont; }
 
@@ -1486,6 +1516,7 @@ public:
                       const nsTArray<gfxFontFeature>& aFontFeatures,
                       bool aDisableLigatures,
                       const nsAString& aFamilyName,
+                      bool aAddSmallCaps,
                       nsDataHashtable<nsUint32HashKey,uint32_t>& aMergedFeatures);
 
 protected:
@@ -1493,7 +1524,11 @@ protected:
     gfxFont * mFont;
 };
 
-/* a SPECIFIC single font family */
+
+class GlyphBufferAzure;
+struct TextRunDrawParams;
+struct FontDrawParams;
+
 class gfxFont {
 
     friend class gfxHarfBuzzShaper;
@@ -1595,7 +1630,7 @@ public:
         return nullptr;
     }
 
-    virtual gfxFloat GetAdjustedSize() {
+    virtual gfxFloat GetAdjustedSize() const {
         return mAdjustedSize > 0.0 ? mAdjustedSize : mStyle.size;
     }
 
@@ -1615,8 +1650,27 @@ public:
         return mFontEntry->HasGraphiteTables();
     }
 
-    // whether the font supports "real" small caps or should fake them
-    bool SupportsSmallCaps(int32_t aScript);
+    // whether a feature is supported by the font (limited to a small set
+    // of features for which some form of fallback needs to be implemented)
+    bool SupportsFeature(int32_t aScript, uint32_t aFeatureTag);
+
+    // whether the font supports "real" small caps, petite caps etc.
+    // aFallbackToSmallCaps true when petite caps should fallback to small caps
+    bool SupportsVariantCaps(int32_t aScript, uint32_t aVariantCaps,
+                             bool& aFallbackToSmallCaps,
+                             bool& aSyntheticLowerToSmallCaps,
+                             bool& aSyntheticUpperToSmallCaps);
+
+    // whether the font supports subscript/superscript feature
+    // for fallback, need to verify that all characters in the run
+    // have variant substitutions
+    bool SupportsSubSuperscript(uint32_t aSubSuperscript,
+                                const uint8_t *aString,
+                                uint32_t aLength, int32_t aRunScript);
+
+    bool SupportsSubSuperscript(uint32_t aSubSuperscript,
+                                const char16_t *aString,
+                                uint32_t aLength, int32_t aRunScript);
 
     // Subclasses may choose to look up glyph ids for characters.
     // If they do not override this, gfxHarfBuzzShaper will fetch the cmap
@@ -1641,8 +1695,6 @@ public:
     // Font metrics
     struct Metrics {
         gfxFloat xHeight;
-        gfxFloat superscriptOffset;
-        gfxFloat subscriptOffset;
         gfxFloat strikeoutSize;
         gfxFloat strikeoutOffset;
         gfxFloat underlineSize;
@@ -1713,31 +1765,30 @@ public:
      * be honoured.
      * @param aStart the first character to draw
      * @param aEnd draw characters up to here
-     * @param aBaselineOrigin the baseline origin; the left end of the baseline
-     * for LTR textruns, the right end of the baseline for RTL textruns. On return,
-     * this should be updated to the other end of the baseline. In application
-     * units, really!
-     * @param aSpacing spacing to insert before and after characters (for RTL
-     * glyphs, before-spacing is inserted to the right of characters). There
-     * are aEnd - aStart elements in this array, unless it's null to indicate
-     * that there is no spacing.
-     * @param aDrawMode specifies whether the fill or stroke of the glyph should be
-     * drawn, or if it should be drawn into the current path
-     * @param aContextPaint information about how to construct the fill and
-     * stroke pattern. Can be nullptr if we are not stroking the text, which
-     * indicates that the current source from aContext should be used for filling
-     * 
+     * @param aPt the baseline origin; the left end of the baseline
+     * for LTR textruns, the right end for RTL textruns.
+     * On return, this will be updated to the other end of the baseline.
+     * In application units, really!
+     * @param aRunParams record with drawing parameters, see TextRunDrawParams.
+     * Particular fields of interest include
+     * .spacing  spacing to insert before and after characters (for RTL
+     *   glyphs, before-spacing is inserted to the right of characters). There
+     *   are aEnd - aStart elements in this array, unless it's null to indicate
+     *   that there is no spacing.
+     * .drawMode  specifies whether the fill or stroke of the glyph should be
+     *   drawn, or if it should be drawn into the current path
+     * .contextPaint  information about how to construct the fill and
+     *   stroke pattern. Can be nullptr if we are not stroking the text, which
+     *   indicates that the current source from context should be used for fill
+     * .context  the Thebes graphics context to which we're drawing
+     * .dt  Moz2D DrawTarget to which we're drawing
+     *
      * Callers guarantee:
      * -- aStart and aEnd are aligned to cluster and ligature boundaries
      * -- all glyphs use this font
-     * 
-     * The default implementation builds a cairo glyph array and
-     * calls cairo_show_glyphs or cairo_glyph_path.
      */
-    virtual void Draw(gfxTextRun *aTextRun, uint32_t aStart, uint32_t aEnd,
-                      gfxContext *aContext, DrawMode aDrawMode, gfxPoint *aBaselineOrigin,
-                      Spacing *aSpacing, gfxTextContextPaint *aContextPaint,
-                      gfxTextRunDrawCallbacks *aCallbacks);
+    void Draw(gfxTextRun *aTextRun, uint32_t aStart, uint32_t aEnd,
+              gfxPoint *aPt, const TextRunDrawParams& aRunParams);
 
     /**
      * Measure a run of characters. See gfxTextRun::Metrics.
@@ -1804,7 +1855,7 @@ public:
                                   (size / threshold);
     }
 
-    gfxFontEntry *GetFontEntry() { return mFontEntry.get(); }
+    gfxFontEntry *GetFontEntry() const { return mFontEntry.get(); }
     bool HasCharacter(uint32_t ch) {
         if (!mIsValid)
             return false;
@@ -1824,7 +1875,9 @@ public:
                               uint32_t        aOffset,
                               uint32_t        aLength,
                               uint8_t         aMatchType,
-                              int32_t         aScript);
+                              int32_t         aScript,
+                              bool            aSyntheticLower,
+                              bool            aSyntheticUpper);
 
     bool InitFakeSmallCapsRun(gfxContext     *aContext,
                               gfxTextRun     *aTextRun,
@@ -1832,7 +1885,9 @@ public:
                               uint32_t        aOffset,
                               uint32_t        aLength,
                               uint8_t         aMatchType,
-                              int32_t         aScript);
+                              int32_t         aScript,
+                              bool            aSyntheticLower,
+                              bool            aSyntheticUpper);
 
     // call the (virtual) InitTextRun method to do glyph generation/shaping,
     // limiting the length of text passed by processing the run in multiple
@@ -1922,7 +1977,7 @@ public:
         void ForgetFont() { mFont = nullptr; }
         virtual void NotifyGlyphsChanged() = 0;
     protected:
-        GlyphChangeObserver(gfxFont *aFont) : mFont(aFont)
+        explicit GlyphChangeObserver(gfxFont *aFont) : mFont(aFont)
         {
             mFont->AddGlyphChangeObserver(this);
         }
@@ -1941,9 +1996,57 @@ public:
         delete sDefaultFeatures;
     }
 
+    // Get a font dimension from the MATH table, scaled to appUnits;
+    // may only be called if mFontEntry->TryGetMathTable has succeeded
+    // (i.e. the font is known to be a valid OpenType math font).
+    nscoord GetMathConstant(gfxFontEntry::MathConstant aConstant,
+                            uint32_t aAppUnitsPerDevPixel)
+    {
+        return NSToCoordRound(mFontEntry->GetMathConstant(aConstant) *
+                              GetAdjustedSize() * aAppUnitsPerDevPixel);
+    }
+
+    // Get a dimensionless math constant (e.g. a percentage);
+    // may only be called if mFontEntry->TryGetMathTable has succeeded
+    // (i.e. the font is known to be a valid OpenType math font).
+    float GetMathConstant(gfxFontEntry::MathConstant aConstant)
+    {
+        return mFontEntry->GetMathConstant(aConstant);
+    }
+
+    // return a cloned font resized and offset to simulate sub/superscript glyphs
+    virtual already_AddRefed<gfxFont>
+    GetSubSuperscriptFont(int32_t aAppUnitsPerDevPixel);
+
 protected:
+    // Output a single glyph at *aPt, which is updated by the glyph's advance.
+    // Normal glyphs are simply accumulated in aBuffer until it is full and
+    // gets flushed, but SVG or color-font glyphs will instead be rendered
+    // directly to the destination (found from the buffer's parameters).
+    void DrawOneGlyph(uint32_t           aGlyphID,
+                      double             aAdvance,
+                      gfxPoint          *aPt,
+                      GlyphBufferAzure&  aBuffer,
+                      bool              *aEmittedGlyphs) const;
+
+    // Output a run of glyphs at *aPt, which is updated to follow the last glyph
+    // in the run. This method also takes account of any letter-spacing provided
+    // in aRunParams.
+    bool DrawGlyphs(gfxShapedText            *aShapedText,
+                    uint32_t                  aOffset, // offset in the textrun
+                    uint32_t                  aCount, // length of run to draw
+                    gfxPoint                 *aPt,
+                    const TextRunDrawParams&  aRunParams,
+                    const FontDrawParams&     aFontParams);
+
+    // set the font size and offset used for
+    // synthetic subscript/superscript glyphs
+    void CalculateSubSuperSizeAndOffset(int32_t aAppUnitsPerDevPixel,
+                                        gfxFloat& aSubSuperSizeRatio,
+                                        float& aBaselineOffset);
+
     // Return a font that is a "clone" of this one, but reduced to 80% size
-    // (and with the smallCaps style set to false).
+    // (and with variantCaps set to normal).
     // Default implementation relies on gfxFontEntry::CreateFontInstance;
     // backends that don't implement that will need to override this and use
     // an alternative technique. (gfxPangoFonts, I'm looking at you...)
@@ -1952,7 +2055,7 @@ protected:
     // subclasses may provide (possibly hinted) glyph widths (in font units);
     // if they do not override this, harfbuzz will use unhinted widths
     // derived from the font tables
-    virtual bool ProvidesGlyphWidths() {
+    virtual bool ProvidesGlyphWidths() const {
         return false;
     }
 
@@ -1977,8 +2080,7 @@ protected:
                    uint32_t       aOffset, // dest offset in gfxShapedText
                    uint32_t       aLength,
                    int32_t        aScript,
-                   gfxShapedText *aShapedText, // where to store the result
-                   bool           aPreferPlatformShaping = false);
+                   gfxShapedText *aShapedText); // where to store the result
 
     // Call the appropriate shaper to generate glyphs for aText and store
     // them into aShapedText.
@@ -1987,8 +2089,7 @@ protected:
                            uint32_t         aOffset,
                            uint32_t         aLength,
                            int32_t          aScript,
-                           gfxShapedText   *aShapedText,
-                           bool             aPreferPlatformShaping = false);
+                           gfxShapedText   *aShapedText);
 
     // Helper to adjust for synthetic bold and set character-type flags
     // in the shaped text; implementations of ShapeText should call this
@@ -2095,7 +2196,7 @@ protected:
 
         // When constructing a new entry in the hashtable, the caller of Put()
         // will fill us in.
-        CacheHashEntry(KeyTypePointer aKey) { }
+        explicit CacheHashEntry(KeyTypePointer aKey) { }
         CacheHashEntry(const CacheHashEntry& toCopy) { NS_ERROR("Should not be called"); }
         ~CacheHashEntry() { }
 
@@ -2107,15 +2208,15 @@ protected:
             return aKey->mHashKey;
         }
 
+        size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
+        {
+            return aMallocSizeOf(mShapedWord.get());
+        }
+
         enum { ALLOW_MEMMOVE = true };
 
         nsAutoPtr<gfxShapedWord> mShapedWord;
     };
-
-    static size_t
-    WordCacheEntrySizeOfExcludingThis(CacheHashEntry*   aHashEntry,
-                                      mozilla::MallocSizeOf aMallocSizeOf,
-                                      void*             aUserArg);
 
     nsAutoPtr<nsTHashtable<CacheHashEntry> > mWordCache;
 
@@ -2147,18 +2248,13 @@ protected:
     // measurement by mathml code
     nsAutoPtr<gfxFont>         mNonAAFont;
 
-    // we may switch between these shapers on the fly, based on the script
-    // of the text run being shaped
-    nsAutoPtr<gfxFontShaper>   mPlatformShaper;
+    // we create either or both of these shapers when needed, depending
+    // whether the font has graphite tables, and whether graphite shaping
+    // is actually enabled
     nsAutoPtr<gfxFontShaper>   mHarfBuzzShaper;
     nsAutoPtr<gfxFontShaper>   mGraphiteShaper;
 
     mozilla::RefPtr<mozilla::gfx::ScaledFont> mAzureScaledFont;
-
-    // Create a default platform text shaper for this font.
-    // (TODO: This should become pure virtual once all font backends have
-    // been updated.)
-    virtual void CreatePlatformShaper() { }
 
     // Helper for subclasses that want to initialize standard metrics from the
     // tables of sfnt (TrueType/OpenType) fonts.
@@ -2179,19 +2275,18 @@ protected:
     void SanitizeMetrics(gfxFont::Metrics *aMetrics, bool aIsBadUnderlineFont);
 
     bool RenderSVGGlyph(gfxContext *aContext, gfxPoint aPoint, DrawMode aDrawMode,
-                        uint32_t aGlyphId, gfxTextContextPaint *aContextPaint);
+                        uint32_t aGlyphId, gfxTextContextPaint *aContextPaint) const;
     bool RenderSVGGlyph(gfxContext *aContext, gfxPoint aPoint, DrawMode aDrawMode,
                         uint32_t aGlyphId, gfxTextContextPaint *aContextPaint,
                         gfxTextRunDrawCallbacks *aCallbacks,
-                        bool& aEmittedGlyphs);
+                        bool& aEmittedGlyphs) const;
 
-    bool RenderColorGlyph(gfxContext* aContext, gfxPoint& point, uint32_t aGlyphId);
     bool RenderColorGlyph(gfxContext* aContext,
                           mozilla::gfx::ScaledFont* scaledFont,
                           mozilla::gfx::GlyphRenderingOptions* renderingOptions,
                           mozilla::gfx::DrawOptions drawOptions,
                           const mozilla::gfx::Point& aPoint,
-                          uint32_t aGlyphId);
+                          uint32_t aGlyphId) const;
 
     // Bug 674909. When synthetic bolding text by drawing twice, need to
     // render using a pixel offset in device pixels, otherwise text
@@ -2595,23 +2690,16 @@ protected:
         DetailedGlyph* Allocate(uint32_t aOffset, uint32_t aCount) {
             uint32_t detailIndex = mDetails.Length();
             DetailedGlyph *details = mDetails.AppendElements(aCount);
-            if (!details) {
-                return nullptr;
-            }
             // We normally set up glyph records sequentially, so the common case
             // here is to append new records to the mOffsetToIndex array;
             // test for that before falling back to the InsertElementSorted
             // method.
             if (mOffsetToIndex.Length() == 0 ||
                 aOffset > mOffsetToIndex[mOffsetToIndex.Length() - 1].mOffset) {
-                if (!mOffsetToIndex.AppendElement(DGRec(aOffset, detailIndex))) {
-                    return nullptr;
-                }
+                mOffsetToIndex.AppendElement(DGRec(aOffset, detailIndex));
             } else {
-                if (!mOffsetToIndex.InsertElementSorted(DGRec(aOffset, detailIndex),
-                                                        CompareRecordOffsets())) {
-                    return nullptr;
-                }
+                mOffsetToIndex.InsertElementSorted(DGRec(aOffset, detailIndex),
+                                                   CompareRecordOffsets());
             }
             return details;
         }
@@ -2840,7 +2928,7 @@ struct gfxTextRunDrawCallbacks {
      *   callbacks will be invoked for each SVG glyph.  If false, SVG glyphs
      *   will not be painted; fallback plain glyphs are not emitted either.
      */
-    gfxTextRunDrawCallbacks(bool aShouldPaintSVGGlyphs = false)
+    explicit gfxTextRunDrawCallbacks(bool aShouldPaintSVGGlyphs = false)
       : mShouldPaintSVGGlyphs(aShouldPaintSVGGlyphs)
     {
     }
@@ -3007,7 +3095,7 @@ public:
 
     class ClusterIterator {
     public:
-        ClusterIterator(gfxTextRun *aTextRun);
+        explicit ClusterIterator(gfxTextRun *aTextRun);
 
         void Reset();
 
@@ -3278,6 +3366,9 @@ public:
         return mCharacterGlyphs;
     }
 
+    // clean out results from shaping in progress, used for fallback scenarios
+    void ClearGlyphsAndCharacters();
+
     void SetSpaceGlyph(gfxFont *aFont, gfxContext *aContext, uint32_t aCharIndex);
 
     // Set the glyph data for the given character index to the font's
@@ -3399,6 +3490,23 @@ public:
         mFlags &= ~gfxTextRunFactory::TEXT_RUN_SIZE_ACCOUNTED;
     }
 
+    // shaping state - for some font features, fallback is required that
+    // affects the entire run. for example, fallback for one script/font
+    // portion of a textrun requires fallback to be applied to the entire run
+
+    enum ShapingState {
+        eShapingState_Normal,                 // default state
+        eShapingState_ShapingWithFeature,     // have shaped with feature
+        eShapingState_ShapingWithFallback,    // have shaped with fallback
+        eShapingState_Aborted,                // abort initial iteration
+        eShapingState_ForceFallbackFeature    // redo with fallback forced on
+    };
+
+    ShapingState GetShapingState() const { return mShapingState; }
+    void SetShapingState(ShapingState aShapingState) {
+        mShapingState = aShapingState;
+    }
+
 #ifdef DEBUG
     void Dump(FILE* aOutput);
 #endif
@@ -3427,9 +3535,6 @@ protected:
 private:
     // **** general helpers **** 
 
-    // Allocate aCount DetailedGlyphs for the given index
-    DetailedGlyph *AllocateDetailedGlyphs(uint32_t aCharIndex, uint32_t aCount);
-
     // Get the total advance for a range of glyphs.
     int32_t GetAdvanceForGlyphs(uint32_t aStart, uint32_t aEnd);
 
@@ -3451,10 +3556,9 @@ private:
                                      PropertyProvider *aProvider);
     gfxFloat ComputePartialLigatureWidth(uint32_t aPartStart, uint32_t aPartEnd,
                                          PropertyProvider *aProvider);
-    void DrawPartialLigature(gfxFont *aFont, gfxContext *aCtx,
-                             uint32_t aStart, uint32_t aEnd, gfxPoint *aPt,
-                             PropertyProvider *aProvider,
-                             gfxTextRunDrawCallbacks *aCallbacks);
+    void DrawPartialLigature(gfxFont *aFont, uint32_t aStart, uint32_t aEnd,
+                             gfxPoint *aPt, PropertyProvider *aProvider,
+                             TextRunDrawParams& aParams);
     // Advance aStart to the start of the nearest ligature; back up aEnd
     // to the nearest ligature end; may result in *aStart == *aEnd
     void ShrinkToLigatureBoundaries(uint32_t *aStart, uint32_t *aEnd);
@@ -3476,12 +3580,10 @@ private:
                                  Metrics *aMetrics);
 
     // **** drawing helper ****
-    void DrawGlyphs(gfxFont *aFont, gfxContext *aContext,
-                    DrawMode aDrawMode, gfxPoint *aPt,
-                    gfxTextContextPaint *aContextPaint, uint32_t aStart,
-                    uint32_t aEnd, PropertyProvider *aProvider,
+    void DrawGlyphs(gfxFont *aFont, uint32_t aStart, uint32_t aEnd,
+                    gfxPoint *aPt, PropertyProvider *aProvider,
                     uint32_t aSpacingStart, uint32_t aSpacingEnd,
-                    gfxTextRunDrawCallbacks *aCallbacks);
+                    TextRunDrawParams& aParams);
 
     // XXX this should be changed to a GlyphRun plus a maybe-null GlyphRun*,
     // for smaller size especially in the super-common one-glyphrun case
@@ -3498,6 +3600,10 @@ private:
                                     // until the download completes (or timeout fires)
     bool              mReleasedFontGroup; // we already called NS_RELEASE on
                                           // mFontGroup, so don't do it again
+
+    // shaping state for handling variant fallback features
+    // such as subscript/superscript variant glyphs
+    ShapingState      mShapingState;
 };
 
 class gfxFontGroup : public gfxTextRunFactory {
@@ -3544,6 +3650,11 @@ public:
 
         return mFonts[i].Font();
     }
+
+    // Returns the first font in the font-group that has an OpenType MATH table,
+    // or null if no such font is available. The GetMathConstant methods may be
+    // called on the returned font.
+    gfxFont *GetFirstMathFont();
 
     uint32_t FontListLength() const {
         return mFonts.Length();

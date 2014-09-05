@@ -1294,6 +1294,9 @@
               this._errorLink.value = gStrings.ext.GetStringFromName("notification.vulnerableNoUpdate.link");
               this._errorLink.href = this.mAddon.blocklistURL;
               this._errorLink.hidden = false;
+            } else if (this.mAddon.id == "gmp-gmpopenh264" && !this.mAddon.isInstalled) {
+              this.setAttribute("notification", "warning");
+              this._warning.textContent = gStrings.ext.GetStringFromName("notification.openH264Pending");
             } else {
               this.removeAttribute("notification");
             }
@@ -1303,10 +1306,7 @@
                                         this.mAddon.optionsType == AddonManager.OPTIONS_TYPE_INLINE_INFO;
 
           let addonType = AddonManager.addonTypes[this.mAddon.type];
-          if (addonType.flags & AddonManager.TYPE_SUPPORTS_ASK_TO_ACTIVATE &&
-              (this.hasPermission("ask_to_activate") ||
-               this.hasPermission("enable") ||
-               this.hasPermission("disable"))) {
+          if (addonType.flags & AddonManager.TYPE_SUPPORTS_ASK_TO_ACTIVATE) {
             this._enableBtn.disabled = true;
             this._disableBtn.disabled = true;
             this._askToActivateMenuitem.disabled = !this.hasPermission("ask_to_activate");
@@ -1319,10 +1319,13 @@
             } else {
               this._stateMenulist.selectedItem = this._alwaysActivateMenuitem;
             }
-            this._stateMenulist.selectedItem.disabled = false;
-            this._stateMenulist.disabled = false;
+            let hasActivatePermission =
+              ["ask_to_activate", "enable", "disable"].some(perm => this.hasPermission(perm));
+            this._stateMenulist.disabled = !hasActivatePermission;
+            this._stateMenulist.hidden = false;
+            this._stateMenulist.classList.add('no-auto-hide');
           } else {
-            this._stateMenulist.disabled = true;
+            this._stateMenulist.hidden = true;
             if (this.hasPermission("enable")) {
               this._enableBtn.hidden = false;
               let tooltip = gViewController.commands["cmd_enableItem"]

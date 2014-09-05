@@ -33,31 +33,11 @@ var mockCommands = {};
  * Registration and de-registration.
  */
 mockCommands.setup = function(requisition) {
-  mockCommands.items.forEach(function(item) {
-    if (item.item === 'command') {
-      requisition.canon.addCommand(item);
-    }
-    else if (item.item === 'type') {
-      requisition.types.addType(item);
-    }
-    else {
-      console.error('Ignoring item ', item);
-    }
-  });
+  requisition.system.addItems(mockCommands.items);
 };
 
 mockCommands.shutdown = function(requisition) {
-  mockCommands.items.forEach(function(item) {
-    if (item.item === 'command') {
-      requisition.canon.removeCommand(item);
-    }
-    else if (item.item === 'type') {
-      requisition.types.removeType(item);
-    }
-    else {
-      console.error('Ignoring item ', item);
-    }
-  });
+  requisition.system.removeItems(mockCommands.items);
 };
 
 function createExec(name) {
@@ -70,6 +50,25 @@ function createExec(name) {
 }
 
 mockCommands.items = [
+  {
+    item: 'converter',
+    from: 'json',
+    to: 'string',
+    exec: function(json, context) {
+      return JSON.stringify(json, null, '  ');
+    }
+  },
+  {
+    item: 'converter',
+    from: 'json',
+    to: 'view',
+    exec: function(json, context) {
+      var html = JSON.stringify(json, null, '&#160;').replace(/\n/g, '<br/>');
+      return {
+        html: '<pre>' + html + '</pre>'
+      };
+    }
+  },
   {
     item: 'type',
     name: 'optionType',
@@ -669,6 +668,75 @@ mockCommands.items = [
     ],
     exec: function(args, context) {
       return 'Test completed';
+    }
+  },
+  {
+    item: 'command',
+    name: 'urlc',
+    params: [
+      {
+        name: 'url',
+        type: 'url'
+      }
+    ],
+    returnType: 'json',
+    exec: function(args, context) {
+      return args;
+    }
+  },
+  {
+    item: 'command',
+    name: 'unionc1',
+    params: [
+      {
+        name: 'first',
+        type: {
+          name: 'union',
+          alternatives: [
+            {
+              name: 'selection',
+              lookup: [
+                { name: 'one', value: 1 },
+                { name: 'two', value: 2 },
+              ]
+            },
+            'number',
+            { name: 'string' }
+          ]
+        }
+      }
+    ],
+    returnType: 'json',
+    exec: function(args, context) {
+      return args;
+    }
+  },
+  {
+    item: 'command',
+    name: 'unionc2',
+    params: [
+      {
+        name: 'first',
+        type: {
+          name: 'union',
+          alternatives: [
+            {
+              name: 'selection',
+              lookup: [
+                { name: 'one', value: 1 },
+                { name: 'two', value: 2 },
+              ]
+            },
+            {
+              name: 'url'
+            }
+          ]
+        }
+      }
+    ],
+    returnType: 'json',
+    exec: function(args, context) {
+      return args;
     }
   }
 ];

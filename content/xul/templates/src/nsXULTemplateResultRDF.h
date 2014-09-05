@@ -26,13 +26,11 @@ public:
 
     NS_DECL_NSIXULTEMPLATERESULT
 
-    nsXULTemplateResultRDF(nsIRDFResource* aNode);
+    explicit nsXULTemplateResultRDF(nsIRDFResource* aNode);
 
     nsXULTemplateResultRDF(nsRDFQuery* aQuery,
                            const Instantiation& aInst,
                            nsIRDFResource* aNode);
-
-    ~nsXULTemplateResultRDF();
 
     nsITemplateRDFQuery* Query() { return mQuery; }
 
@@ -65,6 +63,7 @@ public:
     HasMemoryElement(const MemoryElement& aMemoryElement);
 
 protected:
+    ~nsXULTemplateResultRDF();
 
     // query that generated the result
     nsCOMPtr<nsITemplateRDFQuery> mQuery;

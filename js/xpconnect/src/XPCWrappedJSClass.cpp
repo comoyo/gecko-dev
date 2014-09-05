@@ -13,6 +13,7 @@
 #include "nsWrapperCache.h"
 #include "AccessCheck.h"
 #include "nsJSUtils.h"
+#include "JavaScriptParent.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/DOMException.h"
@@ -45,7 +46,7 @@ bool AutoScriptEvaluate::StartEvaluating(HandleObject scope, JSErrorReporter err
     }
 
     JS_BeginRequest(mJSContext);
-    mAutoCompartment.construct(mJSContext, scope);
+    mAutoCompartment.emplace(mJSContext, scope);
 
     // Saving the exception state keeps us from interfering with another script
     // that may also be running on this context.  This occurred first with the
@@ -53,7 +54,7 @@ bool AutoScriptEvaluate::StartEvaluating(HandleObject scope, JSErrorReporter err
     // http://bugzilla.mozilla.org/show_bug.cgi?id=88130 but presumably could
     // show up in any situation where a script calls into a wrapped js component
     // on the same context, while the context has a nonzero exception state.
-    mState.construct(mJSContext);
+    mState.emplace(mJSContext);
 
     return true;
 }
@@ -62,7 +63,7 @@ AutoScriptEvaluate::~AutoScriptEvaluate()
 {
     if (!mJSContext || !mEvaluated)
         return;
-    mState.ref().restore();
+    mState->restore();
 
     JS_EndRequest(mJSContext);
 
@@ -90,7 +91,7 @@ bool xpc_IsReportableErrorCode(nsresult code)
 
 // static
 already_AddRefed<nsXPCWrappedJSClass>
-nsXPCWrappedJSClass::GetNewOrUsed(JSContext* cx, REFNSIID aIID)
+nsXPCWrappedJSClass::GetNewOrUsed(JSContext* cx, REFNSIID aIID, bool allowNonScriptable)
 {
     XPCJSRuntime* rt = nsXPConnect::GetRuntimeInstance();
     IID2WrappedJSClassMap* map = rt->GetWrappedJSClassMap();
@@ -101,7 +102,7 @@ nsXPCWrappedJSClass::GetNewOrUsed(JSContext* cx, REFNSIID aIID)
         nsXPConnect::XPConnect()->GetInfoForIID(&aIID, getter_AddRefs(info));
         if (info) {
             bool canScript, isBuiltin;
-            if (NS_SUCCEEDED(info->IsScriptable(&canScript)) && canScript &&
+            if (NS_SUCCEEDED(info->IsScriptable(&canScript)) && (canScript || allowNonScriptable) &&
                 NS_SUCCEEDED(info->IsBuiltinClass(&isBuiltin)) && !isBuiltin &&
                 nsXPConnect::IsISupportsDescendant(info))
             {
@@ -202,12 +203,14 @@ nsXPCWrappedJSClass::CallQueryInterfaceOnJSObject(JSContext* cx,
     // implement intentionally (for security) unscriptable interfaces.
     // We so often ask for nsISupports that we can short-circuit the test...
     if (!aIID.Equals(NS_GET_IID(nsISupports))) {
+        bool allowNonScriptable = mozilla::jsipc::IsWrappedCPOW(jsobj);
+
         nsCOMPtr<nsIInterfaceInfo> info;
         nsXPConnect::XPConnect()->GetInfoForIID(&aIID, getter_AddRefs(info));
         if (!info)
             return nullptr;
         bool canScript, isBuiltin;
-        if (NS_FAILED(info->IsScriptable(&canScript)) || !canScript ||
+        if (NS_FAILED(info->IsScriptable(&canScript)) || (!canScript && !allowNonScriptable) ||
             NS_FAILED(info->IsBuiltinClass(&isBuiltin)) || isBuiltin)
             return nullptr;
     }
@@ -283,10 +286,7 @@ GetNamedPropertyAsVariantRaw(XPCCallContext& ccx,
     RootedValue val(ccx);
 
     return JS_GetPropertyById(ccx, aJSObj, aName, &val) &&
-           // Note that this always takes the T_INTERFACE path through
-           // JSData2Native, so the value passed for useAllocator
-           // doesn't really matter. We pass true for consistency.
-           XPCConvert::JSData2Native(aResult, val, type, true,
+           XPCConvert::JSData2Native(aResult, val, type,
                                      &NS_GET_IID(nsIVariant), pErr);
 }
 
@@ -365,13 +365,12 @@ nsXPCWrappedJSClass::BuildPropertyEnumerator(XPCCallContext& ccx,
         if (!name)
             return NS_ERROR_FAILURE;
 
-        size_t length;
-        const jschar *chars = JS_GetStringCharsAndLength(cx, name, &length);
-        if (!chars)
+        nsAutoJSString autoStr;
+        if (!autoStr.init(cx, name))
             return NS_ERROR_FAILURE;
 
         nsCOMPtr<nsIProperty> property =
-            new xpcProperty(chars, (uint32_t) length, value);
+            new xpcProperty(autoStr.get(), (uint32_t)autoStr.Length(), value);
 
         if (!propertyArray.AppendObject(property))
             return NS_ERROR_FAILURE;
@@ -753,7 +752,7 @@ nsXPCWrappedJSClass::CleanupPointerTypeObject(const nsXPTType& type,
 class AutoClearPendingException
 {
 public:
-  AutoClearPendingException(JSContext *cx) : mCx(cx) { }
+  explicit AutoClearPendingException(JSContext *cx) : mCx(cx) { }
   ~AutoClearPendingException() { JS_ClearPendingException(mCx); }
 private:
   JSContext* mCx;
@@ -1350,13 +1349,13 @@ pre_call_clean_up:
     (defined(__powerpc__) && !defined (__powerpc64__)))
         if (type_tag == nsXPTType::T_JSVAL) {
             if (!XPCConvert::JSData2Native(*(void**)(&pv->val), val, type,
-                                           !param.IsDipper(), &param_iid, nullptr))
+                                           &param_iid, nullptr))
                 break;
         } else
 #endif
         {
             if (!XPCConvert::JSData2Native(&pv->val, val, type,
-                                           !param.IsDipper(), &param_iid, nullptr))
+                                           &param_iid, nullptr))
                 break;
         }
     }
@@ -1429,7 +1428,7 @@ pre_call_clean_up:
                     break;
             } else {
                 if (!XPCConvert::JSData2Native(&pv->val, val, type,
-                                               true, &param_iid,
+                                               &param_iid,
                                                nullptr))
                     break;
             }

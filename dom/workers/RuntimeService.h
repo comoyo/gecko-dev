@@ -17,6 +17,7 @@
 #include "nsClassHashtable.h"
 #include "nsHashKeys.h"
 #include "nsTArray.h"
+#include "WorkerPrivate.h"
 
 class nsIRunnable;
 class nsIThread;
@@ -158,6 +159,13 @@ public:
                       const nsACString& aScope,
                       ServiceWorker** aServiceWorker);
 
+  nsresult
+  CreateServiceWorkerFromLoadInfo(JSContext* aCx,
+                                  WorkerPrivate::LoadInfo aLoadInfo,
+                                  const nsAString& aScriptURL,
+                                  const nsACString& aScope,
+                                  ServiceWorker** aServiceWorker);
+
   void
   ForgetSharedWorker(WorkerPrivate* aWorkerPrivate);
 
@@ -185,19 +193,14 @@ public:
   }
 
   static void
-  SetDefaultRuntimeAndContextOptions(
-                                    const JS::RuntimeOptions& aRuntimeOptions,
-                                    const JS::ContextOptions& aContentCxOptions,
-                                    const JS::ContextOptions& aChromeCxOptions)
+  SetDefaultRuntimeOptions(const JS::RuntimeOptions& aRuntimeOptions)
   {
     AssertIsOnMainThread();
     sDefaultJSSettings.runtimeOptions = aRuntimeOptions;
-    sDefaultJSSettings.content.contextOptions = aContentCxOptions;
-    sDefaultJSSettings.chrome.contextOptions = aChromeCxOptions;
   }
 
   void
-  UpdateAllWorkerRuntimeAndContextOptions();
+  UpdateAllWorkerRuntimeOptions();
 
   void
   UpdateAllWorkerPreference(WorkerPreference aPref, bool aValue);
@@ -296,6 +299,14 @@ private:
                              const nsACString& aName,
                              WorkerType aType,
                              SharedWorker** aSharedWorker);
+
+  nsresult
+  CreateSharedWorkerFromLoadInfo(JSContext* aCx,
+                                 WorkerPrivate::LoadInfo aLoadInfo,
+                                 const nsAString& aScriptURL,
+                                 const nsACString& aName,
+                                 WorkerType aType,
+                                 SharedWorker** aSharedWorker);
 };
 
 END_WORKERS_NAMESPACE

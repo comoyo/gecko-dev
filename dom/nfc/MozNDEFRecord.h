@@ -15,11 +15,10 @@
 #include "nsWrapperCache.h"
 #include "jsapi.h"
 
-#include "nsIDocument.h"
-
 #include "mozilla/dom/TypedArray.h"
 #include "jsfriendapi.h"
 #include "js/GCAPI.h"
+#include "nsPIDOMWindow.h"
 
 struct JSContext;
 
@@ -60,46 +59,28 @@ public:
     return mTnf;
   }
 
-  JSObject* GetType(JSContext* cx) const
+  void GetType(JSContext* cx, JS::MutableHandle<JSObject*> retval) const
   {
     if (mType) {
-      return GetTypeObject();
-    } else {
-      return nullptr;
+      JS::ExposeObjectToActiveJS(mType);
     }
-  }
-  JSObject* GetTypeObject() const
-  {
-    JS::ExposeObjectToActiveJS(mType);
-    return mType;
+    retval.set(mType);
   }
 
-  JSObject* GetId(JSContext* cx) const
+  void GetId(JSContext* cx, JS::MutableHandle<JSObject*> retval) const
   {
     if (mId) {
-      return GetIdObject();
-    } else {
-      return nullptr;
+      JS::ExposeObjectToActiveJS(mId);
     }
-  }
-  JSObject* GetIdObject() const
-  {
-    JS::ExposeObjectToActiveJS(mId);
-    return mId;
+    retval.set(mId);
   }
 
-  JSObject* GetPayload(JSContext* cx) const
+  void GetPayload(JSContext* cx, JS::MutableHandle<JSObject*> retval) const
   {
     if (mPayload) {
-      return GetPayloadObject();
-    } else {
-      return nullptr;
+      JS::ExposeObjectToActiveJS(mPayload);
     }
-  }
-  JSObject* GetPayloadObject() const
-  {
-    JS::ExposeObjectToActiveJS(mPayload);
-    return mPayload;
+    retval.set(mPayload);
   }
 
 private:

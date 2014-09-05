@@ -818,26 +818,28 @@ nsMathMLmoFrame::Stretch(nsRenderingContext& aRenderingContext,
   }
   if (isAccent && firstChild) {
     // see bug 188467 for what is going on here
-    nscoord dy = aDesiredStretchSize.TopAscent() - (mBoundingMetrics.ascent + leading);
-    aDesiredStretchSize.SetTopAscent(mBoundingMetrics.ascent + leading);
-    aDesiredStretchSize.Height() = aDesiredStretchSize.TopAscent() + mBoundingMetrics.descent;
+    nscoord dy = aDesiredStretchSize.BlockStartAscent() -
+      (mBoundingMetrics.ascent + leading);
+    aDesiredStretchSize.SetBlockStartAscent(mBoundingMetrics.ascent + leading);
+    aDesiredStretchSize.Height() = aDesiredStretchSize.BlockStartAscent() +
+                                   mBoundingMetrics.descent;
 
     firstChild->SetPosition(firstChild->GetPosition() - nsPoint(0, dy));
   }
   else if (useMathMLChar) {
     nscoord ascent = fm->MaxAscent();
     nscoord descent = fm->MaxDescent();
-    aDesiredStretchSize.SetTopAscent(std::max(mBoundingMetrics.ascent + leading, ascent));
-    aDesiredStretchSize.Height() = aDesiredStretchSize.TopAscent() +
+    aDesiredStretchSize.SetBlockStartAscent(std::max(mBoundingMetrics.ascent + leading, ascent));
+    aDesiredStretchSize.Height() = aDesiredStretchSize.BlockStartAscent() +
                                  std::max(mBoundingMetrics.descent + leading, descent);
   }
   aDesiredStretchSize.Width() = mBoundingMetrics.width;
   aDesiredStretchSize.mBoundingMetrics = mBoundingMetrics;
   mReference.x = 0;
-  mReference.y = aDesiredStretchSize.TopAscent();
+  mReference.y = aDesiredStretchSize.BlockStartAscent();
   // Place our mMathMLChar, its origin is in our coordinate system
   if (useMathMLChar) {
-    nscoord dy = aDesiredStretchSize.TopAscent() - mBoundingMetrics.ascent;
+    nscoord dy = aDesiredStretchSize.BlockStartAscent() - mBoundingMetrics.ascent;
     mMathMLChar.SetRect(nsRect(0, dy, charSize.width, charSize.ascent + charSize.descent));
   }
 
@@ -946,7 +948,7 @@ nsMathMLmoFrame::Reflow(nsPresContext*          aPresContext,
 }
 
 /* virtual */ void
-nsMathMLmoFrame::MarkIntrinsicWidthsDirty()
+nsMathMLmoFrame::MarkIntrinsicISizesDirty()
 {
   // if we get this, it may mean that something changed in the text
   // content. So blow away everything an re-build the automatic data
@@ -967,11 +969,11 @@ nsMathMLmoFrame::MarkIntrinsicWidthsDirty()
   // so that we don't rebuild multiple times for the same change.
   RebuildAutomaticDataForChildren(target);
 
-  nsMathMLContainerFrame::MarkIntrinsicWidthsDirty();
+  nsMathMLContainerFrame::MarkIntrinsicISizesDirty();
 }
 
 /* virtual */ void
-nsMathMLmoFrame::GetIntrinsicWidthMetrics(nsRenderingContext *aRenderingContext, nsHTMLReflowMetrics& aDesiredSize)
+nsMathMLmoFrame::GetIntrinsicISizeMetrics(nsRenderingContext *aRenderingContext, nsHTMLReflowMetrics& aDesiredSize)
 {
   ProcessOperatorData();
   if (UseMathMLChar()) {
@@ -983,7 +985,7 @@ nsMathMLmoFrame::GetIntrinsicWidthMetrics(nsRenderingContext *aRenderingContext,
                   NS_MATHML_OPERATOR_MAXSIZE_IS_ABSOLUTE(mFlags));
   }
   else {
-    nsMathMLTokenFrame::GetIntrinsicWidthMetrics(aRenderingContext,
+    nsMathMLTokenFrame::GetIntrinsicISizeMetrics(aRenderingContext,
                                                  aDesiredSize);
   }
 

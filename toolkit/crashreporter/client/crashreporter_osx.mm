@@ -22,7 +22,7 @@ using namespace CrashReporter;
 
 static NSAutoreleasePool* gMainPool;
 static CrashReporterUI* gUI = 0;
-static string gDumpFile;
+static StringTable gFiles;
 static StringTable gQueryParameters;
 static string gURLParameter;
 static string gSendURL;
@@ -103,11 +103,11 @@ static bool RestartApplication()
                       objectForInfoDictionaryKey:@"CFBundleName"]];
 }
 
--(void)showCrashUI:(const string&)dumpfile
+-(void)showCrashUI:(const StringTable&)files
    queryParameters:(const StringTable&)queryParameters
            sendURL:(const string&)sendURL
 {
-  gDumpFile = dumpfile;
+  gFiles = files;
   gQueryParameters = queryParameters;
   gSendURL = sendURL;
 
@@ -573,7 +573,12 @@ static bool RestartApplication()
     [parameters setObject: value forKey: key];
   }
 
-  [mPost addFileAtPath: NSSTR(gDumpFile) name: @"upload_file_minidump"];
+  for (StringTable::const_iterator i = gFiles.begin();
+       i != gFiles.end();
+       i++) {
+    [mPost addFileAtPath: NSSTR(i->second) name: NSSTR(i->first)];
+  }
+
   [mPost setParameters: parameters];
   [parameters release];
 
@@ -773,14 +778,14 @@ void UIShowDefaultUI()
   [NSApp run];
 }
 
-bool UIShowCrashUI(const string& dumpfile,
+bool UIShowCrashUI(const StringTable& files,
                    const StringTable& queryParameters,
                    const string& sendURL,
                    const vector<string>& restartArgs)
 {
   gRestartArgs = restartArgs;
 
-  [gUI showCrashUI: dumpfile
+  [gUI showCrashUI: files
        queryParameters: queryParameters
        sendURL: sendURL];
   [NSApp run];
@@ -887,9 +892,19 @@ std::ifstream* UIOpenRead(const string& filename)
   return new std::ifstream(filename.c_str(), std::ios::in);
 }
 
-std::ofstream* UIOpenWrite(const string& filename, bool append) // append=false
+std::ofstream* UIOpenWrite(const string& filename,
+                           bool append, // append=false
+                           bool binary) // binary=false
 {
-  return new std::ofstream(filename.c_str(),
-                           append ? std::ios::out | std::ios::app
-                                  : std::ios::out);
+  std::ios_base::openmode mode = std::ios::out;
+
+  if (append) {
+    mode = mode | std::ios::app;
+  }
+
+  if (binary) {
+    mode = mode | std::ios::binary;
+  }
+
+  return new std::ofstream(filename.c_str(), mode);
 }

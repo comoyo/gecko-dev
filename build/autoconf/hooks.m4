@@ -15,39 +15,53 @@ define([_MOZ_AC_INIT_PREPARE], defn([AC_INIT_PREPARE]))
 define([AC_INIT_PREPARE],
 [_MOZ_AC_INIT_PREPARE($1)
 MOZ_CONFIG_LOG_TRAP
+> subconfigures
 ])
 
-dnl Disable the trap when running sub-configures.
-define([_MOZ_AC_OUTPUT_SUBDIRS], defn([AC_OUTPUT_SUBDIRS]))
-define([MOZ_SUBCONFIGURE_WRAP],
-[ _CONFIG_SHELL=${CONFIG_SHELL-/bin/sh}
-case "$host" in
-*-mingw*)
+define([AC_OUTPUT_SUBDIRS],
+[for moz_config_dir in $1; do
+  _CONFIG_SHELL=${CONFIG_SHELL-/bin/sh}
+  case "$moz_config_dir" in
+  *:*)
+    objdir=$(echo $moz_config_dir | awk -F: '{print [$]2}')
+    ;;
+  *)
+    objdir=$moz_config_dir
+    ;;
+  esac
+  dnl Because config.status, storing AC_SUBSTs, is written before any
+  dnl subconfigure runs, we need to use a file. Moreover, some subconfigures
+  dnl are started from a subshell, and variable modifications from a subshell
+  dnl wouldn't be preserved.
+  echo $objdir >> subconfigures
+
+  dumpenv="true | "
+  case "$host" in
+  *-mingw*)
     _CONFIG_SHELL=$(cd $(dirname $_CONFIG_SHELL); pwd -W)/$(basename $_CONFIG_SHELL)
     if test ! -e "$_CONFIG_SHELL" -a -e "${_CONFIG_SHELL}.exe"; then
         _CONFIG_SHELL="${_CONFIG_SHELL}.exe"
     fi
+    dnl Yes, this is horrible. But since msys doesn't preserve environment
+    dnl variables and command line arguments as they are when transitioning
+    dnl from msys (this script) to python (below), we have to resort to hacks,
+    dnl storing the environment and command line arguments from a msys process
+    dnl (perl), and reading it from python.
+    dumpenv="$PERL $srcdir/build/win32/dumpenv4python.pl $ac_configure_args | "
     ;;
-esac
+  esac
 
-if test -d "$1"; then
-    (cd "$1"; $PYTHON $_topsrcdir/build/subconfigure.py dump "$_CONFIG_SHELL")
-else
-    mkdir -p "$1"
-fi
-$2
-(cd "$1"; $PYTHON $_topsrcdir/build/subconfigure.py adjust $ac_sub_configure)
-])
+  eval $dumpenv $PYTHON $_topsrcdir/build/subconfigure.py --prepare "$srcdir" "$moz_config_dir" "$_CONFIG_SHELL" $ac_configure_args ifelse($2,,,--cache-file="$2")
 
-define([AC_OUTPUT_SUBDIRS],
-[trap '' EXIT
-for moz_config_dir in $1; do
-  MOZ_SUBCONFIGURE_WRAP([$moz_config_dir],[
-    _MOZ_AC_OUTPUT_SUBDIRS($moz_config_dir)
-  ])
+  dnl Execute subconfigure, unless --no-recursion was passed to configure.
+  if test "$no_recursion" != yes; then
+    trap '' EXIT
+    if ! $PYTHON $_topsrcdir/build/subconfigure.py "$objdir"; then
+        exit 1
+    fi
+    MOZ_CONFIG_LOG_TRAP
+  fi
 done
-
-MOZ_CONFIG_LOG_TRAP
 ])
 
 dnl Print error messages in config.log as well as stderr

@@ -73,6 +73,7 @@ class UpvarCookie
     F(COMMA) \
     F(CONDITIONAL) \
     F(COLON) \
+    F(SHORTHAND) \
     F(POS) \
     F(NEG) \
     F(PREINCREMENT) \
@@ -88,8 +89,13 @@ class UpvarCookie
     F(OBJECT) \
     F(CALL) \
     F(NAME) \
+    F(COMPUTED_NAME) \
     F(NUMBER) \
     F(STRING) \
+    F(TEMPLATE_STRING_LIST) \
+    F(TEMPLATE_STRING) \
+    F(TAGGED_TEMPLATE) \
+    F(CALLSITEOBJ) \
     F(REGEXP) \
     F(TRUE) \
     F(FALSE) \
@@ -386,15 +392,24 @@ enum ParseNodeKind
  * PNK_COLON    binary      key-value pair in object initializer or
  *                          destructuring lhs
  *                          pn_left: property id, pn_right: value
- *                          var {x} = object destructuring shorthand shares
- *                          PN_NAME node for x on left and right of PNK_COLON
- *                          node in PNK_OBJECT's list, has PNX_DESTRUCT flag
+ * PNK_SHORTHAND binary     Same fields as PNK_COLON. This is used for object
+ *                          literal properties using shorthand ({x}).
+ * PNK_COMPUTED_NAME unary  ES6 ComputedPropertyName.
+ *                          pn_kid: the AssignmentExpression inside the square brackets
  * PNK_NAME,    name        pn_atom: name, string, or object atom
  * PNK_STRING               pn_op: JSOP_NAME, JSOP_STRING, or JSOP_OBJECT
  *                          If JSOP_NAME, pn_op may be JSOP_*ARG or JSOP_*VAR
  *                          with pn_cookie telling (staticLevel, slot) (see
  *                          jsscript.h's UPVAR macros) and pn_dflags telling
  *                          const-ness and static analysis results
+ * PNK_TEMPLATE_STRING_LIST pn_head: list of alternating expr and template strings
+ *              list
+ * PNK_TEMPLATE_STRING      pn_atom: template string atom
+                nullary     pn_op: JSOP_NOP
+ * PNK_TAGGED_TEMPLATE      pn_head: list of call, call site object, arg1, arg2, ... argN
+ *              list        pn_count: 2 + N (N is the number of substitutions)
+ * PNK_CALLSITEOBJ list     pn_head: a PNK_ARRAY node followed by
+ *                          list of pn_count - 1 PNK_TEMPLATE_STRING nodes
  * PNK_REGEXP   nullary     pn_objbox: RegExp model object
  * PNK_NAME     name        If pn_used, PNK_NAME uses the lexdef member instead
  *                          of the expr member it overlays
@@ -675,12 +690,8 @@ class ParseNode
 #define PNX_GROUPINIT   0x02            /* var [a, b] = [c, d]; unit list */
 #define PNX_FUNCDEFS    0x04            /* contains top-level function statements */
 #define PNX_SETCALL     0x08            /* call expression in lvalue context */
-#define PNX_DESTRUCT    0x10            /* destructuring special cases:
-                                           1. shorthand syntax used, at present
-                                              object destructuring ({x,y}) only;
-                                           2. code evaluating destructuring
-                                              arguments occurs before function
-                                              body */
+#define PNX_DESTRUCT    0x10            /* code evaluating destructuring
+                                           arguments occurs before function body */
 #define PNX_SPECIALARRAYINIT 0x20       /* one or more of
                                            1. array initialiser has holes
                                            2. array initializer has spread node */
@@ -820,7 +831,13 @@ class ParseNode
 #endif
     ;
 
-    bool getConstantValue(ExclusiveContext *cx, bool strictChecks, MutableHandleValue vp);
+    enum AllowConstantObjects {
+        DontAllowObjects = 0,
+        DontAllowNestedObjects,
+        AllowObjects
+    };
+
+    bool getConstantValue(ExclusiveContext *cx, AllowConstantObjects allowObjects, MutableHandleValue vp);
     inline bool isConstant();
 
     template <class NodeType>
@@ -1252,6 +1269,21 @@ class PropertyByValue : public ParseNode
     }
 };
 
+/*
+ * A CallSiteNode represents the implicit call site object argument in a TaggedTemplate.
+ */
+struct CallSiteNode : public ListNode {
+    explicit CallSiteNode(uint32_t begin): ListNode(PNK_CALLSITEOBJ, TokenPos(begin, begin + 1)) {}
+
+    static bool test(const ParseNode &node) {
+        return node.isKind(PNK_CALLSITEOBJ);
+    }
+
+    bool getRawArrayValue(ExclusiveContext *cx, MutableHandleValue vp) {
+        return pn_head->getConstantValue(cx, AllowObjects, vp);
+    }
+};
+
 #ifdef DEBUG
 void DumpParseTree(ParseNode *pn, int indent = 0);
 #endif
@@ -1447,6 +1479,7 @@ ParseNode::isConstant()
     switch (pn_type) {
       case PNK_NUMBER:
       case PNK_STRING:
+      case PNK_TEMPLATE_STRING:
       case PNK_NULL:
       case PNK_FALSE:
       case PNK_TRUE:
@@ -1487,7 +1520,7 @@ enum ParseReportKind
     ParseStrictError
 };
 
-enum FunctionSyntaxKind { Expression, Statement, Arrow };
+enum FunctionSyntaxKind { Expression, Statement, Arrow, Method };
 
 static inline ParseNode *
 FunctionArgsList(ParseNode *fn, unsigned *numFormals)

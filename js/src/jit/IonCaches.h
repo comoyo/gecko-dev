@@ -47,7 +47,7 @@ class IonCacheVisitor
   public:
 #define VISIT_INS(op)                                               \
     virtual bool visit##op##IC(CodeGenerator *codegen) {            \
-        MOZ_ASSUME_UNREACHABLE("NYI: " #op "IC");                   \
+        MOZ_CRASH("NYI: " #op "IC");                                \
     }
 
     IONCACHE_KIND_LIST(VISIT_INS)
@@ -213,6 +213,9 @@ class IonCache
         profilerLeavePc_ = pc;
     }
 
+    // Get the address at which IC rejoins the mainline jitcode.
+    virtual void *rejoinAddress() = 0;
+
     virtual void emitInitialJump(MacroAssembler &masm, AddCacheState &addState) = 0;
     virtual void bindInitialJump(MacroAssembler &masm, AddCacheState &addState) = 0;
     virtual void updateBaseAddress(JitCode *code, MacroAssembler &masm);
@@ -375,7 +378,7 @@ class RepatchIonCache : public IonCache
 #if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
         uint32_t i = 0;
         while (i < REJOIN_LABEL_OFFSET)
-            ptr = Assembler::nextInstruction(ptr, &i);
+            ptr = Assembler::NextInstruction(ptr, &i);
 #endif
         return CodeLocationLabel(ptr);
     }
@@ -398,6 +401,10 @@ class RepatchIonCache : public IonCache
 
     // Update the labels once the code is finalized.
     void updateBaseAddress(JitCode *code, MacroAssembler &masm);
+
+    virtual void *rejoinAddress() MOZ_OVERRIDE {
+        return rejoinLabel().raw();
+    }
 };
 
 //
@@ -496,6 +503,10 @@ class DispatchIonCache : public IonCache
 
     // Fix up the first stub pointer once the code is finalized.
     void updateBaseAddress(JitCode *code, MacroAssembler &masm);
+
+    virtual void *rejoinAddress() MOZ_OVERRIDE {
+        return rejoinLabel_.raw();
+    }
 };
 
 // Define the cache kind and pre-declare data structures used for calling inline
@@ -851,7 +862,8 @@ class SetElementIC : public RepatchIonCache
     Register object_;
     Register tempToUnboxIndex_;
     Register temp_;
-    FloatRegister tempFloat_;
+    FloatRegister tempDouble_;
+    FloatRegister tempFloat32_;
     ValueOperand index_;
     ConstantOrRegister value_;
     bool strict_;
@@ -861,12 +873,14 @@ class SetElementIC : public RepatchIonCache
 
   public:
     SetElementIC(Register object, Register tempToUnboxIndex, Register temp,
-                 FloatRegister tempFloat, ValueOperand index, ConstantOrRegister value,
+                 FloatRegister tempDouble, FloatRegister tempFloat32,
+                 ValueOperand index, ConstantOrRegister value,
                  bool strict, bool guardHoles)
       : object_(object),
         tempToUnboxIndex_(tempToUnboxIndex),
         temp_(temp),
-        tempFloat_(tempFloat),
+        tempDouble_(tempDouble),
+        tempFloat32_(tempFloat32),
         index_(index),
         value_(value),
         strict_(strict),
@@ -888,8 +902,11 @@ class SetElementIC : public RepatchIonCache
     Register temp() const {
         return temp_;
     }
-    FloatRegister tempFloat() const {
-        return tempFloat_;
+    FloatRegister tempDouble() const {
+        return tempDouble_;
+    }
+    FloatRegister tempFloat32() const {
+        return tempFloat32_;
     }
     ValueOperand index() const {
         return index_;
@@ -1004,8 +1021,8 @@ class NameIC : public RepatchIonCache
                         HandleObject holder, HandleShape shape);
 
     bool attachCallGetter(JSContext *cx, HandleScript outerScript, IonScript *ion,
-                          HandleObject obj, HandleObject holder, HandleShape shape,
-                          void *returnAddr);
+                          HandleObject scopeChain, HandleObject obj, HandleObject holder,
+                          HandleShape shape, void *returnAddr);
 
     static bool
     update(JSContext *cx, size_t cacheIndex, HandleObject scopeChain, MutableHandleValue vp);
@@ -1247,7 +1264,8 @@ class SetElementParIC : public ParallelIonCache
     Register object_;
     Register tempToUnboxIndex_;
     Register temp_;
-    FloatRegister tempFloat_;
+    FloatRegister tempDouble_;
+    FloatRegister tempFloat32_;
     ValueOperand index_;
     ConstantOrRegister value_;
     bool strict_;
@@ -1255,12 +1273,13 @@ class SetElementParIC : public ParallelIonCache
 
   public:
     SetElementParIC(Register object, Register tempToUnboxIndex, Register temp,
-                    FloatRegister tempFloat, ValueOperand index, ConstantOrRegister value,
+                    FloatRegister tempDouble, FloatRegister tempFloat32, ValueOperand index, ConstantOrRegister value,
                     bool strict, bool guardHoles)
       : object_(object),
         tempToUnboxIndex_(tempToUnboxIndex),
         temp_(temp),
-        tempFloat_(tempFloat),
+        tempDouble_(tempDouble),
+        tempFloat32_(tempFloat32),
         index_(index),
         value_(value),
         strict_(strict),
@@ -1285,8 +1304,11 @@ class SetElementParIC : public ParallelIonCache
     Register temp() const {
         return temp_;
     }
-    FloatRegister tempFloat() const {
-        return tempFloat_;
+    FloatRegister tempDouble() const {
+        return tempDouble_;
+    }
+    FloatRegister tempFloat32() const {
+        return tempFloat32_;
     }
     ValueOperand index() const {
         return index_;

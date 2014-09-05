@@ -24,8 +24,7 @@ class SpeechRecognitionAlternative MOZ_FINAL : public nsISupports,
                                                public nsWrapperCache
 {
 public:
-  SpeechRecognitionAlternative(SpeechRecognition* aParent);
-  ~SpeechRecognitionAlternative();
+  explicit SpeechRecognitionAlternative(SpeechRecognition* aParent);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(SpeechRecognitionAlternative)
@@ -41,6 +40,8 @@ public:
   nsString mTranscript;
   float mConfidence;
 private:
+  ~SpeechRecognitionAlternative();
+
   nsRefPtr<SpeechRecognition> mParent;
 };
 

@@ -539,6 +539,7 @@ nsBrowserContentHandler.prototype = {
   helpInfo : "  -browser           Open a browser window.\n" +
              "  -new-window  <url> Open <url> in a new window.\n" +
              "  -new-tab     <url> Open <url> in a new tab.\n" +
+             "  -private-window <url> Open <url> in a new private window.\n" +
 #ifdef XP_WIN
              "  -preferences       Open Options dialog.\n" +
 #else
@@ -781,9 +782,7 @@ nsDefaultCommandLineHandler.prototype = {
       Components.utils.reportError(e);
     }
 
-    count = cmdLine.length;
-
-    for (i = 0; i < count; ++i) {
+    for (let i = 0; i < cmdLine.length; ++i) {
       var curarg = cmdLine.getArgument(i);
       if (curarg.match(/^-/)) {
         Components.utils.reportError("Warning: unrecognized command line flag " + curarg + "\n");

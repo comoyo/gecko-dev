@@ -80,13 +80,15 @@ LIBRARY_NAME = 'breakpad_common_s'
 
 MSVC_ENABLE_PGO = True
 
-FINAL_LIBRARY = 'xulapp_s'
+FINAL_LIBRARY = 'xul'
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     DEFINES['ELFSIZE'] = 32
 
 if CONFIG['OS_TARGET'] == 'Android':
     DEFINES['NO_STABS_SUPPORT'] = True
+
+include('/toolkit/crashreporter/crashreporter.mozbuild')
 
 LOCAL_INCLUDES += [
     '..',

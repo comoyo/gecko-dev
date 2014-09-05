@@ -62,6 +62,10 @@ public:
                                        BluetoothReplyRunnable* aRunnable)
                                        MOZ_OVERRIDE;
   virtual nsresult
+  FetchUuidsInternal(const nsAString& aDeviceAddress,
+                     BluetoothReplyRunnable* aRunnable) MOZ_OVERRIDE;
+
+  virtual nsresult
   StopDiscoveryInternal(BluetoothReplyRunnable* aRunnable) MOZ_OVERRIDE;
 
   virtual nsresult
@@ -90,17 +94,17 @@ public:
   UpdateSdpRecords(const nsAString& aDeviceAddress,
                    BluetoothProfileManagerBase* aManager) MOZ_OVERRIDE;
 
-  virtual bool
+  virtual void
   SetPinCodeInternal(const nsAString& aDeviceAddress,
                      const nsAString& aPinCode,
                      BluetoothReplyRunnable* aRunnable) MOZ_OVERRIDE;
 
-  virtual bool
+  virtual void
   SetPasskeyInternal(const nsAString& aDeviceAddress,
                      uint32_t aPasskey,
                      BluetoothReplyRunnable* aRunnable) MOZ_OVERRIDE;
 
-  virtual bool
+  virtual void
   SetPairingConfirmationInternal(const nsAString& aDeviceAddress,
                                  bool aConfirm,
                                  BluetoothReplyRunnable* aRunnable)

@@ -340,7 +340,7 @@ nsSVGIntegrationUtils::GetRequiredSourceForInvalidArea(nsIFrame* aFrame,
   if (!prop || !prop->ReferencesValidResources()) {
     return aDirtyRect;
   }
-  
+
   // Convert aDirtyRect into "user space" in app units:
   nsPoint toUserSpace =
     aFrame->GetOffsetTo(firstFrame) + GetOffsetToBoundingBox(firstFrame);
@@ -366,7 +366,9 @@ nsSVGIntegrationUtils::HitTestFrameForEffects(nsIFrame* aFrame, const nsPoint& a
       aFrame->GetOffsetTo(firstFrame) + GetOffsetToBoundingBox(firstFrame);
   }
   nsPoint pt = aPt + toUserSpace;
-  return nsSVGUtils::HitTestClip(firstFrame, pt);
+  gfxPoint userSpacePt =
+    gfxPoint(pt.x, pt.y) / aFrame->PresContext()->AppUnitsPerCSSPixel();
+  return nsSVGUtils::HitTestClip(firstFrame, userSpacePt);
 }
 
 class RegularFramePaintCallback : public nsSVGFilterPaintCallback
@@ -513,7 +515,7 @@ nsSVGIntegrationUtils::PaintFramesWithEffects(nsRenderingContext* aCtx,
    */
   if (clipPathFrame && isTrivialClip) {
     gfx->Save();
-    clipPathFrame->ClipPaint(aCtx, aFrame, cssPxToDevPxMatrix);
+    clipPathFrame->ApplyClipOrPaintClipMask(aCtx, aFrame, cssPxToDevPxMatrix);
   }
 
   /* Paint the child */
@@ -541,14 +543,16 @@ nsSVGIntegrationUtils::PaintFramesWithEffects(nsRenderingContext* aCtx,
   gfx->PopGroupToSource();
 
   nsRefPtr<gfxPattern> maskSurface =
-    maskFrame ? maskFrame->ComputeMaskAlpha(aCtx, aFrame,
-                                            cssPxToDevPxMatrix, opacity) : nullptr;
+    maskFrame ? maskFrame->GetMaskForMaskedFrame(aCtx->ThebesContext(),
+                                                 aFrame, cssPxToDevPxMatrix,
+                                                 opacity)
+              : nullptr;
 
   nsRefPtr<gfxPattern> clipMaskSurface;
   if (clipPathFrame && !isTrivialClip) {
     gfx->PushGroup(gfxContentType::COLOR_ALPHA);
 
-    nsresult rv = clipPathFrame->ClipPaint(aCtx, aFrame, cssPxToDevPxMatrix);
+    nsresult rv = clipPathFrame->ApplyClipOrPaintClipMask(aCtx, aFrame, cssPxToDevPxMatrix);
     clipMaskSurface = gfx->PopGroup();
 
     if (NS_SUCCEEDED(rv) && clipMaskSurface) {
@@ -626,7 +630,11 @@ PaintFrameCallback::operator()(gfxContext* aContext,
   aContext->Rectangle(aFillRect);
   aContext->Clip();
 
-  aContext->Multiply(gfxMatrix(aTransform).Invert());
+  gfxMatrix invmatrix = aTransform;
+  if (!invmatrix.Invert()) {
+    return false;
+  }
+  aContext->Multiply(invmatrix);
 
   // nsLayoutUtils::PaintFrame will anchor its painting at mFrame. But we want
   // to have it anchored at the top left corner of the bounding box of all of
@@ -705,8 +713,8 @@ nsSVGIntegrationUtils::DrawableFromPaintServer(nsIFrame*         aFrame,
     // pattern size.
     gfxFloat scaleX = overrideBounds.Width() / aRenderSize.width;
     gfxFloat scaleY = overrideBounds.Height() / aRenderSize.height;
-    gfxMatrix scaleMatrix = gfxMatrix().Scale(scaleX, scaleY);
-    pattern->SetMatrix(scaleMatrix.Multiply(pattern->GetMatrix()));
+    gfxMatrix scaleMatrix = gfxMatrix::Scaling(scaleX, scaleY);
+    pattern->SetMatrix(scaleMatrix * pattern->GetMatrix());
     nsRefPtr<gfxDrawable> drawable =
       new gfxPatternDrawable(pattern, aRenderSize);
     return drawable.forget();

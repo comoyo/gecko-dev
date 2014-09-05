@@ -26,17 +26,20 @@ namespace layers {
 
 class BasicColorLayer : public ColorLayer, public BasicImplData {
 public:
-  BasicColorLayer(BasicLayerManager* aLayerManager) :
+  explicit BasicColorLayer(BasicLayerManager* aLayerManager) :
     ColorLayer(aLayerManager,
                static_cast<BasicImplData*>(MOZ_THIS_IN_INITIALIZER_LIST()))
   {
     MOZ_COUNT_CTOR(BasicColorLayer);
   }
+
+protected:
   virtual ~BasicColorLayer()
   {
     MOZ_COUNT_DTOR(BasicColorLayer);
   }
 
+public:
   virtual void SetVisibleRegion(const nsIntRegion& aRegion)
   {
     NS_ASSERTION(BasicManager()->InConstruction(),

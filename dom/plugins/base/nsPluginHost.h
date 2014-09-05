@@ -44,16 +44,16 @@ class nsIStreamListener;
 
 class nsInvalidPluginTag : public nsISupports
 {
-public:
-  nsInvalidPluginTag(const char* aFullPath, int64_t aLastModifiedTime = 0);
   virtual ~nsInvalidPluginTag();
-  
+public:
+  explicit nsInvalidPluginTag(const char* aFullPath, int64_t aLastModifiedTime = 0);
+
   NS_DECL_ISUPPORTS
-  
+
   nsCString   mFullPath;
   int64_t     mLastModifiedTime;
   bool        mSeen;
-  
+
   nsRefPtr<nsInvalidPluginTag> mPrev;
   nsRefPtr<nsInvalidPluginTag> mNext;
 };
@@ -63,9 +63,9 @@ class nsPluginHost : public nsIPluginHost,
                      public nsITimerCallback,
                      public nsSupportsWeakReference
 {
+  virtual ~nsPluginHost();
 public:
   nsPluginHost();
-  virtual ~nsPluginHost();
 
   static already_AddRefed<nsPluginHost> GetInst();
 
@@ -305,7 +305,7 @@ private:
 class MOZ_STACK_CLASS PluginDestructionGuard : protected PRCList
 {
 public:
-  PluginDestructionGuard(nsNPAPIPluginInstance *aInstance);
+  explicit PluginDestructionGuard(nsNPAPIPluginInstance *aInstance);
 
   PluginDestructionGuard(NPP npp);
 

@@ -34,11 +34,12 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSICANCELABLE
 
-  TokenBucketCancelable(class ATokenBucketEvent *event);
-  virtual ~TokenBucketCancelable() {}
+  explicit TokenBucketCancelable(class ATokenBucketEvent *event);
   void Fire();
 
 private:
+  virtual ~TokenBucketCancelable() {}
+
   friend class EventTokenBucket;
   ATokenBucketEvent *mEvent;
 };

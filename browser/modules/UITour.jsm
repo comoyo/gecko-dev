@@ -98,6 +98,7 @@ this.UITour = {
     }],
     ["help",        {query: "#PanelUI-help"}],
     ["home",        {query: "#home-button"}],
+    ["loop",        {query: "#loop-call-button"}],
     ["quit",        {query: "#PanelUI-quit"}],
     ["search",      {
       query: "#searchbar",
@@ -418,6 +419,14 @@ this.UITour = {
         this.getConfiguration(contentDocument, data.configuration, data.callbackID);
         break;
       }
+
+      case "showFirefoxAccounts": {
+        // 'signup' is the only action that makes sense currently, so we don't
+        // accept arbitrary actions just to be safe...
+        // We want to replace the current tab.
+        contentDocument.location.href = "about:accounts?action=signup";
+        break;
+      }
     }
 
     if (!this.originTabs.has(window))
@@ -611,7 +620,7 @@ this.UITour = {
   },
 
   isSafeScheme: function(aURI) {
-    let allowedSchemes = new Set(["https"]);
+    let allowedSchemes = new Set(["https", "about"]);
     if (!Services.prefs.getBoolPref("browser.uitour.requireSecure"))
       allowedSchemes.add("http");
 
@@ -834,7 +843,7 @@ this.UITour = {
       highlighter.style.width = highlightWidth + "px";
 
       // Close a previous highlight so we can relocate the panel.
-      if (highlighter.parentElement.state == "open") {
+      if (highlighter.parentElement.state == "showing" || highlighter.parentElement.state == "open") {
         highlighter.parentElement.hidePopup();
       }
       /* The "overlap" position anchors from the top-left but we want to centre highlights at their
@@ -901,7 +910,7 @@ this.UITour = {
       let tooltipIcon = document.getElementById("UITourTooltipIcon");
       let tooltipButtons = document.getElementById("UITourTooltipButtons");
 
-      if (tooltip.state == "open") {
+      if (tooltip.state == "showing" || tooltip.state == "open") {
         tooltip.hidePopup();
       }
 

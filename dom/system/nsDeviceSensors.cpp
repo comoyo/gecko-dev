@@ -14,12 +14,12 @@
 #include "nsIDOMDocument.h"
 #include "nsIServiceManager.h"
 #include "nsIServiceManager.h"
-#include "GeneratedEvents.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Services.h"
 #include "nsIPermissionManager.h"
 #include "mozilla/dom/DeviceLightEvent.h"
+#include "mozilla/dom/DeviceOrientationEvent.h"
 #include "mozilla/dom/DeviceProximityEvent.h"
 #include "mozilla/dom/UserProximityEvent.h"
 
@@ -226,7 +226,7 @@ nsDeviceSensors::Notify(const mozilla::hal::SensorData& aSensorData)
         type == nsIDeviceSensorData::TYPE_GYROSCOPE)
         FireDOMMotionEvent(domdoc, target, type, x, y, z);
       else if (type == nsIDeviceSensorData::TYPE_ORIENTATION)
-        FireDOMOrientationEvent(domdoc, target, x, y, z);
+        FireDOMOrientationEvent(target, x, y, z);
       else if (type == nsIDeviceSensorData::TYPE_PROXIMITY)
         FireDOMProximityEvent(target, x, y, z);
       else if (type == nsIDeviceSensorData::TYPE_LIGHT)
@@ -306,33 +306,27 @@ nsDeviceSensors::FireDOMUserProximityEvent(mozilla::dom::EventTarget* aTarget,
 }
 
 void
-nsDeviceSensors::FireDOMOrientationEvent(nsIDOMDocument* domdoc,
-                                         EventTarget* target,
-                                         double alpha,
-                                         double beta,
-                                         double gamma)
+nsDeviceSensors::FireDOMOrientationEvent(EventTarget* aTarget,
+                                         double aAlpha,
+                                         double aBeta,
+                                         double aGamma)
 {
-  nsCOMPtr<nsIDOMEvent> event;
-  bool defaultActionEnabled = true;
-  domdoc->CreateEvent(NS_LITERAL_STRING("DeviceOrientationEvent"), getter_AddRefs(event));
+  DeviceOrientationEventInit init;
+  init.mBubbles = true;
+  init.mCancelable = false;
+  init.mAlpha.SetValue(aAlpha);
+  init.mBeta.SetValue(aBeta);
+  init.mGamma.SetValue(aGamma);
+  init.mAbsolute = true;
 
-  nsCOMPtr<nsIDOMDeviceOrientationEvent> oe = do_QueryInterface(event);
-
-  if (!oe) {
-    return;
-  }
-
-  oe->InitDeviceOrientationEvent(NS_LITERAL_STRING("deviceorientation"),
-                                 true,
-                                 false,
-                                 alpha,
-                                 beta,
-                                 gamma,
-                                 true);
-
+  nsRefPtr<DeviceOrientationEvent> event =
+    DeviceOrientationEvent::Constructor(aTarget,
+                                        NS_LITERAL_STRING("deviceorientation"),
+                                        init);
   event->SetTrusted(true);
 
-  target->DispatchEvent(event, &defaultActionEnabled);
+  bool dummy;
+  aTarget->DispatchEvent(event, &dummy);
 }
 
 
@@ -349,44 +343,44 @@ nsDeviceSensors::FireDOMMotionEvent(nsIDOMDocument *domdoc,
 
   switch (type) {
   case nsIDeviceSensorData::TYPE_LINEAR_ACCELERATION:
-    if (mLastAcceleration.empty()) {
-      mLastAcceleration.construct();
+    if (!mLastAcceleration) {
+      mLastAcceleration.emplace();
     }
-    mLastAcceleration.ref().mX.SetValue(x);
-    mLastAcceleration.ref().mY.SetValue(y);
-    mLastAcceleration.ref().mZ.SetValue(z);
+    mLastAcceleration->mX.SetValue(x);
+    mLastAcceleration->mY.SetValue(y);
+    mLastAcceleration->mZ.SetValue(z);
     break;
   case nsIDeviceSensorData::TYPE_ACCELERATION:
-    if (mLastAccelerationIncluduingGravity.empty()) {
-      mLastAccelerationIncluduingGravity.construct();
+    if (!mLastAccelerationIncluduingGravity) {
+      mLastAccelerationIncluduingGravity.emplace();
     }
-    mLastAccelerationIncluduingGravity.ref().mX.SetValue(x);
-    mLastAccelerationIncluduingGravity.ref().mY.SetValue(y);
-    mLastAccelerationIncluduingGravity.ref().mZ.SetValue(z);
+    mLastAccelerationIncluduingGravity->mX.SetValue(x);
+    mLastAccelerationIncluduingGravity->mY.SetValue(y);
+    mLastAccelerationIncluduingGravity->mZ.SetValue(z);
     break;
   case nsIDeviceSensorData::TYPE_GYROSCOPE:
-    if (mLastRotationRate.empty()) {
-      mLastRotationRate.construct();
+    if (!mLastRotationRate) {
+      mLastRotationRate.emplace();
     }
-    mLastRotationRate.ref().mAlpha.SetValue(x);
-    mLastRotationRate.ref().mBeta.SetValue(y);
-    mLastRotationRate.ref().mGamma.SetValue(z);
+    mLastRotationRate->mAlpha.SetValue(x);
+    mLastRotationRate->mBeta.SetValue(y);
+    mLastRotationRate->mGamma.SetValue(z);
     break;
   }
 
   if (fireEvent) {
-    if (mLastAcceleration.empty()) {
-      mLastAcceleration.construct();
+    if (!mLastAcceleration) {
+      mLastAcceleration.emplace();
     }
-    if (mLastAccelerationIncluduingGravity.empty()) {
-      mLastAccelerationIncluduingGravity.construct();
+    if (!mLastAccelerationIncluduingGravity) {
+      mLastAccelerationIncluduingGravity.emplace();
     }
-    if (mLastRotationRate.empty()) {
-      mLastRotationRate.construct();
+    if (!mLastRotationRate) {
+      mLastRotationRate.emplace();
     }
-  } else if (mLastAcceleration.empty() ||
-             mLastAccelerationIncluduingGravity.empty() ||
-             mLastRotationRate.empty()) {
+  } else if (!mLastAcceleration ||
+             !mLastAccelerationIncluduingGravity ||
+             !mLastRotationRate) {
     return;
   }
 
@@ -399,9 +393,9 @@ nsDeviceSensors::FireDOMMotionEvent(nsIDOMDocument *domdoc,
   me->InitDeviceMotionEvent(NS_LITERAL_STRING("devicemotion"),
                             true,
                             false,
-                            mLastAcceleration.ref(),
-                            mLastAccelerationIncluduingGravity.ref(),
-                            mLastRotationRate.ref(),
+                            *mLastAcceleration,
+                            *mLastAccelerationIncluduingGravity,
+                            *mLastRotationRate,
                             Nullable<double>(DEFAULT_SENSOR_POLL),
                             rv);
 
@@ -410,8 +404,8 @@ nsDeviceSensors::FireDOMMotionEvent(nsIDOMDocument *domdoc,
   bool defaultActionEnabled = true;
   target->DispatchEvent(event, &defaultActionEnabled);
 
-  mLastRotationRate.destroy();
-  mLastAccelerationIncluduingGravity.destroy();
-  mLastAcceleration.destroy();
+  mLastRotationRate.reset();
+  mLastAccelerationIncluduingGravity.reset();
+  mLastAcceleration.reset();
   mLastDOMMotionEventTime = TimeStamp::Now();
 }

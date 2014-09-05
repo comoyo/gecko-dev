@@ -28,6 +28,7 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLMeterElement.h"
 #include "nsLookAndFeel.h"
+#include "VibrancyManager.h"
 
 #include "gfxContext.h"
 #include "gfxQuartzSurface.h"
@@ -44,6 +45,8 @@ using mozilla::dom::HTMLMeterElement;
 // private Quartz routines needed here
 extern "C" {
   CG_EXTERN void CGContextSetCTM(CGContextRef, CGAffineTransform);
+  typedef CFTypeRef CUIRendererRef;
+  void CUIDraw(CUIRendererRef r, CGRect rect, CGContextRef ctx, CFDictionaryRef options, CFDictionaryRef* result);
 }
 
 // Workaround for NSCell control tint drawing
@@ -83,16 +86,8 @@ extern "C" {
 @end
 
 static void
-DrawCellIncludingFocusRing(NSCell* aCell, NSRect aWithFrame, NSView* aInView)
+DrawFocusRingForCellIfNeeded(NSCell* aCell, NSRect aWithFrame, NSView* aInView)
 {
-  [aCell drawWithFrame:aWithFrame inView:aInView];
-
-#if defined(MAC_OS_X_VERSION_10_8) && MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_8
-  // When building with the 10.8 SDK or higher, focus rings don't draw as part
-  // of -[NSCell drawWithFrame:inView:] and must be drawn by a separate call
-  // to -[NSCell drawFocusRingMaskWithFrame:inView:]; .
-  // See the NSButtonCell section under
-  // https://developer.apple.com/library/mac/releasenotes/AppKit/RN-AppKitOlderNotes/#X10_8Notes
   if ([aCell showsFirstResponder]) {
     CGContextRef cgContext = (CGContextRef)[[NSGraphicsContext currentContext] graphicsPort];
     CGContextSaveGState(cgContext);
@@ -117,6 +112,20 @@ DrawCellIncludingFocusRing(NSCell* aCell, NSRect aWithFrame, NSView* aInView)
 
     CGContextRestoreGState(cgContext);
   }
+}
+
+static void
+DrawCellIncludingFocusRing(NSCell* aCell, NSRect aWithFrame, NSView* aInView)
+{
+  [aCell drawWithFrame:aWithFrame inView:aInView];
+
+#if defined(MAC_OS_X_VERSION_10_8) && MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_8
+  // When building with the 10.8 SDK or higher, focus rings don't draw as part
+  // of -[NSCell drawWithFrame:inView:] and must be drawn by a separate call
+  // to -[NSCell drawFocusRingMaskWithFrame:inView:]; .
+  // See the NSButtonCell section under
+  // https://developer.apple.com/library/mac/releasenotes/AppKit/RN-AppKitOlderNotes/#X10_8Notes
+  DrawFocusRingForCellIfNeeded(aCell, aWithFrame, aInView);
 #endif
 }
 
@@ -288,19 +297,6 @@ static BOOL IsToolbarStyleContainer(nsIFrame* aFrame)
 // On 64-bit, NSSearchFieldCells don't draw focus rings.
 #if defined(__x86_64__)
 
-static void DrawFocusRing(NSRect rect, float radius)
-{
-  NSSetFocusRingStyle(NSFocusRingOnly);
-  NSBezierPath* path = [NSBezierPath bezierPath];
-  rect = NSInsetRect(rect, radius, radius);
-  [path appendBezierPathWithArcWithCenter:NSMakePoint(NSMinX(rect), NSMinY(rect)) radius:radius startAngle:180.0 endAngle:270.0];
-  [path appendBezierPathWithArcWithCenter:NSMakePoint(NSMaxX(rect), NSMinY(rect)) radius:radius startAngle:270.0 endAngle:360.0];
-  [path appendBezierPathWithArcWithCenter:NSMakePoint(NSMaxX(rect), NSMaxY(rect)) radius:radius startAngle:  0.0 endAngle: 90.0];
-  [path appendBezierPathWithArcWithCenter:NSMakePoint(NSMinX(rect), NSMaxY(rect)) radius:radius startAngle: 90.0 endAngle:180.0];
-  [path closePath];
-  [path fill];
-}
-
 @interface SearchFieldCellWithFocusRing : ContextAwareSearchFieldCell {} @end
 
 @implementation SearchFieldCellWithFocusRing
@@ -308,18 +304,26 @@ static void DrawFocusRing(NSRect rect, float radius)
 - (void)drawWithFrame:(NSRect)rect inView:(NSView*)controlView
 {
   [super drawWithFrame:rect inView:controlView];
-  if ([self showsFirstResponder]) {
-    DrawFocusRing(rect, NSHeight(rect) / 2);
-  }
+
+#if !defined(MAC_OS_X_VERSION_10_8) || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_8
+  // When building against the 10.8 SDK and up, DrawCellIncludingFocusRing will
+  // invoke DrawFocusRingForCellIfNeeded for us, but when building
+  // against earlier SDKs we have to do it here.
+  DrawFocusRingForCellIfNeeded(self, rect, controlView);
+#endif
+}
+
+- (void)drawFocusRingMaskWithFrame:(NSRect)rect inView:(NSView*)controlView
+{
+  // By default this draws nothing. I don't know why.
+  // We just draw the search field again. It's a great mask shape for its own
+  // focus ring.
+  [super drawWithFrame:rect inView:controlView];
 }
 
 @end
-  
-#endif
 
-// Copied from nsLookAndFeel.h
-// Apple hasn't defined a constant for scollbars with two arrows on each end, so we'll use this one.
-static const int kThemeScrollBarArrowsBoth = 2;
+#endif
 
 #define HITHEME_ORIENTATION kHIThemeOrientationNormal
 #define MAX_FOCUS_RING_WIDTH 4
@@ -821,6 +825,60 @@ static void DrawCellWithSnapping(NSCell *cell,
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
+@interface NSWindow(CoreUIRendererPrivate)
++ (CUIRendererRef)coreUIRenderer;
+@end
+
+static void
+RenderWithCoreUILegacy(CGRect aRect, CGContextRef cgContext, NSDictionary* aOptions)
+{
+  if (aRect.size.width * aRect.size.height <= BITMAP_MAX_AREA) {
+    CUIRendererRef renderer = [NSWindow respondsToSelector:@selector(coreUIRenderer)]
+      ? [NSWindow coreUIRenderer] : nil;
+    CUIDraw(renderer, aRect, cgContext, (CFDictionaryRef)aOptions, NULL);
+  }
+}
+
+static id
+GetAquaAppearance()
+{
+  // We only need NSAppearance on 10.10 and up.
+  if (nsCocoaFeatures::OnYosemiteOrLater()) {
+    Class NSAppearanceClass = NSClassFromString(@"NSAppearance");
+    if (NSAppearanceClass &&
+        [NSAppearanceClass respondsToSelector:@selector(appearanceNamed:)]) {
+      return [NSAppearanceClass performSelector:@selector(appearanceNamed:)
+                                     withObject:@"NSAppearanceNameAqua"];
+    }
+  }
+  return nil;
+}
+
+@interface NSObject(NSAppearanceCoreUIRendering)
+- (void)_drawInRect:(CGRect)rect context:(CGContextRef)cgContext options:(id)options;
+@end
+
+static void
+RenderWithCoreUI(CGRect aRect, CGContextRef cgContext, NSDictionary* aOptions)
+{
+  static id appearance = GetAquaAppearance();
+
+  if (aRect.size.width * aRect.size.height > BITMAP_MAX_AREA) {
+    return;
+  }
+
+  if (appearance && [appearance respondsToSelector:@selector(_drawInRect:context:options:)]) {
+    // Render through NSAppearance on Mac OS 10.10 and up. This will call
+    // CUIDraw with a CoreUI renderer that will give us the correct 10.10
+    // style. Calling CUIDraw directly with [NSWindow coreUIRenderer] still
+    // renders 10.9-style widgets on 10.10.
+    [appearance _drawInRect:aRect context:cgContext options:aOptions];
+  } else {
+    // 10.9 and below
+    RenderWithCoreUILegacy(aRect, cgContext, aOptions);
+  }
+}
+
 static float VerticalAlignFactor(nsIFrame *aFrame)
 {
   if (!aFrame)
@@ -965,6 +1023,66 @@ nsNativeThemeCocoa::DrawSearchField(CGContextRef cgContext, const HIRect& inBoxR
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
+static const NSSize kCheckmarkSize = NSMakeSize(11, 11);
+static const NSString* kCheckmarkImage = @"image.MenuOnState";
+static const CGFloat kMenuIconIndent = 6.0f;
+
+void
+nsNativeThemeCocoa::DrawMenuIcon(CGContextRef cgContext, const CGRect& aRect,
+                                 EventStates inState, nsIFrame* aFrame,
+                                 const NSSize& aIconSize, const NSString* aImageName)
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+
+  // Adjust size and position of our drawRect.
+  CGFloat paddingX = std::max(CGFloat(0.0), aRect.size.width - aIconSize.width);
+  CGFloat paddingY = std::max(CGFloat(0.0), aRect.size.height - aIconSize.height);
+  CGFloat paddingStartX = std::min(paddingX, kMenuIconIndent);
+  CGFloat paddingEndX = std::max(CGFloat(0.0), paddingX - kMenuIconIndent);
+  CGRect drawRect = CGRectMake(
+    aRect.origin.x + (IsFrameRTL(aFrame) ? paddingEndX : paddingStartX),
+    aRect.origin.y + ceil(paddingY / 2),
+    aIconSize.width, aIconSize.height);
+
+  BOOL isDisabled = IsDisabled(aFrame, inState);
+  BOOL isActive = CheckBooleanAttr(aFrame, nsGkAtoms::menuactive);
+
+  // On 10.6 and at least on 10.7.0, Apple doesn’t seem to have implemented all
+  // keys and values used on 10.7.5 and later. We can however draw menu icons
+  // on earlier OS versions by using different keys/values.
+  BOOL otherKeysAndValues = !nsCocoaFeatures::OnLionOrLater() ||
+                            (nsCocoaFeatures::OSXVersionMajor() == 10 &&
+                             nsCocoaFeatures::OSXVersionMinor() == 7 &&
+                             nsCocoaFeatures::OSXVersionBugFix() < 5);
+
+  // 2 states combined with 2 different backgroundTypeKeys on earlier versions.
+  NSString* state = isDisabled ? @"disabled" :
+    (isActive && !otherKeysAndValues) ? @"pressed" : @"normal";
+  NSString* backgroundTypeKey = !otherKeysAndValues ? @"kCUIBackgroundTypeMenu" :
+    !isDisabled && isActive ? @"backgroundTypeDark" : @"backgroundTypeLight";
+
+  NSMutableArray* keys = [NSMutableArray arrayWithObjects:@"backgroundTypeKey",
+    @"imageNameKey", @"state", @"widget", @"is.flipped", nil];
+  NSMutableArray* values = [NSMutableArray arrayWithObjects: backgroundTypeKey,
+    aImageName, state, @"image", [NSNumber numberWithBool:YES], nil];
+
+  if (otherKeysAndValues) { // Earlier versions used one more key-value pair.
+    [keys insertObject:@"imageIsGrayscaleKey" atIndex:1];
+    [values insertObject:[NSNumber numberWithBool:YES] atIndex:1];
+  }
+
+  RenderWithCoreUI(drawRect, cgContext,
+                  [NSDictionary dictionaryWithObjects:values
+                                              forKeys:keys]);
+
+#if DRAW_IN_FRAME_DEBUG
+  CGContextSetRGBFillColor(cgContext, 0.0, 0.0, 0.5, 0.25);
+  CGContextFillRect(cgContext, drawRect);
+#endif
+
+  NS_OBJC_END_TRY_ABORT_BLOCK;
+}
+
 static const NSSize kHelpButtonSize = NSMakeSize(20, 20);
 
 static const CellRenderSettings pushButtonSettings = {
@@ -1032,6 +1150,29 @@ nsNativeThemeCocoa::DrawPushButton(CGContextRef cgContext, const HIRect& inBoxRe
   CGContextSetRGBFillColor(cgContext, 0.0, 0.0, 0.5, 0.25);
   CGContextFillRect(cgContext, inBoxRect);
 #endif
+
+  NS_OBJC_END_TRY_ABORT_BLOCK;
+}
+
+void
+nsNativeThemeCocoa::DrawFocusOutline(CGContextRef cgContext, const HIRect& inBoxRect,
+                                     EventStates inState, uint8_t aWidgetType,
+                                     nsIFrame* aFrame)
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+
+  HIThemeFrameDrawInfo fdi;
+  fdi.version = 0;
+  fdi.kind = kHIThemeFrameTextFieldSquare;
+  fdi.state = kThemeStateActive;
+  fdi.isFocused = TRUE;
+
+#if DRAW_IN_FRAME_DEBUG
+  CGContextSetRGBFillColor(cgContext, 0.0, 0.0, 0.5, 0.25);
+  CGContextFillRect(cgContext, inBoxRect);
+#endif
+
+  HIThemeDrawFrame(&inBoxRect, &fdi, cgContext, HITHEME_ORIENTATION);
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -1756,16 +1897,13 @@ nsNativeThemeCocoa::DrawSegment(CGContextRef cgContext, const HIRect& inBoxRect,
   nsIFrame* left = GetAdjacentSiblingFrameWithSameAppearance(aFrame, isRTL);
   nsIFrame* right = GetAdjacentSiblingFrameWithSameAppearance(aFrame, !isRTL);
   CGRect drawRect = SeparatorAdjustedRect(inBoxRect, left, aFrame, right);
-  if (drawRect.size.width * drawRect.size.height > CUIDRAW_MAX_AREA) {
-    return;
-  }
   BOOL drawLeftSeparator = SeparatorResponsibility(left, aFrame) == aFrame;
   BOOL drawRightSeparator = SeparatorResponsibility(aFrame, right) == aFrame;
   NSControlSize controlSize = FindControlSize(drawRect.size.height, aSettings.heights, 4.0f);
 
-  CUIDraw([NSWindow coreUIRenderer], drawRect, cgContext,
-          (CFDictionaryRef)[NSDictionary dictionaryWithObjectsAndKeys:
+  RenderWithCoreUI(drawRect, cgContext, [NSDictionary dictionaryWithObjectsAndKeys:
             aSettings.widgetName, @"widget",
+            (isActive ? @"kCUIPresentationStateActiveKey" : @"kCUIPresentationStateInactive"), @"kCUIPresentationStateKey",
             ToolbarButtonPosition(!left, !right), @"kCUIPositionKey",
             [NSNumber numberWithBool:drawLeftSeparator], @"kCUISegmentLeadingSeparatorKey",
             [NSNumber numberWithBool:drawRightSeparator], @"kCUISegmentTrailingSeparatorKey",
@@ -1775,8 +1913,7 @@ nsNativeThemeCocoa::DrawSegment(CGContextRef cgContext, const HIRect& inBoxRect,
             CUIControlSizeForCocoaSize(controlSize), @"size",
             [NSNumber numberWithBool:YES], @"is.flipped",
             @"up", @"direction",
-            nil],
-          nil);
+            nil]);
 }
 
 static inline UInt8
@@ -1951,28 +2088,25 @@ ToolbarCanBeUnified(CGContextRef cgContext, const HIRect& inBoxRect, NSWindow* a
 // So we draw square corners.
 static void
 DrawNativeTitlebarToolbarWithSquareCorners(CGContextRef aContext, const CGRect& aRect,
-                                           CGFloat aUnifiedHeight, BOOL aIsMain)
+                                           CGFloat aUnifiedHeight, BOOL aIsMain, BOOL aIsFlipped)
 {
   // We extend the draw rect horizontally and clip away the rounded corners.
   const CGFloat extendHorizontal = 10;
   CGRect drawRect = CGRectInset(aRect, -extendHorizontal, 0);
-  if (drawRect.size.width * drawRect.size.height <= CUIDRAW_MAX_AREA) {
-    CGContextSaveGState(aContext);
-    CGContextClipToRect(aContext, aRect);
+  CGContextSaveGState(aContext);
+  CGContextClipToRect(aContext, aRect);
 
-    CUIDraw([NSWindow coreUIRenderer], drawRect, aContext,
-            (CFDictionaryRef)[NSDictionary dictionaryWithObjectsAndKeys:
-              @"kCUIWidgetWindowFrame", @"widget",
-              @"regularwin", @"windowtype",
-              (aIsMain ? @"normal" : @"inactive"), @"state",
-              [NSNumber numberWithDouble:aUnifiedHeight], @"kCUIWindowFrameUnifiedTitleBarHeightKey",
-              [NSNumber numberWithBool:YES], @"kCUIWindowFrameDrawTitleSeparatorKey",
-              [NSNumber numberWithBool:YES], @"is.flipped",
-              nil],
-            nil);
+  RenderWithCoreUI(drawRect, aContext,
+          [NSDictionary dictionaryWithObjectsAndKeys:
+            @"kCUIWidgetWindowFrame", @"widget",
+            @"regularwin", @"windowtype",
+            (aIsMain ? @"normal" : @"inactive"), @"state",
+            [NSNumber numberWithDouble:aUnifiedHeight], @"kCUIWindowFrameUnifiedTitleBarHeightKey",
+            [NSNumber numberWithBool:YES], @"kCUIWindowFrameDrawTitleSeparatorKey",
+            [NSNumber numberWithBool:aIsFlipped], @"is.flipped",
+            nil]);
 
-    CGContextRestoreGState(aContext);
-  }
+  CGContextRestoreGState(aContext);
 }
 
 void
@@ -1990,7 +2124,7 @@ nsNativeThemeCocoa::DrawUnifiedToolbar(CGContextRef cgContext, const HIRect& inB
   CGFloat titlebarHeight = unifiedHeight - inBoxRect.size.height;
   CGRect drawRect = CGRectMake(inBoxRect.origin.x, inBoxRect.origin.y - titlebarHeight,
                                inBoxRect.size.width, inBoxRect.size.height + titlebarHeight);
-  DrawNativeTitlebarToolbarWithSquareCorners(cgContext, drawRect, unifiedHeight, isMain);
+  DrawNativeTitlebarToolbarWithSquareCorners(cgContext, drawRect, unifiedHeight, isMain, YES);
 
   CGContextRestoreGState(cgContext);
 
@@ -2016,18 +2150,15 @@ nsNativeThemeCocoa::DrawStatusBar(CGContextRef cgContext, const HIRect& inBoxRec
   const int extendUpwards = 40;
   drawRect.origin.y -= extendUpwards;
   drawRect.size.height += extendUpwards;
-  if (drawRect.size.width * drawRect.size.height <= CUIDRAW_MAX_AREA) {
-    CUIDraw([NSWindow coreUIRenderer], drawRect, cgContext,
-            (CFDictionaryRef)[NSDictionary dictionaryWithObjectsAndKeys:
-              @"kCUIWidgetWindowFrame", @"widget",
-              @"regularwin", @"windowtype",
-              (IsActive(aFrame, YES) ? @"normal" : @"inactive"), @"state",
-              [NSNumber numberWithInt:inBoxRect.size.height], @"kCUIWindowFrameBottomBarHeightKey",
-              [NSNumber numberWithBool:YES], @"kCUIWindowFrameDrawBottomBarSeparatorKey",
-              [NSNumber numberWithBool:YES], @"is.flipped",
-              nil],
-            nil);
-  }
+  RenderWithCoreUI(drawRect, cgContext,
+          [NSDictionary dictionaryWithObjectsAndKeys:
+            @"kCUIWidgetWindowFrame", @"widget",
+            @"regularwin", @"windowtype",
+            (IsActive(aFrame, YES) ? @"normal" : @"inactive"), @"state",
+            [NSNumber numberWithInt:inBoxRect.size.height], @"kCUIWindowFrameBottomBarHeightKey",
+            [NSNumber numberWithBool:YES], @"kCUIWindowFrameDrawBottomBarSeparatorKey",
+            [NSNumber numberWithBool:YES], @"is.flipped",
+            nil]);
 
   CGContextRestoreGState(cgContext);
 
@@ -2036,10 +2167,10 @@ nsNativeThemeCocoa::DrawStatusBar(CGContextRef cgContext, const HIRect& inBoxRec
 
 void
 nsNativeThemeCocoa::DrawNativeTitlebar(CGContextRef aContext, CGRect aTitlebarRect,
-                                       CGFloat aUnifiedHeight, BOOL aIsMain)
+                                       CGFloat aUnifiedHeight, BOOL aIsMain, BOOL aIsFlipped)
 {
   CGFloat unifiedHeight = std::max(aUnifiedHeight, aTitlebarRect.size.height);
-  DrawNativeTitlebarToolbarWithSquareCorners(aContext, aTitlebarRect, unifiedHeight, aIsMain);
+  DrawNativeTitlebarToolbarWithSquareCorners(aContext, aTitlebarRect, unifiedHeight, aIsMain, aIsFlipped);
 }
 
 static void
@@ -2084,10 +2215,10 @@ nsNativeThemeCocoa::IsParentScrollbarRolledOver(nsIFrame* aFrame)
 }
 
 static bool
-IsHiDPIContext(nsDeviceContext* aContext)
+IsHiDPIContext(nsPresContext* aContext)
 {
   return nsPresContext::AppUnitsPerCSSPixel() >=
-    2 * aContext->UnscaledAppUnitsPerDevPixel();
+    2 * aContext->DeviceContext()->UnscaledAppUnitsPerDevPixel();
 }
 
 NS_IMETHODIMP
@@ -2100,7 +2231,7 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
   // setup to draw into the correct port
-  int32_t p2a = aContext->AppUnitsPerDevPixel();
+  int32_t p2a = aFrame->PresContext()->AppUnitsPerDevPixel();
 
   gfxRect nativeDirtyRect(aDirtyRect.x, aDirtyRect.y,
                           aDirtyRect.width, aDirtyRect.height);
@@ -2117,7 +2248,7 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
 
   gfxContextMatrixAutoSaveRestore save(thebesCtx);
 
-  bool hidpi = IsHiDPIContext(aContext->DeviceContext());
+  bool hidpi = IsHiDPIContext(aFrame->PresContext());
   if (hidpi) {
     // Use high-resolution drawing.
     nativeWidgetRect.ScaleInverse(2.0f);
@@ -2125,8 +2256,7 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
     thebesCtx->Scale(2.0f, 2.0f);
   }
 
-  gfxQuartzNativeDrawing nativeDrawing(thebesCtx, nativeDirtyRect,
-                                       hidpi ? 2.0f : 1.0f);
+  gfxQuartzNativeDrawing nativeDrawing(thebesCtx, nativeDirtyRect);
 
   CGContextRef cgContext = nativeDrawing.BeginNativeDrawing();
   if (cgContext == nullptr) {
@@ -2142,7 +2272,7 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
     fprintf(stderr, "Native theme drawing widget %d [%p] dis:%d in rect [%d %d %d %d]\n",
             aWidgetType, aFrame, IsDisabled(aFrame), aRect.x, aRect.y, aRect.width, aRect.height);
     fprintf(stderr, "Cairo matrix: [%f %f %f %f %f %f]\n",
-            mat.xx, mat.yx, mat.xy, mat.yy, mat.x0, mat.y0);
+            mat._11, mat._12, mat._21, mat._22, mat._31, mat._32);
     fprintf(stderr, "Native theme xform[0]: [%f %f %f %f %f %f]\n",
             mm0.a, mm0.b, mm0.c, mm0.d, mm0.tx, mm0.ty);
     CGAffineTransform mm = CGContextGetCTM(cgContext);
@@ -2194,15 +2324,11 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
     }
       break;
 
-    case NS_THEME_MENUITEM: {
-      bool isTransparent;
-      if (thebesCtx->IsCairo()) {
-        isTransparent = thebesCtx->OriginalSurface()->GetContentType() == gfxContentType::COLOR_ALPHA;
-      } else {
-        SurfaceFormat format  = thebesCtx->GetDrawTarget()->GetFormat();
-        isTransparent = (format == SurfaceFormat::R8G8B8A8) ||
-                        (format == SurfaceFormat::B8G8R8A8);
-      }
+    case NS_THEME_MENUITEM:
+    case NS_THEME_CHECKMENUITEM: {
+      SurfaceFormat format  = thebesCtx->GetDrawTarget()->GetFormat();
+      bool isTransparent = (format == SurfaceFormat::R8G8B8A8) ||
+                      (format == SurfaceFormat::B8G8R8A8);
       if (isTransparent) {
         // Clear the background to get correct transparency.
         CGContextClearRect(cgContext, macRect);
@@ -2222,6 +2348,10 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
       // XXX pass in the menu rect instead of always using the item rect
       HIRect ignored;
       HIThemeDrawMenuItem(&macRect, &macRect, &drawInfo, cgContext, HITHEME_ORIENTATION, &ignored);
+
+      if (aWidgetType == NS_THEME_CHECKMENUITEM) {
+        DrawMenuIcon(cgContext, macRect, eventState, aFrame, kCheckmarkSize, kCheckmarkImage);
+      }
     }
       break;
 
@@ -2266,6 +2396,10 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
       } else {
         DrawPushButton(cgContext, macRect, eventState, aWidgetType, aFrame);
       }
+      break;
+
+    case NS_THEME_FOCUS_OUTLINE:
+      DrawFocusOutline(cgContext, macRect, eventState, aWidgetType, aFrame);
       break;
 
     case NS_THEME_MOZ_MAC_HELP_BUTTON:
@@ -2359,7 +2493,7 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
       BOOL isMain = [win isMainWindow];
       float unifiedToolbarHeight = [win isKindOfClass:[ToolbarWindow class]] ?
         [(ToolbarWindow*)win unifiedToolbarHeight] : macRect.size.height;
-      DrawNativeTitlebar(cgContext, macRect, unifiedToolbarHeight, isMain);
+      DrawNativeTitlebar(cgContext, macRect, unifiedToolbarHeight, isMain, YES);
     }
       break;
 
@@ -2545,8 +2679,10 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
           }
         }
         const BOOL isOnTopOfDarkBackground = IsDarkBackground(aFrame);
-        CUIDraw([NSWindow coreUIRenderer], macRect, cgContext,
-                (CFDictionaryRef)[NSDictionary dictionaryWithObjectsAndKeys:
+        // Scrollbar thumbs have a too high minimum width when rendered through
+        // NSAppearance on 10.10, so we call RenderWithCoreUILegacy here.
+        RenderWithCoreUILegacy(macRect, cgContext,
+                [NSDictionary dictionaryWithObjectsAndKeys:
                   (isOverlay ? @"kCUIWidgetOverlayScrollBar" : @"scrollbar"), @"widget",
                   @"regular", @"size",
                   (isRolledOver ? @"rollover" : @"normal"), @"state",
@@ -2555,8 +2691,7 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
                   [NSNumber numberWithBool:YES], @"indiconly",
                   [NSNumber numberWithBool:YES], @"kCUIThumbProportionKey",
                   [NSNumber numberWithBool:YES], @"is.flipped",
-                  nil],
-                nil);
+                  nil]);
       }
       break;
     case NS_THEME_SCROLLBAR_BUTTON_UP:
@@ -2594,8 +2729,8 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
             }
           }
           const BOOL isOnTopOfDarkBackground = IsDarkBackground(aFrame);
-          CUIDraw([NSWindow coreUIRenderer], macRect, cgContext,
-                  (CFDictionaryRef)[NSDictionary dictionaryWithObjectsAndKeys:
+          RenderWithCoreUILegacy(macRect, cgContext,
+                  [NSDictionary dictionaryWithObjectsAndKeys:
                     (isOverlay ? @"kCUIWidgetOverlayScrollBar" : @"scrollbar"), @"widget",
                     @"regular", @"size",
                     (isHorizontal ? @"kCUIOrientHorizontal" : @"kCUIOrientVertical"), @"kCUIOrientationKey",
@@ -2603,8 +2738,7 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
                     [NSNumber numberWithBool:YES], @"noindicator",
                     [NSNumber numberWithBool:YES], @"kCUIThumbProportionKey",
                     [NSNumber numberWithBool:YES], @"is.flipped",
-                    nil],
-                  nil);
+                    nil]);
         }
       }
       break;
@@ -2817,7 +2951,7 @@ nsNativeThemeCocoa::GetWidgetBorder(nsDeviceContext* aContext,
       break;
   }
 
-  if (IsHiDPIContext(aContext)) {
+  if (IsHiDPIContext(aFrame->PresContext())) {
     *aResult = *aResult + *aResult; // doubled
   }
 
@@ -2855,7 +2989,7 @@ bool
 nsNativeThemeCocoa::GetWidgetOverflow(nsDeviceContext* aContext, nsIFrame* aFrame,
                                       uint8_t aWidgetType, nsRect* aOverflowRect)
 {
-  int32_t p2a = aContext->AppUnitsPerDevPixel();
+  int32_t p2a = aFrame->PresContext()->AppUnitsPerDevPixel();
   switch (aWidgetType) {
     case NS_THEME_BUTTON:
     case NS_THEME_MOZ_MAC_HELP_BUTTON:
@@ -2892,6 +3026,11 @@ nsNativeThemeCocoa::GetWidgetOverflow(nsDeviceContext* aContext, nsIFrame* aFram
       aOverflowRect->Inflate(m);
       return true;
     }
+    case NS_THEME_FOCUS_OUTLINE:
+    {
+      aOverflowRect->Inflate(NSIntPixelsToAppUnits(2, p2a));
+      return true;
+    }
   }
 
   return false;
@@ -2901,7 +3040,7 @@ static const int32_t kRegularScrollbarThumbMinSize = 26;
 static const int32_t kSmallScrollbarThumbMinSize = 26;
 
 NS_IMETHODIMP
-nsNativeThemeCocoa::GetMinimumWidgetSize(nsRenderingContext* aContext,
+nsNativeThemeCocoa::GetMinimumWidgetSize(nsPresContext* aPresContext,
                                          nsIFrame* aFrame,
                                          uint8_t aWidgetType,
                                          nsIntSize* aResult,
@@ -2985,7 +3124,8 @@ nsNativeThemeCocoa::GetMinimumWidgetSize(nsRenderingContext* aContext,
     }
 
     case NS_THEME_MOZ_MAC_FULLSCREEN_BUTTON: {
-      if ([NativeWindowForFrame(aFrame) respondsToSelector:@selector(toggleFullScreen:)]) {
+      if ([NativeWindowForFrame(aFrame) respondsToSelector:@selector(toggleFullScreen:)] &&
+          !nsCocoaFeatures::OnYosemiteOrLater()) {
         // This value is hardcoded because it's needed before we can measure the
         // position and size of the fullscreen button.
         aResult->SizeTo(16, 17);
@@ -3191,7 +3331,7 @@ nsNativeThemeCocoa::GetMinimumWidgetSize(nsRenderingContext* aContext,
     }
   }
 
-  if (IsHiDPIContext(aContext->DeviceContext())) {
+  if (IsHiDPIContext(aPresContext)) {
     *aResult = *aResult * 2;
   }
 
@@ -3298,6 +3438,7 @@ nsNativeThemeCocoa::ThemeSupportsWidget(nsPresContext* aPresContext, nsIFrame* a
     case NS_THEME_WINDOW:
     case NS_THEME_WINDOW_BUTTON_BOX:
     case NS_THEME_WINDOW_TITLEBAR:
+    case NS_THEME_CHECKMENUITEM:
     case NS_THEME_MENUPOPUP:
     case NS_THEME_MENUITEM:
     case NS_THEME_MENUSEPARATOR:
@@ -3387,6 +3528,12 @@ nsNativeThemeCocoa::ThemeSupportsWidget(nsPresContext* aPresContext, nsIFrame* a
               scrollFrame && scrollFrame->GetScrollbarVisibility());
       break;
     }
+    case NS_THEME_FOCUS_OUTLINE:
+      return true;
+
+    case NS_THEME_MAC_VIBRANCY_LIGHT:
+    case NS_THEME_MAC_VIBRANCY_DARK:
+      return VibrancyManager::SystemSupportsVibrancy();
   }
 
   return false;
@@ -3438,6 +3585,7 @@ nsNativeThemeCocoa::WidgetAppearanceDependsOnWindowFocus(uint8_t aWidgetType)
     case NS_THEME_DIALOG:
     case NS_THEME_GROUPBOX:
     case NS_THEME_TAB_PANELS:
+    case NS_THEME_CHECKMENUITEM:
     case NS_THEME_MENUPOPUP:
     case NS_THEME_MENUITEM:
     case NS_THEME_MENUSEPARATOR:
@@ -3457,6 +3605,18 @@ nsNativeThemeCocoa::WidgetAppearanceDependsOnWindowFocus(uint8_t aWidgetType)
       return false;
     default:
       return true;
+  }
+}
+
+bool
+nsNativeThemeCocoa::NeedToClearBackgroundBehindWidget(uint8_t aWidgetType)
+{
+  switch (aWidgetType) {
+    case NS_THEME_MAC_VIBRANCY_LIGHT:
+    case NS_THEME_MAC_VIBRANCY_DARK:
+      return true;
+    default:
+      return false;
   }
 }
 

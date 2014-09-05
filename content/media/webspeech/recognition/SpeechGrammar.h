@@ -25,8 +25,7 @@ class SpeechGrammar MOZ_FINAL : public nsISupports,
                                 public nsWrapperCache
 {
 public:
-  SpeechGrammar(nsISupports* aParent);
-  ~SpeechGrammar();
+  explicit SpeechGrammar(nsISupports* aParent);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(SpeechGrammar)
@@ -47,6 +46,8 @@ public:
   void SetWeight(float aArg, ErrorResult& aRv);
 
 private:
+  ~SpeechGrammar();
+
   nsCOMPtr<nsISupports> mParent;
 };
 

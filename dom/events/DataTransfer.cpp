@@ -305,7 +305,7 @@ DataTransfer::GetFiles(ErrorResult& aRv)
       if (!file)
         continue;
 
-      nsRefPtr<nsDOMFileFile> domFile = new nsDOMFileFile(file);
+      nsRefPtr<DOMFile> domFile = DOMFile::CreateFromFile(file);
 
       if (!mFiles->Append(domFile)) {
         aRv.Throw(NS_ERROR_FAILURE);
@@ -381,10 +381,7 @@ DataTransfer::GetData(const nsAString& aFormat, nsAString& aData,
     // for the URL type, parse out the first URI from the list. The URIs are
     // separated by newlines
     nsAutoString lowercaseFormat;
-    aRv = nsContentUtils::ASCIIToLower(aFormat, lowercaseFormat);
-    if (aRv.Failed()) {
-      return;
-    }
+    nsContentUtils::ASCIIToLower(aFormat, lowercaseFormat);
 
     if (lowercaseFormat.EqualsLiteral("url")) {
       int32_t lastidx = 0, idx;
@@ -640,27 +637,27 @@ DataTransfer::MozGetDataAt(const nsAString& aFormat, uint32_t aIndex,
   return NS_OK;
 }
 
-JS::Value
+void
 DataTransfer::MozGetDataAt(JSContext* aCx, const nsAString& aFormat,
-                           uint32_t aIndex, mozilla::ErrorResult& aRv)
+                           uint32_t aIndex,
+                           JS::MutableHandle<JS::Value> aRetval,
+                           mozilla::ErrorResult& aRv)
 {
   nsCOMPtr<nsIVariant> data;
   aRv = MozGetDataAt(aFormat, aIndex, getter_AddRefs(data));
   if (aRv.Failed()) {
-    return JS::UndefinedValue();
+    return;
   }
 
   if (!data) {
-    return JS::NullValue();
+    return;
   }
 
   JS::Rooted<JS::Value> result(aCx);
-  if (!VariantToJsval(aCx, data, &result)) {
+  if (!VariantToJsval(aCx, data, aRetval)) {
     aRv = NS_ERROR_FAILURE;
-    return JS::UndefinedValue();
+    return;
   }
-
-  return result;
 }
 
 NS_IMETHODIMP

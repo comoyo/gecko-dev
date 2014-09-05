@@ -49,7 +49,7 @@ public class Tabs implements GeckoEventListener {
     private final HashMap<Integer, Tab> mTabs = new HashMap<Integer, Tab>();
 
     private AccountManager mAccountManager;
-    private OnAccountsUpdateListener mAccountListener = null;
+    private OnAccountsUpdateListener mAccountListener;
 
     public static final int LOADURL_NONE         = 0;
     public static final int LOADURL_NEW_TAB      = 1 << 0;
@@ -62,6 +62,8 @@ public class Tabs implements GeckoEventListener {
     public static final int LOADURL_EXTERNAL     = 1 << 7;
 
     private static final long PERSIST_TABS_AFTER_MILLISECONDS = 1000 * 5;
+
+    public static final int INVALID_TAB_ID = -1;
 
     private static AtomicInteger sTabId = new AtomicInteger(0);
     private volatile boolean mInitialTabsAdded;
@@ -291,6 +293,7 @@ public class Tabs implements GeckoEventListener {
         return selected != null && selected.getId() == tabId;
     }
 
+    @RobocopTarget
     public synchronized Tab getTab(int id) {
         if (id == -1)
             return null;
@@ -305,6 +308,7 @@ public class Tabs implements GeckoEventListener {
     }
 
     /** Close tab and then select the default next tab */
+    @RobocopTarget
     public synchronized void closeTab(Tab tab) {
         closeTab(tab, getNextTab(tab));
     }
@@ -494,6 +498,7 @@ public class Tabs implements GeckoEventListener {
                     tab.setBackgroundColor(Color.WHITE);
                 }
                 tab.setErrorType(message.optString("errorType"));
+                tab.setMetadata(message.optJSONObject("metadata"));
                 notifyListeners(tab, Tabs.TabEvents.LOADED);
             } else if (event.equals("DOMTitleChanged")) {
                 tab.updateTitle(message.getString("title"));
@@ -826,7 +831,7 @@ public class Tabs implements GeckoEventListener {
         }
 
         // TODO: surely we could just fetch *any* cached icon?
-        if (AboutPages.isDefaultIconPage(url)) {
+        if (AboutPages.isBuiltinIconPage(url)) {
             Log.d(LOGTAG, "Setting about: tab favicon inline.");
             added.updateFavicon(getAboutPageFavicon(url));
         }

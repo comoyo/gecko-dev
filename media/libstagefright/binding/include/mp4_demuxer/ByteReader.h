@@ -5,21 +5,39 @@
 #ifndef BYTE_READER_H_
 #define BYTE_READER_H_
 
+#include "mozilla/Endian.h"
 #include "mozilla/Vector.h"
+#include "nsTArray.h"
 
-namespace mp4_demuxer
-{
+namespace mp4_demuxer {
 
 class ByteReader
 {
 public:
-  ByteReader(mozilla::Vector<uint8_t>& aData)
+  ByteReader() : mPtr(nullptr), mRemaining(0) {}
+  explicit ByteReader(const mozilla::Vector<uint8_t>& aData)
     : mPtr(&aData[0]), mRemaining(aData.length())
   {
   }
   ByteReader(const uint8_t* aData, size_t aSize)
     : mPtr(aData), mRemaining(aSize)
   {
+  }
+  void SetData(const nsTArray<uint8_t>& aData)
+  {
+    MOZ_ASSERT(!mPtr && !mRemaining);
+    mPtr = &aData[0];
+    mRemaining = aData.Length();
+  }
+
+  ~ByteReader()
+  {
+    MOZ_ASSERT(!mRemaining);
+  }
+
+  // Make it explicit if we're not using the extra bytes.
+  void DiscardRemaining() {
+    mRemaining = 0;
   }
 
   size_t Remaining() const { return mRemaining; }
@@ -45,7 +63,27 @@ public:
       MOZ_ASSERT(false);
       return 0;
     }
-    return ptr[0] << 8 | ptr[1];
+    return mozilla::BigEndian::readUint16(ptr);
+  }
+
+  uint32_t ReadU32()
+  {
+    auto ptr = Read(4);
+    if (!ptr) {
+      MOZ_ASSERT(false);
+      return 0;
+    }
+    return mozilla::BigEndian::readUint32(ptr);
+  }
+
+  uint64_t ReadU64()
+  {
+    auto ptr = Read(8);
+    if (!ptr) {
+      MOZ_ASSERT(false);
+      return 0;
+    }
+    return mozilla::BigEndian::readUint64(ptr);
   }
 
   const uint8_t* Read(size_t aCount)
@@ -60,6 +98,31 @@ public:
     mPtr += aCount;
 
     return result;
+  }
+
+  template <typename T> bool CanReadType() { return mRemaining >= sizeof(T); }
+
+  template <typename T> T ReadType()
+  {
+    auto ptr = Read(sizeof(T));
+    if (!ptr) {
+      MOZ_ASSERT(false);
+      return 0;
+    }
+    return *reinterpret_cast<const T*>(ptr);
+  }
+
+  template <typename T>
+  bool ReadArray(nsTArray<T>& aDest, size_t aLength)
+  {
+    auto ptr = Read(aLength * sizeof(T));
+    if (!ptr) {
+      return false;
+    }
+
+    aDest.Clear();
+    aDest.AppendElements(reinterpret_cast<const T*>(ptr), aLength);
+    return true;
   }
 
 private:

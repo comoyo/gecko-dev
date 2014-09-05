@@ -540,7 +540,7 @@ helpers._createDebugCheck = function(options) {
   var hintsPromise = helpers._actual.hints(options);
   var predictionsPromise = helpers._actual.predictions(options);
 
-  return Promise.all(hintsPromise, predictionsPromise).then(function(values) {
+  return Promise.all([ hintsPromise, predictionsPromise ]).then(function(values) {
     var hints = values[0];
     var predictions = values[1];
     var output = '';
@@ -1229,6 +1229,9 @@ helpers.audit = function(options, audits) {
     });
   }).then(function() {
     return options.automator.setInput('');
+  }, function(ex) {
+    options.automator.setInput('');
+    throw ex;
   });
 };
 

@@ -102,7 +102,7 @@ js_GetVariableBytecodeLength(jsbytecode *pc)
         return 1 + 3 * JUMP_OFFSET_LEN + ncases * JUMP_OFFSET_LEN;
       }
       default:
-        MOZ_ASSUME_UNREACHABLE("Unexpected op");
+        MOZ_CRASH("Unexpected op");
     }
 }
 
@@ -209,33 +209,30 @@ PCCounts::countName(JSOp op, size_t which)
             return countElementNames[which - ACCESS_LIMIT];
         if (propertyOp(op))
             return countPropertyNames[which - ACCESS_LIMIT];
-        MOZ_ASSUME_UNREACHABLE("bad op");
+        MOZ_CRASH("bad op");
     }
 
     if (arithOp(op))
         return countArithNames[which - BASE_LIMIT];
 
-    MOZ_ASSUME_UNREACHABLE("bad op");
+    MOZ_CRASH("bad op");
 }
 
-#ifdef JS_ION
 void
 js::DumpIonScriptCounts(Sprinter *sp, jit::IonScriptCounts *ionCounts)
 {
     Sprint(sp, "IonScript [%lu blocks]:\n", ionCounts->numBlocks());
     for (size_t i = 0; i < ionCounts->numBlocks(); i++) {
         const jit::IonBlockCounts &block = ionCounts->block(i);
-        if (block.hitCount() < 10)
-            continue;
         Sprint(sp, "BB #%lu [%05u]", block.id(), block.offset());
+        if (block.description())
+            Sprint(sp, " [inlined %s]", block.description());
         for (size_t j = 0; j < block.numSuccessors(); j++)
             Sprint(sp, " -> #%lu", block.successor(j));
-        Sprint(sp, " :: %llu hits %u instruction bytes %u spill bytes\n",
-               block.hitCount(), block.instructionBytes(), block.spillBytes());
+        Sprint(sp, " :: %llu hits\n", block.hitCount());
         Sprint(sp, "%s\n", block.code());
     }
 }
-#endif
 
 void
 js_DumpPCCounts(JSContext *cx, HandleScript script, js::Sprinter *sp)
@@ -271,14 +268,12 @@ js_DumpPCCounts(JSContext *cx, HandleScript script, js::Sprinter *sp)
     }
 #endif
 
-#ifdef JS_ION
     jit::IonScriptCounts *ionCounts = script->getIonCounts();
 
     while (ionCounts) {
         DumpIonScriptCounts(sp, ionCounts);
         ionCounts = ionCounts->previous();
     }
-#endif
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -1198,21 +1193,24 @@ Sprinter::putString(JSString *s)
     InvariantChecker ic(this);
 
     size_t length = s->length();
-    const jschar *chars = s->getChars(context);
-    if (!chars)
-        return -1;
-
     size_t size = length;
-    if (size == (size_t) -1)
-        return -1;
 
     ptrdiff_t oldOffset = offset;
     char *buffer = reserve(size);
     if (!buffer)
         return -1;
-    DeflateStringToBuffer(nullptr, chars, length, buffer, &size);
-    buffer[size] = 0;
 
+    JSLinearString *linear = s->ensureLinear(context);
+    if (!linear)
+        return -1;
+
+    AutoCheckCannotGC nogc;
+    if (linear->hasLatin1Chars())
+        mozilla::PodCopy(reinterpret_cast<Latin1Char*>(buffer), linear->latin1Chars(nogc), length);
+    else
+        DeflateStringToBuffer(nullptr, linear->twoByteChars(nogc), length, buffer, &size);
+
+    buffer[size] = 0;
     return oldOffset;
 }
 
@@ -1378,7 +1376,7 @@ js_QuoteString(ExclusiveContext *cx, JSString *str, jschar quote)
     char *bytes = QuoteString(&sprinter, str, quote);
     if (!bytes)
         return nullptr;
-    return js_NewStringCopyZ<CanGC>(cx, bytes);
+    return NewStringCopyZ<CanGC>(cx, bytes);
 }
 
 /************************************************************************/
@@ -1559,7 +1557,8 @@ ExpressionDecompiler::decompilePC(jsbytecode *pc)
       case JSOP_NEWARRAY:
         return write("[]");
       case JSOP_REGEXP:
-      case JSOP_OBJECT: {
+      case JSOP_OBJECT:
+      case JSOP_NEWARRAY_COPYONWRITE: {
         JSObject *obj = (op == JSOP_REGEXP)
                         ? script->getRegExp(GET_UINT32_INDEX(pc))
                         : script->getObject(GET_UINT32_INDEX(pc));
@@ -1805,11 +1804,7 @@ js::DecompileValueGenerator(JSContext *cx, int spindex, HandleValue v,
             return nullptr;
     }
 
-    Rooted<JSLinearString *> linear(cx, fallback->ensureLinear(cx));
-    if (!linear)
-        return nullptr;
-    TwoByteChars tbchars(linear->chars(), linear->length());
-    return LossyTwoByteCharsToNewLatin1CharsZ(cx, tbchars).c_str();
+    return JS_EncodeString(cx, fallback);
 }
 
 static bool
@@ -1888,14 +1883,12 @@ js::DecompileArgument(JSContext *cx, int formalIndex, HandleValue v)
     }
     if (v.isUndefined())
         return JS_strdup(cx, js_undefined_str); // Prevent users from seeing "(void 0)"
+
     RootedString fallback(cx, ValueToSource(cx, v));
     if (!fallback)
         return nullptr;
 
-    Rooted<JSLinearString *> linear(cx, fallback->ensureLinear(cx));
-    if (!linear)
-        return nullptr;
-    return LossyTwoByteCharsToNewLatin1CharsZ(cx, linear->range()).c_str();
+    return JS_EncodeString(cx, fallback);
 }
 
 bool
@@ -2057,8 +2050,8 @@ AppendJSONProperty(StringBuffer &buf, const char *name, MaybeComma comma = COMMA
         buf.append(',');
 
     buf.append('\"');
-    buf.appendInflated(name, strlen(name));
-    buf.appendInflated("\":", 2);
+    buf.append(name, strlen(name));
+    buf.append("\":", 2);
 }
 
 static void
@@ -2090,7 +2083,7 @@ js::GetPCCountScriptSummary(JSContext *cx, size_t index)
 
     /*
      * OOM on buffer appends here will not be caught immediately, but since
-     * StringBuffer uses a ContextAllocPolicy will trigger an exception on the
+     * StringBuffer uses a TempAllocPolicy will trigger an exception on the
      * context if they occur, which we'll catch before returning.
      */
     StringBuffer buf(cx);
@@ -2142,11 +2135,11 @@ js::GetPCCountScriptSummary(JSContext *cx, size_t index)
                 else if (PCCounts::propertyOp(op))
                     propertyTotals[j - PCCounts::ACCESS_LIMIT] += value;
                 else
-                    MOZ_ASSUME_UNREACHABLE("Bad opcode");
+                    MOZ_CRASH("Bad opcode");
             } else if (PCCounts::arithOp(op)) {
                 arithTotals[j - PCCounts::BASE_LIMIT] += value;
             } else {
-                MOZ_ASSUME_UNREACHABLE("Bad opcode");
+                MOZ_CRASH("Bad opcode");
             }
         }
     }
@@ -2234,7 +2227,7 @@ GetPCCountJSON(JSContext *cx, const ScriptAndCounts &sac, StringBuffer &buf)
             const char *name = js_CodeName[op];
             AppendJSONProperty(buf, "name");
             buf.append('\"');
-            buf.appendInflated(name, strlen(name));
+            buf.append(name, strlen(name));
             buf.append('\"');
         }
 
@@ -2314,13 +2307,6 @@ GetPCCountJSON(JSContext *cx, const ScriptAndCounts &sac, StringBuffer &buf)
                 if (!str || !(str = StringToSource(cx, str)))
                     return false;
                 buf.append(str);
-
-                AppendJSONProperty(buf, "instructionBytes");
-                NumberValueToStringBuffer(cx, Int32Value(block.instructionBytes()), buf);
-
-                AppendJSONProperty(buf, "spillBytes");
-                NumberValueToStringBuffer(cx, Int32Value(block.spillBytes()), buf);
-
                 buf.append('}');
             }
             buf.append(']');

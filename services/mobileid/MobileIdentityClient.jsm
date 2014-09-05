@@ -12,6 +12,7 @@ this.EXPORTED_SYMBOLS = ["MobileIdentityClient"];
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://services-common/hawkclient.js");
+Cu.import("resource://services-common/hawkrequest.js");
 Cu.import("resource://services-common/utils.js");
 Cu.import("resource://services-crypto/utils.js");
 Cu.import("resource://gre/modules/MobileIdentityCommon.jsm");
@@ -20,9 +21,8 @@ Cu.import("resource://gre/modules/Services.jsm");
 
 this.MobileIdentityClient = function(aServerUrl) {
   let serverUrl = aServerUrl || SERVER_URL;
-  let forceHttps = false;
+  let forceHttps = true;
   try {
-    // TODO: Force https in production. Bug 1021595.
     forceHttps = Services.prefs.getBoolPref(PREF_FORCE_HTTPS);
   } catch(e) {
     log.warn("Getting force HTTPS pref failed. If this was not intentional " +
@@ -35,7 +35,7 @@ this.MobileIdentityClient = function(aServerUrl) {
     throw new Error(ERROR_INTERNAL_HTTP_NOT_ALLOWED);
   }
 
-  this.hawk = new HawkClient(SERVER_URL);
+  this.hawk = new HawkClient(serverUrl);
   this.hawk.observerPrefix = "MobileId:hawk";
 };
 
@@ -54,10 +54,13 @@ this.MobileIdentityClient.prototype = {
     return this._request(REGISTER, "POST", null, {});
   },
 
-  smsMtVerify: function(aSessionToken, aMsisdn, aWantShortCode = false) {
+  smsMtVerify: function(aSessionToken, aMsisdn, aMcc, aMnc,
+                        aWantShortCode = false) {
     let credentials = this._deriveHawkCredentials(aSessionToken);
     return this._request(SMS_MT_VERIFY, "POST", credentials, {
       msisdn: aMsisdn,
+      mcc: aMcc,
+      mnc: aMnc,
       shortVerificationCode: aWantShortCode
     });
   },
@@ -104,15 +107,8 @@ this.MobileIdentityClient.prototype = {
    *        }
    */
   _deriveHawkCredentials: function(aSessionToken) {
-    let token = CommonUtils.hexToBytes(aSessionToken);
-    let out = CryptoUtils.hkdf(token, undefined,
-                               CREDENTIALS_DERIVATION_INFO,
-                               CREDENTIALS_DERIVATION_SIZE);
-    return {
-      algorithm: "sha256",
-      key: CommonUtils.bytesAsHex(out.slice(32, 64)),
-      id: CommonUtils.bytesAsHex(out.slice(0, 32))
-    };
+    return deriveHawkCredentials(aSessionToken, CREDENTIALS_DERIVATION_INFO,
+                                 CREDENTIALS_DERIVATION_SIZE, true /*hexKey*/);
   },
 
   /**
@@ -136,16 +132,20 @@ this.MobileIdentityClient.prototype = {
     let deferred = Promise.defer();
 
     this.hawk.request(path, method, credentials, jsonPayload).then(
-      (responseText) => {
-        log.debug("MobileIdentityClient -> responseText " + responseText);
+      (response) => {
+        log.debug("MobileIdentityClient -> response.body " + response.body);
         try {
-          let response = JSON.parse(responseText);
-          deferred.resolve(response);
+          let responseObj;
+          // We parse the response body unless we are handling a 204 response,
+          // which MUST NOT include a message body.
+          if (response.status != 204) {
+            responseObj = JSON.parse(response.body);
+          }
+          deferred.resolve(responseObj);
         } catch (err) {
           deferred.reject({error: err});
         }
       },
-
       (error) => {
         log.error("MobileIdentityClient -> Error ${}", error);
         deferred.reject(SERVER_ERRNO_TO_ERROR[error.errno] || ERROR_UNKNOWN);

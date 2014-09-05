@@ -40,7 +40,7 @@ class GestureEventListener MOZ_FINAL {
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(GestureEventListener)
 
-  GestureEventListener(AsyncPanZoomController* aAsyncPanZoomController);
+  explicit GestureEventListener(AsyncPanZoomController* aAsyncPanZoomController);
 
   // --------------------------------------------------------------------------
   // These methods must only be called on the controller/UI thread.
@@ -52,6 +52,13 @@ public:
    * it gets consumed here and never forwarded along.
    */
   nsEventStatus HandleInputEvent(const MultiTouchInput& aEvent);
+
+  /**
+   * Returns the identifier of the touch in the last touch event processed by
+   * this GestureEventListener. This should only be called when the last touch
+   * event contained only one touch.
+   */
+  int32_t GetLastTouchIdentifier() const;
 
 private:
   // Private destructor, to discourage deletion outside of Release():

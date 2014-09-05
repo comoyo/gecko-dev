@@ -35,6 +35,7 @@
 #include "nsAttrValue.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/dom/BindingDeclarations.h"
+#include "mozilla/dom/WindowBinding.h"
 #include "Units.h"
 
 class nsIDOMEventListener;
@@ -42,7 +43,6 @@ class nsIFrame;
 class nsIDOMMozNamedAttrMap;
 class nsIDOMCSSStyleDeclaration;
 class nsIURI;
-class nsINodeInfo;
 class nsIControllers;
 class nsEventChainVisitor;
 class nsIScrollableFrame;
@@ -82,18 +82,32 @@ enum {
   // will attempt to restyle descendants).
   ELEMENT_IS_POTENTIAL_ANIMATION_RESTYLE_ROOT = ELEMENT_FLAG_BIT(3),
 
+  // Set if the element has a pending animation-only style change as
+  // part of an animation-only style update (where we update styles from
+  // animation to the current refresh tick, but leave everything else as
+  // it was).
+  ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE =  ELEMENT_FLAG_BIT(4),
+
+  // Set if the element is a potential animation-only restyle root (that
+  // is, has an animation-only style change pending _and_ that style
+  // change will attempt to restyle descendants).
+  ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT = ELEMENT_FLAG_BIT(5),
+
   // All of those bits together, for convenience.
   ELEMENT_ALL_RESTYLE_FLAGS = ELEMENT_HAS_PENDING_RESTYLE |
                               ELEMENT_IS_POTENTIAL_RESTYLE_ROOT |
                               ELEMENT_HAS_PENDING_ANIMATION_RESTYLE |
-                              ELEMENT_IS_POTENTIAL_ANIMATION_RESTYLE_ROOT,
+                              ELEMENT_IS_POTENTIAL_ANIMATION_RESTYLE_ROOT |
+                              ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE |
+                              ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT,
 
   // Just the HAS_PENDING bits, for convenience
   ELEMENT_PENDING_RESTYLE_FLAGS = ELEMENT_HAS_PENDING_RESTYLE |
-                                  ELEMENT_HAS_PENDING_ANIMATION_RESTYLE,
+                                  ELEMENT_HAS_PENDING_ANIMATION_RESTYLE |
+                                  ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE,
 
   // Remaining bits are for subclasses
-  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 4
+  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 6
 };
 
 #undef ELEMENT_FLAG_BIT
@@ -110,6 +124,7 @@ class EventStateManager;
 
 namespace dom {
 
+class AnimationPlayer;
 class Link;
 class UndoManager;
 class DOMRect;
@@ -118,14 +133,14 @@ class DestinationInsertionPointList;
 
 // IID for the dom::Element interface
 #define NS_ELEMENT_IID \
-{ 0xd123f791, 0x124a, 0x43f3, \
-  { 0x84, 0xe3, 0x55, 0x81, 0x0b, 0x6c, 0xf3, 0x08 } }
+{ 0xb0135f9d, 0xa476, 0x4711, \
+  { 0x8b, 0xb9, 0xca, 0xe5, 0x2a, 0x05, 0xf9, 0xbe } }
 
 class Element : public FragmentOrElement
 {
 public:
 #ifdef MOZILLA_INTERNAL_API
-  Element(already_AddRefed<nsINodeInfo>& aNodeInfo) :
+  explicit Element(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo) :
     FragmentOrElement(aNodeInfo),
     mState(NS_EVENT_STATE_MOZ_READONLY)
   {
@@ -424,7 +439,7 @@ public:
    * @param aStr the unparsed attribute string
    * @return the node info. May be nullptr.
    */
-  already_AddRefed<nsINodeInfo>
+  already_AddRefed<mozilla::dom::NodeInfo>
   GetExistingAttrNameFromQName(const nsAString& aStr) const;
 
   nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
@@ -631,6 +646,8 @@ public:
   }
   bool HasAttributeNS(const nsAString& aNamespaceURI,
                       const nsAString& aLocalName) const;
+  bool Matches(const nsAString& aSelector,
+               ErrorResult& aError);
   already_AddRefed<nsIHTMLCollection>
     GetElementsByTagName(const nsAString& aQualifiedName);
   already_AddRefed<nsIHTMLCollection>
@@ -640,7 +657,10 @@ public:
   already_AddRefed<nsIHTMLCollection>
     GetElementsByClassName(const nsAString& aClassNames);
   bool MozMatchesSelector(const nsAString& aSelector,
-                          ErrorResult& aError);
+                          ErrorResult& aError)
+  {
+    return Matches(aSelector, aError);
+  }
   void SetPointerCapture(int32_t aPointerId, ErrorResult& aError)
   {
     bool activeState = false;
@@ -701,11 +721,8 @@ public:
   already_AddRefed<ShadowRoot> CreateShadowRoot(ErrorResult& aError);
   already_AddRefed<DestinationInsertionPointList> GetDestinationInsertionPoints();
 
-  void ScrollIntoView()
-  {
-    ScrollIntoView(true);
-  }
-  void ScrollIntoView(bool aTop);
+  void ScrollIntoView();
+  void ScrollIntoView(bool aTop, const ScrollOptions &aOptions);
   int32_t ScrollTop()
   {
     nsIScrollableFrame* sf = GetScrollFrame();
@@ -783,6 +800,8 @@ public:
   virtual void SetUndoScope(bool aUndoScope, ErrorResult& aError)
   {
   }
+
+  void GetAnimationPlayers(nsTArray<nsRefPtr<AnimationPlayer> >& aPlayers);
 
   NS_IMETHOD GetInnerHTML(nsAString& aInnerHTML);
   virtual void SetInnerHTML(const nsAString& aInnerHTML, ErrorResult& aError);
@@ -898,7 +917,7 @@ public:
    */
   virtual nsAttrInfo GetAttrInfo(int32_t aNamespaceID, nsIAtom* aName) const;
 
-  virtual void NodeInfoChanged(nsINodeInfo* aOldNodeInfo)
+  virtual void NodeInfoChanged(mozilla::dom::NodeInfo* aOldNodeInfo)
   {
   }
 
@@ -1124,8 +1143,8 @@ protected:
   Attr* GetAttributeNodeNSInternal(const nsAString& aNamespaceURI,
                                    const nsAString& aLocalName);
 
-  inline void RegisterFreezableElement();
-  inline void UnregisterFreezableElement();
+  inline void RegisterActivityObserver();
+  inline void UnregisterActivityObserver();
 
   /**
    * Add/remove this element to the documents id cache
@@ -1192,8 +1211,7 @@ private:
 class DestinationInsertionPointList : public nsINodeList
 {
 public:
-  DestinationInsertionPointList(Element* aElement);
-  virtual ~DestinationInsertionPointList();
+  explicit DestinationInsertionPointList(Element* aElement);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(DestinationInsertionPointList)
@@ -1208,6 +1226,8 @@ public:
   virtual uint32_t Length() const;
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 protected:
+  virtual ~DestinationInsertionPointList();
+
   nsRefPtr<Element> mParent;
   nsCOMArray<nsIContent> mDestinationPoints;
 };
@@ -1277,11 +1297,11 @@ inline bool nsINode::HasAttributes() const
  */
 #define NS_IMPL_ELEMENT_CLONE(_elementName)                                 \
 nsresult                                                                    \
-_elementName::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const        \
+_elementName::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const \
 {                                                                           \
   *aResult = nullptr;                                                       \
-  already_AddRefed<nsINodeInfo> ni =                                        \
-    nsCOMPtr<nsINodeInfo>(aNodeInfo).forget();                              \
+  already_AddRefed<mozilla::dom::NodeInfo> ni =                             \
+    nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
   _elementName *it = new _elementName(ni);                                  \
   if (!it) {                                                                \
     return NS_ERROR_OUT_OF_MEMORY;                                          \
@@ -1298,11 +1318,11 @@ _elementName::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const        \
 
 #define NS_IMPL_ELEMENT_CLONE_WITH_INIT(_elementName)                       \
 nsresult                                                                    \
-_elementName::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const        \
+_elementName::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const \
 {                                                                           \
   *aResult = nullptr;                                                       \
-  already_AddRefed<nsINodeInfo> ni =                                        \
-    nsCOMPtr<nsINodeInfo>(aNodeInfo).forget();                              \
+  already_AddRefed<mozilla::dom::NodeInfo> ni =                             \
+    nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
   _elementName *it = new _elementName(ni);                                  \
   if (!it) {                                                                \
     return NS_ERROR_OUT_OF_MEMORY;                                          \

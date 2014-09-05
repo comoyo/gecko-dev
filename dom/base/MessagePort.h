@@ -20,7 +20,7 @@ class PostMessageRunnable;
 class MessagePortBase : public DOMEventTargetHelper
 {
 protected:
-  MessagePortBase(nsPIDOMWindow* aWindow);
+  explicit MessagePortBase(nsPIDOMWindow* aWindow);
   MessagePortBase();
 
 public:
@@ -61,8 +61,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(MessagePort,
                                            DOMEventTargetHelper)
 
-  MessagePort(nsPIDOMWindow* aWindow);
-  ~MessagePort();
+  explicit MessagePort(nsPIDOMWindow* aWindow);
 
   virtual JSObject*
   WrapObject(JSContext* aCx) MOZ_OVERRIDE;
@@ -96,6 +95,8 @@ public:
   Clone() MOZ_OVERRIDE;
 
 private:
+  ~MessagePort();
+
   // Dispatch events from the Message Queue using a nsRunnable.
   void Dispatch();
 

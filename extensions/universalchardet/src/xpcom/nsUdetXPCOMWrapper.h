@@ -79,12 +79,12 @@ class nsXPCOMDetector :
 {
   NS_DECL_ISUPPORTS
   public:
-    nsXPCOMDetector(uint32_t aLanguageFilter);
-    virtual ~nsXPCOMDetector();
+    explicit nsXPCOMDetector(uint32_t aLanguageFilter);
     NS_IMETHOD Init(nsICharsetDetectionObserver* aObserver);
     NS_IMETHOD DoIt(const char* aBuf, uint32_t aLen, bool *oDontFeedMe);
     NS_IMETHOD Done();
   protected:
+    virtual ~nsXPCOMDetector();
     virtual void Report(const char* aCharset);
   private:
     nsCOMPtr<nsICharsetDetectionObserver> mObserver;
@@ -98,11 +98,11 @@ class nsXPCOMStringDetector :
 {
   NS_DECL_ISUPPORTS
   public:
-    nsXPCOMStringDetector(uint32_t aLanguageFilter);
-    virtual ~nsXPCOMStringDetector();
+    explicit nsXPCOMStringDetector(uint32_t aLanguageFilter);
     NS_IMETHOD DoIt(const char* aBuf, uint32_t aLen, 
                     const char** oCharset, nsDetectionConfident &oConf);
   protected:
+    virtual ~nsXPCOMStringDetector();
     virtual void Report(const char* aCharset);
   private:
     nsCOMPtr<nsICharsetDetectionObserver> mObserver;

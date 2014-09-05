@@ -31,7 +31,6 @@ class nsHostObjectProtocolHandler : public nsIProtocolHandler
 {
 public:
   nsHostObjectProtocolHandler();
-  virtual ~nsHostObjectProtocolHandler() {}
   NS_DECL_ISUPPORTS
 
   // nsIProtocolHandler methods, except for GetScheme which is only defined
@@ -42,7 +41,9 @@ public:
   NS_IMETHOD NewChannel(nsIURI *aURI, nsIChannel * *_retval) MOZ_OVERRIDE;
   NS_IMETHOD AllowPort(int32_t port, const char * scheme, bool *_retval) MOZ_OVERRIDE;
 
+  // If principal is not null, its origin will be used to generate the URI.
   static nsresult GenerateURIString(const nsACString &aScheme,
+                                    nsIPrincipal* aPrincipal,
                                     nsACString &aUri);
 
   // Methods for managing uri->object mapping
@@ -54,6 +55,9 @@ public:
   static void RemoveDataEntry(const nsACString& aUri);
   static nsIPrincipal* GetDataEntryPrincipal(const nsACString& aUri);
   static void Traverse(const nsACString& aUri, nsCycleCollectionTraversalCallback& aCallback);
+
+protected:
+  virtual ~nsHostObjectProtocolHandler() {}
 
 private:
   static void Init(void);

@@ -36,6 +36,9 @@ JitOptions::JitOptions()
     // Whether Ion should compile try-catch statements.
     compileTryCatch = true;
 
+    // Toggle whether eager scalar replacement is globally disabled.
+    disableScalarReplacement = true; // experimental
+
     // Toggle whether global value numbering is globally disabled.
     disableGvn = false;
 
@@ -51,6 +54,9 @@ JitOptions::JitOptions()
     // Toggles whether Range Analysis is globally disabled.
     disableRangeAnalysis = false;
 
+    // Toggles whether Loop Unrolling is globally disabled.
+    disableLoopUnrolling = true;
+
     // Toggles whether Unreachable Code Elimination is globally disabled.
     disableUce = false;
 
@@ -65,11 +71,6 @@ JitOptions::JitOptions()
     // (i.e. OptimizationLevel_Normal)
     forceDefaultIonUsesBeforeCompile = false;
     forcedDefaultIonUsesBeforeCompile = 1000;
-
-    // Force the GVN kind to be optimistic or pessimistic instead of letting
-    // the optimization pass decide.
-    forceGvnKind = false;
-    forcedGvnKind = GVN_Optimistic;
 
     // Force the used register allocator instead of letting the
     // optimization pass decide.

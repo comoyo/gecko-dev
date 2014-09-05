@@ -10,7 +10,6 @@
 #include "nsIWebProgress.h"
 #include "nsCURILoader.h"
 #include "nsICachingChannel.h"
-#include "nsICacheVisitor.h"
 #include "nsIHttpChannel.h"
 #include "nsIURL.h"
 #include "nsISimpleEnumerator.h"
@@ -75,9 +74,10 @@ public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSISIMPLEENUMERATOR
     nsPrefetchQueueEnumerator(nsPrefetchService *aService);
-    ~nsPrefetchQueueEnumerator();
 
 private:
+    ~nsPrefetchQueueEnumerator();
+
     void Increment();
 
     nsRefPtr<nsPrefetchService> mService;

@@ -72,9 +72,12 @@ struct nsExternalDOMClassInfoData : public nsDOMClassInfoData
 class nsDOMClassInfo : public nsXPCClassInfo
 {
   friend class nsHTMLDocumentSH;
-public:
-  nsDOMClassInfo(nsDOMClassInfoData* aData);
+
+protected:
   virtual ~nsDOMClassInfo();
+
+public:
+  explicit nsDOMClassInfo(nsDOMClassInfoData* aData);
 
   NS_DECL_NSIXPCSCRIPTABLE
 
@@ -93,6 +96,7 @@ public:
 
   static nsIClassInfo* GetClassInfoInstance(nsDOMClassInfoData* aData);
 
+  static nsresult Init();
   static void ShutDown();
 
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -124,10 +128,6 @@ public:
   {
     return sXPConnect;
   }
-  static nsIScriptSecurityManager *ScriptSecurityManager()
-  {
-    return sSecMan;
-  }
 
 protected:
   friend nsIClassInfo* NS_GetDOMClassInfoInstance(nsDOMClassInfoID aID);
@@ -143,14 +143,12 @@ protected:
     return mData->mInterfacesBitmap;
   }
 
-  static nsresult Init();
   static nsresult RegisterClassProtos(int32_t aDOMClassInfoID);
   static nsresult RegisterExternalClasses();
   nsresult ResolveConstructor(JSContext *cx, JSObject *obj,
                               JSObject **objp);
 
   static nsIXPConnect *sXPConnect;
-  static nsIScriptSecurityManager *sSecMan;
 
   // nsIXPCScriptable code
   static nsresult DefineStaticJSVals(JSContext *cx);
@@ -211,7 +209,7 @@ typedef nsDOMClassInfo nsDOMGenericSH;
 class nsEventTargetSH : public nsDOMGenericSH
 {
 protected:
-  nsEventTargetSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
+  explicit nsEventTargetSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
   {
   }
 
@@ -237,7 +235,7 @@ public:
 class nsWindowSH : public nsDOMGenericSH
 {
 protected:
-  nsWindowSH(nsDOMClassInfoData *aData) : nsDOMGenericSH(aData)
+  explicit nsWindowSH(nsDOMClassInfoData *aData) : nsDOMGenericSH(aData)
   {
   }
 
@@ -274,64 +272,6 @@ public:
   }
 };
 
-// Location scriptable helper
-
-class nsLocationSH : public nsDOMGenericSH
-{
-protected:
-  nsLocationSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
-  {
-  }
-
-  virtual ~nsLocationSH()
-  {
-  }
-
-public:
-  NS_IMETHOD PreCreate(nsISupports *nativeObj, JSContext *cx,
-                       JSObject *globalObj, JSObject **parentObj) MOZ_OVERRIDE;
-  NS_IMETHODIMP AddProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                            JSObject *obj, jsid id, JS::Value *vp, bool *_retval);
-
-  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
-  {
-    return new nsLocationSH(aData);
-  }
-};
-
-
-// WebApps Storage helpers
-
-class nsStorage2SH : public nsDOMGenericSH
-{
-protected:
-  nsStorage2SH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
-  {
-  }
-
-  virtual ~nsStorage2SH()
-  {
-  }
-
-  NS_IMETHOD NewResolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                        JSObject *obj, jsid id, JSObject **objp,
-                        bool *_retval) MOZ_OVERRIDE;
-  NS_IMETHOD SetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                         JSObject *obj, jsid id, JS::Value *vp, bool *_retval) MOZ_OVERRIDE;
-  NS_IMETHOD GetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                         JSObject *obj, jsid id, JS::Value *vp, bool *_retval) MOZ_OVERRIDE;
-  NS_IMETHOD DelProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                         JSObject *obj, jsid id, bool *_retval) MOZ_OVERRIDE;
-  NS_IMETHOD NewEnumerate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                          JSObject *obj, uint32_t enum_op, JS::Value *statep,
-                          jsid *idp, bool *_retval) MOZ_OVERRIDE;
-
-public:
-  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
-  {
-    return new nsStorage2SH(aData);
-  }
-};
 
 // Event handler 'this' translator class, this is called by XPConnect
 // when a "function interface" (nsIDOMEventListener) is called, this
@@ -342,12 +282,12 @@ public:
 
 class nsEventListenerThisTranslator : public nsIXPCFunctionThisTranslator
 {
-public:
-  nsEventListenerThisTranslator()
+  virtual ~nsEventListenerThisTranslator()
   {
   }
 
-  virtual ~nsEventListenerThisTranslator()
+public:
+  nsEventListenerThisTranslator()
   {
   }
 
@@ -361,7 +301,7 @@ public:
 class nsDOMConstructorSH : public nsDOMGenericSH
 {
 protected:
-  nsDOMConstructorSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
+  explicit nsDOMConstructorSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
   {
   }
 
@@ -394,7 +334,7 @@ public:
 class nsNonDOMObjectSH : public nsDOMGenericSH
 {
 protected:
-  nsNonDOMObjectSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
+  explicit nsNonDOMObjectSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
   {
   }
 

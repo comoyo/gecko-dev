@@ -184,9 +184,7 @@ compartment.
     This method's return value is ignored.
 
 `onNewGlobalObject(global)`
-:   A new global object, <i>global</i>, has been created. The application
-    embedding the JavaScript implementation may provide details about what
-    kind of global it is via <code><i>global</i>.hostAnnotations</code>.
+:   A new global object, <i>global</i>, has been created.
 
     This handler method should return a [resumption value][rv] specifying how
     the debuggee's execution should proceed. However, note that a <code>{ return:
@@ -251,6 +249,9 @@ other kinds of objects.
     it is dropped from the `Debugger`'s set of debuggees. (Naturally, the
     [`Debugger.Object`][object] instance this method returns does hold a strong
     reference to the added global.)
+
+    If this debugger is [tracking allocation sites][tracking-allocs] and cannot
+    track allocation sites for <i>global</i>, this method throws an `Error`.
 
 <code>removeDebuggee(<i>global</i>)</code>
 :   Remove the global object designated by <i>global</i> from this
@@ -364,9 +365,7 @@ other kinds of objects.
 
 `findAllGlobals()`
 :   Return an array of [`Debugger.Object`][object] instances referring to all the
-    global objects present in this JavaScript instance. The application may
-    provide details about what kind of globals they are via the
-    [`Debugger.Object`][object] instances' `hostAnnotations` accessors.
+    global objects present in this JavaScript instance.
 
     The results of this call can be affected in non-deterministic ways by
     the details of the JavaScript implementation. The array may include

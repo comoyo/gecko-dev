@@ -7,7 +7,6 @@
 
 #include "plstr.h"
 #include "nsXULPrototypeDocument.h"
-#include "nsCSSStyleSheet.h"
 #include "nsIServiceManager.h"
 #include "nsIURI.h"
 
@@ -24,6 +23,7 @@
 
 #include "js/TracingAPI.h"
 
+#include "mozilla/CSSStyleSheet.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/scache/StartupCache.h"
 #include "mozilla/scache/StartupCacheUtils.h"
@@ -172,7 +172,7 @@ nsXULPrototypeCache::PutPrototype(nsXULPrototypeDocument* aDocument)
 }
 
 nsresult
-nsXULPrototypeCache::PutStyleSheet(nsCSSStyleSheet* aStyleSheet)
+nsXULPrototypeCache::PutStyleSheet(CSSStyleSheet* aStyleSheet)
 {
     nsIURI* uri = aStyleSheet->GetSheetURI();
 
@@ -239,7 +239,7 @@ FlushSkinXBL(nsIURI* aKey, nsRefPtr<nsXBLDocumentInfo>& aDocInfo, void* aClosure
 }
 
 static PLDHashOperator
-FlushSkinSheets(nsIURI* aKey, nsRefPtr<nsCSSStyleSheet>& aSheet, void* aClosure)
+FlushSkinSheets(nsIURI* aKey, nsRefPtr<CSSStyleSheet>& aSheet, void* aClosure)
 {
   nsAutoCString str;
   aSheet->GetSheetURI()->GetPath(str);
@@ -641,7 +641,7 @@ static PLDHashOperator
 MarkScriptsInGC(nsIURI* aKey, JS::Heap<JSScript*>& aScript, void* aClosure)
 {
     JSTracer* trc = static_cast<JSTracer*>(aClosure);
-    JS_CallHeapScriptTracer(trc, &aScript, "nsXULPrototypeCache script");
+    JS_CallScriptTracer(trc, &aScript, "nsXULPrototypeCache script");
     return PL_DHASH_NEXT;
 }
 

@@ -27,7 +27,7 @@ class nsFontFaceLoader;
 class nsUserFontSet : public gfxUserFontSet
 {
 public:
-  nsUserFontSet(nsPresContext* aContext);
+  explicit nsUserFontSet(nsPresContext* aContext);
 
   // Called when this font set is no longer associated with a presentation.
   void Destroy();
@@ -70,6 +70,11 @@ protected:
                   nsTArray<FontFaceRuleRecord>& oldRules,
                   bool& aFontSetModified);
 
+  already_AddRefed<gfxFontEntry> FindOrCreateFontFaceFromRule(
+                                                   const nsAString& aFamilyName,
+                                                   nsCSSFontFaceRule* aRule,
+                                                   uint8_t aSheetType);
+
   virtual nsresult LogMessage(gfxMixedFontFamily* aFamily,
                               gfxProxyFontEntry* aProxy,
                               const char* aMessage,
@@ -106,8 +111,6 @@ public:
                    gfxProxyFontEntry* aFontToLoad, nsIURI* aFontURI, 
                    nsUserFontSet* aFontSet, nsIChannel* aChannel);
 
-  virtual ~nsFontFaceLoader();
-
   NS_DECL_ISUPPORTS
   NS_DECL_NSISTREAMLOADEROBSERVER 
 
@@ -125,6 +128,9 @@ public:
   static nsresult CheckLoadAllowed(nsIPrincipal* aSourcePrincipal,
                                    nsIURI* aTargetURI,
                                    nsISupports* aContext);
+
+protected:
+  virtual ~nsFontFaceLoader();
 
 private:
   nsRefPtr<gfxMixedFontFamily> mFontFamily;

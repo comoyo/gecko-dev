@@ -6,15 +6,27 @@
 
 const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
+// Invalid auth token as per
+// https://github.com/mozilla-services/loop-server/blob/45787d34108e2f0d87d74d4ddf4ff0dbab23501c/loop/errno.json#L6
+const INVALID_AUTH_TOKEN = 110;
+
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
-let console = (Cu.import("resource://gre/modules/devtools/Console.jsm", {})).console;
+Cu.import("resource://gre/modules/osfile.jsm", this);
+Cu.import("resource://gre/modules/Task.jsm");
+Cu.import("resource://gre/modules/FxAccountsOAuthClient.jsm");
 
 this.EXPORTED_SYMBOLS = ["MozLoopService"];
 
+XPCOMUtils.defineLazyModuleGetter(this, "console",
+  "resource://gre/modules/devtools/Console.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "injectLoopAPI",
   "resource:///modules/loop/MozLoopAPI.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "convertToRTCStatsReport",
+  "resource://gre/modules/media/RTCStatsReport.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Chat", "resource:///modules/Chat.jsm");
 
@@ -24,135 +36,32 @@ XPCOMUtils.defineLazyModuleGetter(this, "CommonUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "CryptoUtils",
                                   "resource://services-crypto/utils.js");
 
-XPCOMUtils.defineLazyModuleGetter(this, "HAWKAuthenticatedRESTRequest",
+XPCOMUtils.defineLazyModuleGetter(this, "HawkClient",
+                                  "resource://services-common/hawkclient.js");
+
+XPCOMUtils.defineLazyModuleGetter(this, "deriveHawkCredentials",
                                   "resource://services-common/hawkrequest.js");
 
-/**
- * We don't have push notifications on desktop currently, so this is a
- * workaround to get them going for us.
- *
- * XXX Handle auto-reconnections if connection fails for whatever reason
- * (bug 1013248).
- */
-let PushHandlerHack = {
-  // This is the uri of the push server.
-  pushServerUri: Services.prefs.getCharPref("services.push.serverURL"),
-  // This is the channel id we're using for notifications
-  channelID: "8b1081ce-9b35-42b5-b8f5-3ff8cb813a50",
-  // Stores the push url if we're registered and we have one.
-  pushUrl: undefined,
+XPCOMUtils.defineLazyModuleGetter(this, "MozLoopPushHandler",
+                                  "resource:///modules/loop/MozLoopPushHandler.jsm");
 
-  /**
-   * Call to start the connection to the push socket server. On
-   * connection, it will automatically say hello and register the channel
-   * id with the server.
-   *
-   * Register callback parameters:
-   * - {String|null} err: Encountered error, if any
-   * - {String} url: The push url obtained from the server
-   *
-   * @param {Function} registerCallback Callback to be called once we are
-   *                     registered.
-   * @param {Function} notificationCallback Callback to be called when a
-   *                     push notification is received.
-   */
-  initialize: function(registerCallback, notificationCallback) {
-    if (Services.io.offline) {
-      registerCallback("offline");
-      return;
-    }
+XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
+                                   "@mozilla.org/uuid-generator;1",
+                                   "nsIUUIDGenerator");
 
-    this._registerCallback = registerCallback;
-    this._notificationCallback = notificationCallback;
-
-    this.websocket = Cc["@mozilla.org/network/protocol;1?name=wss"]
-                       .createInstance(Ci.nsIWebSocketChannel);
-
-    this.websocket.protocol = "push-notification";
-
-    var pushURI = Services.io.newURI(this.pushServerUri, null, null);
-    this.websocket.asyncOpen(pushURI, this.pushServerUri, this, null);
-  },
-
-  /**
-   * Listener method, handles the start of the websocket stream.
-   * Sends a hello message to the server.
-   *
-   * @param {nsISupports} aContext Not used
-   */
-  onStart: function() {
-    var helloMsg = { messageType: "hello", uaid: "", channelIDs: [] };
-    this.websocket.sendMsg(JSON.stringify(helloMsg));
-  },
-
-  /**
-   * Listener method, called when the websocket is closed.
-   *
-   * @param {nsISupports} aContext Not used
-   * @param {nsresult} aStatusCode Reason for stopping (NS_OK = successful)
-   */
-  onStop: function(aContext, aStatusCode) {
-    // XXX We really should be handling auto-reconnect here, this will be
-    // implemented in bug 994151. For now, just log a warning, so that a
-    // developer can find out it has happened and not get too confused.
-    Cu.reportError("Loop Push server web socket closed! Code: " + aStatusCode);
-    this.pushUrl = undefined;
-  },
-
-  /**
-   * Listener method, called when the websocket is closed by the server.
-   * If there are errors, onStop may be called without ever calling this
-   * method.
-   *
-   * @param {nsISupports} aContext Not used
-   * @param {integer} aCode the websocket closing handshake close code
-   * @param {String} aReason the websocket closing handshake close reason
-   */
-  onServerClose: function(aContext, aCode) {
-    // XXX We really should be handling auto-reconnect here, this will be
-    // implemented in bug 994151. For now, just log a warning, so that a
-    // developer can find out it has happened and not get too confused.
-    Cu.reportError("Loop Push server web socket closed (server)! Code: " + aCode);
-    this.pushUrl = undefined;
-  },
-
-  /**
-   * Listener method, called when the websocket receives a message.
-   *
-   * @param {nsISupports} aContext Not used
-   * @param {String} aMsg The message data
-   */
-  onMessageAvailable: function(aContext, aMsg) {
-    var msg = JSON.parse(aMsg);
-
-    switch(msg.messageType) {
-      case "hello":
-        this._registerChannel();
-        break;
-      case "register":
-        this.pushUrl = msg.pushEndpoint;
-        this._registerCallback(null, this.pushUrl);
-        break;
-      case "notification":
-        msg.updates.forEach(function(update) {
-          if (update.channelID === this.channelID) {
-            this._notificationCallback(update.version);
-          }
-        }.bind(this));
-        break;
-    }
-  },
-
-  /**
-   * Handles registering a service
-   */
-  _registerChannel: function() {
-    this.websocket.sendMsg(JSON.stringify({
-      messageType: "register",
-      channelID: this.channelID
-    }));
-  }
-};
+// The current deferred for the registration process. This is set if in progress
+// or the registration was successful. This is null if a registration attempt was
+// unsuccessful.
+let gRegisteredDeferred = null;
+let gPushHandler = null;
+let gHawkClient = null;
+let gRegisteredLoopServer = false;
+let gLocalizedStrings =  null;
+let gInitializeTimer = null;
+let gFxAOAuthClientPromise = null;
+let gFxAOAuthClient = null;
+let gFxAOAuthTokenData = null;
+let gErrors = new Map();
 
 /**
  * Internal helper methods and state
@@ -163,12 +72,7 @@ let PushHandlerHack = {
  */
 let MozLoopServiceInternal = {
   // The uri of the Loop server.
-  loopServerUri: Services.prefs.getCharPref("loop.server"),
-
-  // The current deferred for the registration process. This is set if in progress
-  // or the registration was successful. This is null if a registration attempt was
-  // unsuccessful.
-  _registeredDeferred: null,
+  get loopServerUri() Services.prefs.getCharPref("loop.server"),
 
   /**
    * The initial delay for push registration. This ensures we don't start
@@ -232,65 +136,131 @@ let MozLoopServiceInternal = {
    */
   set doNotDisturb(aFlag) {
     Services.prefs.setBoolPref("loop.do_not_disturb", Boolean(aFlag));
+    this.notifyStatusChanged();
+  },
+
+  notifyStatusChanged: function() {
+    Services.obs.notifyObservers(null, "loop-status-changed", null);
+  },
+
+  /**
+   * @param {String} errorType a key to identify the type of error. Only one
+   *                           error of a type will be saved at a time.
+   * @param {Object} error     an object describing the error in the format from Hawk errors
+   */
+  setError: function(errorType, error) {
+    gErrors.set(errorType, error);
+    this.notifyStatusChanged();
+  },
+
+  clearError: function(errorType) {
+    gErrors.delete(errorType);
+    this.notifyStatusChanged();
+  },
+
+  get errors() {
+    return gErrors;
   },
 
   /**
    * Starts registration of Loop with the push server, and then will register
    * with the Loop server. It will return early if already registered.
    *
+   * @param {Object} mockPushHandler Optional, test-only mock push handler. Used
+   *                                 to allow mocking of the MozLoopPushHandler.
    * @returns {Promise} a promise that is resolved with no params on completion, or
    *          rejected with an error code or string.
    */
-  promiseRegisteredWithServers: function() {
-    if (this._registeredDeferred) {
-      return this._registeredDeferred.promise;
+  promiseRegisteredWithServers: function(mockPushHandler) {
+    if (gRegisteredDeferred) {
+      return gRegisteredDeferred.promise;
     }
 
-    this._registeredDeferred = Promise.defer();
+    gRegisteredDeferred = Promise.defer();
     // We grab the promise early in case .initialize or its results sets
     // it back to null on error.
-    let result = this._registeredDeferred.promise;
+    let result = gRegisteredDeferred.promise;
 
-    PushHandlerHack.initialize(this.onPushRegistered.bind(this),
-                               this.onHandleNotification.bind(this));
+    gPushHandler = mockPushHandler || MozLoopPushHandler;
+
+    gPushHandler.initialize(this.onPushRegistered.bind(this),
+      this.onHandleNotification.bind(this));
 
     return result;
   },
 
   /**
-   * Derives hawk credentials for the given token and context.
+   * Performs a hawk based request to the loop server.
    *
-   * @param {String} tokenHex The token value in hex.
-   * @param {String} context  The context for the token.
+   * @param {String} path The path to make the request to.
+   * @param {String} method The request method, e.g. 'POST', 'GET'.
+   * @param {Object} payloadObj An object which is converted to JSON and
+   *                            transmitted with the request.
+   * @returns {Promise}
+   *        Returns a promise that resolves to the response of the API call,
+   *        or is rejected with an error.  If the server response can be parsed
+   *        as JSON and contains an 'error' property, the promise will be
+   *        rejected with this JSON-parsed response.
    */
-  deriveHawkCredentials: function(tokenHex, context) {
-    const PREFIX_NAME = "identity.mozilla.com/picl/v1/";
+  hawkRequest: function(path, method, payloadObj) {
+    if (!gHawkClient) {
+      gHawkClient = new HawkClient(this.loopServerUri);
+    }
 
-    let token = CommonUtils.hexToBytes(tokenHex);
-    let keyWord = CommonUtils.stringToBytes(PREFIX_NAME + context);
+    let sessionToken;
+    try {
+      sessionToken = Services.prefs.getCharPref("loop.hawk-session-token");
+    } catch (x) {
+      // It is ok for this not to exist, we'll default to sending no-creds
+    }
 
-    // XXX Using 2 * 32 for now to be in sync with client.js, but we might
-    // want to make this 3 * 32 to allow for extra, if we start using the extra
-    // field.
-    let out = CryptoUtils.hkdf(token, undefined, keyWord, 2 * 32);
+    let credentials;
+    if (sessionToken) {
+      // true = use a hex key, as required by the server (see bug 1032738).
+      credentials = deriveHawkCredentials(sessionToken, "sessionToken",
+                                          2 * 32, true);
+    }
 
-    return {
-      algorithm: "sha256",
-      key: out.slice(32, 64),
-      id: CommonUtils.bytesAsHex(out.slice(0, 32))
-    };
+    return gHawkClient.request(path, method, credentials, payloadObj).catch(error => {
+      console.error("Loop hawkRequest error:", error);
+      throw error;
+    });
   },
 
   /**
-   * Callback from PushHandlerHack - The push server has been registered
+   * Used to store a session token from a request if it exists in the headers.
+   *
+   * @param {Object} headers The request headers, which may include a
+   *                         "hawk-session-token" to be saved.
+   * @return true on success or no token, false on failure.
+   */
+  storeSessionToken: function(headers) {
+    let sessionToken = headers["hawk-session-token"];
+    if (sessionToken) {
+      // XXX should do more validation here
+      if (sessionToken.length === 64) {
+        Services.prefs.setCharPref("loop.hawk-session-token", sessionToken);
+      } else {
+        // XXX Bubble the precise details up to the UI somehow (bug 1013248).
+        console.warn("Loop server sent an invalid session token");
+        gRegisteredDeferred.reject("session-token-wrong-size");
+        gRegisteredDeferred = null;
+        return false;
+      }
+    }
+    return true;
+  },
+
+  /**
+   * Callback from MozLoopPushHandler - The push server has been registered
    * and has given us a push url.
    *
    * @param {String} pushUrl The push url given by the push server.
    */
   onPushRegistered: function(err, pushUrl) {
     if (err) {
-      this._registeredDeferred.reject(err);
-      this._registeredDeferred = null;
+      gRegisteredDeferred.reject(err);
+      gRegisteredDeferred = null;
       return;
     }
 
@@ -304,43 +274,45 @@ let MozLoopServiceInternal = {
    * @param {Boolean} noRetry Optional, don't retry if authentication fails.
    */
   registerWithLoopServer: function(pushUrl, noRetry) {
-    let sessionToken;
-    try {
-      sessionToken = Services.prefs.getCharPref("loop.hawk-session-token");
-    } catch (x) {
-      // It is ok for this not to exist, we'll default to sending no-creds
-    }
+    this.hawkRequest("/registration", "POST", { simplePushURL: pushUrl})
+      .then((response) => {
+        // If this failed we got an invalid token. storeSessionToken rejects
+        // the gRegisteredDeferred promise for us, so here we just need to
+        // early return.
+        if (!this.storeSessionToken(response.headers))
+          return;
 
-    let credentials;
-    if (sessionToken) {
-      credentials = this.deriveHawkCredentials(sessionToken, "sessionToken");
-    }
+        this.clearError("registration");
+        gRegisteredDeferred.resolve();
+        // No need to clear the promise here, everything was good, so we don't need
+        // to re-register.
+      }, (error) => {
+        // There's other errors than invalid auth token, but we should only do the reset
+        // as a last resort.
+        if (error.code === 401 && error.errno === INVALID_AUTH_TOKEN) {
+          if (this.urlExpiryTimeIsInFuture()) {
+            // XXX Should this be reported to the user is a visible manner?
+            Cu.reportError("Loop session token is invalid, all previously "
+                           + "generated urls will no longer work.");
+          }
 
-    let uri = Services.io.newURI(this.loopServerUri, null, null).resolve("/registration");
-    this.loopXhr = new HAWKAuthenticatedRESTRequest(uri, credentials);
-
-    this.loopXhr.dispatch('POST', { simple_push_url: pushUrl }, (error) => {
-      if (this.loopXhr.response.status == 401) {
-        if (this.urlExpiryTimeIsInFuture()) {
-          // XXX Should this be reported to the user is a visible manner?
-          Cu.reportError("Loop session token is invalid, all previously "
-                         + "generated urls will no longer work.");
+          // Authorization failed, invalid token, we need to try again with a new token.
+          Services.prefs.clearUserPref("loop.hawk-session-token");
+          this.registerWithLoopServer(pushUrl, true);
+          return;
         }
 
-        // Authorization failed, invalid token, we need to try again with a new token.
-        Services.prefs.clearUserPref("loop.hawk-session-token");
-        this.registerWithLoopServer(pushUrl, true);
-
-        return;
+        // XXX Bubble the precise details up to the UI somehow (bug 1013248).
+        Cu.reportError("Failed to register with the loop server. error: " + error);
+        this.setError("registration", error);
+        gRegisteredDeferred.reject(error.errno);
+        gRegisteredDeferred = null;
       }
-
-      // No authorization issues, so complete registration.
-      this.onLoopRegistered(error);
-    });
+    );
   },
 
   /**
-   * Callback from PushHandlerHack - A push notification has been received from
+   * Callback from MozLoopPushHandler - A push notification has been received from
    * the server.
    *
    * @param {String} version The version information from the server.
@@ -350,44 +322,14 @@ let MozLoopServiceInternal = {
       return;
     }
 
-    this.openChatWindow(null, "LooP", "about:loopconversation#incoming/" + version);
-  },
+    // We set this here as it is assumed that once the user receives an incoming
+    // call, they'll have had enough time to see the terms of service. See
+    // bug 1046039 for background.
+    Services.prefs.setCharPref("loop.seenToS", "seen");
 
-  /**
-   * Callback from the loopXhr. Checks the registration result.
-   */
-  onLoopRegistered: function(error) {
-    let status = this.loopXhr.response.status;
-    if (status != 200) {
-      // XXX Bubble the precise details up to the UI somehow (bug 1013248).
-      Cu.reportError("Failed to register with the loop server. Code: " +
-        status + " Text: " + this.loopXhr.response.statusText);
-      this._registeredDeferred.reject(status);
-      this._registeredDeferred = null;
-      return;
-    }
-
-    let sessionToken = this.loopXhr.response.headers["hawk-session-token"];
-    if (sessionToken) {
-
-      // XXX should do more validation here
-      if (sessionToken.length === 64) {
-
-        Services.prefs.setCharPref("loop.hawk-session-token", sessionToken);
-      } else {
-        // XXX Bubble the precise details up to the UI somehow (bug 1013248).
-        console.warn("Loop server sent an invalid session token");
-        this._registeredDeferred.reject("session-token-wrong-size");
-        this._registeredDeferred = null;
-        return;
-      }
-    }
-
-    // If we made it this far, we registered just fine.
-    this.registeredLoopServer = true;
-    this._registeredDeferred.resolve();
-    // No need to clear the promise here, everything was good, so we don't need
-    // to re-register.
+    this.openChatWindow(null,
+                        this.localizedStrings["incoming_call_title2"].textContent,
+                        "about:loopconversation#incoming/" + version);
   },
 
   /**
@@ -397,8 +339,8 @@ let MozLoopServiceInternal = {
    * @returns {Object} a map of element ids with attributes to set.
    */
   get localizedStrings() {
-    if (this._localizedStrings)
-      return this._localizedStrings;
+    if (gLocalizedStrings)
+      return gLocalizedStrings;
 
     var stringBundle =
       Services.strings.createBundle('chrome://browser/locale/loop/loop.properties');
@@ -420,7 +362,73 @@ let MozLoopServiceInternal = {
       map[key][property] = string.value;
     }
 
-    return this._localizedStrings = map;
+    return gLocalizedStrings = map;
+  },
+
+  /**
+   * Saves loop logs to the saved-telemetry-pings folder.
+   *
+   * @param {Object} pc The peerConnection in question.
+   */
+  stageForTelemetryUpload: function(window, pc) {
+    window.WebrtcGlobalInformation.getAllStats(allStats => {
+      let internalFormat = allStats.reports[0]; // filtered on pc.id
+      window.WebrtcGlobalInformation.getLogging('', logs => {
+        let report = convertToRTCStatsReport(internalFormat);
+        let logStr = "";
+        logs.forEach(s => { logStr += s + "\n"; });
+
+        // We have stats and logs.
+
+        // Create worker job. ping = saved telemetry ping file header + payload
+        //
+        // Prepare payload according to https://wiki.mozilla.org/Loop/Telemetry
+
+        let ai = Services.appinfo;
+        let uuid = uuidgen.generateUUID().toString();
+        uuid = uuid.substr(1,uuid.length-2); // remove uuid curly braces
+
+        let directory = OS.Path.join(OS.Constants.Path.profileDir,
+                                     "saved-telemetry-pings");
+        let job = {
+          directory: directory,
+          filename: uuid + ".json",
+          ping: {
+            reason: "loop",
+            slug: uuid,
+            payload: {
+              ver: 1,
+              info: {
+                appUpdateChannel: ai.defaultUpdateChannel,
+                appBuildID: ai.appBuildID,
+                appName: ai.name,
+                appVersion: ai.version,
+                reason: "loop",
+                OS: ai.OS,
+                version: Services.sysinfo.getProperty("version")
+              },
+              report: "ice failure",
+              connectionstate: pc.iceConnectionState,
+              stats: report,
+              localSdp: internalFormat.localSdp,
+              remoteSdp: internalFormat.remoteSdp,
+              log: logStr
+            }
+          }
+        };
+
+        // Send job to worker to do log sanitation, transcoding and saving to
+        // disk for pickup by telemetry on next startup, which then uploads it.
+
+        let worker = new ChromeWorker("MozLoopWorker.js");
+        worker.onmessage = function(e) {
+          console.log(e.data.ok ?
+            "Successfully staged loop report for telemetry upload." :
+            ("Failed to stage loop report. Error: " + e.data.fail));
+        }
+        worker.postMessage(job);
+      });
+    }, pc.id);
   },
 
   /**
@@ -430,9 +438,8 @@ let MozLoopServiceInternal = {
    *                               be null.
    * @param {String} title The title of the chat window.
    * @param {String} url The page to load in the chat window.
-   * @param {String} mode May be "minimized" or undefined.
    */
-  openChatWindow: function(contentWindow, title, url, mode) {
+  openChatWindow: function(contentWindow, title, url) {
     // So I guess the origin is the loop server!?
     let origin = this.loopServerUri;
     url = url.spec || url;
@@ -452,54 +459,215 @@ let MozLoopServiceInternal = {
           return;
         }
         chatbox.removeEventListener("DOMContentLoaded", loaded, true);
-        injectLoopAPI(chatbox.contentWindow);
-      }, true);
+
+        let window = chatbox.contentWindow;
+        injectLoopAPI(window);
+
+        let ourID = window.QueryInterface(Ci.nsIInterfaceRequestor)
+            .getInterface(Ci.nsIDOMWindowUtils).currentInnerWindowID;
+
+        let onPCLifecycleChange = (pc, winID, type) => {
+          if (winID != ourID) {
+            return;
+          }
+          if (type == "iceconnectionstatechange") {
+            switch(pc.iceConnectionState) {
+              case "failed":
+              case "disconnected":
+                if (Services.telemetry.canSend ||
+                    Services.prefs.getBoolPref("toolkit.telemetry.test")) {
+                  this.stageForTelemetryUpload(window, pc);
+                }
+                break;
+            }
+          }
+        };
+
+        let pc_static = new window.mozRTCPeerConnectionStatic();
+        pc_static.registerPeerConnectionLifecycleCallback(onPCLifecycleChange);
+      }.bind(this), true);
     };
 
     Chat.open(contentWindow, origin, title, url, undefined, undefined, callback);
-  }
+  },
+
+  /**
+   * Fetch Firefox Accounts (FxA) OAuth parameters from the Loop Server.
+   *
+   * @return {Promise} resolved with the body of the hawk request for OAuth parameters.
+   */
+  promiseFxAOAuthParameters: function() {
+    return this.hawkRequest("/fxa-oauth/params", "POST").then(response => {
+      return JSON.parse(response.body);
+    });
+  },
+
+  /**
+   * Get the OAuth client constructed with Loop OAauth parameters.
+   *
+   * @return {Promise}
+   */
+  promiseFxAOAuthClient: Task.async(function* () {
+    // We must make sure to have only a single client otherwise they will have different states and
+    // multiple channels. This would happen if the user clicks the Login button more than once.
+    if (gFxAOAuthClientPromise) {
+      return gFxAOAuthClientPromise;
+    }
+
+    gFxAOAuthClientPromise = this.promiseFxAOAuthParameters().then(
+      parameters => {
+        try {
+          gFxAOAuthClient = new FxAccountsOAuthClient({
+            parameters: parameters,
+          });
+        } catch (ex) {
+          gFxAOAuthClientPromise = null;
+          throw ex;
+        }
+        return gFxAOAuthClient;
+      },
+      error => {
+        gFxAOAuthClientPromise = null;
+        throw error;
+      }
+    );
+
+    return gFxAOAuthClientPromise;
+  }),
+
+  /**
+   * Get the OAuth client and do the authorization web flow to get an OAuth code.
+   *
+   * @return {Promise}
+   */
+  promiseFxAOAuthAuthorization: function() {
+    let deferred = Promise.defer();
+    this.promiseFxAOAuthClient().then(
+      client => {
+        client.onComplete = this._fxAOAuthComplete.bind(this, deferred);
+        client.launchWebFlow();
+      },
+      error => {
+        console.error(error);
+        deferred.reject(error);
+      }
+    );
+    return deferred.promise;
+  },
+
+  /**
+   * Get the OAuth token using the OAuth code and state.
+   *
+   * The caller should approperiately handle 4xx errors (which should lead to a logout)
+   * and 5xx or connectivity issues with messaging to try again later.
+   *
+   * @param {String} code
+   * @param {String} state
+   *
+   * @return {Promise} resolving with OAuth token data.
+   */
+  promiseFxAOAuthToken: function(code, state) {
+    if (!code || !state) {
+      throw new Error("promiseFxAOAuthToken: code and state are required.");
+    }
+
+    let payload = {
+      code: code,
+      state: state,
+    };
+    return this.hawkRequest("/fxa-oauth/token", "POST", payload).then(response => {
+      return JSON.parse(response.body);
+    });
+  },
+
+  /**
+   * Called once gFxAOAuthClient fires onComplete.
+   *
+   * @param {Deferred} deferred used to resolve or reject the gFxAOAuthClientPromise
+   * @param {Object} result (with code and state)
+   */
+  _fxAOAuthComplete: function(deferred, result) {
+    gFxAOAuthClientPromise = null;
+
+    // Note: The state was already verified in FxAccountsOAuthClient.
+    if (result) {
+      deferred.resolve(result);
+    } else {
+      deferred.reject("Invalid token data");
+    }
+  },
+};
+Object.freeze(MozLoopServiceInternal);
+
+let gInitializeTimerFunc = () => {
+  // Kick off the push notification service into registering after a timeout
+  // this ensures we're not doing too much straight after the browser's finished
+  // starting up.
+  gInitializeTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+  gInitializeTimer.initWithCallback(() => {
+    MozLoopService.register();
+    gInitializeTimer = null;
+  },
+  MozLoopServiceInternal.initialRegistrationDelayMilliseconds, Ci.nsITimer.TYPE_ONE_SHOT);
 };
 
 /**
  * Public API
  */
 this.MozLoopService = {
+#ifdef DEBUG
+  // Test-only helpers
+  get internal() {
+    return MozLoopServiceInternal;
+  },
+
+  get gFxAOAuthTokenData() {
+    return gFxAOAuthTokenData;
+  },
+
+  resetFxA: function() {
+    gFxAOAuthClientPromise = null;
+    gFxAOAuthClient = null;
+    gFxAOAuthTokenData = null;
+  },
+#endif
+
+  set initializeTimerFunc(value) {
+    gInitializeTimerFunc = value;
+  },
+
   /**
    * Initialized the loop service, and starts registration with the
    * push and loop servers.
    */
   initialize: function() {
+    // Don't do anything if loop is not enabled.
+    if (!Services.prefs.getBoolPref("loop.enabled")) {
+      return;
+    }
+
     // If expiresTime is in the future then kick-off registration.
     if (MozLoopServiceInternal.urlExpiryTimeIsInFuture()) {
-      this._startInitializeTimer();
+      gInitializeTimerFunc();
     }
-  },
-
-  /**
-   * Internal function, exposed for testing purposes only. Used to start the
-   * initialize timer.
-   */
-  _startInitializeTimer: function() {
-    // Kick off the push notification service into registering after a timeout
-    // this ensures we're not doing too much straight after the browser's finished
-    // starting up.
-    this._initializeTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-    this._initializeTimer.initWithCallback(function() {
-      this.register();
-      this._initializeTimer = null;
-    }.bind(this),
-    MozLoopServiceInternal.initialRegistrationDelayMilliseconds, Ci.nsITimer.TYPE_ONE_SHOT);
   },
 
   /**
    * Starts registration of Loop with the push server, and then will register
    * with the Loop server. It will return early if already registered.
    *
+   * @param {Object} mockPushHandler Optional, test-only mock push handler. Used
+   *                                 to allow mocking of the MozLoopPushHandler.
    * @returns {Promise} a promise that is resolved with no params on completion, or
    *          rejected with an error code or string.
    */
-  register: function() {
-    return MozLoopServiceInternal.promiseRegisteredWithServers();
+  register: function(mockPushHandler) {
+    // Don't do anything if loop is not enabled.
+    if (!Services.prefs.getBoolPref("loop.enabled")) {
+      throw new Error("Loop is not enabled");
+    }
+
+    return MozLoopServiceInternal.promiseRegisteredWithServers(mockPushHandler);
   },
 
   /**
@@ -554,6 +722,10 @@ this.MozLoopService = {
     MozLoopServiceInternal.doNotDisturb = aFlag;
   },
 
+  get errors() {
+    return MozLoopServiceInternal.errors;
+  },
+
   /**
    * Returns the current locale
    *
@@ -565,6 +737,23 @@ this.MozLoopService = {
         Ci.nsISupportsString).data;
     } catch (ex) {
       return "en-US";
+    }
+  },
+
+  /**
+   * Set any character preference under "loop.".
+   *
+   * @param {String} prefName The name of the pref without the preceding "loop."
+   * @param {String} value The value to set.
+   *
+   * Any errors thrown by the Mozilla pref API are logged to the console.
+   */
+  setLoopCharPref: function(prefName, value) {
+    try {
+      Services.prefs.setCharPref("loop." + prefName, value);
+    } catch (ex) {
+      console.log("setLoopCharPref had trouble setting " + prefName +
+        "; exception: " + ex);
     }
   },
 
@@ -589,5 +778,70 @@ this.MozLoopService = {
         "; exception: " + ex);
       return null;
     }
-  }
+  },
+
+  /**
+   * Return any preference under "loop." that's coercible to a character
+   * preference.
+   *
+   * @param {String} prefName The name of the pref without the preceding
+   * "loop."
+   *
+   * Any errors thrown by the Mozilla pref API are logged to the console
+   * and cause null to be returned. This includes the case of the preference
+   * not being found.
+   *
+   * @return {String} on success, null on error
+   */
+  getLoopBoolPref: function(prefName) {
+    try {
+      return Services.prefs.getBoolPref("loop." + prefName);
+    } catch (ex) {
+      console.log("getLoopBoolPref had trouble getting " + prefName +
+        "; exception: " + ex);
+      return null;
+    }
+  },
+
+  /**
+   * Start the FxA login flow using the OAuth client and params from the Loop server.
+   *
+   * The caller should be prepared to handle rejections related to network, server or login errors.
+   *
+   * @return {Promise} that resolves when the FxA login flow is complete.
+   */
+  logInToFxA: function() {
+    if (gFxAOAuthTokenData) {
+      return Promise.resolve(gFxAOAuthTokenData);
+    }
+
+    return MozLoopServiceInternal.promiseFxAOAuthAuthorization().then(response => {
+      return MozLoopServiceInternal.promiseFxAOAuthToken(response.code, response.state);
+    }).then(tokenData => {
+      gFxAOAuthTokenData = tokenData;
+      return tokenData;
+    },
+    error => {
+      gFxAOAuthTokenData = null;
+      throw error;
+    });
+  },
+
+  /**
+   * Performs a hawk based request to the loop server.
+   *
+   * @param {String} path The path to make the request to.
+   * @param {String} method The request method, e.g. 'POST', 'GET'.
+   * @param {Object} payloadObj An object which is converted to JSON and
+   *                            transmitted with the request.
+   * @returns {Promise}
+   *        Returns a promise that resolves to the response of the API call,
+   *        or is rejected with an error.  If the server response can be parsed
+   *        as JSON and contains an 'error' property, the promise will be
+   *        rejected with this JSON-parsed response.
+   */
+  hawkRequest: function(path, method, payloadObj) {
+    return MozLoopServiceInternal.hawkRequest(path, method, payloadObj);
+  },
 };
+Object.freeze(this.MozLoopService);

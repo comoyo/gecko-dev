@@ -183,15 +183,15 @@ ICBinaryArith_Int32::Compiler::generateStubCode(MacroAssembler &masm)
             EmitReturnFromIC(masm);
 
             masm.bind(&toUint);
-            masm.convertUInt32ToDouble(R0.payloadReg(), ScratchFloatReg);
-            masm.boxDouble(ScratchFloatReg, R0);
+            masm.convertUInt32ToDouble(R0.payloadReg(), ScratchDoubleReg);
+            masm.boxDouble(ScratchDoubleReg, R0);
         } else {
             masm.j(Assembler::Signed, &revertRegister);
             masm.tagValue(JSVAL_TYPE_INT32, R0.payloadReg(), R0);
         }
         break;
       default:
-       MOZ_ASSUME_UNREACHABLE("Unhandled op for BinaryArith_Int32.  ");
+       MOZ_CRASH("Unhandled op for BinaryArith_Int32.");
     }
 
     // Return.
@@ -252,7 +252,7 @@ ICUnaryArith_Int32::Compiler::generateStubCode(MacroAssembler &masm)
         masm.negl(R0.payloadReg());
         break;
       default:
-        MOZ_ASSUME_UNREACHABLE("Unexpected op");
+        MOZ_CRASH("Unexpected op");
     }
 
     EmitReturnFromIC(masm);

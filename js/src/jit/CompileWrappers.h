@@ -7,8 +7,6 @@
 #ifndef jit_CompileWrappers_h
 #define jit_CompileWrappers_h
 
-#ifdef JS_ION
-
 #include "jscntxt.h"
 
 namespace js {
@@ -53,10 +51,7 @@ class CompileRuntime
 #endif
 
     const void *addressOfInterrupt();
-
-#ifdef JS_THREADSAFE
     const void *addressOfInterruptPar();
-#endif
 
     const void *addressOfThreadPool();
 
@@ -65,7 +60,7 @@ class CompileRuntime
     // Compilation does not occur off thread when the SPS profiler is enabled.
     SPSProfiler &spsProfiler();
 
-    bool signalHandlersInstalled();
+    bool canUseSignalHandlers();
     bool jitSupportsFloatingPoint();
     bool hadOutOfMemory();
     bool profilingScripts();
@@ -96,7 +91,7 @@ class CompileZone
   public:
     static CompileZone *get(Zone *zone);
 
-    const void *addressOfNeedsBarrier();
+    const void *addressOfNeedsIncrementalBarrier();
 
     // allocator.arenas.getFreeList(allocKind)
     const void *addressOfFreeListFirst(gc::AllocKind allocKind);
@@ -144,10 +139,7 @@ class JitCompileOptions
     bool spsSlowAssertionsEnabled_;
 };
 
-
 } // namespace jit
 } // namespace js
-
-#endif // JS_ION
 
 #endif // jit_CompileWrappers_h

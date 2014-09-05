@@ -46,7 +46,7 @@ public:
   }
 
 protected:
-  nsMathMLmtableOuterFrame(nsStyleContext* aContext) : nsTableOuterFrame(aContext) {}
+  explicit nsMathMLmtableOuterFrame(nsStyleContext* aContext) : nsTableOuterFrame(aContext) {}
   virtual ~nsMathMLmtableOuterFrame();
 
   // helper to find the row frame at a given index, positive or negative, e.g.,
@@ -62,6 +62,8 @@ protected:
 class nsMathMLmtableFrame : public nsTableFrame
 {
 public:
+  NS_DECL_QUERYFRAME_TARGET(nsMathMLmtableFrame)
+  NS_DECL_QUERYFRAME
   NS_DECL_FRAMEARENA_HELPERS
 
   friend nsContainerFrame* NS_NewMathMLmtableFrame(nsIPresShell* aPresShell,
@@ -108,9 +110,62 @@ public:
   // safer (albeit grossly suboptimal) to just relayout the whole thing.
   void RestyleTable();
 
+  /** helper to get the cell spacing X style value */
+  nscoord GetCellSpacingX(int32_t aColIndex) MOZ_OVERRIDE;
+
+  /** Sums the combined cell spacing between the columns aStartColIndex to
+   *  aEndColIndex.
+   */
+  nscoord GetCellSpacingX(int32_t aStartColIndex,
+                          int32_t aEndColIndex) MOZ_OVERRIDE;
+
+  /** helper to get the cell spacing Y style value */
+  nscoord GetCellSpacingY(int32_t aRowIndex) MOZ_OVERRIDE;
+
+  /** Sums the combined cell spacing between the rows aStartRowIndex to
+   *  aEndRowIndex.
+   */
+  nscoord GetCellSpacingY(int32_t aStartRowIndex,
+                          int32_t aEndRowIndex) MOZ_OVERRIDE;
+
+  void SetColSpacingArray(const nsTArray<nscoord>& aColSpacing)
+  {
+    mColSpacing = aColSpacing;
+  }
+
+  void SetRowSpacingArray(const nsTArray<nscoord>& aRowSpacing)
+  {
+    mRowSpacing = aRowSpacing;
+  }
+
+  void SetFrameSpacing(nscoord aSpacingX, nscoord aSpacingY)
+  {
+    mFrameSpacingX = aSpacingX;
+    mFrameSpacingY = aSpacingY;
+  }
+
+  /** Determines whether the placement of table cells is determined by CSS
+   * spacing based on padding and border-spacing, or one based upon the
+   * rowspacing, columnspacing and framespacing attributes.  The second
+   * approach is used if the user specifies at least one of those attributes.
+   */
+  void SetUseCSSSpacing();
+
+  bool GetUseCSSSpacing()
+  {
+    return mUseCSSSpacing;
+  }
+
 protected:
-  nsMathMLmtableFrame(nsStyleContext* aContext) : nsTableFrame(aContext) {}
+  explicit nsMathMLmtableFrame(nsStyleContext* aContext) : nsTableFrame(aContext) {}
   virtual ~nsMathMLmtableFrame();
+
+private:
+  nsTArray<nscoord> mColSpacing;
+  nsTArray<nscoord> mRowSpacing;
+  nscoord mFrameSpacingX;
+  nscoord mFrameSpacingY;
+  bool mUseCSSSpacing;
 }; // class nsMathMLmtableFrame
 
 // --------------
@@ -171,7 +226,7 @@ public:
   }
 
 protected:
-  nsMathMLmtrFrame(nsStyleContext* aContext) : nsTableRowFrame(aContext) {}
+  explicit nsMathMLmtrFrame(nsStyleContext* aContext) : nsTableRowFrame(aContext) {}
   virtual ~nsMathMLmtrFrame();
 }; // class nsMathMLmtrFrame
 
@@ -206,8 +261,10 @@ public:
 
   virtual nsMargin* GetBorderWidth(nsMargin& aBorder) const MOZ_OVERRIDE;
 
+  virtual nsMargin GetBorderOverflow() MOZ_OVERRIDE;
+
 protected:
-  nsMathMLmtdFrame(nsStyleContext* aContext) : nsTableCellFrame(aContext) {}
+  explicit nsMathMLmtdFrame(nsStyleContext* aContext) : nsTableCellFrame(aContext) {}
   virtual ~nsMathMLmtdFrame();
 }; // class nsMathMLmtdFrame
 
@@ -256,7 +313,7 @@ public:
   }
 
 protected:
-  nsMathMLmtdInnerFrame(nsStyleContext* aContext);
+  explicit nsMathMLmtdInnerFrame(nsStyleContext* aContext);
   virtual ~nsMathMLmtdInnerFrame();
 
   nsStyleText* mUniqueStyleText;

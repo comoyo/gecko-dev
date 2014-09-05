@@ -30,7 +30,6 @@
 #include "nsAutoPtr.h"
 #include "nsIWidget.h"
 #include "nsStyleSet.h"
-#include "nsFrameSelection.h"
 #include "nsContentUtils.h" // For AddScriptBlocker().
 #include "nsRefreshDriver.h"
 #include "mozilla/Attributes.h"
@@ -39,7 +38,6 @@
 
 class nsRange;
 class nsIDragService;
-class nsCSSStyleSheet;
 
 struct RangePaintInfo;
 struct nsCallbackEventRequest;
@@ -50,14 +48,18 @@ class ReflowCountMgr;
 class nsPresShellEventCB;
 class nsAutoCauseReflowNotifier;
 
+namespace mozilla {
+class CSSStyleSheet;
+} // namespace mozilla
+
 // 250ms.  This is actually pref-controlled, but we use this value if we fail
 // to get the pref for any reason.
 #define PAINTLOCK_EVENT_DELAY 250
 
-class PresShell : public nsIPresShell,
-                  public nsStubDocumentObserver,
-                  public nsISelectionController, public nsIObserver,
-                  public nsSupportsWeakReference
+class PresShell MOZ_FINAL : public nsIPresShell,
+                            public nsStubDocumentObserver,
+                            public nsISelectionController, public nsIObserver,
+                            public nsSupportsWeakReference
 {
 public:
   PresShell();
@@ -159,6 +161,7 @@ public:
   virtual already_AddRefed<nsIContent> GetEventTargetContent(
                                                      mozilla::WidgetEvent* aEvent) MOZ_OVERRIDE;
 
+  virtual void NotifyCounterStylesAreDirty();
 
   virtual nsresult ReconstructFrames(void) MOZ_OVERRIDE;
   virtual void Freeze() MOZ_OVERRIDE;
@@ -220,12 +223,11 @@ public:
   virtual void SetMayHaveTouchCaret(bool aSet) MOZ_OVERRIDE;
   virtual bool MayHaveTouchCaret() MOZ_OVERRIDE;
   // selection caret
-  virtual NS_HIDDEN_(already_AddRefed<mozilla::SelectionCarets>) GetSelectionCarets() const MOZ_OVERRIDE;
-  virtual NS_HIDDEN_(mozilla::dom::Element*) GetSelectionCaretsStartElement() const MOZ_OVERRIDE;
-  virtual NS_HIDDEN_(mozilla::dom::Element*) GetSelectionCaretsEndElement() const MOZ_OVERRIDE;
+  virtual already_AddRefed<mozilla::SelectionCarets> GetSelectionCarets() const MOZ_OVERRIDE;
+  virtual mozilla::dom::Element* GetSelectionCaretsStartElement() const MOZ_OVERRIDE;
+  virtual mozilla::dom::Element* GetSelectionCaretsEndElement() const MOZ_OVERRIDE;
   // caret handling
   virtual already_AddRefed<nsCaret> GetCaret() const MOZ_OVERRIDE;
-  virtual void MaybeInvalidateCaretPosition() MOZ_OVERRIDE;
   NS_IMETHOD SetCaretEnabled(bool aInEnable) MOZ_OVERRIDE;
   NS_IMETHOD SetCaretReadOnly(bool aReadOnly) MOZ_OVERRIDE;
   NS_IMETHOD GetCaretEnabled(bool *aOutEnabled) MOZ_OVERRIDE;
@@ -272,7 +274,6 @@ public:
   NS_DECL_NSIDOCUMENTOBSERVER_STYLERULEREMOVED
 
   // nsIMutationObserver
-  NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATAWILLCHANGE
   NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATACHANGED
   NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTEWILLCHANGE
   NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
@@ -439,7 +440,7 @@ protected:
   friend struct RenderingState;
 
   struct RenderingState {
-    RenderingState(PresShell* aPresShell)
+    explicit RenderingState(PresShell* aPresShell)
       : mXResolution(aPresShell->mXResolution)
       , mYResolution(aPresShell->mYResolution)
       , mRenderFlags(aPresShell->mRenderFlags)
@@ -450,7 +451,7 @@ protected:
   };
 
   struct AutoSaveRestoreRenderingState {
-    AutoSaveRestoreRenderingState(PresShell* aPresShell)
+    explicit AutoSaveRestoreRenderingState(PresShell* aPresShell)
       : mPresShell(aPresShell)
       , mOldState(aPresShell)
     {}
@@ -544,17 +545,7 @@ protected:
   // Utility method to restore the root scrollframe state
   void RestoreRootScrollPosition();
 
-  void MaybeReleaseCapturingContent()
-  {
-    nsRefPtr<nsFrameSelection> frameSelection = FrameSelection();
-    if (frameSelection) {
-      frameSelection->SetMouseDownState(false);
-    }
-    if (gCaptureInfo.mContent &&
-        gCaptureInfo.mContent->OwnerDoc() == mDocument) {
-      SetCapturingContent(nullptr, 0);
-    }
-  }
+  void MaybeReleaseCapturingContent();
 
   nsresult HandleRetargetedEvent(mozilla::WidgetEvent* aEvent,
                                  nsEventStatus* aStatus,
@@ -592,13 +583,13 @@ protected:
   class DelayedMouseEvent : public DelayedInputEvent
   {
   public:
-    DelayedMouseEvent(mozilla::WidgetMouseEvent* aEvent);
+    explicit DelayedMouseEvent(mozilla::WidgetMouseEvent* aEvent);
   };
 
   class DelayedKeyEvent : public DelayedInputEvent
   {
   public:
-    DelayedKeyEvent(mozilla::WidgetKeyboardEvent* aEvent);
+    explicit DelayedKeyEvent(mozilla::WidgetKeyboardEvent* aEvent);
   };
 
   // Check if aEvent is a mouse event and record the mouse location for later
@@ -753,7 +744,7 @@ protected:
   nsPoint                   mMouseLocation;
 
   // mStyleSet owns it but we maintain a ref, may be null
-  nsRefPtr<nsCSSStyleSheet> mPrefStyleSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mPrefStyleSheet;
 
   // Set of frames that we should mark with NS_FRAME_HAS_DIRTY_CHILDREN after
   // we finish reflowing mCurrentReflowRoot.
@@ -818,7 +809,7 @@ protected:
   bool                      mIgnoreFrameDestruction : 1;
   bool                      mHaveShutDown : 1;
   bool                      mViewportOverridden : 1;
-  bool                      mLastRootReflowHadUnconstrainedHeight : 1;
+  bool                      mLastRootReflowHadUnconstrainedBSize : 1;
   bool                      mNoDelayedMouseEvents : 1;
   bool                      mNoDelayedKeyEvents : 1;
 

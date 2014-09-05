@@ -17,6 +17,12 @@
 namespace mozilla {
 namespace dom {
 
+class TimeRanges;
+
+}
+
+namespace dom {
+
 // Implements media TimeRanges:
 // http://www.whatwg.org/specs/web-apps/current-work/multipage/video.html#timeranges
 class TimeRanges MOZ_FINAL : public nsIDOMTimeRanges
@@ -26,7 +32,6 @@ public:
   NS_DECL_NSIDOMTIMERANGES
 
   TimeRanges();
-  ~TimeRanges();
 
   void Add(double aStart, double aEnd);
 
@@ -38,6 +43,12 @@ public:
 
   // See http://www.whatwg.org/html/#normalized-timeranges-object
   void Normalize();
+
+  // Mutate this TimeRange to be the union of this and aOtherRanges.
+  void Union(const TimeRanges* aOtherRanges);
+
+  // Mutate this TimeRange to be the intersection of this and aOtherRanges.
+  void Intersection(const TimeRanges* aOtherRanges);
 
   JSObject* WrapObject(JSContext* aCx);
 
@@ -51,6 +62,7 @@ public:
   virtual double End(uint32_t aIndex, ErrorResult& aRv);
 
 private:
+  ~TimeRanges();
 
   // Comparator which orders TimeRanges by start time. Used by Normalize().
   struct TimeRange
@@ -74,6 +86,12 @@ private:
   };
 
   nsAutoTArray<TimeRange,4> mRanges;
+
+public:
+  typedef nsTArray<TimeRange>::index_type index_type;
+  static const index_type NoIndex = index_type(-1);
+
+  index_type Find(double aTime);
 };
 
 } // namespace dom

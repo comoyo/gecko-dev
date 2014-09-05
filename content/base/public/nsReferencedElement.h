@@ -116,7 +116,7 @@ private:
     virtual void Clear() { mTarget = nullptr; }
     virtual ~Notification() {}
   protected:
-    Notification(nsReferencedElement* aTarget)
+    explicit Notification(nsReferencedElement* aTarget)
       : mTarget(aTarget)
     {
       NS_PRECONDITION(aTarget, "Must have a target");
@@ -132,7 +132,6 @@ private:
                        Element* aFrom, Element* aTo)
       : Notification(aTarget), mFrom(aFrom), mTo(aTo)
     {}
-    virtual ~ChangeNotification() {}
 
     NS_DECL_ISUPPORTS_INHERITED
     NS_IMETHOD Run() MOZ_OVERRIDE {
@@ -148,6 +147,8 @@ private:
       Notification::Clear(); mFrom = nullptr; mTo = nullptr;
     }
   protected:
+    virtual ~ChangeNotification() {}
+
     nsRefPtr<Element> mFrom;
     nsRefPtr<Element> mTo;
   };
@@ -165,11 +166,12 @@ private:
         mRef = aRef;
       }
     }
-    virtual ~DocumentLoadNotification() {}
 
     NS_DECL_ISUPPORTS
     NS_DECL_NSIOBSERVER
   private:
+    virtual ~DocumentLoadNotification() {}
+
     virtual void SetTo(Element* aTo) { }
 
     nsString mRef;

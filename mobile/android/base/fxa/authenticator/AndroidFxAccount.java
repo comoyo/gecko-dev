@@ -24,6 +24,7 @@ import org.mozilla.gecko.fxa.login.State.StateLabel;
 import org.mozilla.gecko.fxa.login.StateFactory;
 import org.mozilla.gecko.sync.ExtendedJSONObject;
 import org.mozilla.gecko.sync.Utils;
+import org.mozilla.gecko.sync.setup.Constants;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
@@ -323,6 +324,9 @@ public class AndroidFxAccount {
     if (email == null) {
       throw new IllegalArgumentException("email must not be null");
     }
+    if (profile == null) {
+      throw new IllegalArgumentException("profile must not be null");
+    }
     if (idpServerURI == null) {
       throw new IllegalArgumentException("idpServerURI must not be null");
     }
@@ -366,6 +370,15 @@ public class AndroidFxAccount {
     boolean added = accountManager.addAccountExplicitly(account, null, userdata);
     if (!added) {
       return null;
+    }
+
+    // Try to work around an intermittent issue described at
+    // http://stackoverflow.com/a/11698139.  What happens is that tests that
+    // delete and re-create the same account frequently will find the account
+    // missing all or some of the userdata bundle, possibly due to an Android
+    // AccountManager caching bug.
+    for (String key : userdata.keySet()) {
+      accountManager.setUserData(account, key, userdata.getString(key));
     }
 
     AndroidFxAccount fxAccount = new AndroidFxAccount(context, account);
@@ -471,6 +484,13 @@ public class AndroidFxAccount {
         " to state " + state.getStateLabel().toString());
     updateBundleValue(BUNDLE_KEY_STATE_LABEL, state.getStateLabel().name());
     updateBundleValue(BUNDLE_KEY_STATE, state.toJSONObject().toJSONString());
+    broadcastAccountStateChangedIntent();
+  }
+
+  protected void broadcastAccountStateChangedIntent() {
+    final Intent intent = new Intent(FxAccountConstants.ACCOUNT_STATE_CHANGED_ACTION);
+    intent.putExtra(Constants.JSON_KEY_ACCOUNT, account.name);
+    context.sendBroadcast(intent, FxAccountConstants.PER_ACCOUNT_TYPE_PERMISSION);
   }
 
   public synchronized State getState() {

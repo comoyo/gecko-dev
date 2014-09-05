@@ -1116,6 +1116,7 @@ public:
     MOZ_COUNT_CTOR(SingleProcessRunnable);
   }
 
+protected:
   ~SingleProcessRunnable()
   {
     MOZ_COUNT_DTOR(SingleProcessRunnable);
@@ -1273,7 +1274,7 @@ private:
 
     FileDescriptor::PlatformHandleType handle =
       FileDescriptor::PlatformHandleType(PR_FileDesc2NativeHandle(mFileDesc));
-    if (!SendOnOpenCacheFile(mFileSize, handle)) {
+    if (!SendOnOpenCacheFile(mFileSize, FileDescriptor(handle))) {
       unused << Send__delete__(this);
     }
   }
@@ -1370,6 +1371,7 @@ public:
     MOZ_COUNT_CTOR(ChildProcessRunnable);
   }
 
+protected:
   ~ChildProcessRunnable()
   {
     MOZ_ASSERT(mState == eFinished);
@@ -1723,6 +1725,8 @@ GetBuildId(JS::BuildIdCharVector* aBuildID)
 
 class Client : public quota::Client
 {
+  ~Client() {}
+
 public:
   NS_IMETHOD_(MozExternalRefCountType)
   AddRef() MOZ_OVERRIDE;

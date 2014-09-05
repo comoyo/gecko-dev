@@ -29,7 +29,6 @@ class nsNativeThemeCocoa : private nsNativeTheme,
 {
 public:
   nsNativeThemeCocoa();
-  virtual ~nsNativeThemeCocoa();
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -52,7 +51,7 @@ public:
   virtual bool GetWidgetOverflow(nsDeviceContext* aContext, nsIFrame* aFrame,
                                    uint8_t aWidgetType, nsRect* aOverflowRect);
 
-  NS_IMETHOD GetMinimumWidgetSize(nsRenderingContext* aContext, nsIFrame* aFrame,
+  NS_IMETHOD GetMinimumWidgetSize(nsPresContext* aPresContext, nsIFrame* aFrame,
                                   uint8_t aWidgetType,
                                   nsIntSize* aResult, bool* aIsOverridable);
   NS_IMETHOD WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType, 
@@ -63,13 +62,18 @@ public:
   bool ThemeDrawsFocusForWidget(uint8_t aWidgetType) MOZ_OVERRIDE;
   bool ThemeNeedsComboboxDropmarker();
   virtual bool WidgetAppearanceDependsOnWindowFocus(uint8_t aWidgetType) MOZ_OVERRIDE;
+  virtual bool NeedToClearBackgroundBehindWidget(uint8_t aWidgetType) MOZ_OVERRIDE;
   virtual Transparency GetWidgetTransparency(nsIFrame* aFrame, uint8_t aWidgetType);
 
   void DrawProgress(CGContextRef context, const HIRect& inBoxRect,
                     bool inIsIndeterminate, bool inIsHorizontal,
                     double inValue, double inMaxValue, nsIFrame* aFrame);
 
-protected:  
+  static void DrawNativeTitlebar(CGContextRef aContext, CGRect aTitlebarRect,
+                                 CGFloat aUnifiedHeight, BOOL aIsMain, BOOL aIsFlipped);
+
+protected:
+  virtual ~nsNativeThemeCocoa();
 
   nsIntMargin RTLAwareMargin(const nsIntMargin& aMargin, nsIFrame* aFrame);
   nsIFrame* SeparatorResponsibility(nsIFrame* aBefore, nsIFrame* aAfter);
@@ -98,10 +102,16 @@ protected:
   void DrawPushButton(CGContextRef cgContext, const HIRect& inBoxRect,
                       mozilla::EventStates inState, uint8_t aWidgetType,
                       nsIFrame* aFrame);
+  void DrawMenuIcon(CGContextRef cgContext, const CGRect& aRect,
+                    mozilla::EventStates inState, nsIFrame* aFrame,
+                    const NSSize& aIconSize, const NSString* aImageName);
   void DrawButton(CGContextRef context, ThemeButtonKind inKind,
                   const HIRect& inBoxRect, bool inIsDefault, 
                   ThemeButtonValue inValue, ThemeButtonAdornment inAdornment,
                   mozilla::EventStates inState, nsIFrame* aFrame);
+  void DrawFocusOutline(CGContextRef cgContext, const HIRect& inBoxRect,
+                        mozilla::EventStates inState, uint8_t aWidgetType,
+                        nsIFrame* aFrame);
   void DrawDropdown(CGContextRef context, const HIRect& inBoxRect,
                     mozilla::EventStates inState, uint8_t aWidgetType,
                     nsIFrame* aFrame);
@@ -118,8 +128,6 @@ protected:
                           NSWindow* aWindow);
   void DrawStatusBar(CGContextRef cgContext, const HIRect& inBoxRect,
                      nsIFrame *aFrame);
-  void DrawNativeTitlebar(CGContextRef aContext, CGRect aTitlebarRect,
-                          CGFloat aUnifiedHeight, BOOL aIsMain);
   void DrawResizer(CGContextRef cgContext, const HIRect& aRect, nsIFrame *aFrame);
 
   // Scrollbars

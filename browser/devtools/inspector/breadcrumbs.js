@@ -1,4 +1,4 @@
-/* -*- Mode: Javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -88,6 +88,8 @@ HTMLBreadcrumbs.prototype = {
 
     this.container.addEventListener("mousedown", this, true);
     this.container.addEventListener("keypress", this, true);
+    this.container.addEventListener("mouseover", this, true);
+    this.container.addEventListener("mouseleave", this, true);
 
     // We will save a list of already displayed nodes in this array.
     this.nodeHierarchy = [];
@@ -101,12 +103,12 @@ HTMLBreadcrumbs.prototype = {
     this.container._scrollButtonUp.collapsed = true;
     this.container._scrollButtonDown.collapsed = true;
 
-    this.onscrollboxreflow = function() {
+    this.onscrollboxreflow = () => {
       if (this.container._scrollButtonDown.collapsed)
         this.container.removeAttribute("overflows");
       else
         this.container.setAttribute("overflows", true);
-    }.bind(this);
+    };
 
     this.container.addEventListener("underflow", this.onscrollboxreflow, false);
     this.container.addEventListener("overflow", this.onscrollboxreflow, false);
@@ -373,6 +375,17 @@ HTMLBreadcrumbs.prototype = {
       event.preventDefault();
       event.stopPropagation();
     }
+
+    if (event.type == "mouseover") {
+      let target = event.originalTarget;
+      if (target.tagName == "button") {
+        target.onBreadcrumbsHover();
+      }
+    }
+
+    if (event.type == "mouseleave") {
+      this.inspector.toolbox.highlighterUtils.unhighlight();
+    }
   },
 
   /**
@@ -392,12 +405,16 @@ HTMLBreadcrumbs.prototype = {
     this.empty();
     this.container.removeEventListener("mousedown", this, true);
     this.container.removeEventListener("keypress", this, true);
+    this.container.removeEventListener("mouseover", this, true);
+    this.container.removeEventListener("mouseleave", this, true);
     this.container = null;
 
     this.separators.remove();
     this.separators = null;
 
     this.nodeHierarchy = null;
+
+    this.isDestroyed = true;
   },
 
   /**
@@ -480,9 +497,13 @@ HTMLBreadcrumbs.prototype = {
         button.click();
     }
 
-    button.onBreadcrumbsClick = function onBreadcrumbsClick() {
+    button.onBreadcrumbsClick = () => {
       this.selection.setNodeFront(aNode, "breadcrumbs");
-    }.bind(this);
+    };
+
+    button.onBreadcrumbsHover = () => {
+      this.inspector.toolbox.highlighterUtils.highlightNodeFront(aNode);
+    };
 
     button.onclick = (function _onBreadcrumbsRightClick(event) {
       button.focus();
@@ -594,8 +615,8 @@ HTMLBreadcrumbs.prototype = {
     if (this.currentIndex == this.nodeHierarchy.length - 1) {
       let node = this.nodeHierarchy[this.currentIndex].node;
       return this.getInterestingFirstNode(node).then(child => {
-        // If the node has a child
-        if (child) {
+        // If the node has a child and we've not been destroyed in the meantime
+        if (child && !this.isDestroyed) {
           // Show this child
           this.expand(child);
         }
@@ -625,6 +646,10 @@ HTMLBreadcrumbs.prototype = {
 
   updateSelectors: function BC_updateSelectors()
   {
+    if (this.isDestroyed) {
+      return;
+    }
+
     for (let i = this.nodeHierarchy.length - 1; i >= 0; i--) {
       let crumb = this.nodeHierarchy[i];
       let button = crumb.button;
@@ -642,6 +667,10 @@ HTMLBreadcrumbs.prototype = {
    */
   update: function BC_update(reason)
   {
+    if (this.isDestroyed) {
+      return;
+    }
+
     if (reason !== "markupmutation") {
       this.inspector.hideNodeMenu();
     }
@@ -688,6 +717,10 @@ HTMLBreadcrumbs.prototype = {
     let doneUpdating = this.inspector.updating("breadcrumbs");
     // Add the first child of the very last node of the breadcrumbs if possible.
     this.ensureFirstChild().then(this.selectionGuard()).then(() => {
+      if (this.isDestroyed) {
+        return;
+      }
+
       this.updateSelectors();
 
       // Make sure the selected node and its neighbours are visible.

@@ -420,18 +420,6 @@ void SetScreenBrightness(double aBrightness)
   PROXY_IF_SANDBOXED(SetScreenBrightness(clamped(aBrightness, 0.0, 1.0)));
 }
 
-bool SetLight(LightType light, const LightConfiguration& aConfig)
-{
-  AssertMainThread();
-  RETURN_PROXY_IF_SANDBOXED(SetLight(light, aConfig), false);
-}
-
-bool GetLight(LightType light, LightConfiguration* aConfig)
-{
-  AssertMainThread();
-  RETURN_PROXY_IF_SANDBOXED(GetLight(light, aConfig), false);
-}
-
 class SystemClockChangeObserversManager : public ObserversManager<int64_t>
 {
 protected:
@@ -1217,10 +1205,10 @@ GetFMBandSettings(FMRadioCountry aCountry) {
     return settings;
 }
 
-void FactoryReset()
+void FactoryReset(mozilla::dom::FactoryResetReason& aReason)
 {
   AssertMainThread();
-  PROXY_IF_SANDBOXED(FactoryReset());
+  PROXY_IF_SANDBOXED(FactoryReset(aReason));
 }
 
 void
@@ -1249,6 +1237,12 @@ uint32_t
 GetTotalSystemMemoryLevel()
 {
   return hal_impl::GetTotalSystemMemoryLevel();
+}
+
+bool IsHeadphoneEventFromInputDev()
+{
+  AssertMainThread();
+  RETURN_PROXY_IF_SANDBOXED(IsHeadphoneEventFromInputDev(), false);
 }
 
 } // namespace hal

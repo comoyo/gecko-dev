@@ -19,12 +19,13 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
 #include "nsIReflowCallback.h"
+#include "nsTObserverArray.h"
 
 class nsImageMap;
 class nsIURI;
 class nsILoadGroup;
 struct nsHTMLReflowState;
-struct nsHTMLReflowMetrics;
+class nsHTMLReflowMetrics;
 class nsDisplayImage;
 class nsPresContext;
 class nsImageFrame;
@@ -41,9 +42,11 @@ namespace layers {
 
 class nsImageListener : public imgINotificationObserver
 {
-public:
-  nsImageListener(nsImageFrame *aFrame);
+protected:
   virtual ~nsImageListener();
+
+public:
+  explicit nsImageListener(nsImageFrame *aFrame);
 
   NS_DECL_ISUPPORTS
   NS_DECL_IMGINOTIFICATIONOBSERVER
@@ -65,20 +68,22 @@ public:
 
   NS_DECL_FRAMEARENA_HELPERS
 
-  nsImageFrame(nsStyleContext* aContext);
+  explicit nsImageFrame(nsStyleContext* aContext);
 
   NS_DECL_QUERYFRAME_TARGET(nsImageFrame)
   NS_DECL_QUERYFRAME
 
   virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
+  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) MOZ_OVERRIDE;
+
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) MOZ_OVERRIDE;
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) MOZ_OVERRIDE;
-  virtual nscoord GetMinWidth(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
-  virtual nscoord GetPrefWidth(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
+  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
+  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
   virtual mozilla::IntrinsicSize GetIntrinsicSize() MOZ_OVERRIDE;
   virtual nsSize GetIntrinsicRatio() MOZ_OVERRIDE;
   virtual void Reflow(nsPresContext*           aPresContext,
@@ -114,7 +119,7 @@ public:
             uint32_t aFlags = 0) const MOZ_OVERRIDE;
 #endif
 
-  virtual int GetLogicalSkipSides(const nsHTMLReflowState* aReflowState = nullptr) const MOZ_OVERRIDE;
+  virtual LogicalSides GetLogicalSkipSides(const nsHTMLReflowState* aReflowState = nullptr) const MOZ_OVERRIDE;
 
   nsresult GetIntrinsicImageSize(nsSize& aSize);
 
@@ -146,14 +151,7 @@ public:
   /**
    * Return a map element associated with this image.
    */
-  mozilla::dom::Element* GetMapElement() const
-  {
-    nsAutoString usemap;
-    if (mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::usemap, usemap)) {
-      return mContent->OwnerDoc()->FindImageMap(usemap);
-    }
-    return nullptr;
-  }
+  mozilla::dom::Element* GetMapElement() const;
 
   /**
    * Return true if the image has associated image map.
@@ -163,8 +161,8 @@ public:
   nsImageMap* GetImageMap();
   nsImageMap* GetExistingImageMap() const { return mImageMap; }
 
-  virtual void AddInlineMinWidth(nsRenderingContext *aRenderingContext,
-                                 InlineMinWidthData *aData) MOZ_OVERRIDE;
+  virtual void AddInlineMinISize(nsRenderingContext *aRenderingContext,
+                                 InlineMinISizeData *aData) MOZ_OVERRIDE;
 
   void DisconnectMap();
 
@@ -177,10 +175,15 @@ protected:
 
   void EnsureIntrinsicSizeAndRatio(nsPresContext* aPresContext);
 
-  virtual nsSize ComputeSize(nsRenderingContext *aRenderingContext,
-                             nsSize aCBSize, nscoord aAvailableWidth,
-                             nsSize aMargin, nsSize aBorder, nsSize aPadding,
-                             uint32_t aFlags) MOZ_OVERRIDE;
+  virtual mozilla::LogicalSize
+  ComputeSize(nsRenderingContext *aRenderingContext,
+              mozilla::WritingMode aWritingMode,
+              const mozilla::LogicalSize& aCBSize,
+              nscoord aAvailableISize,
+              const mozilla::LogicalSize& aMargin,
+              const mozilla::LogicalSize& aBorder,
+              const mozilla::LogicalSize& aPadding,
+              uint32_t aFlags) MOZ_OVERRIDE;
 
   bool IsServerImageMap();
 
@@ -331,6 +334,8 @@ private:
     }
 
   private:
+    ~IconLoad() {}
+
     void GetPrefs();
     nsTObserverArray<nsImageFrame*> mIconObservers;
 

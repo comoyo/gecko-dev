@@ -47,8 +47,9 @@ include box-shadow/reftest.list
 # bugs/
 include bugs/reftest.list
 
-# canvas 2D
+# canvas
 include canvas/reftest.list
+include ../../dom/canvas/test/reftest/reftest.list
 
 # css animations
 include css-animations/reftest.list
@@ -88,6 +89,10 @@ include css-parsing/reftest.list
 
 # css placeholder
 include css-placeholder/reftest.list
+
+# css ruby
+# (Skipping on B2G because of timeouts there; see bug 1054383)
+skip-if(B2G) include css-ruby/reftest.list
 
 # css required
 include css-required/reftest.list
@@ -139,6 +144,9 @@ include ../../content/test/reftest/reftest.list
 
 # counters/
 include counters/reftest.list
+
+# counter-style/
+include counter-style/reftest.list
 
 # datalist
 include datalist/reftest.list
@@ -264,11 +272,11 @@ include pagination/reftest.list
 # <style scoped>
 include scoped-style/reftest.list
 
-# scrolling 
+# scrolling
 include scrolling/reftest.list
 
 # selection
-skip-if(B2G&&browserIsRemote) include selection/reftest.list
+include selection/reftest.list
 
 # sticky positioning
 include position-sticky/reftest.list
@@ -295,6 +303,8 @@ include table-overflow/reftest.list
 
 # table-width/
 include table-width/reftest.list
+
+include ../tables/reftests/reftest.list
 
 # text/
 include text/reftest.list

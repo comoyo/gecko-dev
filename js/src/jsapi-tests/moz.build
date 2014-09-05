@@ -24,6 +24,7 @@ UNIFIED_SOURCES += [
     'testDeepFreeze.cpp',
     'testDefineGetterSetterNonEnumerable.cpp',
     'testDefineProperty.cpp',
+    'testDefinePropertyIgnoredAttributes.cpp',
     'testEnclosingFunction.cpp',
     'testErrorCopying.cpp',
     'testException.cpp',
@@ -35,6 +36,7 @@ UNIFIED_SOURCES += [
     'testGCAllocator.cpp',
     'testGCExactRooting.cpp',
     'testGCFinalizeCallback.cpp',
+    'testGCHeapPostBarriers.cpp',
     'testGCOutOfMemory.cpp',
     'testGCStoreBufferRemoval.cpp',
     'testHashTable.cpp',
@@ -62,15 +64,18 @@ UNIFIED_SOURCES += [
     'testResolveRecursion.cpp',
     'tests.cpp',
     'testSameValue.cpp',
+    'testSavedStacks.cpp',
     'testScriptInfo.cpp',
     'testScriptObject.cpp',
     'testSetProperty.cpp',
+    'testSetPropertyIgnoringNamedGetter.cpp',
     'testSourcePolicy.cpp',
     'testStringBuffer.cpp',
     'testStructuredClone.cpp',
+    'testSymbol.cpp',
     'testToIntWidth.cpp',
-    'testTrap.cpp',
     'testTypedArrays.cpp',
+    'testUbiNode.cpp',
     'testUncaughtError.cpp',
     'testUTF8.cpp',
     'testWeakMap.cpp',
@@ -79,6 +84,9 @@ UNIFIED_SOURCES += [
 
 if CONFIG['ENABLE_ION']:
     UNIFIED_SOURCES += [
+        'testJitDCEinGVN.cpp',
+        'testJitFoldsTo.cpp',
+        'testJitMoveEmitterCycles.cpp',
         'testJitRValueAlloc.cpp',
     ]
 
@@ -89,3 +97,9 @@ DEFINES['IMPL_MFBT'] = True
 
 LOCAL_INCLUDES += ['..']
 GENERATED_INCLUDES += ['..']
+
+USE_LIBS += [
+    'static:js',
+]
+
+OS_LIBS += CONFIG['MOZ_ZLIB_LIBS']

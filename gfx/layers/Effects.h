@@ -42,11 +42,11 @@ struct Effect
 {
   NS_INLINE_DECL_REFCOUNTING(Effect)
 
-  Effect(EffectTypes aType) : mType(aType) {}
+  explicit Effect(EffectTypes aType) : mType(aType) {}
 
   EffectTypes mType;
 
-  virtual void PrintInfo(nsACString& aTo, const char* aPrefix) = 0;
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) = 0;
 
 protected:
   virtual ~Effect() {}
@@ -67,12 +67,12 @@ struct TexturedEffect : public Effect
   {}
 
   virtual const char* Name() = 0;
-  virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
 
   gfx::Rect mTextureCoords;
   TextureSource* mTexture;
   bool mPremultiplied;
-  gfx::Filter mFilter;;
+  gfx::Filter mFilter;
 };
 
 // Support an alpha mask.
@@ -88,7 +88,7 @@ struct EffectMask : public Effect
     , mMaskTransform(aMaskTransform)
   {}
 
-  virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
 
   TextureSource* mMaskTexture;
   bool mIs3D;
@@ -98,13 +98,13 @@ struct EffectMask : public Effect
 
 struct EffectBlendMode : public Effect
 {
-  EffectBlendMode(gfx::CompositionOp aBlendMode)
+  explicit EffectBlendMode(gfx::CompositionOp aBlendMode)
     : Effect(EffectTypes::BLEND_MODE)
     , mBlendMode(aBlendMode)
   { }
 
   virtual const char* Name() { return "EffectBlendMode"; }
-  virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
 
   gfx::CompositionOp mBlendMode;
 };
@@ -112,16 +112,37 @@ struct EffectBlendMode : public Effect
 // Render to a render target rather than the screen.
 struct EffectRenderTarget : public TexturedEffect
 {
-  EffectRenderTarget(CompositingRenderTarget *aRenderTarget)
+  explicit EffectRenderTarget(CompositingRenderTarget *aRenderTarget)
     : TexturedEffect(EffectTypes::RENDER_TARGET, aRenderTarget, true, gfx::Filter::LINEAR)
     , mRenderTarget(aRenderTarget)
   {}
 
   virtual const char* Name() { return "EffectRenderTarget"; }
-  virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
 
   RefPtr<CompositingRenderTarget> mRenderTarget;
+
+protected:
+  EffectRenderTarget(EffectTypes aType, CompositingRenderTarget *aRenderTarget)
+    : TexturedEffect(aType, aRenderTarget, true, gfx::Filter::LINEAR)
+    , mRenderTarget(aRenderTarget)
+  {}
+
 };
+
+// Render to a render target rather than the screen.
+struct EffectColorMatrix : public Effect
+{
+  explicit EffectColorMatrix(gfx::Matrix5x4 aMatrix)
+    : Effect(EffectTypes::COLOR_MATRIX)
+    , mColorMatrix(aMatrix)
+  {}
+
+  virtual const char* Name() { return "EffectColorMatrix"; }
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
+  const gfx::Matrix5x4 mColorMatrix;
+};
+
 
 struct EffectRGB : public TexturedEffect
 {
@@ -162,12 +183,12 @@ struct EffectComponentAlpha : public TexturedEffect
 
 struct EffectSolidColor : public Effect
 {
-  EffectSolidColor(const gfx::Color &aColor)
+  explicit EffectSolidColor(const gfx::Color &aColor)
     : Effect(EffectTypes::SOLID_COLOR)
     , mColor(aColor)
   {}
 
-  virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
 
   gfx::Color mColor;
 };
@@ -195,7 +216,8 @@ struct EffectChain
 inline TemporaryRef<TexturedEffect>
 CreateTexturedEffect(gfx::SurfaceFormat aFormat,
                      TextureSource* aSource,
-                     const gfx::Filter& aFilter)
+                     const gfx::Filter& aFilter,
+                     bool isAlphaPremultiplied)
 {
   MOZ_ASSERT(aSource);
   RefPtr<TexturedEffect> result;
@@ -205,7 +227,7 @@ CreateTexturedEffect(gfx::SurfaceFormat aFormat,
   case gfx::SurfaceFormat::R8G8B8X8:
   case gfx::SurfaceFormat::R5G6B5:
   case gfx::SurfaceFormat::R8G8B8A8:
-    result = new EffectRGB(aSource, true, aFilter);
+    result = new EffectRGB(aSource, isAlphaPremultiplied, aFilter);
     break;
   case gfx::SurfaceFormat::YUV:
     result = new EffectYCbCr(aSource, aFilter);
@@ -227,7 +249,8 @@ CreateTexturedEffect(gfx::SurfaceFormat aFormat,
 inline TemporaryRef<TexturedEffect>
 CreateTexturedEffect(TextureSource* aSource,
                      TextureSource* aSourceOnWhite,
-                     const gfx::Filter& aFilter)
+                     const gfx::Filter& aFilter,
+                     bool isAlphaPremultiplied)
 {
   MOZ_ASSERT(aSource);
   if (aSourceOnWhite) {
@@ -236,7 +259,10 @@ CreateTexturedEffect(TextureSource* aSource,
     return new EffectComponentAlpha(aSource, aSourceOnWhite, aFilter);
   }
 
-  return CreateTexturedEffect(aSource->GetFormat(), aSource, aFilter);
+  return CreateTexturedEffect(aSource->GetFormat(),
+                              aSource,
+                              aFilter,
+                              isAlphaPremultiplied);
 }
 
 /**
@@ -248,7 +274,7 @@ inline TemporaryRef<TexturedEffect>
 CreateTexturedEffect(TextureSource *aTexture,
                      const gfx::Filter& aFilter)
 {
-  return CreateTexturedEffect(aTexture, nullptr, aFilter);
+  return CreateTexturedEffect(aTexture, nullptr, aFilter, true);
 }
 
 

@@ -24,9 +24,10 @@ public:
   nsresult Init();
 
 private:
+  ~ThirdPartyUtil() {}
+
   nsresult IsThirdPartyInternal(const nsCString& aFirstDomain,
     nsIURI* aSecondURI, bool* aResult);
-  static already_AddRefed<nsIURI> GetURIFromWindow(nsIDOMWindow* aWin);
 
   nsCOMPtr<nsIEffectiveTLDService> mTLDService;
 };

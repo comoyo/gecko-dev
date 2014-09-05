@@ -38,17 +38,25 @@ class PLayerChild;
 class TextureClientPool;
 class SimpleTextureClientPool;
 
-class ClientLayerManager : public LayerManager
+class ClientLayerManager MOZ_FINAL : public LayerManager
 {
   typedef nsTArray<nsRefPtr<Layer> > LayerRefArray;
 
 public:
-  ClientLayerManager(nsIWidget* aWidget);
+  explicit ClientLayerManager(nsIWidget* aWidget);
+
+protected:
   virtual ~ClientLayerManager();
 
+public:
   virtual ShadowLayerForwarder* AsShadowForwarder()
   {
     return mForwarder;
+  }
+
+  virtual ClientLayerManager* AsClientLayerManager()
+  {
+    return this;
   }
 
   virtual int32_t GetMaxTextureSize() const;
@@ -73,11 +81,14 @@ public:
 
   virtual void Mutated(Layer* aLayer);
 
+  virtual bool IsOptimizedFor(ThebesLayer* aLayer, ThebesLayerCreationHint aHint);
+
   virtual already_AddRefed<ThebesLayer> CreateThebesLayer();
   virtual already_AddRefed<ThebesLayer> CreateThebesLayerWithHint(ThebesLayerCreationHint aHint);
   virtual already_AddRefed<ContainerLayer> CreateContainerLayer();
   virtual already_AddRefed<ImageLayer> CreateImageLayer();
   virtual already_AddRefed<CanvasLayer> CreateCanvasLayer();
+  virtual already_AddRefed<ReadbackLayer> CreateReadbackLayer();
   virtual already_AddRefed<ColorLayer> CreateColorLayer();
   virtual already_AddRefed<RefLayer> CreateRefLayer();
 
@@ -105,8 +116,8 @@ public:
 
   virtual void SetIsFirstPaint() MOZ_OVERRIDE;
 
-  TextureClientPool *GetTexturePool(gfx::SurfaceFormat aFormat);
-  SimpleTextureClientPool *GetSimpleTileTexturePool(gfx::SurfaceFormat aFormat);
+  TextureClientPool* GetTexturePool(gfx::SurfaceFormat aFormat);
+  SimpleTextureClientPool* GetSimpleTileTexturePool(gfx::SurfaceFormat aFormat);
 
   // Drop cached resources and ask our shadow manager to do the same,
   // if we have one.
@@ -121,7 +132,7 @@ public:
 
   bool HasShadowTarget() { return !!mShadowTarget; }
 
-  void SetShadowTarget(gfxContext *aTarget) { mShadowTarget = aTarget; }
+  void SetShadowTarget(gfxContext* aTarget) { mShadowTarget = aTarget; }
 
   bool CompositorMightResample() { return mCompositorMightResample; } 
   
@@ -131,12 +142,17 @@ public:
   void* GetThebesLayerCallbackData() const
   { return mThebesLayerCallbackData; }
 
-  CompositorChild *GetRemoteRenderer();
+  CompositorChild* GetRemoteRenderer();
+
+  CompositorChild* GetCompositorChild();
+
+  // Disable component alpha layers with the software compositor.
+  virtual bool ShouldAvoidComponentAlphaLayers() { return !IsCompositingCheap(); }
 
   /**
-   * Called for each iteration of a progressive tile update. Fills
-   * aCompositionBounds and aZoom with the current scale and composition bounds
-   * being used to composite the layers in this manager, to determine what area
+   * Called for each iteration of a progressive tile update. Updates
+   * aMetrics with the current scroll offset and scale being used to composite
+   * the primary scrollable layer in this manager, to determine what area
    * intersects with the target composition bounds.
    * aDrawingCritical will be true if the current drawing operation is using
    * the critical displayport.
@@ -146,8 +162,7 @@ public:
    * true.
    */
   bool ProgressiveUpdateCallback(bool aHasPendingNewThebesContent,
-                                 ParentLayerRect& aCompositionBounds,
-                                 CSSToParentLayerScale& aZoom,
+                                 FrameMetrics& aMetrics,
                                  bool aDrawingCritical);
 
   bool InConstruction() { return mPhase == PHASE_CONSTRUCTION; }
@@ -174,6 +189,8 @@ public:
    return (GetTextureFactoryIdentifier().mSupportedBlendModes & aMixBlendModes) == aMixBlendModes;
   }
 
+  virtual bool AreComponentAlphaLayersEnabled() MOZ_OVERRIDE;
+
   // Log APZ test data for the current paint. We supply the paint sequence
   // number ourselves, and take care of calling APZTestData::StartNewPaint()
   // when a new paint is started.
@@ -187,10 +204,8 @@ public:
   // Log APZ test data for a repaint request. The sequence number must be
   // passed in from outside, and APZTestData::StartNewRepaintRequest() needs
   // to be called from the outside as well when a new repaint request is started.
-  void StartNewRepaintRequest(SequenceNumber aSequenceNumber)
-  {
-    mApzTestData.StartNewRepaintRequest(aSequenceNumber);
-  }
+  void StartNewRepaintRequest(SequenceNumber aSequenceNumber);
+
   // TODO(botond): When we start using this and write a wrapper similar to
   // nsLayoutUtils::LogTestDataForPaint(), make sure that wrapper checks
   // gfxPrefs::APZTestLoggingEnabled().
@@ -285,6 +300,7 @@ private:
   RefPtr<ShadowLayerForwarder> mForwarder;
   nsAutoTArray<RefPtr<TextureClientPool>,2> mTexturePools;
   nsAutoTArray<dom::OverfillCallback*,0> mOverfillCallbacks;
+  mozilla::TimeStamp mTransactionStart;
 
   // indexed by gfx::SurfaceFormat
   nsTArray<RefPtr<SimpleTextureClientPool> > mSimpleTilePools;
@@ -319,6 +335,7 @@ public:
   virtual void ClearCachedResources() { }
 
   virtual void RenderLayer() = 0;
+  virtual void RenderLayerWithReadback(ReadbackProcessor *aReadback) { RenderLayer(); }
 
   virtual ClientThebesLayer* AsThebes() { return nullptr; }
 

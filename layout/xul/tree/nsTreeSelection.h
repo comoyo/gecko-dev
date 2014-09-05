@@ -19,8 +19,7 @@ struct nsTreeRange;
 class nsTreeSelection MOZ_FINAL : public nsINativeTreeSelection
 {
 public:
-  nsTreeSelection(nsITreeBoxObject* aTree);
-  ~nsTreeSelection();
+  explicit nsTreeSelection(nsITreeBoxObject* aTree);
    
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(nsTreeSelection)
@@ -32,6 +31,8 @@ public:
   friend struct nsTreeRange;
 
 protected:
+  ~nsTreeSelection();
+
   nsresult FireOnSelectHandler();
   static void SelectCallback(nsITimer *aTimer, void *aClosure);
 

@@ -90,11 +90,17 @@ public:
     PushFrame(aFrame);
   }
 
-  void BlockDirAlignLine();
+  /**
+   * Place frames in the block direction (CSS property vertical-align)
+   */
+  void VerticalAlignLine();
 
   bool TrimTrailingWhiteSpace();
 
-  void InlineDirAlignFrames(nsLineBox* aLine, bool aIsLastLine);
+  /**
+   * Place frames in the inline direction (CSS property text-align).
+   */
+  void TextAlignLine(nsLineBox* aLine, bool aIsLastLine);
 
   /**
    * Handle all the relative positioning in the line, compute the
@@ -310,6 +316,20 @@ public:
    */
   nscoord GetCurrentFrameInlineDistanceFromBlock();
 
+  /**
+   * Move the inline position where the next frame will be reflowed forward by
+   * aAmount.
+   */
+  void AdvanceICoord(nscoord aAmount);
+  /**
+   * Returns the writing mode for the root span.
+   */
+  mozilla::WritingMode GetWritingMode();
+  /**
+   * Returns the inline position where the next frame will be reflowed.
+   */
+  nscoord GetCurrentICoord();
+
 protected:
   // This state is constant for a given block frame doing line layout
   nsFloatManager* mFloatManager;
@@ -337,7 +357,7 @@ protected:
   friend struct PerFrameData;
   struct PerFrameData
   {
-    PerFrameData(mozilla::WritingMode aWritingMode)
+    explicit PerFrameData(mozilla::WritingMode aWritingMode)
       : mBounds(aWritingMode)
       , mMargin(aWritingMode)
       , mBorderPadding(aWritingMode)
@@ -480,7 +500,7 @@ protected:
 
   nscoord mInflationMinFontSize;
 
-  // Final computed line-bSize value after BlockDirAlignFrames for
+  // Final computed line-bSize value after VerticalAlignFrames for
   // the block has been called.
   nscoord mFinalLineBSize;
   
@@ -542,11 +562,11 @@ protected:
   void PlaceFrame(PerFrameData* pfd,
                   nsHTMLReflowMetrics& aMetrics);
 
-  void BlockDirAlignFrames(PerSpanData* psd);
+  void VerticalAlignFrames(PerSpanData* psd);
 
-  void PlaceStartEndFrames(PerSpanData* psd,
-                           nscoord aDistanceFromStart,
-                           nscoord aLineBSize);
+  void PlaceTopBottomFrames(PerSpanData* psd,
+                            nscoord aDistanceFromStart,
+                            nscoord aLineBSize);
 
   void RelativePositionFrames(PerSpanData* psd, nsOverflowAreas& aOverflowAreas);
 

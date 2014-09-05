@@ -7,6 +7,7 @@
 #ifndef SharedBufferManagerPARENT_H_
 #define SharedBufferManagerPARENT_H_
 
+#include "mozilla/Atomics.h"          // for Atomic
 #include "mozilla/layers/PSharedBufferManagerParent.h"
 #include "mozilla/StaticPtr.h"
 
@@ -32,19 +33,15 @@ namespace layers {
 
 class SharedBufferManagerParent : public PSharedBufferManagerParent
 {
+friend class GrallocReporter;
 public:
   /**
    * Create a SharedBufferManagerParent for child process, and link to the child side before leaving
    */
   static PSharedBufferManagerParent* Create(Transport* aTransport, ProcessId aOtherProcess);
 
-  /**
-   * Function for find the buffer owner, most buffer passing on IPC contains only owner/key pair.
-   * Use these function to access the real buffer.
-   */
-  static SharedBufferManagerParent* GetInstance(ProcessId id);
 #ifdef MOZ_HAVE_SURFACEDESCRIPTORGRALLOC
-  android::sp<android::GraphicBuffer> GetGraphicBuffer(int key);
+  android::sp<android::GraphicBuffer> GetGraphicBuffer(int64_t key);
   static android::sp<android::GraphicBuffer> GetGraphicBuffer(GrallocBufferRef aRef);
 #endif
   /**
@@ -64,7 +61,7 @@ public:
   /**
    * Break the buffer's sharing state, decrease buffer reference for both side
    */
-  void DropGrallocBuffer(mozilla::layers::SurfaceDescriptor aDesc);
+  static void DropGrallocBuffer(ProcessId id, mozilla::layers::SurfaceDescriptor aDesc);
 
   // Overriden from IToplevelProtocol
   IToplevelProtocol*
@@ -74,10 +71,6 @@ public:
   MessageLoop* GetMessageLoop();
 
 protected:
-  /**
-   * All living SharedBufferManager instances used to find the buffer owner, and parent->child IPCs
-   */
-  static std::map<base::ProcessId, SharedBufferManagerParent*> sManagers;
 
   /**
    * Break the buffer's sharing state, decrease buffer reference for both side
@@ -89,18 +82,33 @@ protected:
   // dispatched function
   static void DropGrallocBufferSync(SharedBufferManagerParent* mgr, mozilla::layers::SurfaceDescriptor aDesc);
 
+  /**
+   * Function for find the buffer owner, most buffer passing on IPC contains only owner/key pair.
+   * Use these function to access the real buffer.
+   * Caller needs to hold sManagerMonitor.
+   */
+  static SharedBufferManagerParent* GetInstance(ProcessId id);
+
+  /**
+   * All living SharedBufferManager instances used to find the buffer owner, and parent->child IPCs
+   */
+  static std::map<base::ProcessId, SharedBufferManagerParent*> sManagers;
+
 #ifdef MOZ_HAVE_SURFACEDESCRIPTORGRALLOC
   /**
    * Buffers owned by this SharedBufferManager pair
    */
-  std::map<int, android::sp<android::GraphicBuffer> > mBuffers;
-  Mutex mBuffersMutex;
+  std::map<int64_t, android::sp<android::GraphicBuffer> > mBuffers;
 #endif
   
   Transport* mTransport;
   base::ProcessId mOwner;
   base::Thread* mThread;
-  static int sBufferKey;
+  MessageLoop* mMainMessageLoop;
+  bool mDestroyed;
+  Mutex mLock;
+
+  static uint64_t sBufferKey;
   static StaticAutoPtr<Monitor> sManagerMonitor;
 };
 

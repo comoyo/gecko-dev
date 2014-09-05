@@ -20,9 +20,6 @@ class nsChildView;
 class nsMenuBarX;
 @class ChildView;
 
-// Value copied from BITMAP_MAX_AREA, used in nsNativeThemeCocoa.mm
-#define CUIDRAW_MAX_AREA 500000
-
 // If we are using an SDK older than 10.7, define bits we need that are missing
 // from it.
 #if !defined(MAC_OS_X_VERSION_10_7) || \
@@ -236,7 +233,6 @@ private:
 public:
 
     nsCocoaWindow();
-    virtual ~nsCocoaWindow();
 
     NS_DECL_ISUPPORTS_INHERITED
     NS_DECL_NSPIWIDGETCOCOA
@@ -315,8 +311,6 @@ public:
 
     void DispatchSizeModeEvent();
 
-    virtual gfxASurface* GetThebesSurface();
-
     // be notified that a some form of drag event needs to go into Gecko
     virtual bool DragEvent(unsigned int aMessage, Point aMouseGlobal, UInt16 aKeyModifiers);
 
@@ -354,6 +348,7 @@ public:
 
     NS_IMETHOD         ReparentNativeWidget(nsIWidget* aNewParent);
 protected:
+  virtual ~nsCocoaWindow();
 
   nsresult             CreateNativeWindow(const NSRect &aRect,
                                           nsBorderStyle aBorderStyle,

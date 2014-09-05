@@ -8,6 +8,7 @@
 #define js_RootingAPI_h
 
 #include "mozilla/Attributes.h"
+#include "mozilla/DebugOnly.h"
 #include "mozilla/GuardObjects.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/NullPtr.h"
@@ -15,6 +16,7 @@
 
 #include "jspubtd.h"
 
+#include "js/GCAPI.h"
 #include "js/HeapAPI.h"
 #include "js/TypeDecls.h"
 #include "js/Utility.h"
@@ -102,8 +104,6 @@
 
 namespace js {
 
-class ScriptSourceObject;
-
 template <typename T>
 struct GCMethods {};
 
@@ -166,6 +166,23 @@ struct JS_PUBLIC_API(NullPtr)
 {
     static void * const constNullValue;
 };
+
+#ifdef JSGC_GENERATIONAL
+JS_FRIEND_API(void) HeapCellPostBarrier(js::gc::Cell **cellp);
+JS_FRIEND_API(void) HeapCellRelocate(js::gc::Cell **cellp);
+#endif
+
+#ifdef JS_DEBUG
+/*
+ * For generational GC, assert that an object is in the tenured generation as
+ * opposed to being in the nursery.
+ */
+extern JS_FRIEND_API(void)
+AssertGCThingMustBeTenured(JSObject* obj);
+#else
+inline void
+AssertGCThingMustBeTenured(JSObject *obj) {}
+#endif
 
 /*
  * The Heap<T> class is a heap-stored reference to a JS GC thing. All members of
@@ -285,18 +302,6 @@ class Heap : public js::HeapBase<T>
 
     T ptr;
 };
-
-#ifdef JS_DEBUG
-/*
- * For generational GC, assert that an object is in the tenured generation as
- * opposed to being in the nursery.
- */
-extern JS_FRIEND_API(void)
-AssertGCThingMustBeTenured(JSObject* obj);
-#else
-inline void
-AssertGCThingMustBeTenured(JSObject *obj) {}
-#endif
 
 /*
  * The TenuredHeap<T> class is similar to the Heap<T> class above in that it
@@ -561,11 +566,6 @@ class MOZ_STACK_CLASS MutableHandle : public js::MutableHandleBase<T>
     void operator=(MutableHandle other) MOZ_DELETE;
 };
 
-#ifdef JSGC_GENERATIONAL
-JS_FRIEND_API(void) HeapCellPostBarrier(js::gc::Cell **cellp);
-JS_FRIEND_API(void) HeapCellRelocate(js::gc::Cell **cellp);
-#endif
-
 } /* namespace JS */
 
 namespace js {
@@ -667,6 +667,12 @@ struct GCMethods<JSObject *>
 {
     static JSObject *initial() { return nullptr; }
     static bool poisoned(JSObject *v) { return JS::IsPoisonedPtr(v); }
+    static gc::Cell *asGCThingOrNull(JSObject *v) {
+        if (!v)
+            return nullptr;
+        JS_ASSERT(uintptr_t(v) > 32);
+        return reinterpret_cast<gc::Cell *>(v);
+    }
     static bool needsPostBarrier(JSObject *v) {
         return v != nullptr && gc::IsInsideNursery(reinterpret_cast<gc::Cell *>(v));
     }
@@ -675,6 +681,24 @@ struct GCMethods<JSObject *>
         JS::HeapCellPostBarrier(reinterpret_cast<js::gc::Cell **>(vp));
     }
     static void relocate(JSObject **vp) {
+        JS::HeapCellRelocate(reinterpret_cast<js::gc::Cell **>(vp));
+    }
+#endif
+};
+
+template <>
+struct GCMethods<JSFunction *>
+{
+    static JSFunction *initial() { return nullptr; }
+    static bool poisoned(JSFunction *v) { return JS::IsPoisonedPtr(v); }
+    static bool needsPostBarrier(JSFunction *v) {
+        return v != nullptr && gc::IsInsideNursery(reinterpret_cast<gc::Cell *>(v));
+    }
+#ifdef JSGC_GENERATIONAL
+    static void postBarrier(JSFunction **vp) {
+        JS::HeapCellPostBarrier(reinterpret_cast<js::gc::Cell **>(vp));
+    }
+    static void relocate(JSFunction **vp) {
         JS::HeapCellRelocate(reinterpret_cast<js::gc::Cell **>(vp));
     }
 #endif
@@ -999,12 +1023,12 @@ template <typename T> class MaybeRooted<T, NoGC>
     typedef FakeRooted<T> RootType;
     typedef FakeMutableHandle<T> MutableHandleType;
 
-    static inline JS::Handle<T> toHandle(HandleType v) {
-        MOZ_ASSUME_UNREACHABLE("Bad conversion");
+    static JS::Handle<T> toHandle(HandleType v) {
+        MOZ_CRASH("Bad conversion");
     }
 
-    static inline JS::MutableHandle<T> toMutableHandle(MutableHandleType v) {
-        MOZ_ASSUME_UNREACHABLE("Bad conversion");
+    static JS::MutableHandle<T> toMutableHandle(MutableHandleType v) {
+        MOZ_CRASH("Bad conversion");
     }
 };
 
@@ -1091,7 +1115,7 @@ class PersistentRooted : private mozilla::LinkedListElement<PersistentRooted<T> 
     friend class mozilla::LinkedList<PersistentRooted>;
     friend class mozilla::LinkedListElement<PersistentRooted>;
 
-    friend class js::gc::PersistentRootedMarker<T>;
+    friend struct js::gc::PersistentRootedMarker<T>;
 
     void registerWithRuntime(JSRuntime *rt) {
         JS::shadow::Runtime *srt = JS::shadow::Runtime::asShadowRuntime(rt);
@@ -1119,7 +1143,7 @@ class PersistentRooted : private mozilla::LinkedListElement<PersistentRooted<T> 
         registerWithRuntime(rt);
     }
 
-    PersistentRooted(PersistentRooted &rhs)
+    PersistentRooted(const PersistentRooted &rhs)
       : mozilla::LinkedListElement<PersistentRooted<T> >(),
         ptr(rhs.ptr)
     {
@@ -1127,8 +1151,11 @@ class PersistentRooted : private mozilla::LinkedListElement<PersistentRooted<T> 
          * Copy construction takes advantage of the fact that the original
          * is already inserted, and simply adds itself to whatever list the
          * original was on - no JSRuntime pointer needed.
+         *
+         * This requires mutating rhs's links, but those should be 'mutable'
+         * anyway. C++ doesn't let us declare mutable base classes.
          */
-        rhs.setNext(this);
+        const_cast<PersistentRooted &>(rhs).setNext(this);
     }
 
     /*
@@ -1165,26 +1192,68 @@ class PersistentRooted : private mozilla::LinkedListElement<PersistentRooted<T> 
     T ptr;
 };
 
+class JS_PUBLIC_API(ObjectPtr)
+{
+    Heap<JSObject *> value;
+
+  public:
+    ObjectPtr() : value(nullptr) {}
+
+    explicit ObjectPtr(JSObject *obj) : value(obj) {}
+
+    /* Always call finalize before the destructor. */
+    ~ObjectPtr() { MOZ_ASSERT(!value); }
+
+    void finalize(JSRuntime *rt) {
+        if (IsIncrementalBarrierNeeded(rt))
+            IncrementalObjectBarrier(value);
+        value = nullptr;
+    }
+
+    void init(JSObject *obj) { value = obj; }
+
+    JSObject *get() const { return value; }
+
+    void writeBarrierPre(JSRuntime *rt) {
+        IncrementalObjectBarrier(value);
+    }
+
+    bool isAboutToBeFinalized();
+
+    ObjectPtr &operator=(JSObject *obj) {
+        IncrementalObjectBarrier(value);
+        value = obj;
+        return *this;
+    }
+
+    void trace(JSTracer *trc, const char *name);
+
+    JSObject &operator*() const { return *value; }
+    JSObject *operator->() const { return value; }
+    operator JSObject *() const { return value; }
+};
+
 } /* namespace JS */
 
 namespace js {
+namespace gc {
 
-/* Base class for automatic read-only object rooting during compilation. */
-class CompilerRootNode
+template <typename T, typename TraceCallbacks>
+void
+CallTraceCallbackOnNonHeap(T *v, const TraceCallbacks &aCallbacks, const char *aName, void *aClosure)
 {
-  protected:
-    explicit CompilerRootNode(js::gc::Cell *ptr) : next(nullptr), ptr_(ptr) {}
+    static_assert(sizeof(T) == sizeof(JS::Heap<T>), "T and Heap<T> must be compatible.");
+    MOZ_ASSERT(v);
+    mozilla::DebugOnly<Cell *> cell = GCMethods<T>::asGCThingOrNull(*v);
+    MOZ_ASSERT(cell);
+    MOZ_ASSERT(!IsInsideNursery(cell));
+    JS::Heap<T> *asHeapT = reinterpret_cast<JS::Heap<T>*>(v);
+    aCallbacks.Trace(asHeapT, aName, aClosure);
+    MOZ_ASSERT(GCMethods<T>::asGCThingOrNull(*v) == cell);
+}
 
-  public:
-    void **address() { return (void **)&ptr_; }
+} /* namespace gc */
 
-  public:
-    CompilerRootNode *next;
-
-  protected:
-    js::gc::Cell *ptr_;
-};
-
-}  /* namespace js */
+} /* namespace js */
 
 #endif  /* js_RootingAPI_h */

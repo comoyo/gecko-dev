@@ -566,7 +566,7 @@ function sendMMI(aMmi) {
  * Query current voice privacy mode.
  *
  * Fulfill params:
-     A boolean indicates the current voice privacy mode.
+ *   A boolean indicates the current voice privacy mode.
  * Reject params:
  *   'RadioNotAvailable', 'RequestNotSupported', or 'GenericFailure'.
  *
@@ -576,6 +576,54 @@ function sendMMI(aMmi) {
   let request = mobileConnection.getVoicePrivacyMode();
   return wrapDomRequestAsPromise(request)
     .then(() => request.result, () => { throw request.error });
+}
+
+/**
+ * Configures call barring options.
+ *
+ * Fulfill params: (none)
+ * Reject params:
+ *   'RadioNotAvailable', 'RequestNotSupported', 'InvalidParameter' or
+ *   'GenericFailure'.
+ *
+ * @return A deferred promise.
+ */
+ function setCallBarringOption(aOptions) {
+  let request = mobileConnection.setCallBarringOption(aOptions);
+  return wrapDomRequestAsPromise(request)
+    .then(null, () => { throw request.error });
+}
+
+/**
+ * Queries current call barring status.
+ *
+ * Fulfill params:
+ *   An object contains call barring status.
+ * Reject params:
+ *   'RadioNotAvailable', 'RequestNotSupported', 'InvalidParameter' or
+ *   'GenericFailure'.
+ *
+ * @return A deferred promise.
+ */
+ function getCallBarringOption(aOptions) {
+  let request = mobileConnection.getCallBarringOption(aOptions);
+  return wrapDomRequestAsPromise(request)
+    .then(() => request.result, () => { throw request.error });
+}
+
+/**
+ * Change call barring facility password.
+ *
+ * Fulfill params: (none)
+ * Reject params:
+ *   'RadioNotAvailable', 'RequestNotSupported', or 'GenericFailure'.
+ *
+ * @return A deferred promise.
+ */
+ function changeCallBarringPassword(aOptions) {
+  let request = mobileConnection.changeCallBarringPassword(aOptions);
+  return wrapDomRequestAsPromise(request)
+    .then(null, () => { throw request.error });
 }
 
 /**
@@ -959,6 +1007,94 @@ function setEmulatorOperatorNamesAndWait(aOperator, aLongName, aShortName,
   return Promise.all(promises);
 }
 
+/**
+ * Set GSM signal strength.
+ *
+ * Fulfill params: (none)
+ * Reject params: (none)
+ *
+ * @param aRssi
+ *
+ * @return A deferred promise.
+ */
+function setEmulatorGsmSignalStrength(aRssi) {
+  let cmd = "gsm signal " + aRssi;
+  return runEmulatorCmdSafe(cmd);
+}
+
+/**
+ * Set emulator GSM signal strength and wait for voice and/or data state change.
+ *
+ * Fulfill params: (none)
+ *
+ * @param aRssi
+ * @param aWaitVoice [optional]
+ *        A boolean value.  Default true.
+ * @param aWaitData [optional]
+ *        A boolean value.  Default false.
+ *
+ * @return A deferred promise.
+ */
+function setEmulatorGsmSignalStrengthAndWait(aRssi,
+                                             aWaitVoice = true,
+                                             aWaitData = false) {
+  let promises = [];
+  if (aWaitVoice) {
+    promises.push(waitForManagerEvent("voicechange"));
+  }
+  if (aWaitData) {
+    promises.push(waitForManagerEvent("datachange"));
+  }
+  promises.push(setEmulatorGsmSignalStrength(aRssi));
+  return Promise.all(promises);
+}
+
+/**
+ * Set LTE signal strength.
+ *
+ * Fulfill params: (none)
+ * Reject params: (none)
+ *
+ * @param aRxlev
+ * @param aRsrp
+ * @param aRssnr
+ *
+ * @return A deferred promise.
+ */
+function setEmulatorLteSignalStrength(aRxlev, aRsrp, aRssnr) {
+  let cmd = "gsm lte_signal " + aRxlev + " " + aRsrp + " " + aRssnr;
+  return runEmulatorCmdSafe(cmd);
+}
+
+/**
+ * Set emulator LTE signal strength and wait for voice and/or data state change.
+ *
+ * Fulfill params: (none)
+ *
+ * @param aRxlev
+ * @param aRsrp
+ * @param aRssnr
+ * @param aWaitVoice [optional]
+ *        A boolean value.  Default true.
+ * @param aWaitData [optional]
+ *        A boolean value.  Default false.
+ *
+ * @return A deferred promise.
+ */
+function setEmulatorLteSignalStrengthAndWait(aRxlev, aRsrp, aRssnr,
+                                             aWaitVoice = true,
+                                             aWaitData = false) {
+  let promises = [];
+  if (aWaitVoice) {
+    promises.push(waitForManagerEvent("voicechange"));
+  }
+  if (aWaitData) {
+    promises.push(waitForManagerEvent("datachange"));
+  }
+  promises.push(setEmulatorLteSignalStrength(aRxlev, aRsrp, aRssnr));
+  return Promise.all(promises);
+}
+
 let _networkManager;
 
 /**
@@ -992,17 +1128,13 @@ function getNumOfRadioInterfaces() {
 }
 
 /**
- * Flush permission settings and call |finish()|.
+ * Wait for pending emulator transactions and call |finish()|.
  */
 function cleanUp() {
-  waitFor(function() {
-    SpecialPowers.flushPermissions(function() {
-      // Use ok here so that we have at least one test run.
-      ok(true, "permissions flushed");
+  // Use ok here so that we have at least one test run.
+  ok(true, ":: CLEANING UP ::");
 
-      finish();
-    });
-  }, function() {
+  waitFor(finish, function() {
     return _pendingEmulatorCmdCount === 0 &&
            _pendingEmulatorShellCmdCount === 0;
   });

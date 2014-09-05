@@ -77,6 +77,8 @@ public class FxAccountUpdateCredentialsActivity extends FxAccountAbstractSetupAc
 
     TextView view = (TextView) findViewById(R.id.forgot_password_link);
     ActivityUtils.linkTextView(view, R.string.fxaccount_sign_in_forgot_password, R.string.fxaccount_link_forgot_password);
+
+    updateFromIntentExtras();
   }
 
   @Override
@@ -158,7 +160,8 @@ public class FxAccountUpdateCredentialsActivity extends FxAccountAbstractSetupAc
         fxAccount.dump();
       }
 
-      redirectToActivity(FxAccountStatusActivity.class);
+      setResult(RESULT_OK);
+      finish();
     }
   }
 

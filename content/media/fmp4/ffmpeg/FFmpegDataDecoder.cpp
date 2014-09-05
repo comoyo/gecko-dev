@@ -9,23 +9,28 @@
 
 #include "MediaTaskQueue.h"
 #include "mp4_demuxer/mp4_demuxer.h"
-#include "FFmpegRuntimeLinker.h"
-
+#include "FFmpegLibs.h"
+#include "FFmpegLog.h"
 #include "FFmpegDataDecoder.h"
+#include "prsystem.h"
 
 namespace mozilla
 {
 
-bool FFmpegDataDecoder::sFFmpegInitDone = false;
+bool FFmpegDataDecoder<LIBAV_VER>::sFFmpegInitDone = false;
 
-FFmpegDataDecoder::FFmpegDataDecoder(MediaTaskQueue* aTaskQueue,
-                                     AVCodecID aCodecID)
-  : mTaskQueue(aTaskQueue), mCodecID(aCodecID)
+FFmpegDataDecoder<LIBAV_VER>::FFmpegDataDecoder(MediaTaskQueue* aTaskQueue,
+                                                AVCodecID aCodecID)
+  : mTaskQueue(aTaskQueue)
+  , mCodecContext(nullptr)
+  , mFrame(NULL)
+  , mCodecID(aCodecID)
 {
   MOZ_COUNT_CTOR(FFmpegDataDecoder);
 }
 
-FFmpegDataDecoder::~FFmpegDataDecoder() {
+FFmpegDataDecoder<LIBAV_VER>::~FFmpegDataDecoder()
+{
   MOZ_COUNT_DTOR(FFmpegDataDecoder);
 }
 
@@ -51,14 +56,9 @@ ChoosePixelFormat(AVCodecContext* aCodecContext, const PixelFormat* aFormats)
 }
 
 nsresult
-FFmpegDataDecoder::Init()
+FFmpegDataDecoder<LIBAV_VER>::Init()
 {
   FFMPEG_LOG("Initialising FFmpeg decoder.");
-
-  if (!FFmpegRuntimeLinker::Link()) {
-    NS_WARNING("Failed to link FFmpeg shared libraries.");
-    return NS_ERROR_FAILURE;
-  }
 
   if (!sFFmpegInitDone) {
     av_register_all();
@@ -74,29 +74,44 @@ FFmpegDataDecoder::Init()
     return NS_ERROR_FAILURE;
   }
 
-  if (avcodec_get_context_defaults3(&mCodecContext, codec) < 0) {
+  if (!(mCodecContext = avcodec_alloc_context3(codec))) {
     NS_WARNING("Couldn't init ffmpeg context");
     return NS_ERROR_FAILURE;
   }
 
-  mCodecContext.opaque = this;
+  mCodecContext->opaque = this;
 
   // FFmpeg takes this as a suggestion for what format to use for audio samples.
-  mCodecContext.request_sample_fmt = AV_SAMPLE_FMT_FLT;
+  mCodecContext->request_sample_fmt = AV_SAMPLE_FMT_FLT;
 
   // FFmpeg will call back to this to negotiate a video pixel format.
-  mCodecContext.get_format = ChoosePixelFormat;
+  mCodecContext->get_format = ChoosePixelFormat;
 
-  AVDictionary* opts = nullptr;
-  if (avcodec_open2(&mCodecContext, codec, &opts) < 0) {
+  mCodecContext->thread_count = PR_GetNumberOfProcessors();
+  mCodecContext->thread_type = FF_THREAD_SLICE | FF_THREAD_FRAME;
+  mCodecContext->thread_safe_callbacks = false;
+
+  mCodecContext->extradata_size = mExtraData.length();
+  for (int i = 0; i < FF_INPUT_BUFFER_PADDING_SIZE; i++) {
+    mExtraData.append(0);
+  }
+  mCodecContext->extradata = mExtraData.begin();
+
+  if (codec->capabilities & CODEC_CAP_DR1) {
+    mCodecContext->flags |= CODEC_FLAG_EMU_EDGE;
+  }
+
+  if (avcodec_open2(mCodecContext, codec, nullptr) < 0) {
     NS_WARNING("Couldn't initialise ffmpeg decoder");
     return NS_ERROR_FAILURE;
   }
 
-  if (mCodecContext.codec_type == AVMEDIA_TYPE_AUDIO &&
-      mCodecContext.sample_fmt != AV_SAMPLE_FMT_FLT &&
-      mCodecContext.sample_fmt != AV_SAMPLE_FMT_FLTP) {
-    NS_WARNING("FFmpeg AAC decoder outputs unsupported audio format.");
+  if (mCodecContext->codec_type == AVMEDIA_TYPE_AUDIO &&
+      mCodecContext->sample_fmt != AV_SAMPLE_FMT_FLT &&
+      mCodecContext->sample_fmt != AV_SAMPLE_FMT_FLTP &&
+      mCodecContext->sample_fmt != AV_SAMPLE_FMT_S16 &&
+      mCodecContext->sample_fmt != AV_SAMPLE_FMT_S16P) {
+    NS_WARNING("FFmpeg audio decoder outputs unsupported audio format.");
     return NS_ERROR_FAILURE;
   }
 
@@ -105,20 +120,52 @@ FFmpegDataDecoder::Init()
 }
 
 nsresult
-FFmpegDataDecoder::Flush()
+FFmpegDataDecoder<LIBAV_VER>::Flush()
 {
   mTaskQueue->Flush();
-  avcodec_flush_buffers(&mCodecContext);
+  avcodec_flush_buffers(mCodecContext);
   return NS_OK;
 }
 
 nsresult
-FFmpegDataDecoder::Shutdown()
+FFmpegDataDecoder<LIBAV_VER>::Shutdown()
 {
   if (sFFmpegInitDone) {
-    avcodec_close(&mCodecContext);
+    avcodec_close(mCodecContext);
+    av_freep(&mCodecContext);
+#if LIBAVCODEC_VERSION_MAJOR >= 55
+    av_frame_free(&mFrame);
+#elif LIBAVCODEC_VERSION_MAJOR == 54
+    avcodec_free_frame(&mFrame);
+#else
+    delete mFrame;
+    mFrame = nullptr;
+#endif
   }
   return NS_OK;
+}
+
+AVFrame*
+FFmpegDataDecoder<LIBAV_VER>::PrepareFrame()
+{
+#if LIBAVCODEC_VERSION_MAJOR >= 55
+  if (mFrame) {
+    av_frame_unref(mFrame);
+  } else {
+    mFrame = av_frame_alloc();
+  }
+#elif LIBAVCODEC_VERSION_MAJOR == 54
+  if (mFrame) {
+    avcodec_get_frame_defaults(mFrame);
+  } else {
+    mFrame = avcodec_alloc_frame();
+  }
+#else
+  delete mFrame;
+  mFrame = new AVFrame;
+  avcodec_get_frame_defaults(mFrame);
+#endif
+  return mFrame;
 }
 
 } // namespace mozilla

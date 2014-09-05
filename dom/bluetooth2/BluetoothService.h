@@ -33,7 +33,6 @@ class BluetoothSignal;
 typedef mozilla::ObserverList<BluetoothSignal> BluetoothSignalObserverList;
 
 class BluetoothService : public nsIObserver
-                       , public BluetoothSignalObserver
 {
   class ToggleBtTask;
   friend class ToggleBtTask;
@@ -98,13 +97,6 @@ public:
   DistributeSignal(const BluetoothSignal& aEvent);
 
   /**
-   * Called when get a Bluetooth Signal from BluetoothDBusService
-   *
-   */
-  void
-  Notify(const BluetoothSignal& aParam);
-
-  /**
    * Returns the BluetoothService singleton. Only to be called from main thread.
    *
    * @param aService Pointer to return singleton into.
@@ -150,6 +142,16 @@ public:
   virtual nsresult
   GetConnectedDevicePropertiesInternal(uint16_t aServiceUuid,
                                        BluetoothReplyRunnable* aRunnable) = 0;
+
+  /**
+   * Returns up-to-date uuids of given device address,
+   * implemented via a platform specific methood.
+   *
+   * @return NS_OK on success, NS_ERROR_FAILURE otherwise
+   */
+  virtual nsresult
+  FetchUuidsInternal(const nsAString& aDeviceAddress,
+                     BluetoothReplyRunnable* aRunnable) = 0;
 
   /**
    * Stop device discovery (platform specific implementation)
@@ -209,15 +211,15 @@ public:
   UpdateSdpRecords(const nsAString& aDeviceAddress,
                    BluetoothProfileManagerBase* aManager) = 0;
 
-  virtual bool
+  virtual void
   SetPinCodeInternal(const nsAString& aDeviceAddress, const nsAString& aPinCode,
                      BluetoothReplyRunnable* aRunnable) = 0;
 
-  virtual bool
+  virtual void
   SetPasskeyInternal(const nsAString& aDeviceAddress, uint32_t aPasskey,
                      BluetoothReplyRunnable* aRunnable) = 0;
 
-  virtual bool
+  virtual void
   SetPairingConfirmationInternal(const nsAString& aDeviceAddress, bool aConfirm,
                                  BluetoothReplyRunnable* aRunnable) = 0;
 
@@ -308,13 +310,6 @@ public:
   bool
   IsToggling() const;
 
-  /**
-   * Below 2 function/variable are used for ensuring event 'AdapterAdded' will
-   * be fired after event 'Enabled'.
-   */
-  void TryFiringAdapterAdded();
-  void AdapterAddedReceived();
-
   void FireAdapterStateChanged(bool aEnable);
   nsresult EnableDisable(bool aEnable,
                          BluetoothReplyRunnable* aRunnable);
@@ -339,9 +334,7 @@ public:
 
 protected:
   BluetoothService() : mEnabled(false)
-                     , mAdapterAddedReceived(false)
-  {
-  }
+  { }
 
   virtual ~BluetoothService();
 
@@ -400,9 +393,6 @@ protected:
   BluetoothSignalObserverTable mBluetoothSignalObserverTable;
 
   bool mEnabled;
-
-private:
-  bool mAdapterAddedReceived;
 };
 
 END_BLUETOOTH_NAMESPACE

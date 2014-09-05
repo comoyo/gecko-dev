@@ -10,6 +10,8 @@
 #include "RestyleManager.h"
 #include <algorithm>
 
+using namespace mozilla;
+
 nsIFrame*
 NS_NewMathMLTokenFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 {
@@ -125,17 +127,19 @@ nsMathMLTokenFrame::Reflow(nsPresContext*          aPresContext,
                            nsReflowStatus&          aStatus)
 {
   // initializations needed for empty markup like <mtag></mtag>
-  aDesiredSize.Width() = aDesiredSize.Height() = 0;
-  aDesiredSize.SetTopAscent(0);
+  aDesiredSize.ClearSize();
+  aDesiredSize.SetBlockStartAscent(0);
   aDesiredSize.mBoundingMetrics = nsBoundingMetrics();
 
-  nsSize availSize(aReflowState.ComputedWidth(), NS_UNCONSTRAINEDSIZE);
   nsIFrame* childFrame = GetFirstPrincipalChild();
   while (childFrame) {
     // ask our children to compute their bounding metrics
     nsHTMLReflowMetrics childDesiredSize(aReflowState.GetWritingMode(),
                                          aDesiredSize.mFlags
                                          | NS_REFLOW_CALC_BOUNDING_METRICS);
+    WritingMode wm = childFrame->GetWritingMode();
+    LogicalSize availSize = aReflowState.ComputedSize(wm);
+    availSize.BSize(wm) = NS_UNCONSTRAINEDSIZE;
     nsHTMLReflowState childReflowState(aPresContext, aReflowState,
                                        childFrame, availSize);
     ReflowChild(childFrame, aPresContext, childDesiredSize,
@@ -179,8 +183,8 @@ nsMathMLTokenFrame::Place(nsRenderingContext& aRenderingContext,
 
   aDesiredSize.mBoundingMetrics = mBoundingMetrics;
   aDesiredSize.Width() = mBoundingMetrics.width;
-  aDesiredSize.SetTopAscent(std::max(mBoundingMetrics.ascent, ascent));
-  aDesiredSize.Height() = aDesiredSize.TopAscent() +
+  aDesiredSize.SetBlockStartAscent(std::max(mBoundingMetrics.ascent, ascent));
+  aDesiredSize.Height() = aDesiredSize.BlockStartAscent() +
                         std::max(mBoundingMetrics.descent, descent);
 
   if (aPlaceOrigin) {
@@ -192,13 +196,13 @@ nsMathMLTokenFrame::Place(nsRenderingContext& aRenderingContext,
                                      childSize.mBoundingMetrics);
 
       // place and size the child; (dx,0) makes the caret happy - bug 188146
-      dy = childSize.Height() == 0 ? 0 : aDesiredSize.TopAscent() - childSize.TopAscent();
+      dy = childSize.Height() == 0 ? 0 : aDesiredSize.BlockStartAscent() - childSize.BlockStartAscent();
       FinishReflowChild(childFrame, PresContext(), childSize, nullptr, dx, dy, 0);
       dx += childSize.Width();
     }
   }
 
-  SetReference(nsPoint(0, aDesiredSize.TopAscent()));
+  SetReference(nsPoint(0, aDesiredSize.BlockStartAscent()));
 
   return NS_OK;
 }

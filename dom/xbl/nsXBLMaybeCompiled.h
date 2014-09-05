@@ -26,10 +26,10 @@ class nsXBLMaybeCompiled
 public:
   nsXBLMaybeCompiled() : mUncompiled(BIT_UNCOMPILED) {}
 
-  nsXBLMaybeCompiled(UncompiledT* uncompiled)
+  explicit nsXBLMaybeCompiled(UncompiledT* uncompiled)
     : mUncompiled(reinterpret_cast<uintptr_t>(uncompiled) | BIT_UNCOMPILED) {}
 
-  nsXBLMaybeCompiled(JSObject* compiled) : mCompiled(compiled) {}
+  explicit nsXBLMaybeCompiled(JSObject* compiled) : mCompiled(compiled) {}
 
   bool IsCompiled() const
   {
@@ -78,7 +78,7 @@ private:
     JSObject* mCompiled;
   };
 
-  friend class js::GCMethods<nsXBLMaybeCompiled<UncompiledT> >;
+  friend struct js::GCMethods<nsXBLMaybeCompiled<UncompiledT>>;
 };
 
 /* Add support for JS::Heap<nsXBLMaybeCompiled>. */

@@ -16,11 +16,11 @@ interface Telephony : EventTarget {
    * |navigator.mozMobileConnections.length|.
    */
 
-  // Promise<TelephonyCall>
-  Promise dial(DOMString number, optional unsigned long serviceId);
+  [Throws]
+  Promise<TelephonyCall> dial(DOMString number, optional unsigned long serviceId);
 
-  // Promise<TelephonyCall>
-  Promise dialEmergency(DOMString number, optional unsigned long serviceId);
+  [Throws]
+  Promise<TelephonyCall> dialEmergency(DOMString number, optional unsigned long serviceId);
 
   [Throws]
   void startTone(DOMString tone, optional unsigned long serviceId);
@@ -39,6 +39,9 @@ interface Telephony : EventTarget {
   // A call is contained either in Telephony or in TelephonyCallGroup.
   readonly attribute CallsList calls;
   readonly attribute TelephonyCallGroup conferenceGroup;
+
+  // The 'ready' event will be fired when the telephony object is ready.
+  attribute EventHandler onready;
 
   attribute EventHandler onincoming;
   attribute EventHandler oncallschanged;

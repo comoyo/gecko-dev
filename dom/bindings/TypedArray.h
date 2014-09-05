@@ -24,23 +24,31 @@ namespace dom {
  */
 struct TypedArrayObjectStorage : AllTypedArraysBase {
 protected:
-  JSObject* mObj;
+  JSObject* mTypedObj;
+  JSObject* mWrappedObj;
 
-  TypedArrayObjectStorage() : mObj(nullptr)
+  TypedArrayObjectStorage()
+    : mTypedObj(nullptr),
+      mWrappedObj(nullptr)
   {
   }
 
   explicit TypedArrayObjectStorage(TypedArrayObjectStorage&& aOther)
-    : mObj(aOther.mObj)
+    : mTypedObj(aOther.mTypedObj),
+      mWrappedObj(aOther.mWrappedObj)
   {
-    aOther.mObj = nullptr;
+    aOther.mTypedObj = nullptr;
+    aOther.mWrappedObj = nullptr;
   }
 
 public:
   inline void TraceSelf(JSTracer* trc)
   {
-    if (mObj) {
-      JS_CallObjectTracer(trc, &mObj, "TypedArray.mObj");
+    if (mTypedObj) {
+      JS_CallUnbarrieredObjectTracer(trc, &mTypedObj, "TypedArray.mTypedObj");
+    }
+    if (mWrappedObj) {
+      JS_CallUnbarrieredObjectTracer(trc, &mTypedObj, "TypedArray.mWrappedObj");
     }
   }
 
@@ -87,12 +95,12 @@ public:
   inline bool Init(JSObject* obj)
   {
     MOZ_ASSERT(!inited());
-    mObj = UnwrapArray(obj);
+    mTypedObj = mWrappedObj = UnwrapArray(obj);
     return inited();
   }
 
   inline bool inited() const {
-    return !!mObj;
+    return !!mTypedObj;
   }
 
   inline T *Data() const {
@@ -107,30 +115,21 @@ public:
 
   inline JSObject *Obj() const {
     MOZ_ASSERT(inited());
-    return mObj;
+    return mWrappedObj;
   }
 
   inline bool WrapIntoNewCompartment(JSContext* cx)
   {
     return JS_WrapObject(cx,
-      JS::MutableHandle<JSObject*>::fromMarkedLocation(&mObj));
+      JS::MutableHandle<JSObject*>::fromMarkedLocation(&mWrappedObj));
   }
 
   inline void ComputeLengthAndData() const
   {
     MOZ_ASSERT(inited());
     MOZ_ASSERT(!mComputed);
-    GetLengthAndData(mObj, &mLength, &mData);
+    GetLengthAndData(mTypedObj, &mLength, &mData);
     mComputed = true;
-  }
-
-protected:
-  inline void ComputeData() const {
-    MOZ_ASSERT(inited());
-    if (!mComputed) {
-      GetLengthAndData(mObj, &mLength, &mData);
-      mComputed = true;
-    }
   }
 
 private:
@@ -163,7 +162,7 @@ public:
     JS::Rooted<JSObject*> creatorWrapper(cx);
     Maybe<JSAutoCompartment> ac;
     if (creator && (creatorWrapper = creator->GetWrapperPreserveColor())) {
-      ac.construct(cx, creatorWrapper);
+      ac.emplace(cx, creatorWrapper);
     }
 
     return CreateCommon(cx, length, data);
@@ -234,7 +233,7 @@ class TypedArrayCreator
   typedef nsTArray<typename TypedArrayType::element_type> ArrayType;
 
   public:
-    TypedArrayCreator(const ArrayType& aArray)
+    explicit TypedArrayCreator(const ArrayType& aArray)
       : mArray(aArray)
     {}
 
@@ -299,7 +298,7 @@ class MOZ_STACK_CLASS RootedTypedArray : public ArrayType,
                                          private TypedArrayRooter<ArrayType>
 {
 public:
-  RootedTypedArray(JSContext* cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM) :
+  explicit RootedTypedArray(JSContext* cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM) :
     ArrayType(),
     TypedArrayRooter<ArrayType>(cx,
                                 MOZ_THIS_IN_INITIALIZER_LIST()

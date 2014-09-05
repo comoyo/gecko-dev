@@ -879,6 +879,10 @@ exports.testContentContextMatchString = function (assert, done) {
 exports.testContentScriptFile = function (assert, done) {
   let test = new TestHelper(assert, done);
   let loader = test.newLoader();
+  let { defer, all } = require("sdk/core/promise");
+  let itemScript = [defer(), defer()];
+  let menuShown = defer();
+  let menuPromises = itemScript.concat(menuShown).map(({promise}) => promise);
 
   // Reject remote files
   assert.throws(function() {
@@ -887,20 +891,37 @@ exports.testContentScriptFile = function (assert, done) {
         contentScriptFile: "http://mozilla.com/context-menu.js"
       });
     },
-    new RegExp("The 'contentScriptFile' option must be a local file URL " +
-    "or an array of local file URLs."),
+    /The `contentScriptFile` option must be a local URL or an array of URLs/,
     "Item throws when contentScriptFile is a remote URL");
 
   // But accept files from data folder
   let item = new loader.cm.Item({
     label: "item",
-    contentScriptFile: data.url("test-context-menu.js")
+    contentScriptFile: data.url("test-contentScriptFile.js"),
+    onMessage: (message) => {
+      assert.equal(message, "msg from contentScriptFile",
+        "contentScriptFile loaded with absolute url");
+      itemScript[0].resolve();
+    }
   });
 
-  test.showMenu(null, function (popup) {
-    test.checkMenu([item], [], []);
-    test.done();
+  let item2 = new loader.cm.Item({
+    label: "item2",
+    contentScriptFile: "./test-contentScriptFile.js",
+    onMessage: (message) => {
+      assert.equal(message, "msg from contentScriptFile",
+        "contentScriptFile loaded with relative url");
+      itemScript[1].resolve();
+    }
   });
+  console.log(item.contentScriptFile, item2.contentScriptFile);
+
+  test.showMenu(null, function (popup) {
+    test.checkMenu([item, item2], [], []);
+    menuShown.resolve();
+  });
+
+  all(menuPromises).then(() => test.done());
 };
 
 
@@ -3572,6 +3593,48 @@ exports.testPredicateContextTargetLinkNotSet = function (assert, done) {
   });
 };
 
+// Test that the data object has the correct link for a nested image
+exports.testPredicateContextTargetLinkSetNestedImage = function (assert, done) {
+  let test = new TestHelper(assert, done);
+  let loader = test.newLoader();
+
+  let items = [loader.cm.Item({
+    label: "item",
+    context: loader.cm.PredicateContext(function (data) {
+      assert.strictEqual(data.linkURL, TEST_DOC_URL + "#nested-image");
+      return true;
+    })
+  })];
+
+  test.withTestDoc(function (window, doc) {
+    test.showMenu(doc.getElementById("predicate-test-nested-image"), function (popup) {
+      test.checkMenu(items, [], []);
+      test.done();
+    });
+  });
+};
+
+// Test that the data object has the correct link for a complex nested structure
+exports.testPredicateContextTargetLinkSetNestedStructure = function (assert, done) {
+  let test = new TestHelper(assert, done);
+  let loader = test.newLoader();
+
+  let items = [loader.cm.Item({
+    label: "item",
+    context: loader.cm.PredicateContext(function (data) {
+      assert.strictEqual(data.linkURL, TEST_DOC_URL + "#nested-structure");
+      return true;
+    })
+  })];
+
+  test.withTestDoc(function (window, doc) {
+    test.showMenu(doc.getElementById("predicate-test-nested-structure"), function (popup) {
+      test.checkMenu(items, [], []);
+      test.done();
+    });
+  });
+};
+
 // Test that the data object has the value for an input textbox
 exports.testPredicateContextTargetValueSet = function (assert, done) {
   let test = new TestHelper(assert, done);
@@ -3902,7 +3965,15 @@ TestHelper.prototype = {
   // function that unloads the loader and associated resources.
   newLoader: function () {
     const self = this;
-    let loader = Loader(module);
+    const selfModule = require('sdk/self');
+    let loader = Loader(module, null, null, {
+      modules: {
+        "sdk/self": merge({}, selfModule, {
+          data: merge({}, selfModule.data, require("./fixtures"))
+        })
+      }
+    });
+
     let wrapper = {
       loader: loader,
       cm: loader.require("sdk/context-menu"),

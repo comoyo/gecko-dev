@@ -42,7 +42,7 @@ protected:
 
   virtual bool
   RecvNotifyCdmaCallWaiting(const uint32_t& aClientId,
-                            const nsString& aNumber) MOZ_OVERRIDE;
+                            const IPCCdmaWaitingCallData& aData) MOZ_OVERRIDE;
 
   virtual bool
   RecvNotifyConferenceCallStateChanged(const uint16_t& aCallState) MOZ_OVERRIDE;
@@ -83,7 +83,8 @@ protected:
   RecvNotifyDialError(const nsString& aError) MOZ_OVERRIDE;
 
   virtual bool
-  RecvNotifyDialSuccess(const uint32_t& aCallIndex) MOZ_OVERRIDE;
+  RecvNotifyDialSuccess(const uint32_t& aCallIndex,
+                        const nsString& aNumber) MOZ_OVERRIDE;
 
 private:
   nsCOMPtr<nsITelephonyListener> mListener;

@@ -9,8 +9,8 @@
 #include "nsCharSeparatedTokenizer.h"
 #include "mozilla/Preferences.h"
 
-#ifdef MOZ_MEDIA_PLUGINS
-#include "MediaPluginHost.h"
+#ifdef MOZ_ANDROID_OMX
+#include "AndroidMediaPluginHost.h"
 #endif
 
 #include "OggDecoder.h"
@@ -31,19 +31,27 @@
 #include "GStreamerDecoder.h"
 #include "GStreamerReader.h"
 #endif
-#ifdef MOZ_MEDIA_PLUGINS
-#include "MediaPluginHost.h"
-#include "MediaPluginDecoder.h"
-#include "MediaPluginReader.h"
-#include "MediaPluginHost.h"
+#ifdef MOZ_ANDROID_OMX
+#include "AndroidMediaPluginHost.h"
+#include "AndroidMediaDecoder.h"
+#include "AndroidMediaReader.h"
+#include "AndroidMediaPluginHost.h"
 #endif
 #ifdef MOZ_OMX_DECODER
 #include "MediaOmxDecoder.h"
 #include "MediaOmxReader.h"
 #include "nsIPrincipal.h"
 #include "mozilla/dom/HTMLMediaElement.h"
+#if ANDROID_VERSION >= 18
+#include "MediaCodecDecoder.h"
+#include "MediaCodecReader.h"
+#endif
 #endif
 #ifdef NECKO_PROTOCOL_rtsp
+#if ANDROID_VERSION >= 18
+#include "RtspMediaCodecDecoder.h"
+#include "RtspMediaCodecReader.h"
+#endif
 #include "RtspOmxDecoder.h"
 #include "RtspOmxReader.h"
 #endif
@@ -283,11 +291,11 @@ bool DecoderTraits::DecoderWaitsForOnConnected(const nsACString& aMimeType) {
 #endif
 }
 
-#ifdef MOZ_MEDIA_PLUGINS
+#ifdef MOZ_ANDROID_OMX
 static bool
-IsMediaPluginsType(const nsACString& aType)
+IsAndroidMediaType(const nsACString& aType)
 {
-  if (!MediaDecoder::IsMediaPluginsEnabled()) {
+  if (!MediaDecoder::IsAndroidMediaEnabled()) {
     return false;
   }
 
@@ -316,10 +324,18 @@ IsDirectShowSupportedType(const nsACString& aType)
 
 #ifdef MOZ_FMP4
 static bool
-IsMP4SupportedType(const nsACString& aType)
+IsMP4SupportedType(const nsACString& aType,
+                   const nsAString& aCodecs = EmptyString())
 {
+// Currently on B2G, FMP4 is only working for MSE playback.
+// For other normal MP4, it still uses current omx decoder.
+// Bug 1061034 is a follow-up bug to enable all MP4s with MOZ_FMP4
+#ifdef MOZ_OMX_DECODER
+  return false;
+#else
   return Preferences::GetBool("media.fragmented-mp4.exposed", false) &&
-         MP4Decoder::GetSupportedCodecs(aType, nullptr);
+         MP4Decoder::CanHandleMediaType(aType, aCodecs);
+#endif
 }
 #endif
 
@@ -401,6 +417,12 @@ DecoderTraits::CanHandleMediaType(const char* aMIMEType,
     result = CANPLAY_MAYBE;
   }
 #endif
+#ifdef MOZ_FMP4
+  if (IsMP4SupportedType(nsDependentCString(aMIMEType),
+                                     aRequestedCodecs)) {
+    return aHaveRequestedCodecs ? CANPLAY_YES : CANPLAY_MAYBE;
+  }
+#endif
 #ifdef MOZ_GSTREAMER
   if (GStreamerDecoder::CanHandleMediaType(nsDependentCString(aMIMEType),
                                            aHaveRequestedCodecs ? &aRequestedCodecs : nullptr)) {
@@ -432,7 +454,8 @@ DecoderTraits::CanHandleMediaType(const char* aMIMEType,
   }
 #endif
 #ifdef MOZ_WMF
-  if (IsWMFSupportedType(nsDependentCString(aMIMEType))) {
+  if (!Preferences::GetBool("media.fragmented-mp4.exposed", false) &&
+      IsWMFSupportedType(nsDependentCString(aMIMEType))) {
     if (!aHaveRequestedCodecs) {
       return CANPLAY_MAYBE;
     }
@@ -446,9 +469,9 @@ DecoderTraits::CanHandleMediaType(const char* aMIMEType,
     result = CANPLAY_MAYBE;
   }
 #endif
-#ifdef MOZ_MEDIA_PLUGINS
-  if (MediaDecoder::IsMediaPluginsEnabled() &&
-      GetMediaPluginHost()->FindDecoder(nsDependentCString(aMIMEType), &codecList))
+#ifdef MOZ_ANDROID_OMX
+  if (MediaDecoder::IsAndroidMediaEnabled() &&
+      GetAndroidMediaPluginHost()->FindDecoder(nsDependentCString(aMIMEType), &codecList))
     result = CANPLAY_MAYBE;
 #endif
 #ifdef NECKO_PROTOCOL_rtsp
@@ -487,6 +510,12 @@ InstantiateDecoder(const nsACString& aType, MediaDecoderOwner* aOwner)
 {
   nsRefPtr<MediaDecoder> decoder;
 
+#ifdef MOZ_FMP4
+  if (IsMP4SupportedType(aType)) {
+    decoder = new MP4Decoder();
+    return decoder.forget();
+  }
+#endif
 #ifdef MOZ_GSTREAMER
   if (IsGStreamerSupportedType(aType)) {
     decoder = new GStreamerDecoder();
@@ -526,20 +555,32 @@ InstantiateDecoder(const nsACString& aType, MediaDecoderOwner* aOwner)
         return nullptr;
       }
     }
+#if ANDROID_VERSION >= 18
+    decoder = MediaDecoder::IsOmxAsyncEnabled()
+      ? static_cast<MediaDecoder*>(new MediaCodecDecoder())
+      : static_cast<MediaDecoder*>(new MediaOmxDecoder());
+#else
     decoder = new MediaOmxDecoder();
+#endif
     return decoder.forget();
   }
 #endif
 #ifdef NECKO_PROTOCOL_rtsp
   if (IsRtspSupportedType(aType)) {
+#if ANDROID_VERSION >= 18
+    decoder = MediaDecoder::IsOmxAsyncEnabled()
+      ? static_cast<MediaDecoder*>(new RtspMediaCodecDecoder())
+      : static_cast<MediaDecoder*>(new RtspOmxDecoder());
+#else
     decoder = new RtspOmxDecoder();
+#endif
     return decoder.forget();
   }
 #endif
-#ifdef MOZ_MEDIA_PLUGINS
-  if (MediaDecoder::IsMediaPluginsEnabled() &&
-      GetMediaPluginHost()->FindDecoder(aType, nullptr)) {
-    decoder = new MediaPluginDecoder(aType);
+#ifdef MOZ_ANDROID_OMX
+  if (MediaDecoder::IsAndroidMediaEnabled() &&
+      GetAndroidMediaPluginHost()->FindDecoder(aType, nullptr)) {
+    decoder = new AndroidMediaDecoder(aType);
     return decoder.forget();
   }
 #endif
@@ -554,12 +595,6 @@ InstantiateDecoder(const nsACString& aType, MediaDecoderOwner* aOwner)
   // MP3 support over WMF's.
   if (IsDirectShowSupportedType(aType)) {
     decoder = new DirectShowDecoder();
-    return decoder.forget();
-  }
-#endif
-#ifdef MOZ_FMP4
-  if (IsMP4SupportedType(aType)) {
-    decoder = new MP4Decoder();
     return decoder.forget();
   }
 #endif
@@ -597,6 +632,11 @@ MediaDecoderReader* DecoderTraits::CreateReader(const nsACString& aType, Abstrac
 {
   MediaDecoderReader* decoderReader = nullptr;
 
+#ifdef MOZ_FMP4
+  if (IsMP4SupportedType(aType)) {
+    decoderReader = new MP4Reader(aDecoder);
+  } else
+#endif
 #ifdef MOZ_GSTREAMER
   if (IsGStreamerSupportedType(aType)) {
     decoderReader = new GStreamerReader(aDecoder);
@@ -617,13 +657,19 @@ MediaDecoderReader* DecoderTraits::CreateReader(const nsACString& aType, Abstrac
 #endif
 #ifdef MOZ_OMX_DECODER
   if (IsOmxSupportedType(aType)) {
+#if ANDROID_VERSION >= 18
+    decoderReader = MediaDecoder::IsOmxAsyncEnabled()
+      ? static_cast<MediaDecoderReader*>(new MediaCodecReader(aDecoder))
+      : static_cast<MediaDecoderReader*>(new MediaOmxReader(aDecoder));
+#else
     decoderReader = new MediaOmxReader(aDecoder);
+#endif
   } else
 #endif
-#ifdef MOZ_MEDIA_PLUGINS
-  if (MediaDecoder::IsMediaPluginsEnabled() &&
-      GetMediaPluginHost()->FindDecoder(aType, nullptr)) {
-    decoderReader = new MediaPluginReader(aDecoder, aType);
+#ifdef MOZ_ANDROID_OMX
+  if (MediaDecoder::IsAndroidMediaEnabled() &&
+      GetAndroidMediaPluginHost()->FindDecoder(aType, nullptr)) {
+    decoderReader = new AndroidMediaReader(aDecoder, aType);
   } else
 #endif
 #ifdef MOZ_WEBM
@@ -636,11 +682,6 @@ MediaDecoderReader* DecoderTraits::CreateReader(const nsACString& aType, Abstrac
   // fallback to the WMFReader.
   if (IsDirectShowSupportedType(aType)) {
     decoderReader = new DirectShowReader(aDecoder);
-  } else
-#endif
-#ifdef MOZ_FMP4
-  if (IsMP4SupportedType(aType)) {
-    decoderReader = new MP4Reader(aDecoder);
   } else
 #endif
 #ifdef MOZ_WMF
@@ -661,6 +702,14 @@ MediaDecoderReader* DecoderTraits::CreateReader(const nsACString& aType, Abstrac
 /* static */
 bool DecoderTraits::IsSupportedInVideoDocument(const nsACString& aType)
 {
+  // Forbid playing media in video documents if the user has opted
+  // not to, using either the legacy WMF specific pref, or the newer
+  // catch-all pref.
+  if (!Preferences::GetBool("media.windows-media-foundation.play-stand-alone", true) ||
+      !Preferences::GetBool("media.play-stand-alone", true)) {
+    return false;
+  }
+
   return
     IsOggType(aType) ||
 #ifdef MOZ_OMX_DECODER
@@ -674,15 +723,14 @@ bool DecoderTraits::IsSupportedInVideoDocument(const nsACString& aType)
 #ifdef MOZ_GSTREAMER
     IsGStreamerSupportedType(aType) ||
 #endif
-#ifdef MOZ_MEDIA_PLUGINS
-    (MediaDecoder::IsMediaPluginsEnabled() && IsMediaPluginsType(aType)) ||
+#ifdef MOZ_ANDROID_OMX
+    (MediaDecoder::IsAndroidMediaEnabled() && IsAndroidMediaType(aType)) ||
 #endif
 #ifdef MOZ_FMP4
     IsMP4SupportedType(aType) ||
 #endif
 #ifdef MOZ_WMF
-    (IsWMFSupportedType(aType) &&
-     Preferences::GetBool("media.windows-media-foundation.play-stand-alone", true)) ||
+    IsWMFSupportedType(aType) ||
 #endif
 #ifdef MOZ_DIRECTSHOW
     IsDirectShowSupportedType(aType) ||

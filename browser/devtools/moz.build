@@ -23,15 +23,14 @@ DIRS += [
     'shadereditor',
     'shared',
     'sourceeditor',
+    'storage',
     'styleeditor',
     'styleinspector',
     'tilt',
     'webaudioeditor',
     'webconsole',
+    'webide',
 ]
-
-if CONFIG['MOZ_DEVTOOLS_WEBIDE']:
-    DIRS += ['webide']
 
 EXTRA_COMPONENTS += [
     'devtools-clhandler.js',
@@ -39,3 +38,7 @@ EXTRA_COMPONENTS += [
 ]
 
 JAR_MANIFESTS += ['jar.mn']
+
+EXTRA_JS_MODULES.devtools += [
+    'main.js',
+]

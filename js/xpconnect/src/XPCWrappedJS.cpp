@@ -9,9 +9,9 @@
 #include "xpcprivate.h"
 #include "jsprf.h"
 #include "nsCCUncollectableMarker.h"
-#include "nsCxPusher.h"
 #include "nsContentUtils.h"
 #include "nsThreadUtils.h"
+#include "JavaScriptParent.h"
 
 using namespace mozilla;
 
@@ -285,7 +285,7 @@ nsXPCWrappedJS::TraceJS(JSTracer* trc)
 {
     MOZ_ASSERT(mRefCnt >= 2 && IsValid(), "must be strongly referenced");
     trc->setTracingDetails(GetTraceName, this, 0);
-    JS_CallHeapObjectTracer(trc, &mJSObj, "nsXPCWrappedJS::mJSObj");
+    JS_CallObjectTracer(trc, &mJSObj, "nsXPCWrappedJS::mJSObj");
 }
 
 // static
@@ -334,7 +334,9 @@ nsXPCWrappedJS::GetNewOrUsed(JS::HandleObject jsObj,
         return NS_ERROR_FAILURE;
     }
 
-    nsRefPtr<nsXPCWrappedJSClass> clasp = nsXPCWrappedJSClass::GetNewOrUsed(cx, aIID);
+    bool allowNonScriptable = mozilla::jsipc::IsWrappedCPOW(jsObj);
+    nsRefPtr<nsXPCWrappedJSClass> clasp = nsXPCWrappedJSClass::GetNewOrUsed(cx, aIID,
+                                                                            allowNonScriptable);
     if (!clasp)
         return NS_ERROR_FAILURE;
 
@@ -450,7 +452,7 @@ nsXPCWrappedJS::Unlink()
     if (mOuter) {
         XPCJSRuntime* rt = nsXPConnect::GetRuntimeInstance();
         if (rt->GCIsRunning()) {
-            nsContentUtils::DeferredFinalize(mOuter.forget().take());
+            cyclecollector::DeferredFinalize(mOuter.forget().take());
         } else {
             mOuter = nullptr;
         }
@@ -548,6 +550,25 @@ nsXPCWrappedJS::SystemIsBeingShutDown()
     // Notify other wrappers in the chain.
     if (mNext)
         mNext->SystemIsBeingShutDown();
+}
+
+size_t
+nsXPCWrappedJS::SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const
+{
+    // mJSObject is a JS pointer, so don't measure the object.
+    // mClass is not uniquely owned by this WrappedJS. Measure it in IID2WrappedJSClassMap.
+    // mRoot is not measured because it is either |this| or we have already measured it.
+    // mOuter is rare and probably not uniquely owned by this.
+    size_t n = mallocSizeOf(this);
+    n += nsAutoXPTCStub::SizeOfExcludingThis(mallocSizeOf);
+
+    // Wrappers form a linked list via the mNext field, so include them all
+    // in the measurement. Only root wrappers are stored in the map, so
+    // everything will be measured exactly once.
+    if (mNext)
+        n += mNext->SizeOfIncludingThis(mallocSizeOf);
+
+    return n;
 }
 
 /***************************************************************************/

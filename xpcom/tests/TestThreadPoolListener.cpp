@@ -47,6 +47,8 @@ static bool gAllThreadsShutDown = false;
 
 class Listener MOZ_FINAL : public nsIThreadPoolListener
 {
+  ~Listener() {}
+
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSITHREADPOOLLISTENER
@@ -113,17 +115,15 @@ Listener::OnThreadShuttingDown()
 class AutoCreateAndDestroyReentrantMonitor
 {
 public:
-  AutoCreateAndDestroyReentrantMonitor(ReentrantMonitor** aReentrantMonitorPtr)
+  explicit AutoCreateAndDestroyReentrantMonitor(ReentrantMonitor** aReentrantMonitorPtr)
   : mReentrantMonitorPtr(aReentrantMonitorPtr) {
     *aReentrantMonitorPtr = new ReentrantMonitor("TestThreadPoolListener::AutoMon");
     TEST_ASSERTION(*aReentrantMonitorPtr, "Out of memory!");
   }
 
   ~AutoCreateAndDestroyReentrantMonitor() {
-    if (*mReentrantMonitorPtr) {
-      delete *mReentrantMonitorPtr;
-      *mReentrantMonitorPtr = nullptr;
-    }
+    delete *mReentrantMonitorPtr;
+    *mReentrantMonitorPtr = nullptr;
   }
 
 private:

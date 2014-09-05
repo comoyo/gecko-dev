@@ -567,17 +567,50 @@ nsUserFontSet::InsertRule(nsCSSFontFaceRule* aRule, uint8_t aSheetType,
   }
 
   // this is a new rule:
+  FontFaceRuleRecord ruleRec;
+  ruleRec.mFontEntry =
+    FindOrCreateFontFaceFromRule(fontfamily, aRule, aSheetType);
+
+  if (!ruleRec.mFontEntry) {
+    return;
+  }
+
+  ruleRec.mContainer.mRule = aRule;
+  ruleRec.mContainer.mSheetType = aSheetType;
+
+  // Add the entry to the end of the list.  If an existing proxy entry was
+  // returned by FindOrCreateFontFaceFromRule that was already stored on the
+  // family, gfxMixedFontFamily::AddFontEntry(), which AddFontFace calls,
+  // will automatically remove the earlier occurrence of the same proxy.
+  AddFontFace(fontfamily, ruleRec.mFontEntry);
+
+  mRules.AppendElement(ruleRec);
+
+  // this was a new rule and font entry, so note that the set was modified
+  aFontSetModified = true;
+}
+
+already_AddRefed<gfxFontEntry>
+nsUserFontSet::FindOrCreateFontFaceFromRule(const nsAString& aFamilyName,
+                                            nsCSSFontFaceRule* aRule,
+                                            uint8_t aSheetType)
+{
+  nsCSSValue val;
+  uint32_t unit;
 
   uint32_t weight = NS_STYLE_FONT_WEIGHT_NORMAL;
   int32_t stretch = NS_STYLE_FONT_STRETCH_NORMAL;
   uint32_t italicStyle = NS_STYLE_FONT_STYLE_NORMAL;
-  nsString languageOverride;
+  uint32_t languageOverride = NO_FONT_LANGUAGE_OVERRIDE;
 
   // set up weight
   aRule->GetDesc(eCSSFontDesc_Weight, val);
   unit = val.GetUnit();
   if (unit == eCSSUnit_Integer || unit == eCSSUnit_Enumerated) {
     weight = val.GetIntValue();
+    if (weight == 0) {
+      weight = NS_STYLE_FONT_WEIGHT_NORMAL;
+    }
   } else if (unit == eCSSUnit_Normal) {
     weight = NS_STYLE_FONT_WEIGHT_NORMAL;
   } else {
@@ -628,7 +661,9 @@ nsUserFontSet::InsertRule(nsCSSFontFaceRule* aRule, uint8_t aSheetType,
   if (unit == eCSSUnit_Normal) {
     // empty feature string
   } else if (unit == eCSSUnit_String) {
-    val.GetStringValue(languageOverride);
+    nsString stringValue;
+    val.GetStringValue(stringValue);
+    languageOverride = gfxFontStyle::ParseFontLanguageOverride(stringValue);
   } else {
     NS_ASSERTION(unit == eCSSUnit_Null,
                  "@font-face font-language-override has unexpected unit");
@@ -648,7 +683,7 @@ nsUserFontSet::InsertRule(nsCSSFontFaceRule* aRule, uint8_t aSheetType,
       unit = val.GetUnit();
       gfxFontFaceSrc* face = srcArray.AppendElements(1);
       if (!face)
-        return;
+        return nullptr;
 
       switch (unit) {
 
@@ -713,19 +748,15 @@ nsUserFontSet::InsertRule(nsCSSFontFaceRule* aRule, uint8_t aSheetType,
     NS_ASSERTION(unit == eCSSUnit_Null, "@font-face src has unexpected unit");
   }
 
-  if (srcArray.Length() > 0) {
-    FontFaceRuleRecord ruleRec;
-    ruleRec.mContainer.mRule = aRule;
-    ruleRec.mContainer.mSheetType = aSheetType;
-    ruleRec.mFontEntry = AddFontFace(fontfamily, srcArray,
-                                     weight, stretch, italicStyle,
-                                     featureSettings, languageOverride);
-    if (ruleRec.mFontEntry) {
-      mRules.AppendElement(ruleRec);
-    }
-    // this was a new rule and fontEntry, so note that the set was modified
-    aFontSetModified = true;
+  if (srcArray.IsEmpty()) {
+    return nullptr;
   }
+
+  nsRefPtr<gfxProxyFontEntry> entry =
+    FindOrCreateFontFace(aFamilyName, srcArray, weight, stretch, italicStyle,
+                         featureSettings, languageOverride,
+                         nullptr /* aUnicodeRanges */);
+  return entry.forget();
 }
 
 void
@@ -769,7 +800,7 @@ nsUserFontSet::LogMessage(gfxMixedFontFamily* aFamily,
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  NS_ConvertUTF16toUTF8 familyName(aFamily->Name());
+  NS_ConvertUTF16toUTF8 familyName(aProxy->mFamilyName);
   nsAutoCString fontURI;
   if (aProxy->mSrcIndex == aProxy->mSrcList.Length()) {
     fontURI.AppendLiteral("(end of source list)");

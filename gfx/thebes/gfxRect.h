@@ -63,7 +63,7 @@ struct gfxRect :
         Super(aPos, aSize) {}
     gfxRect(gfxFloat aX, gfxFloat aY, gfxFloat aWidth, gfxFloat aHeight) :
         Super(aX, aY, aWidth, aHeight) {}
-    gfxRect(const nsIntRect& aRect) :
+    MOZ_IMPLICIT gfxRect(const nsIntRect& aRect) :
         Super(aRect.x, aRect.y, aRect.width, aRect.height) {}
 
     /**
@@ -87,7 +87,7 @@ struct gfxRect :
         return gfxPoint(0.0, 0.0);
     }
 
-    gfxPoint CCWCorner(mozilla::css::Side side) const {
+    gfxPoint CCWCorner(mozilla::Side side) const {
         switch (side) {
             case NS_SIDE_TOP: return TopLeft();
             case NS_SIDE_RIGHT: return TopRight();
@@ -97,7 +97,7 @@ struct gfxRect :
         MOZ_CRASH("Incomplete switch");
     }
 
-    gfxPoint CWCorner(mozilla::css::Side side) const {
+    gfxPoint CWCorner(mozilla::Side side) const {
         switch (side) {
             case NS_SIDE_TOP: return TopRight();
             case NS_SIDE_RIGHT: return BottomRight();
@@ -144,7 +144,7 @@ struct gfxCornerSizes {
 
     gfxCornerSizes () { }
 
-    gfxCornerSizes (gfxFloat v) {
+    explicit gfxCornerSizes (gfxFloat v) {
         for (int i = 0; i < NS_NUM_CORNERS; i++)
             sizes[i].SizeTo(v, v);
     }

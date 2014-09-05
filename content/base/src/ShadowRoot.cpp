@@ -54,8 +54,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(ShadowRoot,
   tmp->mIdentifierMap.Clear();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-DOMCI_DATA(ShadowRoot, ShadowRoot)
-
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ShadowRoot)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIContent)
   NS_INTERFACE_MAP_ENTRY(nsIMutationObserver)
@@ -65,7 +63,7 @@ NS_IMPL_ADDREF_INHERITED(ShadowRoot, DocumentFragment)
 NS_IMPL_RELEASE_INHERITED(ShadowRoot, DocumentFragment)
 
 ShadowRoot::ShadowRoot(nsIContent* aContent,
-                       already_AddRefed<nsINodeInfo>&& aNodeInfo,
+                       already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                        nsXBLPrototypeBinding* aProtoBinding)
   : DocumentFragment(aNodeInfo), mPoolHost(aContent),
     mProtoBinding(aProtoBinding), mShadowElement(nullptr),
@@ -114,7 +112,7 @@ ShadowRoot::WrapObject(JSContext* aCx)
 ShadowRoot*
 ShadowRoot::FromNode(nsINode* aNode)
 {
-  if (aNode->HasFlag(NODE_IS_IN_SHADOW_TREE) && !aNode->GetParentNode()) {
+  if (aNode->IsInShadowTree() && !aNode->GetParentNode()) {
     MOZ_ASSERT(aNode->NodeType() == nsIDOMNode::DOCUMENT_FRAGMENT_NODE,
                "ShadowRoot is a document fragment.");
     return static_cast<ShadowRoot*>(aNode);
@@ -137,7 +135,7 @@ ShadowRoot::StyleSheetChanged()
 }
 
 void
-ShadowRoot::InsertSheet(nsCSSStyleSheet* aSheet,
+ShadowRoot::InsertSheet(CSSStyleSheet* aSheet,
                         nsIContent* aLinkingContent)
 {
   nsCOMPtr<nsIStyleSheetLinkingElement>
@@ -147,21 +145,17 @@ ShadowRoot::InsertSheet(nsCSSStyleSheet* aSheet,
 
   linkingElement->SetStyleSheet(aSheet); // This sets the ownerNode on the sheet
 
-  nsTArray<nsRefPtr<nsCSSStyleSheet> >* sheets =
-    mProtoBinding->GetOrCreateStyleSheets();
-  MOZ_ASSERT(sheets, "Style sheets array should never be null.");
-
   // Find the correct position to insert into the style sheet list (must
   // be in tree order).
-  for (uint32_t i = 0; i <= sheets->Length(); i++) {
-    if (i == sheets->Length()) {
-      sheets->AppendElement(aSheet);
+  for (size_t i = 0; i <= mProtoBinding->SheetCount(); i++) {
+    if (i == mProtoBinding->SheetCount()) {
+      mProtoBinding->AppendStyleSheet(aSheet);
       break;
     }
 
-    nsINode* sheetOwnerNode = sheets->ElementAt(i)->GetOwnerNode();
+    nsINode* sheetOwnerNode = mProtoBinding->StyleSheetAt(i)->GetOwnerNode();
     if (nsContentUtils::PositionIsBefore(aLinkingContent, sheetOwnerNode)) {
-      sheets->InsertElementAt(i, aSheet);
+      mProtoBinding->InsertStyleSheetAt(i, aSheet);
       break;
     }
   }
@@ -172,15 +166,9 @@ ShadowRoot::InsertSheet(nsCSSStyleSheet* aSheet,
 }
 
 void
-ShadowRoot::RemoveSheet(nsCSSStyleSheet* aSheet)
+ShadowRoot::RemoveSheet(CSSStyleSheet* aSheet)
 {
-  nsTArray<nsRefPtr<nsCSSStyleSheet> >* sheets =
-    mProtoBinding->GetOrCreateStyleSheets();
-  MOZ_ASSERT(sheets, "Style sheets array should never be null.");
-
-  DebugOnly<bool> found = sheets->RemoveElement(aSheet);
-  MOZ_ASSERT(found, "Trying to remove a sheet from a ShadowRoot "
-                    "that does not exist.");
+  mProtoBinding->RemoveStyleSheet(aSheet);
 
   if (aSheet->IsApplicable()) {
     StyleSheetChanged();
@@ -595,7 +583,7 @@ ShadowRoot::IsPooledNode(nsIContent* aContent, nsIContent* aContainer,
     return true;
   }
 
-  if (aContainer->IsHTML(nsGkAtoms::content)) {
+  if (aContainer && aContainer->IsHTML(nsGkAtoms::content)) {
     // Fallback content will end up in pool if its parent is a child of the host.
     HTMLContentElement* content = static_cast<HTMLContentElement*>(aContainer);
     return content->IsInsertionPoint() && content->MatchedNodes().IsEmpty() &&
@@ -729,31 +717,21 @@ ShadowRootStyleSheetList::~ShadowRootStyleSheetList()
   MOZ_COUNT_DTOR(ShadowRootStyleSheetList);
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 ShadowRootStyleSheetList::IndexedGetter(uint32_t aIndex, bool& aFound)
 {
-  nsTArray<nsRefPtr<nsCSSStyleSheet>>* sheets =
-    mShadowRoot->mProtoBinding->GetStyleSheets();
+  aFound = aIndex < mShadowRoot->mProtoBinding->SheetCount();
 
-  if (!sheets) {
-    aFound = false;
+  if (!aFound) {
     return nullptr;
   }
 
-  aFound = aIndex < sheets->Length();
-  return sheets->SafeElementAt(aIndex);
+  return mShadowRoot->mProtoBinding->StyleSheetAt(aIndex);
 }
 
 uint32_t
 ShadowRootStyleSheetList::Length()
 {
-  nsTArray<nsRefPtr<nsCSSStyleSheet> >* sheets =
-    mShadowRoot->mProtoBinding->GetStyleSheets();
-
-  if (!sheets) {
-    return 0;
-  }
-
-  return sheets->Length();
+  return mShadowRoot->mProtoBinding->SheetCount();
 }
 

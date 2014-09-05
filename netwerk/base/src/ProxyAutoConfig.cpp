@@ -244,7 +244,18 @@ static const char *sPacUtils =
 // sRunning is defined for the helper functions only while the
 // Javascript engine is running and the PAC object cannot be deleted
 // or reset.
-static ProxyAutoConfig *sRunning = nullptr;
+static uint32_t sRunningIndex = 0xdeadbeef;
+static ProxyAutoConfig *GetRunning()
+{
+  MOZ_ASSERT(sRunningIndex != 0xdeadbeef);
+  return static_cast<ProxyAutoConfig *>(PR_GetThreadPrivate(sRunningIndex));
+}
+
+static void SetRunning(ProxyAutoConfig *arg)
+{
+  MOZ_ASSERT(sRunningIndex != 0xdeadbeef);
+  PR_SetThreadPrivate(sRunningIndex, arg);
+}
 
 // The PACResolver is used for dnsResolve()
 class PACResolver MOZ_FINAL : public nsIDNSListener
@@ -287,6 +298,9 @@ public:
   nsCOMPtr<nsICancelable> mRequest;
   nsCOMPtr<nsIDNSRecord>  mResponse;
   nsCOMPtr<nsITimer>      mTimer;
+
+private:
+  ~PACResolver() {}
 };
 NS_IMPL_ISUPPORTS(PACResolver, nsIDNSListener, nsITimerCallback)
 
@@ -319,12 +333,12 @@ static
 bool PACResolve(const nsCString &aHostName, NetAddr *aNetAddr,
                 unsigned int aTimeout)
 {
-  if (!sRunning) {
+  if (!GetRunning()) {
     NS_WARNING("PACResolve without a running ProxyAutoConfig object");
     return false;
   }
 
-  return sRunning->ResolveAddress(aHostName, aNetAddr, aTimeout);
+  return GetRunning()->ResolveAddress(aHostName, aNetAddr, aTimeout);
 }
 
 ProxyAutoConfig::ProxyAutoConfig()
@@ -406,7 +420,7 @@ bool PACDnsResolve(JSContext *cx, unsigned int argc, JS::Value *vp)
   if (!JS_ConvertArguments(cx, args, "S", arg1.address()))
     return false;
 
-  nsDependentJSString hostName;
+  nsAutoJSString hostName;
   nsAutoCString dottedDecimal;
 
   if (!hostName.init(cx, arg1))
@@ -437,12 +451,12 @@ bool PACMyIpAddress(JSContext *cx, unsigned int argc, JS::Value *vp)
     return false;
   }
 
-  if (!sRunning) {
+  if (!GetRunning()) {
     NS_WARNING("PAC myIPAddress without a running ProxyAutoConfig object");
     return false;
   }
 
-  return sRunning->MyIPAddress(args);
+  return GetRunning()->MyIPAddress(args);
 }
 
 // proxyAlert(msg) javascript implementation
@@ -455,11 +469,11 @@ bool PACProxyAlert(JSContext *cx, unsigned int argc, JS::Value *vp)
   if (!JS_ConvertArguments(cx, args, "S", arg1.address()))
     return false;
 
-  nsDependentJSString message;
+  nsAutoJSString message;
   if (!message.init(cx, arg1))
     return false;
 
-  nsString alertMessage;
+  nsAutoString alertMessage;
   alertMessage.SetCapacity(32 + message.Length());
   alertMessage += NS_LITERAL_STRING("PAC-alert: ");
   alertMessage += message;
@@ -567,7 +581,6 @@ private:
     JS::Rooted<JSObject*> global(mContext, mGlobal);
 
     JSAutoCompartment ac(mContext, global);
-    js::SetDefaultObjectForContext(mContext, global);
     JS_InitStandardClasses(mContext, global);
 
     JS_SetErrorReporter(mContext, PACErrorReporter);
@@ -590,6 +603,12 @@ const JSClass JSRuntimeWrapper::sGlobalClass = {
   JS_GlobalObjectTraceHook
 };
 
+void
+ProxyAutoConfig::SetThreadLocalIndex(uint32_t index)
+{
+  sRunningIndex = index;
+}
+
 nsresult
 ProxyAutoConfig::Init(const nsCString &aPACURI,
                       const nsCString &aPACScript)
@@ -598,7 +617,7 @@ ProxyAutoConfig::Init(const nsCString &aPACURI,
   mPACScript = sPacUtils;
   mPACScript.Append(aPACScript);
 
-  if (!sRunning)
+  if (!GetRunning())
     return SetupJS();
 
   mJSNeedsSetup = true;
@@ -609,7 +628,7 @@ nsresult
 ProxyAutoConfig::SetupJS()
 {
   mJSNeedsSetup = false;
-  NS_ABORT_IF_FALSE(!sRunning, "JIT is running");
+  NS_ABORT_IF_FALSE(!GetRunning(), "JIT is running");
 
   delete mJSRuntime;
   mJSRuntime = nullptr;
@@ -630,13 +649,15 @@ ProxyAutoConfig::SetupJS()
   // use nsIRUI scheme methods
   bool isDataURI = nsDependentCSubstring(mPACURI, 0, 5).LowerCaseEqualsASCII("data:", 5);
 
-  sRunning = this;
+  SetRunning(this);
   JS::Rooted<JSObject*> global(cx, mJSRuntime->Global());
   JS::CompileOptions options(cx);
   options.setFileAndLine(mPACURI.get(), 1);
-  JS::Rooted<JSScript*> script(cx, JS_CompileScript(cx, global, mPACScript.get(),
-                                                    mPACScript.Length(), options));
-  if (!script || !JS_ExecuteScript(cx, global, script)) {
+  JS::Rooted<JSScript*> script(cx);
+  if (!JS_CompileScript(cx, global, mPACScript.get(),
+                        mPACScript.Length(), options, &script) ||
+      !JS_ExecuteScript(cx, global, script))
+  {
     nsString alertMessage(NS_LITERAL_STRING("PAC file failed to install from "));
     if (isDataURI) {
       alertMessage += NS_LITERAL_STRING("data: URI");
@@ -645,10 +666,10 @@ ProxyAutoConfig::SetupJS()
       alertMessage += NS_ConvertUTF8toUTF16(mPACURI);
     }
     PACLogToConsole(alertMessage);
-    sRunning = nullptr;
+    SetRunning(nullptr);
     return NS_ERROR_FAILURE;
   }
-  sRunning = nullptr;
+  SetRunning(nullptr);
 
   mJSRuntime->SetOK();
   nsString alertMessage(NS_LITERAL_STRING("PAC file installed from "));
@@ -684,7 +705,7 @@ ProxyAutoConfig::GetProxyForURI(const nsCString &aTestURI,
 
   // the sRunning flag keeps a new PAC file from being installed
   // while the event loop is spinning on a DNS function. Don't early return.
-  sRunning = this;
+  SetRunning(this);
   mRunningHost = aTestHost;
 
   nsresult rv = NS_ERROR_FAILURE;
@@ -701,7 +722,7 @@ ProxyAutoConfig::GetProxyForURI(const nsCString &aTestURI,
     bool ok = JS_CallFunctionName(cx, global, "FindProxyForURL", args, &rval);
 
     if (ok && rval.isString()) {
-      nsDependentJSString pacString;
+      nsAutoJSString pacString;
       if (pacString.init(cx, rval.toString())) {
         CopyUTF16toUTF8(pacString, result);
         rv = NS_OK;
@@ -710,7 +731,7 @@ ProxyAutoConfig::GetProxyForURI(const nsCString &aTestURI,
   }
 
   mRunningHost.Truncate();
-  sRunning = nullptr;
+  SetRunning(nullptr);
   return rv;
 }
 
@@ -737,7 +758,7 @@ ProxyAutoConfig::Shutdown()
 {
   NS_ABORT_IF_FALSE(!NS_IsMainThread(), "wrong thread for shutdown");
 
-  if (sRunning || mShutdown)
+  if (GetRunning() || mShutdown)
     return;
 
   mShutdown = true;

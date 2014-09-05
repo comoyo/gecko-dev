@@ -205,6 +205,8 @@ class OSXBootstrapper(BaseBootstrapper):
                     self._install_xcode_app_store()
                     assert False # Above should exit.
 
+                output = e.output
+
             # This isn't the most robust check in the world. It relies on the
             # default value not being in an application bundle, which seems to
             # hold on at least Mavericks.
@@ -303,7 +305,6 @@ class OSXBootstrapper(BaseBootstrapper):
         packages = ['python27',
                     'mercurial',
                     'yasm',
-                    'libidl',
                     'autoconf213']
 
         missing = [package for package in packages if package not in installed]

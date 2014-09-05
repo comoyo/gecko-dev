@@ -13,30 +13,39 @@
 #include "gfxDrawable.h"
 #include "imgIContainer.h"
 
+namespace mozilla {
+namespace image {
+
+class ImageRegion;
+
 class imgFrame
 {
-  typedef mozilla::gfx::Color Color;
-  typedef mozilla::gfx::DataSourceSurface DataSourceSurface;
-  typedef mozilla::gfx::IntSize IntSize;
-  typedef mozilla::gfx::SourceSurface SourceSurface;
-  typedef mozilla::gfx::SurfaceFormat SurfaceFormat;
+  typedef gfx::Color Color;
+  typedef gfx::DataSourceSurface DataSourceSurface;
+  typedef gfx::DrawTarget DrawTarget;
+  typedef gfx::IntSize IntSize;
+  typedef gfx::SourceSurface SourceSurface;
+  typedef gfx::SurfaceFormat SurfaceFormat;
 
 public:
-  imgFrame();
-  ~imgFrame();
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(imgFrame)
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(imgFrame)
 
-  nsresult Init(int32_t aX, int32_t aY, int32_t aWidth, int32_t aHeight, mozilla::gfx::SurfaceFormat aFormat, uint8_t aPaletteDepth = 0);
+  imgFrame();
+
+  nsresult Init(int32_t aX, int32_t aY, int32_t aWidth, int32_t aHeight, SurfaceFormat aFormat, uint8_t aPaletteDepth = 0);
   nsresult Optimize();
 
-  bool Draw(gfxContext *aContext, GraphicsFilter aFilter,
-            const gfxMatrix &aUserSpaceToImageSpace, const gfxRect& aFill,
-            const nsIntMargin &aPadding, const nsIntRect &aSubimage,
-            uint32_t aImageFlags = imgIContainer::FLAG_NONE);
+  bool Draw(gfxContext* aContext, const ImageRegion& aRegion,
+            const nsIntMargin& aPadding, GraphicsFilter aFilter,
+            uint32_t aImageFlags);
 
   nsresult ImageUpdated(const nsIntRect &aUpdateRect);
 
   nsIntRect GetRect() const;
-  mozilla::gfx::SurfaceFormat GetFormat() const;
+  IntSize GetSize() const { return mSize; }
+  int32_t GetStride() const;
+  SurfaceFormat GetFormat() const;
   bool GetNeedsBackground() const;
   uint32_t GetImageBytesPerRow() const;
   uint32_t GetImageDataLength() const;
@@ -67,7 +76,8 @@ public:
 
   void SetDiscardable();
 
-  mozilla::TemporaryRef<SourceSurface> GetSurface();
+  TemporaryRef<SourceSurface> GetSurface();
+  TemporaryRef<DrawTarget> GetDrawTarget();
 
   Color
   SinglePixelColor()
@@ -80,11 +90,11 @@ public:
     return mSinglePixel;
   }
 
-  mozilla::TemporaryRef<SourceSurface> CachedSurface();
+  TemporaryRef<SourceSurface> CachedSurface();
 
   size_t SizeOfExcludingThisWithComputedFallbackIfHeap(
            gfxMemoryLocation aLocation,
-           mozilla::MallocSizeOf aMallocSizeOf) const;
+           MallocSizeOf aMallocSizeOf) const;
 
   uint8_t GetPaletteDepth() const { return mPaletteDepth; }
   uint32_t PaletteDataLength() const {
@@ -95,6 +105,8 @@ public:
   }
 
 private: // methods
+
+  ~imgFrame();
 
   struct SurfaceWithFormat {
     nsRefPtr<gfxDrawable> mDrawable;
@@ -108,24 +120,22 @@ private: // methods
   SurfaceWithFormat SurfaceForDrawing(bool               aDoPadding,
                                       bool               aDoPartialDecode,
                                       bool               aDoTile,
+                                      gfxContext*        aContext,
                                       const nsIntMargin& aPadding,
-                                      gfxMatrix&         aUserSpaceToImageSpace,
-                                      gfxRect&           aFill,
-                                      gfxRect&           aSubimage,
-                                      gfxRect&           aSourceRect,
                                       gfxRect&           aImageRect,
+                                      ImageRegion&       aRegion,
                                       SourceSurface*     aSurface);
 
 private: // data
-  mozilla::RefPtr<DataSourceSurface> mImageSurface;
-  mozilla::RefPtr<SourceSurface> mOptSurface;
+  RefPtr<DataSourceSurface> mImageSurface;
+  RefPtr<SourceSurface> mOptSurface;
 
   IntSize      mSize;
   nsIntPoint   mOffset;
 
   nsIntRect    mDecoded;
 
-  mutable mozilla::Mutex mDecodedMutex;
+  mutable Mutex mDecodedMutex;
 
   // The palette and image data for images that are paletted, since Cairo
   // doesn't support these images.
@@ -142,8 +152,8 @@ private: // data
   /** Indicates how many readers currently have locked this frame */
   int32_t mLockCount;
 
-  mozilla::RefPtr<mozilla::VolatileBuffer> mVBuf;
-  mozilla::VolatileBufferPtr<uint8_t> mVBufPtr;
+  RefPtr<VolatileBuffer> mVBuf;
+  VolatileBufferPtr<uint8_t> mVBufPtr;
 
   SurfaceFormat mFormat;
   uint8_t      mPaletteDepth;
@@ -157,8 +167,6 @@ private: // data
   bool mInformedDiscardTracker;
 };
 
-namespace mozilla {
-namespace image {
   // An RAII class to ensure it's easy to balance locks and unlocks on
   // imgFrames.
   class AutoFrameLocker
@@ -180,10 +188,11 @@ namespace image {
     bool Succeeded() { return mSucceeded; }
 
   private:
-    imgFrame* mFrame;
+    nsRefPtr<imgFrame> mFrame;
     bool mSucceeded;
   };
-}
-}
+
+} // namespace image
+} // namespace mozilla
 
 #endif /* imgFrame_h */

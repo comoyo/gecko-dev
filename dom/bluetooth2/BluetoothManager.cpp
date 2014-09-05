@@ -6,7 +6,6 @@
 
 #include "base/basictypes.h"
 #include "BluetoothManager.h"
-#include "BluetoothCommon.h"
 #include "BluetoothAdapter.h"
 #include "BluetoothService.h"
 #include "BluetoothReplyRunnable.h"
@@ -76,8 +75,8 @@ class GetAdaptersTask : public BluetoothReplyRunnable
     return true;
   }
 
-  void
-  ReleaseMembers()
+  virtual void
+  ReleaseMembers() MOZ_OVERRIDE
   {
     BluetoothReplyRunnable::ReleaseMembers();
     mManager = nullptr;
@@ -247,31 +246,24 @@ BluetoothManager::DispatchAttributeEvent()
   MOZ_ASSERT(NS_IsMainThread());
   BT_API2_LOGR();
 
-  // Wrap default adapter
-  AutoJSContext cx;
-  JS::Rooted<JS::Value> value(cx, JS::NullValue());
-  if (DefaultAdapterExists()) {
-    BluetoothAdapter* adapter = mAdapters[mDefaultAdapterIndex];
-    nsCOMPtr<nsIGlobalObject> global =
-      do_QueryInterface(adapter->GetParentObject());
-    NS_ENSURE_TRUE_VOID(global);
+  AutoJSAPI jsapi;
+  NS_ENSURE_TRUE_VOID(jsapi.Init(GetOwner()));
+  JSContext* cx = jsapi.cx();
+  JS::Rooted<JS::Value> value(cx);
 
-    JS::Rooted<JSObject*> scope(cx, global->GetGlobalJSObject());
-    NS_ENSURE_TRUE_VOID(scope);
+  nsTArray<nsString> types;
+  BT_APPEND_ENUM_STRING(types,
+                        BluetoothManagerAttribute,
+                        BluetoothManagerAttribute::DefaultAdapter);
 
-    JSAutoCompartment ac(cx, scope);
-    if (!ToJSValue(cx, adapter, &value)) {
-      JS_ClearPendingException(cx);
-      return;
-    }
-
-    BT_API2_LOGR("Default adapter is wrapped");
+  if (!ToJSValue(cx, types, &value)) {
+    JS_ClearPendingException(cx);
+    return;
   }
 
   // Notify application of default adapter change
   RootedDictionary<BluetoothAttributeEventInit> init(cx);
-  init.mAttr = (uint16_t)BluetoothManagerAttribute::DefaultAdapter;
-  init.mValue = value;
+  init.mAttrs = value;
   nsRefPtr<BluetoothAttributeEvent> event =
     BluetoothAttributeEvent::Constructor(this,
                                          NS_LITERAL_STRING("attributechanged"),

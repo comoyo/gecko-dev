@@ -11,11 +11,11 @@ import java.util.EnumSet;
 import java.util.List;
 
 import org.json.JSONObject;
+import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.BrowserApp;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoApplication;
-import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.LightweightTheme;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
@@ -40,16 +40,15 @@ import org.mozilla.gecko.widget.ThemedRelativeLayout;
 
 import android.content.Context;
 import android.content.res.Resources;
-import android.graphics.Bitmap;
-import android.graphics.drawable.BitmapDrawable;
+import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.StateListDrawable;
-import android.os.Build;
+import android.graphics.Paint;
+import android.graphics.Path;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.ContextMenu;
-import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.MenuInflater;
 import android.view.MotionEvent;
@@ -129,7 +128,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
     private RelativeLayout.LayoutParams urlBarEntryShrunkenLayoutParams;
     private ImageView urlBarTranslatingEdge;
     private boolean isSwitchingTabs;
-    private ShapedButton tabsButton;
+    private ThemedImageButton tabsButton;
     private ImageButton backButton;
     private ImageButton forwardButton;
 
@@ -143,10 +142,10 @@ public class BrowserToolbar extends ThemedRelativeLayout
 
     private final ThemedImageView editCancel;
 
-    private final View[] tabletDisplayModeViews;
-    private boolean hidForwardButtonOnStartEditing = false;
+    private List<View> tabletDisplayModeViews;
+    private boolean hidForwardButtonOnStartEditing;
 
-    private boolean shouldShrinkURLBar = false;
+    private boolean shouldShrinkURLBar;
 
     private OnActivateListener activateListener;
     private OnFocusChangeListener focusChangeListener;
@@ -164,11 +163,18 @@ public class BrowserToolbar extends ThemedRelativeLayout
     private int urlBarViewOffset;
     private int defaultForwardMargin;
 
+    private Path roundCornerShape;
+    private Paint roundCornerPaint;
+
+    private final Paint shadowPaint;
+    private final int shadowSize;
+
     private static final Interpolator buttonsInterpolator = new AccelerateInterpolator();
 
     private static final int FORWARD_ANIMATION_DURATION = 450;
 
     private final LightweightTheme theme;
+    private final ToolbarPrefs prefs;
 
     public BrowserToolbar(Context context) {
         this(context, null);
@@ -176,6 +182,8 @@ public class BrowserToolbar extends ThemedRelativeLayout
 
     public BrowserToolbar(Context context, AttributeSet attrs) {
         super(context, attrs);
+        setWillNotDraw(false);
+
         theme = ((GeckoApplication) context.getApplicationContext()).getLightweightTheme();
 
         // BrowserToolbar is attached to BrowserApp only.
@@ -186,7 +194,6 @@ public class BrowserToolbar extends ThemedRelativeLayout
 
         Tabs.registerOnTabsChangedListener(this);
         isSwitchingTabs = true;
-        isAnimatingEntry = false;
 
         EventDispatcher.getInstance().registerGeckoThreadListener(this,
             "Reader:Click",
@@ -202,8 +209,8 @@ public class BrowserToolbar extends ThemedRelativeLayout
         urlBarEntryDefaultLayoutParams = (RelativeLayout.LayoutParams) urlBarEntry.getLayoutParams();
         // API level 19 adds a RelativeLayout.LayoutParams copy constructor, so we explicitly cast
         // to ViewGroup.MarginLayoutParams to ensure consistency across platforms.
-        urlBarEntryShrunkenLayoutParams = new RelativeLayout.LayoutParams(
-                (ViewGroup.MarginLayoutParams) urlBarEntryDefaultLayoutParams);
+        urlBarEntryShrunkenLayoutParams =
+                new RelativeLayout.LayoutParams((ViewGroup.MarginLayoutParams) urlBarEntryDefaultLayoutParams);
         // Note: a shrunken phone layout is not displayed on any known devices,
         // and thus shrunken layout params for phone are not maintained.
         if (HardwareUtils.isTablet()) {
@@ -218,9 +225,9 @@ public class BrowserToolbar extends ThemedRelativeLayout
             urlBarTranslatingEdge.getDrawable().setLevel(6000);
         }
 
-        tabsButton = (ShapedButton) findViewById(R.id.tabs);
+        tabsButton = (ThemedImageButton) findViewById(R.id.tabs);
         tabsCounter = (TabCounter) findViewById(R.id.tabs_counter);
-        if (Build.VERSION.SDK_INT >= 11) {
+        if (Versions.feature11Plus) {
             tabsCounter.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         }
 
@@ -248,6 +255,25 @@ public class BrowserToolbar extends ThemedRelativeLayout
             focusOrder.addAll(urlDisplayLayout.getFocusOrder());
             focusOrder.addAll(Arrays.asList(tabsButton, menuButton));
         }
+
+        if (!HardwareUtils.isTablet()) {
+            roundCornerShape = new Path();
+            roundCornerShape.moveTo(0, 0);
+            roundCornerShape.lineTo(30, 0);
+            roundCornerShape.cubicTo(0, 0, 0, 0, 0, 30);
+            roundCornerShape.lineTo(0, 0);
+
+            roundCornerPaint = new Paint();
+            roundCornerPaint.setAntiAlias(true);
+            roundCornerPaint.setColor(res.getColor(R.color.background_tabs));
+            roundCornerPaint.setStrokeWidth(0.0f);
+        }
+
+        shadowSize = res.getDimensionPixelSize(R.dimen.browser_toolbar_shadow_size);
+
+        shadowPaint = new Paint();
+        shadowPaint.setColor(res.getColor(R.color.url_bar_shadow));
+        shadowPaint.setStrokeWidth(0.0f);
 
         setUIMode(UIMode.DISPLAY);
 
@@ -286,7 +312,18 @@ public class BrowserToolbar extends ThemedRelativeLayout
             }
         };
 
-        tabletDisplayModeViews = new View[] {
+        prefs = new ToolbarPrefs();
+        urlDisplayLayout.setToolbarPrefs(prefs);
+        urlEditLayout.setToolbarPrefs(prefs);
+    }
+
+    public ArrayList<View> populateTabletViews() {
+        if (!HardwareUtils.isTablet()) {
+            // Avoid the runtime and memory overhead for non-tablet devices.
+            return null;
+        }
+
+        final View[] allTabletDisplayModeViews = new View[] {
             actionItemBar,
             backButton,
             menuButton,
@@ -294,11 +331,25 @@ public class BrowserToolbar extends ThemedRelativeLayout
             tabsButton,
             tabsCounter,
         };
+        final ArrayList<View> listToPopulate = new ArrayList<View>(allTabletDisplayModeViews.length);
+
+        // Some tablet devices do not display all of the Views but instead rely on visibility
+        // to hide them. Find and return the ones that are relevant to our device.
+        for (final View v : allTabletDisplayModeViews) {
+            // These views should all be initialized and we explicitly do not
+            // check for null because we may be hiding bugs.
+            if (v.getVisibility() == View.VISIBLE) {
+                listToPopulate.add(v);
+            }
+        };
+        return listToPopulate;
     }
 
     @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
+
+        prefs.open();
 
         setOnClickListener(new Button.OnClickListener() {
             @Override
@@ -335,7 +386,6 @@ public class BrowserToolbar extends ThemedRelativeLayout
                     if (url == null) {
                         menu.findItem(R.id.copyurl).setVisible(false);
                         menu.findItem(R.id.add_to_launcher).setVisible(false);
-                        MenuUtils.safeSetVisible(menu, R.id.share, false);
                     }
 
                     MenuUtils.safeSetVisible(menu, R.id.subscribe, tab.hasFeeds());
@@ -344,12 +394,9 @@ public class BrowserToolbar extends ThemedRelativeLayout
                     // if there is no tab, remove anything tab dependent
                     menu.findItem(R.id.copyurl).setVisible(false);
                     menu.findItem(R.id.add_to_launcher).setVisible(false);
-                    MenuUtils.safeSetVisible(menu, R.id.share, false);
                     MenuUtils.safeSetVisible(menu, R.id.subscribe, false);
                     MenuUtils.safeSetVisible(menu, R.id.add_search_engine, false);
                 }
-
-                MenuUtils.safeSetVisible(menu, R.id.share, !GeckoProfile.get(getContext()).inGuestMode());
             }
         });
 
@@ -454,6 +501,25 @@ public class BrowserToolbar extends ThemedRelativeLayout
         }
     }
 
+    @Override
+    public void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+
+        prefs.close();
+    }
+
+    @Override
+    public void draw(Canvas canvas) {
+        super.draw(canvas);
+
+        if (!HardwareUtils.isTablet() && uiMode == UIMode.DISPLAY) {
+            canvas.drawPath(roundCornerShape, roundCornerPaint);
+        }
+
+        final int height = getHeight();
+        canvas.drawRect(0, height - shadowSize, getWidth(), height, shadowPaint);
+    }
+
     public void setProgressBar(ToolbarProgressView progressBar) {
         this.progressBar = progressBar;
     }
@@ -477,7 +543,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // If the motion event has occured below the toolbar (due to the scroll
+        // If the motion event has occurred below the toolbar (due to the scroll
         // offset), let it pass through to the page.
         if (event != null && event.getY() > getHeight() + ViewHelper.getTranslationY(this)) {
             return false;
@@ -1009,7 +1075,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
                 urlBarEntry.setLayoutParams(urlBarEntryShrunkenLayoutParams);
             }
 
-            if (Build.VERSION.SDK_INT < 11) {
+            if (Versions.preHC) {
                 showEditingOnPreHoneycomb(entryTranslation, curveTranslation);
             } else {
                 showEditingWithPhoneAnimation(animator, entryTranslation, curveTranslation);
@@ -1039,6 +1105,10 @@ public class BrowserToolbar extends ThemedRelativeLayout
     }
 
     private void showEditingOnTablet() {
+        if (tabletDisplayModeViews == null) {
+            tabletDisplayModeViews = populateTabletViews();
+        }
+
         urlBarEntry.setLayoutParams(urlBarEntryShrunkenLayoutParams);
 
         // Hide display elements.
@@ -1138,7 +1208,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
         // not selected so clear the selection by clearing focus.
         urlEditLayout.clearFocus();
 
-        if (Build.VERSION.SDK_INT < 11) {
+        if (Versions.preHC) {
             stopEditingOnPreHoneycomb();
         } else if (HardwareUtils.isTablet()) {
             stopEditingOnTablet();
@@ -1175,6 +1245,12 @@ public class BrowserToolbar extends ThemedRelativeLayout
     }
 
     private void stopEditingOnTablet() {
+        if (tabletDisplayModeViews == null) {
+            throw new IllegalStateException("We initialize tabletDisplayModeViews in the " +
+                    "transition to show editing mode and don't expect stop editing to be called " +
+                    "first.");
+        }
+
         urlBarEntry.setLayoutParams(urlBarEntryDefaultLayoutParams);
 
         // Show display elements.
@@ -1358,6 +1434,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
         tabsButton.setPrivateMode(isPrivate);
         menuButton.setPrivateMode(isPrivate);
         menuIcon.setPrivateMode(isPrivate);
+        editCancel.setPrivateMode(isPrivate);
         urlEditLayout.setPrivateMode(isPrivate);
 
         if (backButton instanceof BackButton) {

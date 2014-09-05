@@ -17,7 +17,6 @@
 #include "mozilla/StaticPtr.h"
 #include "nsIMemoryReporter.h"
 #include "gfx2DGlue.h"
-#include "gfxASurface.h"
 #include "gfxPattern.h"  // Workaround for flaw in bug 921753 part 2.
 #include "gfxDrawable.h"
 #include "gfxPlatform.h"
@@ -32,9 +31,11 @@
 
 using std::max;
 using std::min;
-using namespace mozilla::gfx;
 
 namespace mozilla {
+
+using namespace gfx;
+
 namespace image {
 
 class CachedSurface;
@@ -112,28 +113,29 @@ private:
  */
 class CachedSurface
 {
+  ~CachedSurface() {}
 public:
   NS_INLINE_DECL_REFCOUNTING(CachedSurface)
 
-  CachedSurface(DrawTarget*       aTarget,
+  CachedSurface(SourceSurface*    aSurface,
                 const IntSize     aTargetSize,
                 const Cost        aCost,
                 const ImageKey    aImageKey,
                 const SurfaceKey& aSurfaceKey)
-    : mTarget(aTarget)
+    : mSurface(aSurface)
     , mTargetSize(aTargetSize)
     , mCost(aCost)
     , mImageKey(aImageKey)
     , mSurfaceKey(aSurfaceKey)
   {
-    MOZ_ASSERT(mTarget, "Must have a valid DrawTarget");
+    MOZ_ASSERT(mSurface, "Must have a valid SourceSurface");
     MOZ_ASSERT(mImageKey, "Must have a valid image key");
   }
 
   already_AddRefed<gfxDrawable> Drawable() const
   {
     nsRefPtr<gfxDrawable> drawable =
-      new gfxSurfaceDrawable(mTarget, ThebesIntSize(mTargetSize));
+      new gfxSurfaceDrawable(mSurface, ThebesIntSize(mTargetSize));
     return drawable.forget();
   }
 
@@ -144,7 +146,7 @@ public:
 
 private:
   nsExpirationState       mExpirationState;
-  nsRefPtr<DrawTarget>    mTarget;
+  nsRefPtr<SourceSurface> mSurface;
   const IntSize           mTargetSize;
   const Cost              mCost;
   const ImageKey          mImageKey;
@@ -159,6 +161,7 @@ private:
  */
 class ImageSurfaceCache
 {
+  ~ImageSurfaceCache() {}
 public:
   NS_INLINE_DECL_REFCOUNTING(ImageSurfaceCache)
 
@@ -204,7 +207,7 @@ private:
  * maintains high-level invariants and encapsulates the details of the surface
  * cache's implementation.
  */
-class SurfaceCacheImpl : public nsIMemoryReporter
+class SurfaceCacheImpl MOZ_FINAL : public nsIMemoryReporter
 {
 public:
   NS_DECL_ISUPPORTS
@@ -217,25 +220,27 @@ public:
     , mMaxCost(aSurfaceCacheSize)
     , mAvailableCost(aSurfaceCacheSize)
   {
-    nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
+    nsCOMPtr<nsIObserverService> os = services::GetObserverService();
     if (os)
       os->AddObserver(mMemoryPressureObserver, "memory-pressure", false);
   }
 
+private:
   virtual ~SurfaceCacheImpl()
   {
-    nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
+    nsCOMPtr<nsIObserverService> os = services::GetObserverService();
     if (os)
       os->RemoveObserver(mMemoryPressureObserver, "memory-pressure");
 
     UnregisterWeakMemoryReporter(this);
   }
 
+public:
   void InitMemoryReporter() {
     RegisterWeakMemoryReporter(this);
   }
 
-  void Insert(DrawTarget*       aTarget,
+  void Insert(SourceSurface*    aSurface,
               IntSize           aTargetSize,
               const Cost        aCost,
               const ImageKey    aImageKey,
@@ -249,7 +254,7 @@ public:
       return;
 
     nsRefPtr<CachedSurface> surface =
-      new CachedSurface(aTarget, aTargetSize, aCost, aImageKey, aSurfaceKey);
+      new CachedSurface(aSurface, aTargetSize, aCost, aImageKey, aSurfaceKey);
 
     // Remove elements in order of cost until we can fit this in the cache.
     while (aCost > mAvailableCost) {
@@ -367,7 +372,8 @@ public:
   }
 
   NS_IMETHOD
-  CollectReports(nsIHandleReportCallback* aHandleReport, nsISupports* aData)
+  CollectReports(nsIHandleReportCallback* aHandleReport, nsISupports* aData,
+                 bool aAnonymize)
   {
     return MOZ_COLLECT_REPORT(
       "imagelib-surface-cache", KIND_OTHER, UNITS_BYTES,
@@ -415,8 +421,6 @@ private:
   {
     NS_DECL_ISUPPORTS
 
-    virtual ~MemoryPressureObserver() { }
-
     NS_IMETHOD Observe(nsISupports*, const char* aTopic, const char16_t*)
     {
       if (sInstance && strcmp(aTopic, "memory-pressure") == 0) {
@@ -424,6 +428,9 @@ private:
       }
       return NS_OK;
     }
+
+  private:
+    virtual ~MemoryPressureObserver() { }
   };
 
 
@@ -501,7 +508,7 @@ SurfaceCache::Lookup(const ImageKey    aImageKey,
 }
 
 /* static */ void
-SurfaceCache::Insert(DrawTarget*       aTarget,
+SurfaceCache::Insert(SourceSurface*    aSurface,
                      const ImageKey    aImageKey,
                      const SurfaceKey& aSurfaceKey)
 {
@@ -509,7 +516,7 @@ SurfaceCache::Insert(DrawTarget*       aTarget,
   MOZ_ASSERT(NS_IsMainThread());
 
   Cost cost = ComputeCost(aSurfaceKey.Size());
-  return sInstance->Insert(aTarget, aSurfaceKey.Size(), cost, aImageKey,
+  return sInstance->Insert(aSurface, aSurfaceKey.Size(), cost, aImageKey,
                            aSurfaceKey);
 }
 
@@ -535,10 +542,12 @@ SurfaceCache::Discard(Image* aImageKey)
 /* static */ void
 SurfaceCache::DiscardAll()
 {
-  MOZ_ASSERT(sInstance, "Should be initialized");
   MOZ_ASSERT(NS_IsMainThread());
 
-  return sInstance->DiscardAll();
+  if (sInstance) {
+    sInstance->DiscardAll();
+  }
+  // nothing to discard
 }
 
 } // namespace image

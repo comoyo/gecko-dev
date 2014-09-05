@@ -5,17 +5,23 @@
 
 package org.mozilla.gecko.home;
 
+import static org.mozilla.gecko.db.URLMetadataTable.TILE_COLOR_COLUMN;
+import static org.mozilla.gecko.db.URLMetadataTable.TILE_IMAGE_URL_COLUMN;
+
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
+import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.db.BrowserContract.Thumbnails;
 import org.mozilla.gecko.db.BrowserContract.TopSites;
 import org.mozilla.gecko.db.BrowserDB;
+import org.mozilla.gecko.db.URLMetadata;
 import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.favicons.OnFaviconLoadedListener;
 import org.mozilla.gecko.gfx.BitmapUtils;
@@ -23,17 +29,17 @@ import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
 import org.mozilla.gecko.home.PinSiteDialog.OnSiteSelectedListener;
 import org.mozilla.gecko.home.TopSitesGridView.OnEditPinnedSiteListener;
 import org.mozilla.gecko.home.TopSitesGridView.TopSitesGridContextMenuInfo;
+import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Context;
-import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.net.Uri;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.support.v4.app.FragmentManager;
 import android.support.v4.app.LoaderManager.LoaderCallbacks;
 import android.support.v4.content.AsyncTaskLoader;
@@ -88,9 +94,6 @@ public class TopSitesPanel extends HomeFragment {
     // Listener for editing pinned sites.
     private EditPinnedSiteListener mEditPinnedSiteListener;
 
-    // On URL open listener
-    private OnUrlOpenListener mUrlOpenListener;
-
     // Max number of entries shown in the grid from the cursor.
     private int mMaxGridEntries;
 
@@ -99,10 +102,6 @@ public class TopSitesPanel extends HomeFragment {
 
     public static TopSitesPanel newInstance() {
         return new TopSitesPanel();
-    }
-
-    public TopSitesPanel() {
-        mUrlOpenListener = null;
     }
 
     private static boolean logDebug = Log.isLoggable(LOGTAG, Log.DEBUG);
@@ -125,20 +124,6 @@ public class TopSitesPanel extends HomeFragment {
         super.onAttach(activity);
 
         mMaxGridEntries = activity.getResources().getInteger(R.integer.number_of_top_sites);
-
-        try {
-            mUrlOpenListener = (OnUrlOpenListener) activity;
-        } catch (ClassCastException e) {
-            throw new ClassCastException(activity.toString()
-                    + " must implement HomePager.OnUrlOpenListener");
-        }
-    }
-
-    @Override
-    public void onDetach() {
-        super.onDetach();
-
-        mUrlOpenListener = null;
     }
 
     @Override
@@ -228,19 +213,6 @@ public class TopSitesPanel extends HomeFragment {
     }
 
     @Override
-    public void onConfigurationChanged(Configuration newConfig) {
-        super.onConfigurationChanged(newConfig);
-
-        // Detach and reattach the fragment as the layout changes.
-        if (isVisible()) {
-            getFragmentManager().beginTransaction()
-                                .detach(this)
-                                .attach(this)
-                                .commitAllowingStateLoss();
-        }
-    }
-
-    @Override
     public void onActivityCreated(Bundle savedInstanceState) {
         super.onActivityCreated(savedInstanceState);
 
@@ -277,8 +249,7 @@ public class TopSitesPanel extends HomeFragment {
         MenuInflater inflater = new MenuInflater(view.getContext());
         inflater.inflate(R.menu.home_contextmenu, menu);
 
-        // Hide ununsed menu items.
-        menu.findItem(R.id.home_open_in_reader).setVisible(false);
+        // Hide unused menu items.
         menu.findItem(R.id.home_edit_bookmark).setVisible(false);
 
         TopSitesGridContextMenuInfo info = (TopSitesGridContextMenuInfo) menuInfo;
@@ -295,6 +266,10 @@ public class TopSitesPanel extends HomeFragment {
             menu.findItem(R.id.home_open_private_tab).setVisible(false);
             menu.findItem(R.id.top_sites_pin).setVisible(false);
             menu.findItem(R.id.top_sites_unpin).setVisible(false);
+        }
+
+        if (!StringUtils.isShareableUrl(info.url) || GeckoProfile.get(getActivity()).inGuestMode()) {
+            menu.findItem(R.id.home_share).setVisible(false);
         }
     }
 
@@ -350,7 +325,8 @@ public class TopSitesPanel extends HomeFragment {
 
         if (itemId == R.id.top_sites_edit) {
             // Decode "user-entered" URLs before showing them.
-            mEditPinnedSiteListener.onEditPinnedSite(info.position, decodeUserEnteredUrl(info.url));
+            mEditPinnedSiteListener.onEditPinnedSite(info.position,
+                                                     StringUtils.decodeUserEnteredUrl(info.url));
 
             Telemetry.sendUIEvent(TelemetryContract.Event.EDIT);
             return true;
@@ -370,10 +346,6 @@ public class TopSitesPanel extends HomeFragment {
         // Gecko thread priority, we ensure that the UI appears quickly. The
         // priority is reset to normal once thumbnails are loaded.
         ThreadUtils.reduceGeckoPriority(PRIORITY_RESET_TIMEOUT);
-    }
-
-    static String encodeUserEnteredUrl(String url) {
-        return Uri.fromParts("user-entered", url, null).toString();
     }
 
     /**
@@ -419,7 +391,7 @@ public class TopSitesPanel extends HomeFragment {
         mList.setHeaderDividersEnabled(c != null && c.getCount() > mMaxGridEntries);
     }
 
-    private void updateUiWithThumbnails(Map<String, Bitmap> thumbnails) {
+    private void updateUiWithThumbnails(Map<String, ThumbnailInfo> thumbnails) {
         if (mGridAdapter != null) {
             mGridAdapter.updateThumbnails(thumbnails);
         }
@@ -430,8 +402,9 @@ public class TopSitesPanel extends HomeFragment {
     }
 
     private static class TopSitesLoader extends SimpleCursorLoader {
-        // Max number of search results
+        // Max number of search results.
         private static final int SEARCH_LIMIT = 30;
+        private static final String TELEMETRY_HISTOGRAM_LOAD_CURSOR = "FENNEC_TOPSITES_LOADER_TIME_MS";
         private int mMaxGridEntries;
 
         public TopSitesLoader(Context context) {
@@ -441,8 +414,12 @@ public class TopSitesPanel extends HomeFragment {
 
         @Override
         public Cursor loadCursor() {
-            trace("TopSitesLoader.loadCursor()");
-            return BrowserDB.getTopSites(getContext().getContentResolver(), mMaxGridEntries, SEARCH_LIMIT);
+            final long start = SystemClock.uptimeMillis();
+            final Cursor cursor = BrowserDB.getTopSites(getContext().getContentResolver(), mMaxGridEntries, SEARCH_LIMIT);
+            final long end = SystemClock.uptimeMillis();
+            final long took = end - start;
+            Telemetry.HistogramAdd(TELEMETRY_HISTOGRAM_LOAD_CURSOR, (int) Math.min(took, Integer.MAX_VALUE));
+            return cursor;
         }
     }
 
@@ -479,7 +456,7 @@ public class TopSitesPanel extends HomeFragment {
     public class TopSitesGridAdapter extends CursorAdapter {
         // Cache to store the thumbnails.
         // Ensure that this is only accessed from the UI thread.
-        private Map<String, Bitmap> mThumbnails;
+        private Map<String, ThumbnailInfo> mThumbnailInfos;
 
         public TopSitesGridAdapter(Context context, Cursor cursor) {
             super(context, cursor, 0);
@@ -502,8 +479,8 @@ public class TopSitesPanel extends HomeFragment {
          *
          * @param thumbnails A map of urls and their thumbnail bitmaps.
          */
-        public void updateThumbnails(Map<String, Bitmap> thumbnails) {
-            mThumbnails = thumbnails;
+        public void updateThumbnails(Map<String, ThumbnailInfo> thumbnails) {
+            mThumbnailInfos = thumbnails;
 
             final int count = mGrid.getChildCount();
             for (int i = 0; i < count; i++) {
@@ -533,7 +510,7 @@ public class TopSitesPanel extends HomeFragment {
             }
 
             // Show the thumbnail, if any.
-            Bitmap thumbnail = (mThumbnails != null ? mThumbnails.get(url) : null);
+            ThumbnailInfo thumbnail = (mThumbnailInfos != null ? mThumbnailInfos.get(url) : null);
 
             // Debounce bindView calls to avoid redundant redraws and favicon
             // fetches.
@@ -547,18 +524,21 @@ public class TopSitesPanel extends HomeFragment {
                 return;
             }
 
+            // Make sure we query suggested images without the user-entered wrapper.
+            final String decodedUrl = StringUtils.decodeUserEnteredUrl(url);
+
             // Suggested images have precedence over thumbnails, no need to wait
             // for them to be loaded. See: CursorLoaderCallbacks.onLoadFinished()
-            final String imageUrl = BrowserDB.getSuggestedImageUrlForUrl(url);
+            final String imageUrl = BrowserDB.getSuggestedImageUrlForUrl(decodedUrl);
             if (!TextUtils.isEmpty(imageUrl)) {
-                final int bgColor = BrowserDB.getSuggestedBackgroundColorForUrl(url);
+                final int bgColor = BrowserDB.getSuggestedBackgroundColorForUrl(decodedUrl);
                 view.displayThumbnail(imageUrl, bgColor);
                 return;
             }
 
             // If thumbnails are still being loaded, don't try to load favicons
             // just yet. If we sent in a thumbnail, we're done now.
-            if (mThumbnails == null || thumbnail != null) {
+            if (mThumbnailInfos == null || thumbnail != null) {
                 return;
             }
 
@@ -655,7 +635,7 @@ public class TopSitesPanel extends HomeFragment {
 
             if (urls.isEmpty()) {
                 // Short-circuit empty results to the UI.
-                updateUiWithThumbnails(new HashMap<String, Bitmap>());
+                updateUiWithThumbnails(new HashMap<String, ThumbnailInfo>());
                 return;
             }
 
@@ -676,12 +656,52 @@ public class TopSitesPanel extends HomeFragment {
         }
     }
 
+    static class ThumbnailInfo {
+        public final Bitmap bitmap;
+        public final String imageUrl;
+        public final int bgColor;
+
+        public ThumbnailInfo(final Bitmap bitmap) {
+            this.bitmap = bitmap;
+            this.imageUrl = null;
+            this.bgColor = Color.TRANSPARENT;
+        }
+
+        public ThumbnailInfo(final String imageUrl, final int bgColor) {
+            this.bitmap = null;
+            this.imageUrl = imageUrl;
+            this.bgColor = bgColor;
+        }
+
+        public static ThumbnailInfo fromMetadata(final Map<String, Object> data) {
+            final String imageUrl = (String) data.get(TILE_IMAGE_URL_COLUMN);
+            if (imageUrl == null) {
+                return null;
+            }
+
+            int bgColor = Color.WHITE;
+            final String colorString = (String) data.get(TILE_COLOR_COLUMN);
+            try {
+                bgColor = Color.parseColor(colorString);
+            } catch (Exception ex) {
+            }
+
+            return new ThumbnailInfo(imageUrl, bgColor);
+        }
+    }
+
     /**
      * An AsyncTaskLoader to load the thumbnails from a cursor.
      */
-    private static class ThumbnailsLoader extends AsyncTaskLoader<Map<String, Bitmap>> {
-        private Map<String, Bitmap> mThumbnails;
+    @SuppressWarnings("serial")
+    static class ThumbnailsLoader extends AsyncTaskLoader<Map<String, ThumbnailInfo>> {
+        private Map<String, ThumbnailInfo> mThumbnailInfos;
         private ArrayList<String> mUrls;
+
+        private static final ArrayList<String> COLUMNS = new ArrayList<String>() {{
+            add(TILE_IMAGE_URL_COLUMN);
+            add(TILE_COLOR_COLUMN);
+        }};
 
         public ThumbnailsLoader(Context context, ArrayList<String> urls) {
             super(context);
@@ -689,20 +709,44 @@ public class TopSitesPanel extends HomeFragment {
         }
 
         @Override
-        public Map<String, Bitmap> loadInBackground() {
+        public Map<String, ThumbnailInfo> loadInBackground() {
+            final Map<String, ThumbnailInfo> thumbnails = new HashMap<String, ThumbnailInfo>();
             if (mUrls == null || mUrls.size() == 0) {
-                return null;
+                return thumbnails;
             }
 
-            // Query the DB for thumbnails.
+            // Query the DB for tile images.
             final ContentResolver cr = getContext().getContentResolver();
-            final Cursor cursor = BrowserDB.getThumbnailsForUrls(cr, mUrls);
+            final Map<String, Map<String, Object>> metadata = URLMetadata.getForUrls(cr, mUrls, COLUMNS);
 
-            if (cursor == null) {
-                return null;
+            // Keep a list of urls that don't have tiles images. We'll use thumbnails for them instead.
+            final List<String> thumbnailUrls;
+            if (metadata != null) {
+                thumbnailUrls = new ArrayList<String>();
+
+                for (String url : metadata.keySet()) {
+                    ThumbnailInfo info = ThumbnailInfo.fromMetadata(metadata.get(url));
+                    if (info == null) {
+                        // If we didn't find metadata, we'll look for a thumbnail for this url.
+                        thumbnailUrls.add(url);
+                        continue;
+                    }
+
+                    thumbnails.put(url, info);
+                }
+            } else {
+                thumbnailUrls = new ArrayList<String>(mUrls);
             }
 
-            final Map<String, Bitmap> thumbnails = new HashMap<String, Bitmap>();
+            if (thumbnailUrls.size() == 0) {
+                return thumbnails;
+            }
+
+            // Query the DB for tile thumbnails.
+            final Cursor cursor = BrowserDB.getThumbnailsForUrls(cr, thumbnailUrls);
+            if (cursor == null) {
+                return thumbnails;
+            }
 
             try {
                 final int urlIndex = cursor.getColumnIndexOrThrow(Thumbnails.URL);
@@ -727,7 +771,7 @@ public class TopSitesPanel extends HomeFragment {
                         break;
                     }
 
-                    thumbnails.put(url, bitmap);
+                    thumbnails.put(url, new ThumbnailInfo(bitmap));
                 }
             } finally {
                 cursor.close();
@@ -737,13 +781,13 @@ public class TopSitesPanel extends HomeFragment {
         }
 
         @Override
-        public void deliverResult(Map<String, Bitmap> thumbnails) {
+        public void deliverResult(Map<String, ThumbnailInfo> thumbnails) {
             if (isReset()) {
-                mThumbnails = null;
+                mThumbnailInfos = null;
                 return;
             }
 
-            mThumbnails = thumbnails;
+            mThumbnailInfos = thumbnails;
 
             if (isStarted()) {
                 super.deliverResult(thumbnails);
@@ -752,11 +796,11 @@ public class TopSitesPanel extends HomeFragment {
 
         @Override
         protected void onStartLoading() {
-            if (mThumbnails != null) {
-                deliverResult(mThumbnails);
+            if (mThumbnailInfos != null) {
+                deliverResult(mThumbnailInfos);
             }
 
-            if (takeContentChanged() || mThumbnails == null) {
+            if (takeContentChanged() || mThumbnailInfos == null) {
                 forceLoad();
             }
         }
@@ -767,8 +811,8 @@ public class TopSitesPanel extends HomeFragment {
         }
 
         @Override
-        public void onCanceled(Map<String, Bitmap> thumbnails) {
-            mThumbnails = null;
+        public void onCanceled(Map<String, ThumbnailInfo> thumbnails) {
+            mThumbnailInfos = null;
         }
 
         @Override
@@ -778,26 +822,26 @@ public class TopSitesPanel extends HomeFragment {
             // Ensure the loader is stopped.
             onStopLoading();
 
-            mThumbnails = null;
+            mThumbnailInfos = null;
         }
     }
 
     /**
      * Loader callbacks for the thumbnails on TopSitesGridView.
      */
-    private class ThumbnailsLoaderCallbacks implements LoaderCallbacks<Map<String, Bitmap>> {
+    private class ThumbnailsLoaderCallbacks implements LoaderCallbacks<Map<String, ThumbnailInfo>> {
         @Override
-        public Loader<Map<String, Bitmap>> onCreateLoader(int id, Bundle args) {
+        public Loader<Map<String, ThumbnailInfo>> onCreateLoader(int id, Bundle args) {
             return new ThumbnailsLoader(getActivity(), args.getStringArrayList(THUMBNAILS_URLS_KEY));
         }
 
         @Override
-        public void onLoadFinished(Loader<Map<String, Bitmap>> loader, Map<String, Bitmap> thumbnails) {
+        public void onLoadFinished(Loader<Map<String, ThumbnailInfo>> loader, Map<String, ThumbnailInfo> thumbnails) {
             updateUiWithThumbnails(thumbnails);
         }
 
         @Override
-        public void onLoaderReset(Loader<Map<String, Bitmap>> loader) {
+        public void onLoaderReset(Loader<Map<String, ThumbnailInfo>> loader) {
             if (mGridAdapter != null) {
                 mGridAdapter.updateThumbnails(null);
             }

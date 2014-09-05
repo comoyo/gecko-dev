@@ -9,6 +9,7 @@
 #include "HttpLog.h"
 
 #include "nsHttp.h"
+#include "nsICacheEntry.h"
 #include "mozilla/unused.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/TabChild.h"
@@ -41,7 +42,7 @@ HttpChannelChild::HttpChannelChild()
   : HttpAsyncAborter<HttpChannelChild>(MOZ_THIS_IN_INITIALIZER_LIST())
   , mIsFromCache(false)
   , mCacheEntryAvailable(false)
-  , mCacheExpirationTime(nsICache::NO_EXPIRATION_TIME)
+  , mCacheExpirationTime(nsICacheEntry::NO_EXPIRATION_TIME)
   , mSendResumeAt(false)
   , mIPCOpen(false)
   , mKeptAlive(false)
@@ -336,9 +337,14 @@ HttpChannelChild::OnStartRequest(const nsresult& channelStatus,
   if (mResponseHead)
     SetCookie(mResponseHead->PeekHeader(nsHttp::Set_Cookie));
 
-  rv = ApplyContentConversions();
-  if (NS_FAILED(rv))
+  nsCOMPtr<nsIStreamListener> listener;
+  rv = DoApplyContentConversions(mListener, getter_AddRefs(listener),
+                                 mListenerContext);
+  if (NS_FAILED(rv)) {
     Cancel(rv);
+  } else if (listener) {
+    mListener = listener;
+  }
 
   mSelfAddr = selfAddr;
   mPeerAddr = peerAddr;
@@ -435,15 +441,18 @@ HttpChannelChild::OnTransportAndData(const nsresult& channelStatus,
     return;
 
   // cache the progress sink so we don't have to query for it each time.
-  if (!mProgressSink)
+  if (!mProgressSink) {
     GetCallback(mProgressSink);
+  }
 
   // Hold queue lock throughout all three calls, else we might process a later
   // necko msg in between them.
   AutoEventEnqueuer ensureSerialDispatch(mEventQ);
 
-  // block status/progress after Cancel or OnStopRequest has been called,
+  // Block status/progress after Cancel or OnStopRequest has been called,
   // or if channel has LOAD_BACKGROUND set.
+  // Note: Progress events will be received directly in RecvOnProgress if
+  // LOAD_BACKGROUND is set.
   // - JDUELL: may not need mStatus/mIsPending checks, given this is always called
   //   during OnDataAvailable, and we've already checked mCanceled.  Code
   //   dupe'd from nsHttpChannel
@@ -604,15 +613,14 @@ HttpChannelChild::OnProgress(const uint64_t& progress,
     return;
 
   // cache the progress sink so we don't have to query for it each time.
-  if (!mProgressSink)
+  if (!mProgressSink) {
     GetCallback(mProgressSink);
+  }
 
   AutoEventEnqueuer ensureSerialDispatch(mEventQ);
 
-  // block socket status event after Cancel or OnStopRequest has been called,
-  // or if channel has LOAD_BACKGROUND set
-  if (mProgressSink && NS_SUCCEEDED(mStatus) && mIsPending &&
-      !(mLoadFlags & LOAD_BACKGROUND))
+  // Block socket status event after Cancel or OnStopRequest has been called.
+  if (mProgressSink && NS_SUCCEEDED(mStatus) && mIsPending)
   {
     if (progress > 0) {
       MOZ_ASSERT(progress <= progressMax, "unexpected progress values");
@@ -711,7 +719,7 @@ HttpChannelChild::FailedAsyncOpen(const nsresult& status)
   LOG(("HttpChannelChild::FailedAsyncOpen [this=%p status=%x]\n", this, status));
 
   mStatus = status;
-  mIsPending = false;
+
   // We're already being called from IPDL, therefore already "async"
   HandleAsyncAbort();
 }
@@ -726,7 +734,7 @@ HttpChannelChild::DoNotifyListenerCleanup()
 class DeleteSelfEvent : public ChannelEvent
 {
  public:
-  DeleteSelfEvent(HttpChannelChild* child) : mChild(child) {}
+  explicit DeleteSelfEvent(HttpChannelChild* child) : mChild(child) {}
   void Run() { mChild->DeleteSelf(); }
  private:
   HttpChannelChild* mChild;
@@ -850,7 +858,7 @@ HttpChannelChild::Redirect1Begin(const uint32_t& newChannelId,
 class Redirect3Event : public ChannelEvent
 {
  public:
-  Redirect3Event(HttpChannelChild* child) : mChild(child) {}
+  explicit Redirect3Event(HttpChannelChild* child) : mChild(child) {}
   void Run() { mChild->Redirect3Complete(); }
  private:
   HttpChannelChild* mChild;
@@ -870,7 +878,7 @@ HttpChannelChild::RecvRedirect3Complete()
 class HttpFlushedForDiversionEvent : public ChannelEvent
 {
  public:
-  HttpFlushedForDiversionEvent(HttpChannelChild* aChild)
+  explicit HttpFlushedForDiversionEvent(HttpChannelChild* aChild)
   : mChild(aChild)
   {
     MOZ_RELEASE_ASSERT(aChild);
@@ -964,8 +972,15 @@ HttpChannelChild::ConnectParent(uint32_t id)
   AddIPDLReference();
 
   HttpChannelConnectArgs connectArgs(id);
+  PBrowserOrId browser;
+  if (!tabChild ||
+      static_cast<ContentChild*>(gNeckoChild->Manager()) == tabChild->Manager()) {
+    browser = tabChild;
+  } else {
+    browser = TabChild::GetTabChildId(tabChild);
+  }
   if (!gNeckoChild->
-        SendPHttpChannelConstructor(this, tabChild,
+        SendPHttpChannelConstructor(this, browser,
                                     IPC::SerializedLoadContext(this),
                                     connectArgs)) {
     return NS_ERROR_FAILURE;
@@ -1274,7 +1289,14 @@ HttpChannelChild::AsyncOpen(nsIStreamListener *listener, nsISupports *aContext)
   // until OnStopRequest, or we do a redirect, or we hit an IPDL error.
   AddIPDLReference();
 
-  gNeckoChild->SendPHttpChannelConstructor(this, tabChild,
+  PBrowserOrId browser;
+  if (!tabChild ||
+      static_cast<ContentChild*>(gNeckoChild->Manager()) == tabChild->Manager()) {
+    browser = tabChild;
+  } else {
+    browser = TabChild::GetTabChildId(tabChild);
+  }
+  gNeckoChild->SendPHttpChannelConstructor(this, browser,
                                            IPC::SerializedLoadContext(this),
                                            openArgs);
 

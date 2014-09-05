@@ -2,10 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/UniquePtr.h"
+
 #include "prerror.h"
 #include "prprf.h"
 
-#include "ScopedNSSTypes.h"
 #include "nsNSSCertHelper.h"
 #include "nsCOMPtr.h"
 #include "nsNSSCertificate.h"
@@ -653,7 +654,10 @@ ProcessKeyUsageExtension(SECItem *extData, nsAString &text,
     text.Append(local.get());
     return NS_OK;
   }
-  unsigned char keyUsage = decoded.data[0];
+  unsigned char keyUsage = 0;
+  if (decoded.len) {
+    keyUsage = decoded.data[0];
+  }
   nsMemory::Free(decoded.data);  
   if (keyUsage & KU_DIGITAL_SIGNATURE) {
     nssComponent->GetPIPNSSBundleString("CertDumpKUSign", local);
@@ -810,7 +814,7 @@ ProcessRDN(CERTRDN* rdn, nsAString &finalString, nsINSSComponent *nssComponent)
     // We know we can fit buffer of this length. CERT_RFC1485_EscapeAndQuote
     // will fail if we provide smaller buffer then the result can fit to.
     int escapedValueCapacity = decodeItem->len * 3 + 3;
-    ScopedDeleteArray<char> escapedValue(new char[escapedValueCapacity]);
+    UniquePtr<char[]> escapedValue = MakeUnique<char[]>(escapedValueCapacity);
 
     SECStatus status = CERT_RFC1485_EscapeAndQuote(
           escapedValue.get(),
@@ -822,7 +826,7 @@ ProcessRDN(CERTRDN* rdn, nsAString &finalString, nsINSSComponent *nssComponent)
       return NS_ERROR_FAILURE;
     }
 
-    avavalue = NS_ConvertUTF8toUTF16(escapedValue);
+    avavalue = NS_ConvertUTF8toUTF16(escapedValue.get());
     
     SECITEM_FreeItem(decodeItem, true);
     params[0] = type.get();

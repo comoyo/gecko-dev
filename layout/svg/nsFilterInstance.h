@@ -27,7 +27,7 @@ class nsSVGFilterPaintCallback;
 
 /**
  * This class performs all filter processing.
- * 
+ *
  * We build a graph of the filter image data flow, essentially
  * converting the filter graph to SSA. This lets us easily propagate
  * analysis data (such as bounding-boxes) over the filter primitive graph.
@@ -183,7 +183,6 @@ private:
    * nodes
    */
   nsresult BuildSourcePaint(SourceInfo *aPrimitive,
-                            gfxASurface* aTargetSurface,
                             DrawTarget* aTargetDT);
 
   /**
@@ -191,15 +190,13 @@ private:
    * nodes, fills its contents and assigns it to mFillPaint.mSourceSurface and
    * mStrokePaint.mSourceSurface respectively.
    */
-  nsresult BuildSourcePaints(gfxASurface* aTargetSurface,
-                             DrawTarget* aTargetDT);
+  nsresult BuildSourcePaints(DrawTarget* aTargetDT);
 
   /**
    * Creates the SourceSurface for the SourceGraphic graph node, paints its
    * contents, and assigns it to mSourceGraphic.mSourceSurface.
    */
-  nsresult BuildSourceImage(gfxASurface* aTargetSurface,
-                            DrawTarget* aTargetDT);
+  nsresult BuildSourceImage(DrawTarget* aTargetDT);
 
   /**
    * Build the list of FilterPrimitiveDescriptions that describes the filter's
@@ -221,6 +218,11 @@ private:
    * This sets mNeededBounds on the corresponding SourceInfo structs.
    */
   void ComputeNeededBoxes();
+
+  /**
+   * Returns the output bounds of the final FilterPrimitiveDescription.
+   */
+  nsIntRect OutputFilterSpaceBounds() const;
 
   /**
    * Compute the scale factors between user space and filter space.
@@ -271,6 +273,11 @@ private:
   gfxRect                 mTargetBBox;
 
   /**
+   * The SVG bbox of the element that is being filtered, in filter space.
+   */
+  nsIntRect               mTargetBBoxInFilterSpace;
+
+  /**
    * The transform from filter space to outer-<svg> device space.
    */
   gfxMatrix               mFilterSpaceToDeviceSpaceTransform;
@@ -280,12 +287,6 @@ private:
    */
   gfxMatrix               mFilterSpaceToFrameSpaceInCSSPxTransform;
   gfxMatrix               mFrameSpaceInCSSPxToFilterSpaceTransform;
-
-  /**
-   * The "filter region", in the filtered element's user space.
-   */
-  gfxRect                 mUserSpaceBounds;
-  nsIntRect               mFilterSpaceBounds;
 
   /**
    * The scale factors between user space and filter space.

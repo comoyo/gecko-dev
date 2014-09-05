@@ -33,18 +33,19 @@
 namespace mozilla {
 namespace net {
 
-class HttpChannelChild : public PHttpChannelChild
-                       , public HttpBaseChannel
-                       , public HttpAsyncAborter<HttpChannelChild>
-                       , public nsICacheInfoChannel
-                       , public nsIProxiedChannel
-                       , public nsIApplicationCacheChannel
-                       , public nsIAsyncVerifyRedirectCallback
-                       , public nsIAssociatedContentSecurity
-                       , public nsIChildChannel
-                       , public nsIHttpChannelChild
-                       , public nsIDivertableChannel
+class HttpChannelChild MOZ_FINAL : public PHttpChannelChild
+                                 , public HttpBaseChannel
+                                 , public HttpAsyncAborter<HttpChannelChild>
+                                 , public nsICacheInfoChannel
+                                 , public nsIProxiedChannel
+                                 , public nsIApplicationCacheChannel
+                                 , public nsIAsyncVerifyRedirectCallback
+                                 , public nsIAssociatedContentSecurity
+                                 , public nsIChildChannel
+                                 , public nsIHttpChannelChild
+                                 , public nsIDivertableChannel
 {
+  virtual ~HttpChannelChild();
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSICACHEINFOCHANNEL
@@ -58,7 +59,6 @@ public:
   NS_DECL_NSIDIVERTABLECHANNEL
 
   HttpChannelChild();
-  virtual ~HttpChannelChild();
 
   // Methods HttpBaseChannel didn't implement for us or that we override.
   //

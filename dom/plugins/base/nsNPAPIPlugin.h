@@ -10,8 +10,7 @@
 #include "npfunctions.h"
 #include "nsPluginHost.h"
 
-#include "nsCxPusher.h"
-
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/PluginLibrary.h"
 
 #if defined(XP_WIN)
@@ -32,7 +31,6 @@ private:
 
 public:
   nsNPAPIPlugin();
-  virtual ~nsNPAPIPlugin();
 
   NS_DECL_ISUPPORTS
 
@@ -62,6 +60,8 @@ public:
   static nsresult RetainStream(NPStream *pstream, nsISupports **aRetainedPeer);
 
 protected:
+  virtual ~nsNPAPIPlugin();
+
   NPPluginFuncs mPluginFuncs;
   PluginLibrary* mLibrary;
 };

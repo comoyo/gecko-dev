@@ -20,6 +20,12 @@
 #include "nsRegion.h"                   // for nsIntRegion
 
 namespace mozilla {
+namespace gl {
+class SurfaceStream;
+class SharedSurface;
+class SurfaceFactory;
+}
+
 namespace layers {
 
 class CompositableClient;
@@ -30,7 +36,7 @@ class ClientCanvasLayer : public CopyableCanvasLayer,
 {
   typedef CanvasClient::CanvasClientType CanvasClientType;
 public:
-  ClientCanvasLayer(ClientLayerManager* aLayerManager) :
+  explicit ClientCanvasLayer(ClientLayerManager* aLayerManager) :
     CopyableCanvasLayer(aLayerManager,
                         static_cast<ClientLayer*>(MOZ_THIS_IN_INITIALIZER_LIST()))
     , mTextureSurface(nullptr)
@@ -38,8 +44,11 @@ public:
   {
     MOZ_COUNT_CTOR(ClientCanvasLayer);
   }
+
+protected:
   virtual ~ClientCanvasLayer();
 
+public:
   virtual void SetVisibleRegion(const nsIntRegion& aRegion)
   {
     NS_ASSERTION(ClientManager()->InConstruction(),
@@ -92,8 +101,8 @@ protected:
 
   RefPtr<CanvasClient> mCanvasClient;
 
-  gfx::SharedSurface* mTextureSurface;
-  gfx::SurfaceFactory* mFactory;
+  UniquePtr<gl::SharedSurface> mTextureSurface;
+  UniquePtr<gl::SurfaceFactory> mFactory;
 
   friend class DeprecatedCanvasClient2D;
   friend class CanvasClient2D;

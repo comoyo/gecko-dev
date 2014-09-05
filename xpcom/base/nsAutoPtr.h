@@ -48,7 +48,7 @@ private:
   class Ptr
   {
   public:
-    Ptr(T* aPtr)
+    MOZ_IMPLICIT Ptr(T* aPtr)
       : mPtr(aPtr)
     {
     }
@@ -81,7 +81,7 @@ public:
   {
   }
 
-  nsAutoPtr(Ptr aRawPtr)
+  MOZ_IMPLICIT nsAutoPtr(Ptr aRawPtr)
     : mRawPtr(aRawPtr)
     // construct from a raw pointer (of the right type)
   {
@@ -341,14 +341,6 @@ operator!=(const U* aLhs, const nsAutoPtr<T>& aRhs)
   return static_cast<const U*>(aLhs) != static_cast<const T*>(aRhs.get());
 }
 
-// To avoid ambiguities caused by the presence of builtin |operator==|s
-// creating a situation where one of the |operator==| defined above
-// has a better conversion for one argument and the builtin has a
-// better conversion for the other argument, define additional
-// |operator==| without the |const| on the raw pointer.
-// See bug 65664 for details.
-
-#ifndef NSCAP_DONT_PROVIDE_NONCONST_OPEQ
 template <class T, class U>
 inline bool
 operator==(const nsAutoPtr<T>& aLhs, U* aRhs)
@@ -376,7 +368,6 @@ operator!=(U* aLhs, const nsAutoPtr<T>& aRhs)
 {
   return const_cast<const U*>(aLhs) != static_cast<const T*>(aRhs.get());
 }
-#endif
 
 
 
@@ -480,7 +471,7 @@ public:
   {
   }
 
-  nsAutoArrayPtr(T* aRawPtr)
+  MOZ_IMPLICIT nsAutoArrayPtr(T* aRawPtr)
     : mRawPtr(aRawPtr)
     // construct from a raw pointer (of the right type)
   {
@@ -725,14 +716,6 @@ operator!=(const U* aLhs, const nsAutoArrayPtr<T>& aRhs)
   return static_cast<const U*>(aLhs) != static_cast<const T*>(aRhs.get());
 }
 
-// To avoid ambiguities caused by the presence of builtin |operator==|s
-// creating a situation where one of the |operator==| defined above
-// has a better conversion for one argument and the builtin has a
-// better conversion for the other argument, define additional
-// |operator==| without the |const| on the raw pointer.
-// See bug 65664 for details.
-
-#ifndef NSCAP_DONT_PROVIDE_NONCONST_OPEQ
 template <class T, class U>
 inline bool
 operator==(const nsAutoArrayPtr<T>& aLhs, U* aRhs)
@@ -760,7 +743,6 @@ operator!=(U* aLhs, const nsAutoArrayPtr<T>& aRhs)
 {
   return const_cast<const U*>(aLhs) != static_cast<const T*>(aRhs.get());
 }
-#endif
 
 
 
@@ -896,7 +878,7 @@ public:
 
   // construct from a raw pointer (of the right type)
 
-  nsRefPtr(T* aRawPtr)
+  MOZ_IMPLICIT nsRefPtr(T* aRawPtr)
     : mRawPtr(aRawPtr)
   {
     if (mRawPtr) {
@@ -918,7 +900,7 @@ public:
   {
   }
 
-  nsRefPtr(const nsCOMPtr_helper& aHelper)
+  MOZ_IMPLICIT nsRefPtr(const nsCOMPtr_helper& aHelper)
   {
     void* newRawPtr;
     if (NS_FAILED(aHelper(NS_GET_TEMPLATE_IID(T), &newRawPtr))) {
@@ -1247,14 +1229,6 @@ operator!=(const U* aLhs, const nsRefPtr<T>& aRhs)
   return static_cast<const U*>(aLhs) != static_cast<const T*>(aRhs.get());
 }
 
-// To avoid ambiguities caused by the presence of builtin |operator==|s
-// creating a situation where one of the |operator==| defined above
-// has a better conversion for one argument and the builtin has a
-// better conversion for the other argument, define additional
-// |operator==| without the |const| on the raw pointer.
-// See bug 65664 for details.
-
-#ifndef NSCAP_DONT_PROVIDE_NONCONST_OPEQ
 template <class T, class U>
 inline bool
 operator==(const nsRefPtr<T>& aLhs, U* aRhs)
@@ -1282,7 +1256,6 @@ operator!=(U* aLhs, const nsRefPtr<T>& aRhs)
 {
   return const_cast<const U*>(aLhs) != static_cast<const T*>(aRhs.get());
 }
-#endif
 
 
 
@@ -1357,7 +1330,7 @@ template<class T>
 class nsQueryObject : public nsCOMPtr_helper
 {
 public:
-  nsQueryObject(T* aRawPtr)
+  explicit nsQueryObject(T* aRawPtr)
     : mRawPtr(aRawPtr)
   {
   }

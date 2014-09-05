@@ -37,7 +37,7 @@ namespace xpc {
 
 class Scriptability {
 public:
-    Scriptability(JSCompartment *c);
+    explicit Scriptability(JSCompartment *c);
     bool Allowed();
     bool IsImmuneToScriptPolicy();
 
@@ -97,6 +97,13 @@ GetXBLScopeOrGlobal(JSContext *cx, JSObject *obj)
     return GetXBLScope(cx, obj);
 }
 
+// This function is similar to GetXBLScopeOrGlobal. However, if |obj| is a
+// chrome scope, then it will return an add-on scope if addonId is non-null.
+// Like GetXBLScopeOrGlobal, it returns the scope of |obj| if it's already a
+// content XBL scope. But it asserts that |obj| is not an add-on scope.
+JSObject *
+GetScopeForXBLExecution(JSContext *cx, JS::HandleObject obj, JSAddonId *addonId);
+
 // Returns whether XBL scopes have been explicitly disabled for code running
 // in this compartment. See the comment around mAllowContentXBLScope.
 bool
@@ -108,6 +115,12 @@ AllowContentXBLScope(JSCompartment *c);
 // not already exist.
 bool
 UseContentXBLScope(JSCompartment *c);
+
+bool
+IsInAddonScope(JSObject *obj);
+
+JSObject *
+GetAddonScope(JSContext *cx, JS::HandleObject contentScope, JSAddonId *addonId);
 
 bool
 IsSandboxPrototypeProxy(JSObject *obj);
@@ -125,6 +138,9 @@ IsXrayWrapper(JSObject *obj);
 // compartment with the argument.
 JSObject *
 XrayAwareCalleeGlobal(JSObject *fun);
+
+void
+TraceXPCGlobal(JSTracer *trc, JSObject *obj);
 
 } /* namespace xpc */
 
@@ -177,7 +193,7 @@ inline JSScript *
 xpc_UnmarkGrayScript(JSScript *script)
 {
     if (script)
-        JS::ExposeGCThingToActiveJS(script, JSTRACE_SCRIPT);
+        JS::ExposeScriptToActiveJS(script);
 
     return script;
 }
@@ -193,11 +209,6 @@ xpc_TryUnmarkWrappedGrayObject(nsISupports* aWrappedJS);
 
 extern void
 xpc_UnmarkSkippableJSHolders();
-
-// No JS can be on the stack when this is called. Probably only useful from
-// xpcshell.
-void
-xpc_ActivateDebugMode();
 
 // readable string conversions, static methods and members only
 class XPCStringConvert
@@ -230,7 +241,7 @@ public:
         JS::Zone *zone = js::GetContextZone(cx);
         ZoneStringCache *cache = static_cast<ZoneStringCache*>(JS_GetZoneUserData(zone));
         if (cache && buf == cache->mBuffer) {
-            MOZ_ASSERT(JS::GetGCThingZone(cache->mString) == zone);
+            MOZ_ASSERT(JS::GetTenuredGCThingZone(cache->mString) == zone);
             JS::MarkStringAsLive(zone, cache->mString);
             rval.setString(cache->mString);
             *sharedBuffer = false;
@@ -278,6 +289,8 @@ private:
 
     XPCStringConvert();         // not implemented
 };
+
+class nsIAddonInterposition;
 
 namespace xpc {
 
@@ -400,7 +413,9 @@ nsresult
 ReportJSRuntimeExplicitTreeStats(const JS::RuntimeStats &rtStats,
                                  const nsACString &rtPath,
                                  nsIMemoryReporterCallback *cb,
-                                 nsISupports *closure, size_t *rtTotal = nullptr);
+                                 nsISupports *closure,
+                                 bool anonymize,
+                                 size_t *rtTotal = nullptr);
 
 /**
  * Throws an exception on cx and returns false.
@@ -422,25 +437,17 @@ nsISupports *
 UnwrapReflectorToISupports(JSObject *reflector);
 
 /**
- * In some cases a native object does not really belong to any compartment (XBL,
- * document created from by XHR of a worker, etc.). But when for some reason we
- * have to wrap these natives (because of an event for example) instead of just
- * wrapping them into some random compartment we find on the context stack (like
- * we did previously) a default compartment is used. This function returns that
- * compartment's global. It is a singleton on the runtime.
- * If you find yourself wanting to use this compartment, you're probably doing
+ * Singleton scopes for stuff that really doesn't fit anywhere else.
+ *
+ * If you find yourself wanting to use these compartments, you're probably doing
  * something wrong. Callers MUST consult with the XPConnect module owner before
  * using this compartment. If you don't, bholley will hunt you down.
  */
 JSObject *
-GetJunkScope();
+UnprivilegedJunkScope();
 
-/**
- * Returns the native global of the junk scope. See comment of GetJunkScope
- * about the conditions of using it.
- */
-nsIGlobalObject *
-GetJunkScopeGlobal();
+JSObject *
+PrivilegedJunkScope();
 
 /**
  * Shared compilation scope for XUL prototype documents and XBL
@@ -448,7 +455,7 @@ GetJunkScopeGlobal();
  * it is invisible to the debugger.
  */
 JSObject *
-GetCompilationScope();
+CompilationScope();
 
 /**
  * If |aObj| is a window, returns the associated nsGlobalWindow.
@@ -456,13 +463,6 @@ GetCompilationScope();
  */
 nsGlobalWindow*
 WindowOrNull(JSObject *aObj);
-
-/*
- * Returns the dummy global associated with the SafeJSContext. Callers MUST
- * consult with the XPConnect module owner before using this function.
- */
-JSObject *
-GetSafeJSContextGlobal();
 
 /**
  * If |aObj| has a window for a global, returns the associated nsGlobalWindow.
@@ -479,16 +479,16 @@ SystemErrorReporter(JSContext *cx, const char *message, JSErrorReport *rep);
 void
 SimulateActivityCallback(bool aActive);
 
-void
-RecordAdoptedNode(JSCompartment *c);
-
-void
-RecordDonatedNode(JSCompartment *c);
-
 // This function may be used off-main-thread, in which case it is benignly
 // racey.
 bool
 ShouldDiscardSystemSource();
+
+bool
+SetAddonInterposition(const nsACString &addonId, nsIAddonInterposition *interposition);
+
+bool
+ExtraWarningsForSystemJS();
 
 } // namespace xpc
 

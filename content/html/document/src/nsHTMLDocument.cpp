@@ -32,7 +32,6 @@
 #include "nsNetUtil.h"
 #include "nsIContentViewerContainer.h"
 #include "nsIContentViewer.h"
-#include "nsIMarkupDocumentViewer.h"
 #include "nsDocShell.h"
 #include "nsDocShellLoadTypes.h"
 #include "nsIWebNavigation.h"
@@ -83,6 +82,7 @@
 
 #include "mozilla/dom/EncodingUtils.h"
 #include "mozilla/dom/FallbackEncoding.h"
+#include "mozilla/LoadInfo.h"
 #include "nsIEditingSession.h"
 #include "nsIEditor.h"
 #include "nsNodeInfoManager.h"
@@ -288,17 +288,17 @@ nsHTMLDocument::CreateShell(nsPresContext* aContext,
 }
 
 void
-nsHTMLDocument::TryHintCharset(nsIMarkupDocumentViewer* aMarkupDV,
+nsHTMLDocument::TryHintCharset(nsIContentViewer* aCv,
                                int32_t& aCharsetSource, nsACString& aCharset)
 {
-  if (aMarkupDV) {
+  if (aCv) {
     int32_t requestCharsetSource;
-    nsresult rv = aMarkupDV->GetHintCharacterSetSource(&requestCharsetSource);
+    nsresult rv = aCv->GetHintCharacterSetSource(&requestCharsetSource);
 
     if(NS_SUCCEEDED(rv) && kCharsetUninitialized != requestCharsetSource) {
       nsAutoCString requestCharset;
-      rv = aMarkupDV->GetHintCharacterSet(requestCharset);
-      aMarkupDV->SetHintCharacterSetSource((int32_t)(kCharsetUninitialized));
+      rv = aCv->GetHintCharacterSet(requestCharset);
+      aCv->SetHintCharacterSetSource((int32_t)(kCharsetUninitialized));
 
       if(requestCharsetSource <= aCharsetSource)
         return;
@@ -316,7 +316,7 @@ nsHTMLDocument::TryHintCharset(nsIMarkupDocumentViewer* aMarkupDV,
 
 
 void
-nsHTMLDocument::TryUserForcedCharset(nsIMarkupDocumentViewer* aMarkupDV,
+nsHTMLDocument::TryUserForcedCharset(nsIContentViewer* aCv,
                                      nsIDocShell*  aDocShell,
                                      int32_t& aCharsetSource,
                                      nsACString& aCharset)
@@ -332,9 +332,9 @@ nsHTMLDocument::TryUserForcedCharset(nsIMarkupDocumentViewer* aMarkupDV,
   }
 
   nsAutoCString forceCharsetFromDocShell;
-  if (aMarkupDV) {
+  if (aCv) {
     // XXX mailnews-only
-    rv = aMarkupDV->GetForceCharacterSet(forceCharsetFromDocShell);
+    rv = aCv->GetForceCharacterSet(forceCharsetFromDocShell);
   }
 
   if(NS_SUCCEEDED(rv) &&
@@ -647,15 +647,12 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  nsCOMPtr<nsIMarkupDocumentViewer> muCV;
   nsCOMPtr<nsIContentViewer> cv;
   if (docShell) {
     docShell->GetContentViewer(getter_AddRefs(cv));
   }
-  if (cv) {
-     muCV = do_QueryInterface(cv);
-  } else {
-    muCV = do_QueryInterface(parentContentViewer);
+  if (!cv) {
+    cv = parentContentViewer.forget();
   }
 
   nsAutoCString urlSpec;
@@ -714,9 +711,9 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
       TryChannelCharset(aChannel, charsetSource, charset, executor);
     }
 
-    TryUserForcedCharset(muCV, docShell, charsetSource, charset);
+    TryUserForcedCharset(cv, docShell, charsetSource, charset);
 
-    TryHintCharset(muCV, charsetSource, charset); // XXX mailnews-only
+    TryHintCharset(cv, charsetSource, charset); // XXX mailnews-only
     TryParentCharset(docShell, charsetSource, charset);
 
     if (cachingChan && !urlSpec.IsEmpty()) {
@@ -1137,7 +1134,7 @@ nsHTMLDocument::MatchLinks(nsIContent *aContent, int32_t aNamespaceID,
     }
 #endif
 
-    nsINodeInfo *ni = aContent->NodeInfo();
+    mozilla::dom::NodeInfo *ni = aContent->NodeInfo();
 
     nsIAtom *localName = ni->NameAtom();
     if (ni->NamespaceID() == kNameSpaceID_XHTML &&
@@ -1432,10 +1429,10 @@ nsHTMLDocument::Open(JSContext* cx,
     return ret.forget();
   }
 
-  // Note: We want to use GetDocumentFromContext here because this document
+  // Note: We want to use GetEntryDocument here because this document
   // should inherit the security information of the document that's opening us,
   // (since if it's secure, then it's presumably trusted).
-  nsCOMPtr<nsIDocument> callerDoc = nsContentUtils::GetDocumentFromContext();
+  nsCOMPtr<nsIDocument> callerDoc = GetEntryDocument();
   if (!callerDoc) {
     // If we're called from C++ or in some other way without an originating
     // document we can't do a document.open w/o changing the principal of the
@@ -1525,7 +1522,10 @@ nsHTMLDocument::Open(JSContext* cx,
 
   // Set the caller principal, if any, on the channel so that we'll
   // make sure to use it when we reset.
-  rv = channel->SetOwner(callerPrincipal);
+  nsCOMPtr<nsILoadInfo> loadInfo =
+    new LoadInfo(callerPrincipal, LoadInfo::eInheritPrincipal,
+                 LoadInfo::eNotSandboxed);
+  rv = channel->SetLoadInfo(loadInfo);
   if (rv.Failed()) {
     return nullptr;
   }
@@ -1576,6 +1576,13 @@ nsHTMLDocument::Open(JSContext* cx,
 #ifdef DEBUG
     bool willReparent = mWillReparent;
     mWillReparent = true;
+
+    nsDocument* templateContentsOwner =
+      static_cast<nsDocument*>(mTemplateContentsOwner.get());
+
+    if (templateContentsOwner) {
+      templateContentsOwner->mWillReparent = true;
+    }
 #endif
 
     // Should this pass true for aForceReuseInnerWindow?
@@ -1585,6 +1592,10 @@ nsHTMLDocument::Open(JSContext* cx,
     }
 
 #ifdef DEBUG
+    if (templateContentsOwner) {
+      templateContentsOwner->mWillReparent = willReparent;
+    }
+
     mWillReparent = willReparent;
 #endif
 
@@ -1601,6 +1612,20 @@ nsHTMLDocument::Open(JSContext* cx,
       if (rv.Failed()) {
         return nullptr;
       }
+
+      // Also reparent the template contents owner document
+      // because its global is set to the same as this document.
+      if (mTemplateContentsOwner) {
+        JS::Rooted<JSObject*> contentsOwnerWrapper(cx,
+          mTemplateContentsOwner->GetWrapper());
+        if (contentsOwnerWrapper) {
+          rv = mozilla::dom::ReparentWrapper(cx, contentsOwnerWrapper);
+          if (rv.Failed()) {
+            return nullptr;
+          }
+        }
+      }
+
       nsIXPConnect *xpc = nsContentUtils::XPConnect();
       rv = xpc->RescueOrphansInScope(cx, oldScope->GetGlobalJSObject());
       if (rv.Failed()) {
@@ -2244,15 +2269,17 @@ nsHTMLDocument::ResolveName(const nsAString& aName, nsWrapperCache **aCache)
   return nullptr;
 }
 
-JSObject*
+void
 nsHTMLDocument::NamedGetter(JSContext* cx, const nsAString& aName, bool& aFound,
+                            JS::MutableHandle<JSObject*> aRetval,
                             ErrorResult& rv)
 {
   nsWrapperCache* cache;
   nsISupports* supp = ResolveName(aName, &cache);
   if (!supp) {
     aFound = false;
-    return nullptr;
+    aRetval.set(nullptr);
+    return;
   }
 
   JS::Rooted<JS::Value> val(cx);
@@ -2260,10 +2287,10 @@ nsHTMLDocument::NamedGetter(JSContext* cx, const nsAString& aName, bool& aFound,
   // here?
   if (!dom::WrapObject(cx, supp, cache, nullptr, &val)) {
     rv.Throw(NS_ERROR_OUT_OF_MEMORY);
-    return nullptr;
+    return;
   }
   aFound = true;
-  return &val.toObject();
+  aRetval.set(&val.toObject());
 }
 
 bool
@@ -2361,7 +2388,10 @@ nsHTMLDocument::CreateAndAddWyciwygChannel(void)
                                        GetDocumentCharacterSet());
 
   // Use our new principal
-  channel->SetOwner(NodePrincipal());
+  nsCOMPtr<nsILoadInfo> loadInfo =
+    new LoadInfo(NodePrincipal(), LoadInfo::eInheritPrincipal,
+                 LoadInfo::eNotSandboxed);
+  channel->SetLoadInfo(loadInfo);
 
   // Inherit load flags from the original document's channel
   channel->SetLoadFlags(mLoadFlags);
@@ -2754,7 +2784,7 @@ nsHTMLDocument::EditingStateChanged()
     rv = NS_NewURI(getter_AddRefs(uri), NS_LITERAL_STRING("resource://gre/res/contenteditable.css"));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsRefPtr<nsCSSStyleSheet> sheet;
+    nsRefPtr<CSSStyleSheet> sheet;
     rv = LoadChromeSheetSync(uri, true, getter_AddRefs(sheet));
     NS_ENSURE_TRUE(sheet, rv);
 
@@ -3519,7 +3549,7 @@ nsHTMLDocument::QueryCommandValue(const nsAString& commandID,
 }
 
 nsresult
-nsHTMLDocument::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
+nsHTMLDocument::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
 {
   NS_ASSERTION(aNodeInfo->NodeInfoManager() == mNodeInfoManager,
                "Can't import this document into another document!");

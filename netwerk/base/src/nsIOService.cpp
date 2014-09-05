@@ -497,7 +497,7 @@ nsIOService::GetProtocolFlags(const char* scheme, uint32_t *flags)
 class AutoIncrement
 {
     public:
-        AutoIncrement(uint32_t *var) : mVar(var)
+        explicit AutoIncrement(uint32_t *var) : mVar(var)
         {
             ++*var;
         }
@@ -1179,6 +1179,8 @@ nsIOService::ExtractCharsetFromContentType(const nsACString &aTypeHeader,
 // nsISpeculativeConnect
 class IOServiceProxyCallback MOZ_FINAL : public nsIProtocolProxyCallback
 {
+    ~IOServiceProxyCallback() {}
+
 public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIPROTOCOLPROXYCALLBACK

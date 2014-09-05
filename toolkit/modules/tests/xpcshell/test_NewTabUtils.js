@@ -51,12 +51,7 @@ add_test(function changeLinks() {
   do_check_links(NewTabUtils.links.getLinks(), expectedLinks);
 
   // Notify of a new link.
-  let newLink = {
-    url: "http://example.com/19",
-    title: "My frecency is 19",
-    frecency: 19,
-    lastVisitDate: 0,
-  };
+  let newLink = makeLink(19);
   expectedLinks.splice(1, 0, newLink);
   provider.notifyLinkChanged(newLink);
   do_check_links(NewTabUtils.links.getLinks(), expectedLinks);
@@ -81,11 +76,7 @@ add_test(function changeLinks() {
 
   // Notify of a new link again, but this time make it overflow maxNumLinks.
   provider.maxNumLinks = expectedLinks.length;
-  newLink = {
-    url: "http://example.com/21",
-    frecency: 21,
-    lastVisitDate: 0,
-  };
+  newLink = makeLink(21);
   expectedLinks.unshift(newLink);
   expectedLinks.pop();
   do_check_eq(expectedLinks.length, provider.maxNumLinks); // Sanity check.
@@ -123,6 +114,86 @@ add_task(function oneProviderAlreadyCached() {
 
   NewTabUtils.links.removeProvider(provider1);
   NewTabUtils.links.removeProvider(provider2);
+});
+
+add_task(function newLowRankedLink() {
+  // Init a provider with 10 links and make its maximum number also 10.
+  let links = makeLinks(0, 10, 1);
+  let provider = new TestProvider(done => done(links));
+  provider.maxNumLinks = links.length;
+
+  NewTabUtils.initWithoutProviders();
+  NewTabUtils.links.addProvider(provider);
+
+  // This is sync since the provider's getLinks is sync.
+  NewTabUtils.links.populateCache(function () {}, false);
+  do_check_links(NewTabUtils.links.getLinks(), links);
+
+  // Notify of a new link that's low-ranked enough not to make the list.
+  let newLink = makeLink(0);
+  provider.notifyLinkChanged(newLink);
+  do_check_links(NewTabUtils.links.getLinks(), links);
+
+  // Notify about the new link's title change.
+  provider.notifyLinkChanged({
+    url: newLink.url,
+    title: "a new title",
+  });
+  do_check_links(NewTabUtils.links.getLinks(), links);
+
+  NewTabUtils.links.removeProvider(provider);
+});
+
+add_task(function extractSite() {
+  // All these should extract to the same site
+  [ "mozilla.org",
+    "m.mozilla.org",
+    "mobile.mozilla.org",
+    "www.mozilla.org",
+    "www3.mozilla.org",
+  ].forEach(host => {
+    let url = "http://" + host;
+    do_check_eq(NewTabUtils.extractSite(url), "mozilla.org", "extracted same " + host);
+  });
+
+  // All these should extract to the same subdomain
+  [ "bugzilla.mozilla.org",
+    "www.bugzilla.mozilla.org",
+  ].forEach(host => {
+    let url = "http://" + host;
+    do_check_eq(NewTabUtils.extractSite(url), "bugzilla.mozilla.org", "extracted eTLD+2 " + host);
+  });
+
+  // All these should not extract to the same site
+  [ "bugzilla.mozilla.org",
+    "bug123.bugzilla.mozilla.org",
+    "too.many.levels.bugzilla.mozilla.org",
+    "m2.mozilla.org",
+    "mobile30.mozilla.org",
+    "ww.mozilla.org",
+    "ww2.mozilla.org",
+    "wwwww.mozilla.org",
+    "wwwww50.mozilla.org",
+    "wwws.mozilla.org",
+    "secure.mozilla.org",
+    "secure10.mozilla.org",
+    "many.levels.deep.mozilla.org",
+    "just.check.in",
+    "192.168.0.1",
+    "localhost",
+  ].forEach(host => {
+    let url = "http://" + host;
+    do_check_neq(NewTabUtils.extractSite(url), "mozilla.org", "extracted diff " + host);
+  });
+
+  // All these should not extract to the same site
+  [ "about:blank",
+    "file:///Users/user/file",
+    "chrome://browser/something",
+    "ftp://ftp.mozilla.org/",
+  ].forEach(url => {
+    do_check_neq(NewTabUtils.extractSite(url), "mozilla.org", "extracted diff url " + url);
+  });
 });
 
 function TestProvider(getLinksFn) {
@@ -165,12 +236,16 @@ function makeLinks(frecRangeStart, frecRangeEnd, step) {
   let links = [];
   // Remember, links are ordered by frecency descending.
   for (let i = frecRangeEnd; i > frecRangeStart; i -= step) {
-    links.push({
-      url: "http://example.com/" + i,
-      title: "My frecency is " + i,
-      frecency: i,
-      lastVisitDate: 0,
-    });
+    links.push(makeLink(i));
   }
   return links;
+}
+
+function makeLink(frecency) {
+  return {
+    url: "http://example" + frecency + ".com/",
+    title: "My frecency is " + frecency,
+    frecency: frecency,
+    lastVisitDate: 0,
+  };
 }

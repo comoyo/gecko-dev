@@ -20,14 +20,14 @@
 #include "nsCycleCollectionParticipant.h"
 
 #include "nsISMILAttr.h"
-#include "nsIDocument.h"
+#include "mozilla/dom/ShadowRoot.h"
 
+class nsIDocument;
 class nsIDOMAttr;
 class nsIDOMEventListener;
 class nsIDOMNodeList;
 class nsIFrame;
 class nsIDOMText;
-class nsINodeInfo;
 class nsURI;
 
 #define DATA_NODE_FLAG_BIT(n_) NODE_FLAG_BIT(NODE_TYPE_SPECIFIC_BITS_OFFSET + (n_))
@@ -65,9 +65,8 @@ public:
 
   NS_DECL_SIZEOF_EXCLUDING_THIS
 
-  nsGenericDOMDataNode(already_AddRefed<nsINodeInfo>& aNodeInfo);
-  nsGenericDOMDataNode(already_AddRefed<nsINodeInfo>&& aNodeInfo);
-  virtual ~nsGenericDOMDataNode();
+  explicit nsGenericDOMDataNode(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
+  explicit nsGenericDOMDataNode(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
   virtual void GetNodeValueInternal(nsAString& aNodeValue) MOZ_OVERRIDE;
   virtual void SetNodeValueInternal(const nsAString& aNodeValue,
@@ -94,7 +93,8 @@ public:
   virtual nsresult InsertChildAt(nsIContent* aKid, uint32_t aIndex,
                                  bool aNotify) MOZ_OVERRIDE;
   virtual void RemoveChildAt(uint32_t aIndex, bool aNotify) MOZ_OVERRIDE;
-  virtual void GetTextContentInternal(nsAString& aTextContent) MOZ_OVERRIDE
+  virtual void GetTextContentInternal(nsAString& aTextContent,
+                                      mozilla::ErrorResult& aError) MOZ_OVERRIDE
   {
     GetNodeValue(aTextContent);
   }
@@ -174,7 +174,7 @@ public:
   virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
                                               int32_t aModType) const;
 
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE
   {
     *aResult = CloneDataNode(aNodeInfo, true);
     if (!*aResult) {
@@ -226,6 +226,8 @@ public:
   NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS(nsGenericDOMDataNode)
 
 protected:
+  virtual ~nsGenericDOMDataNode();
+
   virtual mozilla::dom::Element* GetNameSpaceElement()
   {
     nsINode *parent = GetParentNode();
@@ -308,7 +310,7 @@ protected:
    * @param aCloneText if true the text content will be cloned too
    * @return the clone
    */
-  virtual nsGenericDOMDataNode *CloneDataNode(nsINodeInfo *aNodeInfo,
+  virtual nsGenericDOMDataNode *CloneDataNode(mozilla::dom::NodeInfo *aNodeInfo,
                                               bool aCloneText) const = 0;
 
   nsTextFragment mText;

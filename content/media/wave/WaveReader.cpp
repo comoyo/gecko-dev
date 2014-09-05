@@ -158,6 +158,13 @@ nsresult WaveReader::ReadMetadata(MediaInfo* aInfo,
   return NS_OK;
 }
 
+bool
+WaveReader::IsMediaSeekable()
+{
+  // not used
+  return true;
+}
+
 template <typename T> T UnsignedByteToAudioSample(uint8_t aValue);
 template <typename T> T SignedShortToAudioSample(int16_t aValue);
 
@@ -236,7 +243,8 @@ bool WaveReader::DecodeAudioData()
                                  static_cast<int64_t>(readSizeTime * USECS_PER_S),
                                  static_cast<int32_t>(frames),
                                  sampleBuffer.forget(),
-                                 mChannels));
+                                 mChannels,
+                                 mSampleRate));
 
   return true;
 }

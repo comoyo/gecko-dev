@@ -14,6 +14,7 @@ import org.mozilla.gecko.ThumbnailHelper;
 import org.mozilla.gecko.db.BrowserContract.TopSites;
 import org.mozilla.gecko.db.TopSitesCursorWrapper;
 import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
+import org.mozilla.gecko.util.StringUtils;
 
 import android.content.Context;
 import android.content.res.TypedArray;
@@ -89,8 +90,6 @@ public class TopSitesGridView extends GridView {
         mHorizontalSpacing = a.getDimensionPixelOffset(R.styleable.TopSitesGridView_android_horizontalSpacing, 0x00);
         mVerticalSpacing = a.getDimensionPixelOffset(R.styleable.TopSitesGridView_android_verticalSpacing, 0x00);
         a.recycle();
-
-        mIsHandlingFocusChange = false;
     }
 
     /**
@@ -106,7 +105,7 @@ public class TopSitesGridView extends GridView {
                 TopSitesGridItemView item = (TopSitesGridItemView) view;
 
                 // Decode "user-entered" URLs before loading them.
-                String url = HomeFragment.decodeUserEnteredUrl(item.getUrl());
+                String url = StringUtils.decodeUserEnteredUrl(item.getUrl());
                 int type = item.getType();
 
                 // If the url is empty, the user can pin a site.

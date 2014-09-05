@@ -7,6 +7,7 @@
 let Cu = Components.utils;
 let Ci = Components.interfaces;
 
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource:///modules/sessionstore/FrameTree.jsm", this);
 let gFrameTree = new FrameTree(this);
 
@@ -20,6 +21,49 @@ gFrameTree.addObserver({
   }
 });
 
+
+docShell.QueryInterface(Ci.nsIWebNavigation).
+  sessionHistory.addSHistoryListener({
+
+  OnHistoryNewEntry: function () {
+    sendAsyncMessage("ss-test:OnHistoryNewEntry");
+  },
+
+  OnHistoryGoBack: function () {
+    sendAsyncMessage("ss-test:OnHistoryGoBack");
+    return true;
+  },
+
+  OnHistoryGoForward: function () {
+    sendAsyncMessage("ss-test:OnHistoryGoForward");
+    return true;
+  },
+
+  OnHistoryGotoIndex: function () {
+    sendAsyncMessage("ss-test:OnHistoryGotoIndex");
+    return true;
+  },
+
+  OnHistoryPurge: function () {
+    sendAsyncMessage("ss-test:OnHistoryPurge");
+    return true;
+  },
+
+  OnHistoryReload: function () {
+    sendAsyncMessage("ss-test:OnHistoryReload");
+    return true;
+  },
+
+  OnHistoryReplaceEntry: function () {
+    sendAsyncMessage("ss-test:OnHistoryReplaceEntry");
+  },
+
+  QueryInterface: XPCOMUtils.generateQI([
+    Ci.nsISHistoryListener,
+    Ci.nsISupportsWeakReference
+  ])
+});
+
 /**
  * This frame script is only loaded for sessionstore mochitests. It enables us
  * to modify and query docShell data when running with multiple processes.
@@ -31,7 +75,7 @@ addEventListener("hashchange", function () {
 
 addEventListener("MozStorageChanged", function () {
   sendSyncMessage("ss-test:MozStorageChanged");
-});
+}, true);
 
 addMessageListener("ss-test:modifySessionStorage", function (msg) {
   for (let key of Object.keys(msg.data)) {
@@ -74,13 +118,13 @@ addMessageListener("ss-test:enableSubDocumentStyleSheetsForSet", function (msg) 
 
 addMessageListener("ss-test:getAuthorStyleDisabled", function (msg) {
   let {authorStyleDisabled} =
-    docShell.contentViewer.QueryInterface(Ci.nsIMarkupDocumentViewer);
+    docShell.contentViewer;
   sendSyncMessage("ss-test:getAuthorStyleDisabled", authorStyleDisabled);
 });
 
 addMessageListener("ss-test:setAuthorStyleDisabled", function (msg) {
   let markupDocumentViewer =
-    docShell.contentViewer.QueryInterface(Ci.nsIMarkupDocumentViewer);
+    docShell.contentViewer;
   markupDocumentViewer.authorStyleDisabled = msg.data;
   sendSyncMessage("ss-test:setAuthorStyleDisabled");
 });

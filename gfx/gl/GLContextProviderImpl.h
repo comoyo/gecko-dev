@@ -14,7 +14,6 @@
 class GL_CONTEXT_PROVIDER_NAME
 {
 public:
-    typedef gfx::SurfaceCaps SurfaceCaps;
     /**
      * Create a context that renders to the surface of the widget that is
      * passed in.  The context is always created with an RGB pixel format,
@@ -60,6 +59,10 @@ public:
     static already_AddRefed<GLContext>
     CreateOffscreen(const gfxIntSize& size,
                     const SurfaceCaps& caps);
+
+    // Just create a context. We'll add offscreen stuff ourselves.
+    static already_AddRefed<GLContext>
+    CreateHeadless();
 
     /**
      * Create wrapping Gecko GLContext for external gl context.

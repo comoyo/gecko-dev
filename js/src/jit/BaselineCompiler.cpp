@@ -13,6 +13,7 @@
 #include "jit/IonAnalysis.h"
 #include "jit/IonLinker.h"
 #include "jit/IonSpewer.h"
+#include "jit/JitcodeMap.h"
 #ifdef JS_ION_PERF
 # include "jit/PerfSpewer.h"
 #endif
@@ -108,7 +109,7 @@ BaselineCompiler::compile()
 
     Linker linker(masm);
     AutoFlushICache afc("Baseline");
-    JitCode *code = linker.newCode<CanGC>(cx, JSC::BASELINE_CODE);
+    JitCode *code = linker.newCode<CanGC>(cx, BASELINE_CODE);
     if (!code)
         return Method_Error;
 
@@ -177,7 +178,7 @@ BaselineCompiler::compile()
     // Note: There is an extra entry in the bytecode type map for the search hint, see below.
     size_t bytecodeTypeMapEntries = script->nTypeSets() + 1;
 
-    BaselineScript *baselineScript = BaselineScript::New(cx, prologueOffset_.offset(),
+    BaselineScript *baselineScript = BaselineScript::New(script, prologueOffset_.offset(),
                                                          epilogueOffset_.offset(),
                                                          spsPushToggleOffset_.offset(),
                                                          postDebugPrologueOffset_.offset(),
@@ -218,7 +219,7 @@ BaselineCompiler::compile()
         label.fixup(&masm);
         size_t icEntry = icLoadLabels_[i].icEntry;
         ICEntry *entryAddr = &(baselineScript->icEntry(icEntry));
-        Assembler::patchDataWithValueCheck(CodeLocationLabel(code, label),
+        Assembler::PatchDataWithValueCheck(CodeLocationLabel(code, label),
                                            ImmPtr(entryAddr),
                                            ImmPtr((void*)-1));
     }
@@ -227,7 +228,7 @@ BaselineCompiler::compile()
         baselineScript->setModifiesArguments();
 
     // All barriers are emitted off-by-default, toggle them on if needed.
-    if (cx->zone()->needsBarrier())
+    if (cx->zone()->needsIncrementalBarrier())
         baselineScript->toggleBarriers(true);
 
     // All SPS instrumentation is emitted toggled off.  Toggle them on if needed.
@@ -243,6 +244,21 @@ BaselineCompiler::compile()
 
     if (script->compartment()->debugMode())
         baselineScript->setDebugMode();
+
+    // Register a native => bytecode mapping entry for this script if needed.
+    if (cx->runtime()->jitRuntime()->isNativeToBytecodeMapEnabled(cx->runtime())) {
+        IonSpew(IonSpew_Profiling, "Added JitcodeGlobalEntry for baseline script %s:%d (%p)",
+                    script->filename(), script->lineno(), baselineScript);
+        JitcodeGlobalEntry::BaselineEntry entry;
+        entry.init(code->raw(), code->raw() + code->instructionsSize(), script);
+
+        JitcodeGlobalTable *globalTable = cx->runtime()->jitRuntime()->getJitcodeGlobalTable();
+        if (!globalTable->addEntry(entry))
+            return Method_Error;
+
+        // Mark the jitcode as having a bytecode map.
+        code->setHasBytecodeMap();
+    }
 
     script->setBaselineScript(cx, baselineScript);
 
@@ -1239,7 +1255,7 @@ static const VMFunction DeepCloneObjectLiteralInfo =
 bool
 BaselineCompiler::emit_JSOP_OBJECT()
 {
-    if (JS::CompartmentOptionsRef(cx).cloneSingletons(cx)) {
+    if (JS::CompartmentOptionsRef(cx).cloneSingletons()) {
         RootedObject obj(cx, script->getObject(GET_UINT32_INDEX(pc)));
         if (!obj)
             return false;
@@ -1260,6 +1276,23 @@ BaselineCompiler::emit_JSOP_OBJECT()
 
     JS::CompartmentOptionsRef(cx).setSingletonsAsValues();
     frame.push(ObjectValue(*script->getObject(pc)));
+    return true;
+}
+
+bool
+BaselineCompiler::emit_JSOP_CALLSITEOBJ()
+{
+    RootedObject cso(cx, script->getObject(pc));
+    RootedObject raw(cx, script->getObject(GET_UINT32_INDEX(pc) + 1));
+    if (!cso || !raw)
+        return false;
+    RootedValue rawValue(cx);
+    rawValue.setObject(*raw);
+
+    if (!ProcessCallSiteObjOperation(cx, cso, raw, rawValue))
+        return false;
+
+    frame.push(ObjectValue(*cso));
     return true;
 }
 
@@ -1361,7 +1394,7 @@ BaselineCompiler::storeValue(const StackValue *source, const Address &dest,
         masm.storeValue(scratch, dest);
         break;
       default:
-        MOZ_ASSUME_UNREACHABLE("Invalid kind");
+        MOZ_CRASH("Invalid kind");
     }
 }
 
@@ -1612,6 +1645,32 @@ BaselineCompiler::emit_JSOP_NEWARRAY()
     if (!emitOpIC(stubCompiler.getStub(&stubSpace_)))
         return false;
 
+    frame.push(R0);
+    return true;
+}
+
+typedef JSObject *(*NewArrayCopyOnWriteFn)(JSContext *, HandleObject, gc::InitialHeap);
+const VMFunction jit::NewArrayCopyOnWriteInfo =
+    FunctionInfo<NewArrayCopyOnWriteFn>(js::NewDenseCopyOnWriteArray);
+
+bool
+BaselineCompiler::emit_JSOP_NEWARRAY_COPYONWRITE()
+{
+    RootedScript scriptRoot(cx, script);
+    JSObject *obj = types::GetOrFixupCopyOnWriteObject(cx, scriptRoot, pc);
+    if (!obj)
+        return false;
+
+    prepareVMCall();
+
+    pushArg(Imm32(gc::DefaultHeap));
+    pushArg(ImmGCPtr(obj));
+
+    if (!callVM(NewArrayCopyOnWriteInfo))
+        return false;
+
+    // Box and push return value.
+    masm.tagValue(JSVAL_TYPE_OBJECT, ReturnReg, R0);
     frame.push(R0);
     return true;
 }
@@ -2195,10 +2254,10 @@ BaselineCompiler::emit_JSOP_DEFVAR()
     frame.syncStack(0);
 
     unsigned attrs = JSPROP_ENUMERATE;
-    if (!script->isForEval())
-        attrs |= JSPROP_PERMANENT;
     if (JSOp(*pc) == JSOP_DEFCONST)
         attrs |= JSPROP_READONLY;
+    else if (!script->isForEval())
+        attrs |= JSPROP_PERMANENT;
     JS_ASSERT(attrs <= UINT32_MAX);
 
     masm.loadPtr(frame.addressOfScopeChain(), R0.scratchReg());
@@ -2367,34 +2426,6 @@ BaselineCompiler::emit_JSOP_INITELEM_INC()
     // Increment index
     Address indexAddr = frame.addressOfStackValue(frame.peek(-1));
     masm.incrementInt32Value(indexAddr);
-    return true;
-}
-
-typedef bool (*SpreadFn)(JSContext *, HandleObject, HandleValue,
-                         HandleValue, MutableHandleValue);
-static const VMFunction SpreadInfo = FunctionInfo<SpreadFn>(js::SpreadOperation);
-
-bool
-BaselineCompiler::emit_JSOP_SPREAD()
-{
-    // Load index and iterator in R0 and R1, but keep values on the stack for
-    // the decompiler.
-    frame.syncStack(0);
-    masm.loadValue(frame.addressOfStackValue(frame.peek(-2)), R0);
-    masm.loadValue(frame.addressOfStackValue(frame.peek(-1)), R1);
-
-    prepareVMCall();
-
-    pushArg(R1);
-    pushArg(R0);
-    masm.extractObject(frame.addressOfStackValue(frame.peek(-3)), R0.scratchReg());
-    pushArg(R0.scratchReg());
-
-    if (!callVM(SpreadInfo))
-        return false;
-
-    frame.popn(2);
-    frame.push(R0);
     return true;
 }
 
@@ -2861,8 +2892,9 @@ BaselineCompiler::emit_JSOP_DEBUGGER()
     return true;
 }
 
-typedef bool (*DebugEpilogueFn)(JSContext *, BaselineFrame *, jsbytecode *, bool);
-static const VMFunction DebugEpilogueInfo = FunctionInfo<DebugEpilogueFn>(jit::DebugEpilogue);
+typedef bool (*DebugEpilogueFn)(JSContext *, BaselineFrame *, jsbytecode *);
+static const VMFunction DebugEpilogueInfo =
+    FunctionInfo<DebugEpilogueFn>(jit::DebugEpilogueOnBaselineReturn);
 
 bool
 BaselineCompiler::emitReturn()
@@ -2877,7 +2909,6 @@ BaselineCompiler::emitReturn()
         masm.loadBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
 
         prepareVMCall();
-        pushArg(Imm32(1));
         pushArg(ImmPtr(pc));
         pushArg(R0.scratchReg());
         if (!callVM(DebugEpilogueInfo))

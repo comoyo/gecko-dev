@@ -25,19 +25,21 @@ class nsDirectoryViewerFactory : public nsIDocumentLoaderFactory
 {
 public:
     nsDirectoryViewerFactory();
-    virtual ~nsDirectoryViewerFactory();
 
     // nsISupports interface
     NS_DECL_ISUPPORTS
     NS_DECL_NSIDOCUMENTLOADERFACTORY
+
+protected:
+    virtual ~nsDirectoryViewerFactory();
 };
 
-class nsHTTPIndex : public nsIHTTPIndex,
-                    public nsIRDFDataSource,
-                    public nsIStreamListener,
-                    public nsIDirIndexListener,
-                    public nsIInterfaceRequestor,
-                    public nsIFTPEventSink
+class nsHTTPIndex MOZ_FINAL : public nsIHTTPIndex,
+                              public nsIRDFDataSource,
+                              public nsIStreamListener,
+                              public nsIDirIndexListener,
+                              public nsIInterfaceRequestor,
+                              public nsIFTPEventSink
 {
 private:
 
@@ -87,9 +89,10 @@ protected:
 
     static void FireTimer(nsITimer* aTimer, void* aClosure);
 
+    virtual ~nsHTTPIndex();
+
 public:
     nsHTTPIndex();
-    virtual ~nsHTTPIndex();
     nsresult Init(void);
 
     static nsresult Create(nsIURI* aBaseURI, nsIInterfaceRequestor* aContainer,

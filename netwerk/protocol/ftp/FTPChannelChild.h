@@ -53,8 +53,7 @@ public:
   NS_IMETHOD Suspend();
   NS_IMETHOD Resume();
 
-  FTPChannelChild(nsIURI* uri);
-  virtual ~FTPChannelChild();
+  explicit FTPChannelChild(nsIURI* uri);
 
   void AddIPDLReference();
   void ReleaseIPDLReference();
@@ -74,6 +73,8 @@ public:
   void FlushedForDiversion();
 
 protected:
+  virtual ~FTPChannelChild();
+
   bool RecvOnStartRequest(const nsresult& aChannelStatus,
                           const int64_t& aContentLength,
                           const nsCString& aContentType,

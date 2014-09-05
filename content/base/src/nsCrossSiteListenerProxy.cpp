@@ -47,7 +47,7 @@ LogBlockedRequest(nsIRequest* aRequest)
   nsresult rv = NS_OK;
 
   // Get the innerWindowID associated with the XMLHTTPRequest
-  PRUint64 innerWindowID = 0;
+  uint64_t innerWindowID = 0;
 
   nsCOMPtr<nsILoadGroup> loadGroup;
   aRequest->GetLoadGroup(getter_AddRefs(loadGroup));
@@ -124,7 +124,7 @@ public:
 
   struct CacheEntry : public LinkedListElement<CacheEntry>
   {
-    CacheEntry(nsCString& aKey)
+    explicit CacheEntry(nsCString& aKey)
       : mKey(aKey)
     {
       MOZ_COUNT_CTOR(nsPreflightCache::CacheEntry);
@@ -453,6 +453,10 @@ nsCORSListenerProxy::nsCORSListenerProxy(nsIStreamListener* aOuter,
   mPreflightHeaders.Sort();
 }
 
+nsCORSListenerProxy::~nsCORSListenerProxy()
+{
+}
+
 nsresult
 nsCORSListenerProxy::Init(nsIChannel* aChannel, bool aAllowDataURI)
 {
@@ -498,46 +502,6 @@ nsCORSListenerProxy::OnStartRequest(nsIRequest* aRequest,
   }
 
   return mOuterListener->OnStartRequest(aRequest, aContext);
-}
-
-bool
-IsValidHTTPToken(const nsCSubstring& aToken)
-{
-  if (aToken.IsEmpty()) {
-    return false;
-  }
-
-  nsCSubstring::const_char_iterator iter, end;
-
-  aToken.BeginReading(iter);
-  aToken.EndReading(end);
-
-  while (iter != end) {
-    if (*iter <= 32 ||
-        *iter >= 127 ||
-        *iter == '(' ||
-        *iter == ')' ||
-        *iter == '<' ||
-        *iter == '>' ||
-        *iter == '@' ||
-        *iter == ',' ||
-        *iter == ';' ||
-        *iter == ':' ||
-        *iter == '\\' ||
-        *iter == '\"' ||
-        *iter == '/' ||
-        *iter == '[' ||
-        *iter == ']' ||
-        *iter == '?' ||
-        *iter == '=' ||
-        *iter == '{' ||
-        *iter == '}') {
-      return false;
-    }
-    ++iter;
-  }
-
-  return true;
 }
 
 nsresult
@@ -612,7 +576,7 @@ nsCORSListenerProxy::CheckRequestApproved(nsIRequest* aRequest)
       if (method.IsEmpty()) {
         continue;
       }
-      if (!IsValidHTTPToken(method)) {
+      if (!NS_IsValidHTTPToken(method)) {
         return NS_ERROR_DOM_BAD_URI;
       }
       foundMethod |= mPreflightMethod.Equals(method);
@@ -631,7 +595,7 @@ nsCORSListenerProxy::CheckRequestApproved(nsIRequest* aRequest)
       if (header.IsEmpty()) {
         continue;
       }
-      if (!IsValidHTTPToken(header)) {
+      if (!NS_IsValidHTTPToken(header)) {
         return NS_ERROR_DOM_BAD_URI;
       }
       headers.AppendElement(header);
@@ -921,6 +885,8 @@ public:
   NS_DECL_NSICHANNELEVENTSINK
 
 private:
+  ~nsCORSPreflightListener() {}
+
   void AddResultToCache(nsIRequest* aRequest);
 
   nsCOMPtr<nsIChannel> mOuterChannel;

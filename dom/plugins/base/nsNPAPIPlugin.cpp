@@ -40,7 +40,7 @@
 #include "nsIPrincipal.h"
 #include "nsWildCard.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
+#include "mozilla/dom/ScriptSettings.h"
 
 #include "nsIXPConnect.h"
 
@@ -643,27 +643,6 @@ GetDocumentFromNPP(NPP npp)
   return doc;
 }
 
-static JSContext *
-GetJSContextFromDoc(nsIDocument *doc)
-{
-  nsCOMPtr<nsIScriptGlobalObject> sgo = do_QueryInterface(doc->GetWindow());
-  NS_ENSURE_TRUE(sgo, nullptr);
-
-  nsIScriptContext *scx = sgo->GetContext();
-  NS_ENSURE_TRUE(scx, nullptr);
-
-  return scx->GetNativeContext();
-}
-
-static JSContext *
-GetJSContextFromNPP(NPP npp)
-{
-  nsIDocument *doc = GetDocumentFromNPP(npp);
-  NS_ENSURE_TRUE(doc, nullptr);
-
-  return GetJSContextFromDoc(doc);
-}
-
 static already_AddRefed<nsIChannel>
 GetChannelFromNPP(NPP npp)
 {
@@ -1239,9 +1218,16 @@ _getpluginelement(NPP npp)
   if (!element)
     return nullptr;
 
-  AutoPushJSContext cx(GetJSContextFromNPP(npp));
-  NS_ENSURE_TRUE(cx, nullptr);
-  JSAutoRequest ar(cx); // Unnecessary once bug 868130 lands.
+  nsIDocument *doc = GetDocumentFromNPP(npp);
+  if (NS_WARN_IF(!doc)) {
+    return nullptr;
+  }
+
+  dom::AutoJSAPI jsapi;
+  if (NS_WARN_IF(!jsapi.Init(doc->GetInnerWindow()))) {
+    return nullptr;
+  }
+  JSContext* cx = jsapi.cx();
 
   nsCOMPtr<nsIXPConnect> xpc(do_GetService(nsIXPConnect::GetCID()));
   NS_ENSURE_TRUE(xpc, nullptr);
@@ -1316,10 +1302,10 @@ _utf8fromidentifier(NPIdentifier id)
   }
 
   JSString *str = NPIdentifierToString(id);
+  nsAutoString autoStr;
+  AssignJSFlatString(autoStr, JS_ASSERT_STRING_IS_FLAT(str));
 
-  return
-    ToNewUTF8String(nsDependentString(::JS_GetInternedStringChars(str),
-                                      ::JS_GetStringLength(str)));
+  return ToNewUTF8String(autoStr);
 }
 
 int32_t
@@ -1496,8 +1482,8 @@ _evaluate(NPP npp, NPObject* npobj, NPString *script, NPVariant *result)
     return false;
   }
 
-  AutoSafeJSContext cx;
-  JSAutoCompartment ac(cx, win->FastGetGlobalJSObject());
+  dom::AutoEntryScript aes(win);
+  JSContext* cx = aes.cx();
 
   JS::Rooted<JSObject*> obj(cx, nsNPObjWrapper::GetNewOrUsed(npp, cx, npobj));
 

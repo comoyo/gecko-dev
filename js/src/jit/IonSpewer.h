@@ -28,12 +28,16 @@ namespace jit {
     _(Logs)                                 \
     /* Information during MIR building */   \
     _(MIR)                                  \
+    /* Information during escape analysis */\
+    _(Escape)                               \
     /* Information during alias analysis */ \
     _(Alias)                                \
     /* Information during GVN */            \
     _(GVN)                                  \
     /* Information during Range analysis */ \
     _(Range)                                \
+    /* Information during loop unrolling */ \
+    _(Unrolling)                            \
     /* Information during LICM */           \
     _(LICM)                                 \
     /* Information during regalloc */       \
@@ -54,8 +58,8 @@ namespace jit {
     _(Safepoints)                           \
     /* Debug info about Pools*/             \
     _(Pools)                                \
-    /* Calls to js::jit::Trace() */         \
-    _(Trace)                                \
+    /* Profiling-related information */     \
+    _(Profiling)                            \
     /* Debug info about the I$ */           \
     _(CacheFlush)                           \
                                             \
@@ -117,6 +121,13 @@ class IonSpewer
     void endFunction();
 };
 
+class IonSpewFunction
+{
+  public:
+    IonSpewFunction(MIRGraph *graph, JS::HandleScript function);
+    ~IonSpewFunction();
+};
+
 void IonSpewNewFunction(MIRGraph *graph, JS::HandleScript function);
 void IonSpewPass(const char *pass);
 void IonSpewPass(const char *pass, LinearScanAllocator *ra);
@@ -133,6 +144,7 @@ bool IonSpewEnabled(IonSpewChannel channel);
 void IonSpewVA(IonSpewChannel channel, const char *fmt, va_list ap);
 void IonSpewStartVA(IonSpewChannel channel, const char *fmt, va_list ap);
 void IonSpewContVA(IonSpewChannel channel, const char *fmt, va_list ap);
+void IonSpewDef(IonSpewChannel channel, const char *str, MDefinition *def);
 
 void EnableChannel(IonSpewChannel channel);
 void DisableChannel(IonSpewChannel channel);
@@ -166,6 +178,8 @@ static inline void IonSpewHeader(IonSpewChannel channel)
 static inline bool IonSpewEnabled(IonSpewChannel channel)
 { return false; }
 static inline void IonSpewVA(IonSpewChannel channel, const char *fmt, va_list ap)
+{ }
+static inline void IonSpewDef(IonSpewChannel channel, const char *str, MDefinition *def)
 { }
 
 static inline void EnableChannel(IonSpewChannel)

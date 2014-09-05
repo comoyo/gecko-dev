@@ -14,7 +14,7 @@
 namespace mozilla {
 namespace dom {
 
-struct IPCTabContext;
+class IPCTabContext;
 
 /**
  * TabContext encapsulates information about an iframe that may be a mozbrowser
@@ -254,7 +254,7 @@ public:
    * This constructor copies the information in aContext and sets IsValid() as
    * appropriate.
    */
-  MaybeInvalidTabContext(const IPCTabContext& aContext);
+  explicit MaybeInvalidTabContext(const IPCTabContext& aContext);
 
   /**
    * Was the IPCTabContext we received in our constructor valid?

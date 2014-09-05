@@ -11,12 +11,12 @@
 #include "ChildIterator.h"
 #include "nsDOMClassInfoID.h"
 #include "nsError.h"
-#include "nsINodeInfo.h"
 #include "nsIXULSortService.h"
 #include "nsContentUtils.h"
 #include "nsTreeBodyFrame.h"
 #include "mozilla/dom/Element.h"
 #include "nsServiceManagerUtils.h"
+#include "nsIDocument.h"
 
 using namespace mozilla;
 
@@ -488,7 +488,7 @@ nsTreeContentView::SetTree(nsITreeBoxObject* aTree)
     NS_ENSURE_STATE(mRoot);
 
     // Add ourselves to document's observers.
-    nsIDocument* document = mRoot->GetDocument();
+    nsIDocument* document = mRoot->GetComposedDoc();
     if (document) {
       document->AddObserver(this);
       mDocument = document;

@@ -25,9 +25,11 @@ class DOMParser MOZ_FINAL : public nsIDOMParser,
                             public nsWrapperCache
 {
   typedef mozilla::dom::GlobalObject GlobalObject;
+
+  virtual ~DOMParser();
+
 public: 
   DOMParser();
-  virtual ~DOMParser();
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(DOMParser,
@@ -79,7 +81,7 @@ public:
   }
 
 private:
-  DOMParser(nsISupports* aOwner) : mOwner(aOwner), mAttemptedInit(false)
+  explicit DOMParser(nsISupports* aOwner) : mOwner(aOwner), mAttemptedInit(false)
   {
     MOZ_ASSERT(aOwner);
     SetIsDOMBinding();
@@ -96,7 +98,7 @@ private:
 
   class AttemptedInitMarker {
   public:
-    AttemptedInitMarker(bool* aAttemptedInit) :
+    explicit AttemptedInitMarker(bool* aAttemptedInit) :
       mAttemptedInit(aAttemptedInit)
     {}
 

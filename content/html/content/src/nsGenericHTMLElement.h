@@ -51,7 +51,7 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase,
                              public nsIDOMHTMLElement
 {
 public:
-  nsGenericHTMLElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+  explicit nsGenericHTMLElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
     : nsGenericHTMLElementBase(aNodeInfo),
       mScrollgrab(false)
   {
@@ -124,11 +124,13 @@ public:
     return GetTokenList(nsGkAtoms::itemprop);
   }
   mozilla::dom::HTMLPropertiesCollection* Properties();
-  JS::Value GetItemValue(JSContext* aCx, JSObject* aScope,
-                         mozilla::ErrorResult& aError);
-  JS::Value GetItemValue(JSContext* aCx, mozilla::ErrorResult& aError)
+  void GetItemValue(JSContext* aCx, JSObject* aScope,
+                    JS::MutableHandle<JS::Value> aRetval,
+                    mozilla::ErrorResult& aError);
+  void GetItemValue(JSContext* aCx, JS::MutableHandle<JS::Value> aRetval,
+                    mozilla::ErrorResult& aError)
   {
-    return GetItemValue(aCx, GetWrapperPreserveColor(), aError);
+    GetItemValue(aCx, GetWrapperPreserveColor(), aRetval, aError);
   }
   void SetItemValue(JSContext* aCx, JS::Value aValue,
                     mozilla::ErrorResult& aError);
@@ -290,6 +292,8 @@ public:
   }
 
 protected:
+  virtual ~nsGenericHTMLElement() {}
+
   // These methods are used to implement element-specific behavior of Get/SetItemValue
   // when an element has @itemprop but no @itemscope.
   virtual void GetItemValueText(nsAString& text);
@@ -465,7 +469,7 @@ public:
     if (!_argc) {
       top = true;
     }
-    mozilla::dom::Element::ScrollIntoView(top);
+    mozilla::dom::Element::ScrollIntoView(top, mozilla::dom::ScrollOptions());
     return NS_OK;
   }
   NS_IMETHOD GetOffsetParent(nsIDOMElement** aOffsetParent) MOZ_FINAL {
@@ -825,7 +829,12 @@ public:
    * Get the presentation context for this content node.
    * @return the presentation context
    */
-  nsPresContext* GetPresContext();
+  enum PresContextFor
+  {
+    eForComposedDoc,
+    eForUncomposedDoc
+  };
+  nsPresContext* GetPresContext(PresContextFor aFor);
 
   // Form Helper Routines
   /**
@@ -1259,8 +1268,7 @@ class nsGenericHTMLFormElement : public nsGenericHTMLElement,
                                  public nsIFormControl
 {
 public:
-  nsGenericHTMLFormElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
-  virtual ~nsGenericHTMLFormElement();
+  explicit nsGenericHTMLFormElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -1344,6 +1352,8 @@ public:
   virtual bool IsLabelable() const MOZ_OVERRIDE;
 
 protected:
+  virtual ~nsGenericHTMLFormElement();
+
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                                  const nsAttrValueOrString* aValue,
                                  bool aNotify) MOZ_OVERRIDE;
@@ -1416,7 +1426,7 @@ protected:
 class nsGenericHTMLFormElementWithState : public nsGenericHTMLFormElement
 {
 public:
-  nsGenericHTMLFormElementWithState(already_AddRefed<nsINodeInfo>& aNodeInfo);
+  explicit nsGenericHTMLFormElementWithState(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   /**
    * Get the presentation state for a piece of content, or create it if it does
@@ -1447,7 +1457,7 @@ public:
    * Called when we have been cloned and adopted, and the information of the
    * node has been changed.
    */
-  virtual void NodeInfoChanged(nsINodeInfo* aOldNodeInfo) MOZ_OVERRIDE;
+  virtual void NodeInfoChanged(mozilla::dom::NodeInfo* aOldNodeInfo) MOZ_OVERRIDE;
 
 protected:
   /* Generates the state key for saving the form state in the session if not
@@ -1683,12 +1693,12 @@ class HTML##_elementName##Element;                                         \
 }                                                                          \
 }                                                                          \
 nsGenericHTMLElement*                                                      \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser = mozilla::dom::NOT_FROM_PARSER);
 
 #define NS_DECLARE_NS_NEW_HTML_ELEMENT_AS_SHARED(_elementName)             \
 inline nsGenericHTMLElement*                                               \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser = mozilla::dom::NOT_FROM_PARSER) \
 {                                                                          \
   return NS_NewHTMLSharedElement(mozilla::Move(aNodeInfo), aFromParser);   \
@@ -1699,7 +1709,7 @@ NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
  */
 #define NS_IMPL_NS_NEW_HTML_ELEMENT(_elementName)                            \
 nsGenericHTMLElement*                                                        \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser)      \
 {                                                                            \
   return new mozilla::dom::HTML##_elementName##Element(aNodeInfo);           \
@@ -1707,7 +1717,7 @@ NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
 
 #define NS_IMPL_NS_NEW_HTML_ELEMENT_CHECK_PARSER(_elementName)               \
 nsGenericHTMLElement*                                                        \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser)      \
 {                                                                            \
   return new mozilla::dom::HTML##_elementName##Element(aNodeInfo,            \
@@ -1717,7 +1727,7 @@ NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
 // Here, we expand 'NS_DECLARE_NS_NEW_HTML_ELEMENT()' by hand.
 // (Calling the macro directly (with no args) produces compiler warnings.)
 nsGenericHTMLElement*
-NS_NewHTMLElement(already_AddRefed<nsINodeInfo>&& aNodeInfo,
+NS_NewHTMLElement(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                   mozilla::dom::FromParser aFromParser = mozilla::dom::NOT_FROM_PARSER);
 
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Shared)
@@ -1762,6 +1772,7 @@ NS_DECLARE_NS_NEW_HTML_ELEMENT(OptGroup)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Option)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Output)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Paragraph)
+NS_DECLARE_NS_NEW_HTML_ELEMENT(Picture)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Pre)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Progress)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Script)

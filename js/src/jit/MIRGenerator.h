@@ -76,15 +76,38 @@ class MIRGenerator
     }
 
     bool instrumentedProfiling() {
-        return GetIonContext()->runtime->spsProfiler().enabled();
+        if (!instrumentedProfilingIsCached_) {
+            instrumentedProfiling_ = GetIonContext()->runtime->spsProfiler().enabled();
+            instrumentedProfilingIsCached_ = true;
+        }
+        return instrumentedProfiling_;
+    }
+
+    bool isNativeToBytecodeMapEnabled() {
+        if (compilingAsmJS())
+            return false;
+#ifdef DEBUG
+        return true;
+#else
+        return instrumentedProfiling();
+#endif
     }
 
     // Whether the main thread is trying to cancel this build.
     bool shouldCancel(const char *why) {
+        maybePause();
         return cancelBuild_;
     }
     void cancel() {
         cancelBuild_ = true;
+    }
+
+    void maybePause() {
+        if (pauseBuild_ && *pauseBuild_)
+            PauseCurrentHelperThread();
+    }
+    void setPauseFlag(mozilla::Atomic<bool, mozilla::Relaxed> *pauseBuild) {
+        pauseBuild_ = pauseBuild;
     }
 
     void disable() {
@@ -118,19 +141,11 @@ class MIRGenerator
     bool performsCall() const {
         return performsCall_;
     }
-    void setNeedsInitialStackAlignment() {
-        needsInitialStackAlignment_ = true;
-    }
-    bool needsInitialStackAlignment() const {
-        JS_ASSERT(compilingAsmJS());
-        return needsInitialStackAlignment_;
-    }
-    void setPerformsAsmJSCall() {
-        JS_ASSERT(compilingAsmJS());
-        setPerformsCall();
-        setNeedsInitialStackAlignment();
-    }
-    void noteMinAsmJSHeapLength(uint32_t len) {
+    // Traverses the graph to find if there's any SIMD instruction. Costful but
+    // the value is cached, so don't worry about calling it several times.
+    bool usesSimd();
+    void initMinAsmJSHeapLength(uint32_t len) {
+        JS_ASSERT(minAsmJSHeapLength_ == 0);
         minAsmJSHeapLength_ = len;
     }
     uint32_t minAsmJSHeapLength() const {
@@ -153,17 +168,22 @@ class MIRGenerator
     MIRGraph *graph_;
     AbortReason abortReason_;
     bool error_;
+    mozilla::Atomic<bool, mozilla::Relaxed> *pauseBuild_;
     mozilla::Atomic<bool, mozilla::Relaxed> cancelBuild_;
 
     uint32_t maxAsmJSStackArgBytes_;
     bool performsCall_;
-    bool needsInitialStackAlignment_;
+    bool usesSimd_;
+    bool usesSimdCached_;
     uint32_t minAsmJSHeapLength_;
 
     // Keep track of whether frame arguments are modified during execution.
     // RegAlloc needs to know this as spilling values back to their register
     // slots is not compatible with that.
     bool modifiesFrameArguments_;
+
+    bool instrumentedProfiling_;
+    bool instrumentedProfilingIsCached_;
 
 #if defined(JS_ION_PERF)
     AsmJSPerfSpewer asmJSPerfSpewer_;

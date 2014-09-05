@@ -5,17 +5,17 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
-    TEST_DIRS += ['test']
+    MOCHITEST_MANIFESTS += ['test/mochitest.ini']
 
 EXPORTS += [
     'CameraCommon.h',
-    'CameraPreviewMediaStream.h',
+    'CameraPreferences.h',
     'DOMCameraManager.h',
-    'GonkCameraControl.h',
 ]
 
 SOURCES += [
     'CameraControlImpl.cpp',
+    'CameraPreferences.cpp',
     'CameraPreviewMediaStream.cpp',
     'CameraRecorderProfiles.cpp',
     'DOMCameraCapabilities.cpp',
@@ -51,4 +51,4 @@ LOCAL_INCLUDES += [
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
-FINAL_LIBRARY = 'gklayout'
+FINAL_LIBRARY = 'xul'

@@ -26,13 +26,11 @@ const EXPECTED_COLOR = "rgb(255, 255, 85)"; // #ff5
 // to close it, and clicking the page to select a color.
 
 let test = asyncTest(function*() {
-  yield addTab("data:text/html,rule view eyedropper test");
+  yield addTab("data:text/html;charset=utf-8,rule view eyedropper test");
   content.document.body.innerHTML = PAGE_CONTENT;
-  let {toolbox, inspector, view} = yield openRuleView();
 
-  let element = content.document.querySelector("div");
-  inspector.selection.setNode(element, "test");
-  yield inspector.once("inspector-updated");
+  let {toolbox, inspector, view} = yield openRuleView();
+  yield selectNode("div", inspector);
 
   let property = getRuleViewProperty(view, "div", "background-color");
   let swatch = property.valueSpan.querySelector(".ruleview-colorswatch");
@@ -40,7 +38,7 @@ let test = asyncTest(function*() {
 
   let dropper = yield openEyedropper(view, swatch);
 
-  let tooltip = view.colorPicker.tooltip;
+  let tooltip = view.tooltips.colorPicker.tooltip;
   ok(tooltip.isHidden(),
      "color picker tooltip is closed after opening eyedropper");
 
@@ -52,7 +50,6 @@ let test = asyncTest(function*() {
 
   yield testSelect(swatch, dropper);
 });
-
 
 function testESC(swatch, dropper) {
   let deferred = promise.defer();
@@ -98,7 +95,7 @@ function testSelect(swatch, dropper) {
 function openEyedropper(view, swatch) {
   let deferred = promise.defer();
 
-  let tooltip = view.colorPicker.tooltip;
+  let tooltip = view.tooltips.colorPicker.tooltip;
 
   tooltip.once("shown", () => {
     let tooltipDoc = tooltip.content.contentDocument;

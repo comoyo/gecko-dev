@@ -9,8 +9,14 @@
 #include "nsJARChannel.h"
 #include "nsNetCID.h"
 #include "nsIAppsService.h"
-#include "nsCxPusher.h"
+#include "nsILoadInfo.h"
 #include "nsXULAppAPI.h"
+#include "nsPrincipal.h"
+
+#include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/Preferences.h"
+
+using namespace mozilla;
 
 /**
   * This dummy channel implementation only provides enough functionality
@@ -21,7 +27,7 @@ class DummyChannel : public nsIJARChannel
                           , nsRunnable
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIREQUEST
   NS_DECL_NSICHANNEL
   NS_DECL_NSIJARCHANNEL
@@ -31,15 +37,18 @@ public:
   NS_IMETHODIMP Run();
 
 private:
+  ~DummyChannel() {}
+
   bool                        mPending;
   uint32_t                    mSuspendCount;
   nsCOMPtr<nsISupports>       mListenerContext;
   nsCOMPtr<nsIStreamListener> mListener;
   nsCOMPtr<nsILoadGroup>      mLoadGroup;
   nsLoadFlags                 mLoadFlags;
+  nsCOMPtr<nsILoadInfo>       mLoadInfo;
 };
 
-NS_IMPL_ISUPPORTS(DummyChannel, nsIRequest, nsIChannel, nsIJARChannel)
+NS_IMPL_ISUPPORTS_INHERITED(DummyChannel, nsRunnable, nsIRequest, nsIChannel, nsIJARChannel)
 
 DummyChannel::DummyChannel() : mPending(false)
                              , mSuspendCount(0)
@@ -123,6 +132,16 @@ NS_IMETHODIMP DummyChannel::GetJarFile(nsIFile* *aFile)
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
+NS_IMETHODIMP DummyChannel::GetZipEntry(nsIZipEntry* *aEntry)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP DummyChannel::EnsureChildFd()
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
 NS_IMETHODIMP DummyChannel::Run()
 {
   nsresult rv = mListener->OnStartRequest(this, mListenerContext);
@@ -190,6 +209,18 @@ NS_IMETHODIMP DummyChannel::GetOwner(nsISupports**)
 NS_IMETHODIMP DummyChannel::SetOwner(nsISupports*)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP DummyChannel::GetLoadInfo(nsILoadInfo** aLoadInfo)
+{
+  NS_IF_ADDREF(*aLoadInfo = mLoadInfo);
+  return NS_OK;
+}
+
+NS_IMETHODIMP DummyChannel::SetLoadInfo(nsILoadInfo* aLoadInfo)
+{
+  mLoadInfo = aLoadInfo;
+  return NS_OK;
 }
 
 NS_IMETHODIMP DummyChannel::GetNotificationCallbacks(nsIInterfaceRequestor**)
@@ -355,6 +386,23 @@ AppProtocolHandler::NewChannel(nsIURI* aUri, nsIChannel* *aResult)
   nsAutoCString host;
   nsresult rv = aUri->GetHost(host);
   NS_ENSURE_SUCCESS(rv, rv);
+
+  if (Preferences::GetBool("dom.mozApps.themable")) {
+    nsAutoCString origin;
+    nsPrincipal::GetOriginForURI(aUri, getter_Copies(origin));
+    nsAdoptingCString themeOrigin;
+    themeOrigin = Preferences::GetCString("b2g.theme.origin");
+    if (themeOrigin.Equals(origin)) {
+      // We are trying to load a theme resource. Check whether we have a
+      // package registered as a theme provider to override the file path.
+      nsAdoptingCString selectedTheme;
+      selectedTheme = Preferences::GetCString("dom.mozApps.selected_theme");
+      if (!selectedTheme.IsEmpty()) {
+        // Substitute the path with the actual theme.
+        host = selectedTheme;
+      }
+    }
+  }
 
   nsAutoCString fileSpec;
   nsCOMPtr<nsIURL> url = do_QueryInterface(aUri);

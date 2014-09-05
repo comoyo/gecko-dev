@@ -5,6 +5,8 @@
 
 package org.mozilla.gecko.home;
 
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.mozilla.gecko.EditBookmarkDialog;
 import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.GeckoAppShell;
@@ -16,20 +18,22 @@ import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
-import org.mozilla.gecko.db.BrowserContract.Combined;
+import org.mozilla.gecko.db.BrowserContract.SuggestedSites;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.favicons.Favicons;
+import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
 import org.mozilla.gecko.home.TopSitesGridView.TopSitesGridContextMenuInfo;
 import org.mozilla.gecko.util.Clipboard;
+import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.util.ThreadUtils;
-import org.mozilla.gecko.util.UiAsyncTask;
+import org.mozilla.gecko.util.UIAsyncTask;
 import org.mozilla.gecko.widget.ButtonToast;
 
+import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
-import android.net.Uri;
 import android.os.Bundle;
 import android.support.v4.app.Fragment;
 import android.util.Log;
@@ -42,7 +46,9 @@ import android.widget.Toast;
 
 /**
  * HomeFragment is an empty fragment that can be added to the HomePager.
- * Subclasses can add their own views. 
+ * Subclasses can add their own views.
+ * <p>
+ * The containing activity <b>must</b> implement {@link OnUrlOpenListener}.
  */
 abstract class HomeFragment extends Fragment {
     // Log Tag.
@@ -61,6 +67,27 @@ abstract class HomeFragment extends Fragment {
 
     // Whether the fragment has loaded its content
     private boolean mIsLoaded;
+
+    // On URL open listener
+    protected OnUrlOpenListener mUrlOpenListener;
+
+    @Override
+    public void onAttach(Activity activity) {
+        super.onAttach(activity);
+
+        try {
+            mUrlOpenListener = (OnUrlOpenListener) activity;
+        } catch (ClassCastException e) {
+            throw new ClassCastException(activity.toString()
+                    + " must implement HomePager.OnUrlOpenListener");
+        }
+    }
+
+    @Override
+    public void onDetach() {
+        super.onDetach();
+        mUrlOpenListener = null;
+    }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -94,7 +121,7 @@ abstract class HomeFragment extends Fragment {
 
         menu.setHeaderTitle(info.getDisplayTitle());
 
-        // Hide ununsed menu items.
+        // Hide unused menu items.
         menu.findItem(R.id.top_sites_edit).setVisible(false);
         menu.findItem(R.id.top_sites_pin).setVisible(false);
         menu.findItem(R.id.top_sites_unpin).setVisible(false);
@@ -110,10 +137,9 @@ abstract class HomeFragment extends Fragment {
             menu.findItem(R.id.home_remove).setVisible(false);
         }
 
-        menu.findItem(R.id.home_share).setVisible(!GeckoProfile.get(getActivity()).inGuestMode());
-
-        final boolean canOpenInReader = (info.display == Combined.DISPLAY_READER);
-        menu.findItem(R.id.home_open_in_reader).setVisible(canOpenInReader);
+        if (!StringUtils.isShareableUrl(info.url) || GeckoProfile.get(getActivity()).inGuestMode()) {
+            menu.findItem(R.id.home_share).setVisible(false);
+        }
     }
 
     @Override
@@ -190,7 +216,7 @@ abstract class HomeFragment extends Fragment {
 
             // Some pinned site items have "user-entered" urls. URLs entered in the PinSiteDialog are wrapped in
             // a special URI until we can get a valid URL. If the url is a user-entered url, decode the URL before loading it.
-            final Tab newTab = Tabs.getInstance().loadUrl(decodeUserEnteredUrl(url), flags);
+            final Tab newTab = Tabs.getInstance().loadUrl(StringUtils.decodeUserEnteredUrl(url), flags);
             final int newTabId = newTab.getId(); // We don't want to hold a reference to the Tab.
 
             final String message = isPrivate ?
@@ -200,6 +226,7 @@ abstract class HomeFragment extends Fragment {
             final GeckoApp geckoApp = (GeckoApp) context;
             geckoApp.getButtonToast().show(false,
                     message,
+                    ButtonToast.LENGTH_SHORT,
                     buttonMessage,
                     R.drawable.switch_button_icon,
                     new ButtonToast.ToastListener() {
@@ -217,12 +244,6 @@ abstract class HomeFragment extends Fragment {
         if (itemId == R.id.home_edit_bookmark) {
             // UI Dialog associates to the activity context, not the applications'.
             new EditBookmarkDialog(context).show(info.url);
-            return true;
-        }
-
-        if (itemId == R.id.home_open_in_reader) {
-            final String url = ReaderModeUtils.getAboutReaderForUrl(info.url);
-            Tabs.getInstance().loadUrl(url, Tabs.LOADURL_NONE);
             return true;
         }
 
@@ -251,9 +272,35 @@ abstract class HomeFragment extends Fragment {
         loadIfVisible();
     }
 
+    /**
+     * Handle a configuration change by detaching and re-attaching.
+     * <p>
+     * A HomeFragment only needs to handle onConfiguration change (i.e.,
+     * re-attach) if its UI needs to change (i.e., re-inflate layouts, use
+     * different styles, etc) for different device orientations. Handling
+     * configuration changes in all HomeFragments will simply cause some
+     * redundant re-inflations on device rotation. This slight inefficiency
+     * avoids potentially not handling a needed onConfigurationChanged in a
+     * subclass.
+     */
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+
+        // Reattach the fragment, forcing a re-inflation of its view.
+        // We use commitAllowingStateLoss() instead of commit() here to avoid
+        // an IllegalStateException. If the phone is rotated while Fennec
+        // is in the background, onConfigurationChanged() is fired.
+        // onConfigurationChanged() is called before onResume(), so
+        // using commit() would throw an IllegalStateException since it can't
+        // be used between the Activity's onSaveInstanceState() and
+        // onResume().
+        if (isVisible()) {
+            getFragmentManager().beginTransaction()
+                                .detach(this)
+                                .attach(this)
+                                .commitAllowingStateLoss();
+        }
     }
 
     void setCanLoadHint(boolean canLoadHint) {
@@ -269,22 +316,6 @@ abstract class HomeFragment extends Fragment {
         return mCanLoadHint;
     }
 
-    /**
-     * Given a url with a user-entered scheme, extract the
-     * scheme-specific component. For e.g, given "user-entered://www.google.com",
-     * this method returns "//www.google.com". If the passed url
-     * does not have a user-entered scheme, the same url will be returned.
-     *
-     * @param  url to be decoded
-     * @return url component entered by user
-     */
-    public static String decodeUserEnteredUrl(String url) {
-        Uri uri = Uri.parse(url);
-        if ("user-entered".equals(uri.getScheme())) {
-            return uri.getSchemeSpecificPart();
-        }
-        return url;
-    }
 
     protected abstract void load();
 
@@ -301,7 +332,7 @@ abstract class HomeFragment extends Fragment {
         mIsLoaded = true;
     }
 
-    private static class RemoveItemByUrlTask extends UiAsyncTask<Void, Void, Void> {
+    private static class RemoveItemByUrlTask extends UIAsyncTask.WithoutParams<Void> {
         private final Context mContext;
         private final String mUrl;
         private final int mPosition;
@@ -326,18 +357,30 @@ abstract class HomeFragment extends Fragment {
         }
 
         @Override
-        public Void doInBackground(Void... params) {
+        public Void doInBackground() {
             ContentResolver cr = mContext.getContentResolver();
 
             if (mPosition > -1) {
                 BrowserDB.unpinSite(cr, mPosition);
+                if (BrowserDB.hideSuggestedSite(mUrl)) {
+                    cr.notifyChange(SuggestedSites.CONTENT_URI, null);
+                }
             }
 
             BrowserDB.removeBookmarksWithURL(cr, mUrl);
             BrowserDB.removeHistoryEntry(cr, mUrl);
 
             BrowserDB.removeReadingListItemWithURL(cr, mUrl);
-            GeckoEvent e = GeckoEvent.createBroadcastEvent("Reader:Remove", mUrl);
+
+            final JSONObject json = new JSONObject();
+            try {
+                json.put("url", mUrl);
+                json.put("notify", false);
+            } catch (JSONException e) {
+                Log.e(LOGTAG, "error building JSON arguments");
+            }
+
+            GeckoEvent e = GeckoEvent.createBroadcastEvent("Reader:Remove", json.toString());
             GeckoAppShell.sendEventToGecko(e);
 
             return null;

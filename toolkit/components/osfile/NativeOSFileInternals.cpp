@@ -114,7 +114,7 @@ struct ScopedArrayBufferContents: public Scoped<ScopedArrayBufferContentsTraits>
   bool Allocate(uint32_t length) {
     dispose();
     ArrayBufferContents& value = rwget();
-    void *ptr = JS_AllocateArrayBufferContents(/*no context available*/nullptr, length);
+    void *ptr = calloc(1, length);
     if (ptr) {
       value.data = (uint8_t *) ptr;
       value.nbytes = length;
@@ -177,11 +177,6 @@ public:
     MOZ_ASSERT(NS_IsMainThread());
     mozilla::HoldJSObjects(this);
   }
-  virtual ~AbstractResult() {
-    MOZ_ASSERT(NS_IsMainThread());
-    DropJSData();
-    mozilla::DropJSObjects(this);
-  }
 
   /**
    * Setup the AbstractResult once data is available.
@@ -207,6 +202,12 @@ public:
   }
 
 protected:
+  virtual ~AbstractResult() {
+    MOZ_ASSERT(NS_IsMainThread());
+    DropJSData();
+    mozilla::DropJSObjects(this);
+  }
+
   virtual nsresult GetCacheableResult(JSContext *cx, JS::MutableHandleValue aResult) = 0;
 
 private:

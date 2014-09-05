@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,9 +25,15 @@
 #include "nsIObserverService.h"
 #include "mozilla/HangMonitor.h"
 #include "mozilla/IOInterposer.h"
+#include "mozilla/ipc/MessageChannel.h"
 #include "mozilla/Services.h"
 #include "nsXPCOMPrivate.h"
 #include "mozilla/ChaosMode.h"
+
+#ifdef MOZ_CRASHREPORTER
+#include "nsServiceManagerUtils.h"
+#include "nsICrashReporter.h"
+#endif
 
 #ifdef XP_LINUX
 #include <sys/time.h>
@@ -213,9 +219,7 @@ public:
 
   // This method needs to be public to support older compilers (xlC_r on AIX).
   // It should be called directly as this class type is reference counted.
-  virtual ~nsThreadStartupEvent()
-  {
-  }
+  virtual ~nsThreadStartupEvent() {}
 
 private:
   NS_IMETHOD Run()
@@ -243,7 +247,7 @@ struct nsThreadShutdownContext
 class nsThreadShutdownAckEvent : public nsRunnable
 {
 public:
-  nsThreadShutdownAckEvent(nsThreadShutdownContext* aCtx)
+  explicit nsThreadShutdownAckEvent(nsThreadShutdownContext* aCtx)
     : mShutdownContext(aCtx)
   {
   }
@@ -386,6 +390,34 @@ nsThread::ThreadFunc(void* aArg)
 }
 
 //-----------------------------------------------------------------------------
+
+#ifdef MOZ_CRASHREPORTER
+// Tell the crash reporter to save a memory report if our heuristics determine
+// that an OOM failure is likely to occur soon.
+static bool SaveMemoryReportNearOOM()
+{
+  bool needMemoryReport = false;
+
+#ifdef XP_WIN // XXX implement on other platforms as needed
+  const size_t LOWMEM_THRESHOLD_VIRTUAL = 200 * 1024 * 1024;
+  MEMORYSTATUSEX statex;
+  statex.dwLength = sizeof(statex);
+  if (GlobalMemoryStatusEx(&statex)) {
+    if (statex.ullAvailVirtual < LOWMEM_THRESHOLD_VIRTUAL) {
+      needMemoryReport = true;
+    }
+  }
+#endif
+
+  if (needMemoryReport) {
+    nsCOMPtr<nsICrashReporter> cr =
+      do_GetService("@mozilla.org/toolkit/crash-reporter;1");
+    cr->SaveMemoryReport();
+  }
+
+  return needMemoryReport;
+}
+#endif
 
 #ifdef MOZ_CANARY
 int sCanaryOutputFD = -1;
@@ -686,6 +718,10 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
 {
   LOG(("THRD(%p) ProcessNextEvent [%u %u]\n", this, aMayWait, mRunningEvent));
 
+  // If we're on the main thread, we shouldn't be dispatching CPOWs.
+  MOZ_RELEASE_ASSERT(mIsMainThread != MAIN_THREAD ||
+                     !ipc::ProcessingUrgentMessages());
+
   if (NS_WARN_IF(PR_GetCurrentThread() != mThread)) {
     return NS_ERROR_NOT_SAME_THREAD;
   }
@@ -725,6 +761,27 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
       }
     }
   }
+
+#ifdef MOZ_CRASHREPORTER
+  if (MAIN_THREAD == mIsMainThread && !ShuttingDown()) {
+    // Keep an eye on memory usage (cheap, ~7ms) somewhat frequently,
+    // but save memory reports (expensive, ~75ms) less frequently.
+    const size_t LOW_MEMORY_CHECK_SECONDS = 30;
+    const size_t LOW_MEMORY_SAVE_SECONDS = 3 * 60;
+
+    static TimeStamp nextCheck = TimeStamp::NowLoRes()
+      + TimeDuration::FromSeconds(LOW_MEMORY_CHECK_SECONDS);
+    
+    TimeStamp now = TimeStamp::NowLoRes();
+    if (now >= nextCheck) {
+      if (SaveMemoryReportNearOOM()) {
+        nextCheck = now + TimeDuration::FromSeconds(LOW_MEMORY_SAVE_SECONDS);
+      } else {
+        nextCheck = now + TimeDuration::FromSeconds(LOW_MEMORY_CHECK_SECONDS);
+      }
+    }
+  }
+#endif
 
   bool notifyMainThreadObserver =
     (MAIN_THREAD == mIsMainThread) && sMainThreadObserver;

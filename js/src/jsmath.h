@@ -92,28 +92,42 @@ class MathCache
 extern JSObject *
 js_InitMathClass(JSContext *cx, js::HandleObject obj);
 
+namespace js {
+
 extern double
 math_random_no_outparam(JSContext *cx);
 
 extern bool
-js_math_random(JSContext *cx, unsigned argc, js::Value *vp);
+math_random(JSContext *cx, unsigned argc, js::Value *vp);
 
 extern bool
-js_math_abs(JSContext *cx, unsigned argc, js::Value *vp);
+math_abs_handle(JSContext *cx, js::HandleValue v, js::MutableHandleValue r);
 
 extern bool
-js_math_max(JSContext *cx, unsigned argc, js::Value *vp);
+math_abs(JSContext *cx, unsigned argc, js::Value *vp);
 
 extern bool
-js_math_min(JSContext *cx, unsigned argc, js::Value *vp);
+math_max(JSContext *cx, unsigned argc, js::Value *vp);
 
 extern bool
-js_math_sqrt(JSContext *cx, unsigned argc, js::Value *vp);
+math_min(JSContext *cx, unsigned argc, js::Value *vp);
 
 extern bool
-js_math_pow(JSContext *cx, unsigned argc, js::Value *vp);
+math_sqrt(JSContext *cx, unsigned argc, js::Value *vp);
 
-namespace js {
+extern bool
+math_pow_handle(JSContext *cx, js::HandleValue base, js::HandleValue power,
+                js::MutableHandleValue result);
+
+extern bool
+math_pow(JSContext *cx, unsigned argc, js::Value *vp);
+
+extern bool
+minmax_impl(JSContext *cx, bool max, js::HandleValue a, js::HandleValue b,
+            js::MutableHandleValue res);
+
+extern bool
+math_sqrt_handle(JSContext *cx, js::HandleValue number, js::MutableHandleValue result);
 
 extern bool
 math_imul(JSContext *cx, unsigned argc, js::Value *vp);
@@ -227,6 +241,9 @@ extern bool
 math_atan(JSContext *cx, unsigned argc, Value *vp);
 
 extern bool
+math_atan2_handle(JSContext *cx, HandleValue y, HandleValue x, MutableHandleValue res);
+
+extern bool
 math_atan2(JSContext *cx, unsigned argc, Value *vp);
 
 extern double
@@ -269,10 +286,16 @@ extern bool
 math_clz32(JSContext *cx, unsigned argc, Value *vp);
 
 extern bool
+math_floor_handle(JSContext *cx, HandleValue v, MutableHandleValue r);
+
+extern bool
 math_floor(JSContext *cx, unsigned argc, Value *vp);
 
 extern double
 math_floor_impl(double x);
+
+extern bool
+math_round_handle(JSContext *cx, HandleValue arg, MutableHandleValue res);
 
 extern bool
 math_round(JSContext *cx, unsigned argc, Value *vp);

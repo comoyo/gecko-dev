@@ -12,6 +12,14 @@ namespace jit {
 
 #define MIR_OPCODE_LIST(_)                                                  \
     _(Constant)                                                             \
+    _(SimdValueX4)                                                          \
+    _(SimdSplatX4)                                                          \
+    _(SimdConstant)                                                         \
+    _(SimdExtractElement)                                                   \
+    _(SimdSignMask)                                                         \
+    _(SimdBinaryComp)                                                       \
+    _(SimdBinaryArith)                                                      \
+    _(SimdBinaryBitwise)                                                    \
     _(CloneLiteral)                                                         \
     _(Parameter)                                                            \
     _(Callee)                                                               \
@@ -43,6 +51,7 @@ namespace jit {
     _(ApplyArgs)                                                            \
     _(ArraySplice)                                                          \
     _(Bail)                                                                 \
+    _(Unreachable)                                                          \
     _(AssertFloat32)                                                        \
     _(GetDynamicName)                                                       \
     _(FilterArgumentsOrEval)                                                \
@@ -58,6 +67,7 @@ namespace jit {
     _(Ursh)                                                                 \
     _(MinMax)                                                               \
     _(Abs)                                                                  \
+    _(Clz)                                                                  \
     _(Sqrt)                                                                 \
     _(Atan2)                                                                \
     _(Hypot)                                                                \
@@ -88,11 +98,14 @@ namespace jit {
     _(TruncateToInt32)                                                      \
     _(ToString)                                                             \
     _(NewArray)                                                             \
+    _(NewArrayCopyOnWrite)                                                  \
     _(NewObject)                                                            \
     _(NewDeclEnvObject)                                                     \
     _(NewCallObject)                                                        \
     _(NewRunOnceCallObject)                                                 \
     _(NewStringObject)                                                      \
+    _(ObjectState)                                                          \
+    _(ArrayState)                                                           \
     _(InitElem)                                                             \
     _(InitElemGetterSetter)                                                 \
     _(MutateProto)                                                          \
@@ -114,6 +127,7 @@ namespace jit {
     _(ConstantElements)                                                     \
     _(ConvertElementsToDoubles)                                             \
     _(MaybeToDoubleElement)                                                 \
+    _(MaybeCopyElementsForWrite)                                            \
     _(LoadSlot)                                                             \
     _(StoreSlot)                                                            \
     _(FunctionEnvironment)                                                  \
@@ -153,6 +167,7 @@ namespace jit {
     _(ArrayPopShift)                                                        \
     _(ArrayPush)                                                            \
     _(ArrayConcat)                                                          \
+    _(ArrayJoin)                                                            \
     _(LoadTypedArrayElement)                                                \
     _(LoadTypedArrayElementHole)                                            \
     _(LoadTypedArrayElementStatic)                                          \
@@ -191,11 +206,13 @@ namespace jit {
     _(InstanceOf)                                                           \
     _(CallInstanceOf)                                                       \
     _(InterruptCheck)                                                       \
+    _(AsmJSInterruptCheck)                                                  \
     _(ProfilerStackOp)                                                      \
     _(GetDOMProperty)                                                       \
     _(GetDOMMember)                                                         \
     _(SetDOMProperty)                                                       \
     _(IsCallable)                                                           \
+    _(IsObject)                                                             \
     _(HaveSameClass)                                                        \
     _(HasClass)                                                             \
     _(AsmJSNeg)                                                             \
@@ -217,7 +234,6 @@ namespace jit {
     _(NewPar)                                                               \
     _(NewDenseArrayPar)                                                     \
     _(NewDerivedTypedObject)                                                \
-    _(AbortPar)                                                             \
     _(LambdaPar)                                                            \
     _(RestPar)                                                              \
     _(ForkJoinContext)                                                      \
@@ -231,7 +247,7 @@ namespace jit {
  MIR_OPCODE_LIST(FORWARD_DECLARE)
 #undef FORWARD_DECLARE
 
-class MInstructionVisitor // interface i.e. pure abstract class
+class MDefinitionVisitor // interface i.e. pure abstract class
 {
   public:
 #define VISIT_INS(op) virtual bool visit##op(M##op *) = 0;
@@ -239,10 +255,21 @@ class MInstructionVisitor // interface i.e. pure abstract class
 #undef VISIT_INS
 };
 
-class MInstructionVisitorWithDefaults : public MInstructionVisitor
+// MDefinition visitor which raises a Not Yet Implemented error for
+// non-overloaded visit functions.
+class MDefinitionVisitorDefaultNYI : public MDefinitionVisitor
 {
   public:
-#define VISIT_INS(op) virtual bool visit##op(M##op *) { MOZ_ASSUME_UNREACHABLE("NYI: " #op); }
+#define VISIT_INS(op) virtual bool visit##op(M##op *) { MOZ_CRASH("NYI: " #op); }
+    MIR_OPCODE_LIST(VISIT_INS)
+#undef VISIT_INS
+};
+
+// MDefinition visitor which ignores non-overloaded visit functions.
+class MDefinitionVisitorDefaultNoop : public MDefinitionVisitor
+{
+  public:
+#define VISIT_INS(op) virtual bool visit##op(M##op *) { return true; }
     MIR_OPCODE_LIST(VISIT_INS)
 #undef VISIT_INS
 };

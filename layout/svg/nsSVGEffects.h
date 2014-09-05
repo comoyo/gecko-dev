@@ -42,12 +42,15 @@ class nsSVGMaskFrame;
  * StopListening, respectively.
  */
 class nsSVGRenderingObserver : public nsStubMutationObserver {
+
+protected:
+  virtual ~nsSVGRenderingObserver()
+    {}
+
 public:
   typedef mozilla::dom::Element Element;
   nsSVGRenderingObserver()
     : mInObserverList(false)
-    {}
-  virtual ~nsSVGRenderingObserver()
     {}
 
   // nsISupports
@@ -101,7 +104,7 @@ protected:
  * track when those resources change and when the DOM changes in ways
  * that affect which element is referenced by a given ID (e.g., when
  * element IDs change). The code here is responsible for that.
- * 
+ *
  * When a frame references a supporting resource, we create a property
  * object derived from nsSVGIDRenderingObserver to manage the relationship. The
  * property object is attached to the referencing frame.
@@ -121,7 +124,7 @@ protected:
 
   class SourceReference : public nsReferencedElement {
   public:
-    SourceReference(nsSVGIDRenderingObserver* aContainer) : mContainer(aContainer) {}
+    explicit SourceReference(nsSVGIDRenderingObserver* aContainer) : mContainer(aContainer) {}
   protected:
     virtual void ElementChanged(Element* aFrom, Element* aTo) MOZ_OVERRIDE {
       mContainer->StopListening();
@@ -137,7 +140,7 @@ protected:
   private:
     nsSVGIDRenderingObserver* mContainer;
   };
-  
+
   SourceReference mElement;
   // The frame that this property is attached to
   nsIFrame *mFrame;
@@ -161,7 +164,7 @@ protected:
  *
  * The nsSVGFilterProperty class manages a list of nsSVGFilterReferences.
  */
-class nsSVGFilterReference :
+class nsSVGFilterReference MOZ_FINAL :
   public nsSVGIDRenderingObserver, public nsISVGFilterReference {
 public:
   nsSVGFilterReference(nsIURI *aURI, nsIFrame *aFilteredFrame)
@@ -175,10 +178,13 @@ public:
   nsSVGFilterFrame *GetFilterFrame();
 
   // nsISupports
-  NS_DECL_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
 
   // nsISVGFilterReference
   virtual void Invalidate() MOZ_OVERRIDE { DoUpdate(); };
+
+protected:
+  virtual ~nsSVGFilterReference() {}
 
 private:
   // nsSVGIDRenderingObserver
@@ -199,7 +205,6 @@ class nsSVGFilterProperty : public nsISupports {
 public:
   nsSVGFilterProperty(const nsTArray<nsStyleFilter> &aFilters,
                       nsIFrame *aFilteredFrame);
-  virtual ~nsSVGFilterProperty();
 
   const nsTArray<nsStyleFilter>& GetFilters() { return mFilters; }
   bool ReferencesValidResources();
@@ -208,6 +213,9 @@ public:
 
   // nsISupports
   NS_DECL_ISUPPORTS
+
+protected:
+  virtual ~nsSVGFilterProperty();
 
 private:
   nsTArray<nsSVGFilterReference*> mReferences;
@@ -242,7 +250,7 @@ private:
 
   bool mValid;
 };
- 
+
 class nsSVGPaintingProperty : public nsSVGIDRenderingObserver {
 public:
   nsSVGPaintingProperty(nsIURI *aURI, nsIFrame *aFrame, bool aReferenceImage)
@@ -262,7 +270,7 @@ protected:
  * the observer will force repainting of whatever part of the document
  * is needed, and then at paint time the observer will do a clean lookup
  * of the referenced element and [re-]add itself to the element's observer list.
- * 
+ *
  * InvalidateAll must be called before this object is destroyed, i.e.
  * before the referenced frame is destroyed. This should normally happen
  * via nsSVGContainerFrame::RemoveFrame, since only frames in the frame
@@ -271,7 +279,7 @@ protected:
 class nsSVGRenderingObserverList {
 public:
   nsSVGRenderingObserverList()
-    : mObservers(5)
+    : mObservers(4)
   {
     MOZ_COUNT_CTOR(nsSVGRenderingObserverList);
   }

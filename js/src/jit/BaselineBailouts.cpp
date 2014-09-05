@@ -79,7 +79,7 @@ struct BaselineStackBuilder
 
     static size_t HeaderSize() {
         return AlignBytes(sizeof(BaselineBailoutInfo), sizeof(void *));
-    };
+    }
     size_t bufferTotal_;
     size_t bufferAvail_;
     size_t bufferUsed_;
@@ -371,6 +371,8 @@ struct BaselineStackBuilder
         size_t extraOffset = IonRectifierFrameLayout::Size() + priorFrame->prevFrameLocalSize() +
                              IonBaselineStubFrameLayout::reverseOffsetOfSavedFramePtr();
         return virtualPointerAtStackOffset(priorOffset + extraOffset);
+#elif defined(JS_CODEGEN_NONE)
+        MOZ_CRASH();
 #else
 #  error "Bad architecture!"
 #endif
@@ -1672,13 +1674,46 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo *bailoutInfo)
             (unsigned) bailoutKind);
 
     switch (bailoutKind) {
-      case Bailout_Normal:
+      // Normal bailouts.
+      case Bailout_Inevitable:
+      case Bailout_DuringVMCall:
+      case Bailout_NonJSFunctionCallee:
+      case Bailout_DynamicNameNotFound:
+      case Bailout_StringArgumentsEval:
+      case Bailout_Overflow:
+      case Bailout_Round:
+      case Bailout_NonPrimitiveInput:
+      case Bailout_PrecisionLoss:
+      case Bailout_TypeBarrierO:
+      case Bailout_TypeBarrierV:
+      case Bailout_MonitorTypes:
+      case Bailout_Hole:
+      case Bailout_NegativeIndex:
+      case Bailout_ObjectIdentityOrTypeGuard:
+      case Bailout_NonInt32Input:
+      case Bailout_NonNumericInput:
+      case Bailout_NonBooleanInput:
+      case Bailout_NonObjectInput:
+      case Bailout_NonStringInput:
+      case Bailout_NonSymbolInput:
+      case Bailout_GuardThreadExclusive:
+      case Bailout_InitialState:
         // Do nothing.
         break;
+
+      // Invalid assumption based on baseline code.
+      case Bailout_OverflowInvalidate:
+      case Bailout_NonStringInputInvalidate:
+      case Bailout_DoubleOutput:
+        if (!HandleBaselineInfoBailout(cx, outerScript, innerScript))
+            return false;
+        break;
+
       case Bailout_ArgumentCheck:
         // Do nothing, bailout will resume before the argument monitor ICs.
         break;
       case Bailout_BoundsCheck:
+      case Bailout_Neutered:
         if (!HandleBoundsCheckFailure(cx, outerScript, innerScript))
             return false;
         break;
@@ -1686,16 +1721,12 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo *bailoutInfo)
         if (!HandleShapeGuardFailure(cx, outerScript, innerScript))
             return false;
         break;
-      case Bailout_BaselineInfo:
-        if (!HandleBaselineInfoBailout(cx, outerScript, innerScript))
-            return false;
-        break;
       case Bailout_IonExceptionDebugMode:
         // Return false to resume in HandleException with reconstructed
         // baseline frame.
         return false;
       default:
-        MOZ_ASSUME_UNREACHABLE("Unknown bailout kind!");
+        MOZ_CRASH("Unknown bailout kind!");
     }
 
     if (!CheckFrequentBailouts(cx, outerScript))

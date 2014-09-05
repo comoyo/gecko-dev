@@ -13,6 +13,7 @@
 #include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/dom/TypedArray.h"
 #include "nsContentUtils.h"
+#include "mozilla/dom/MediaKeys.h"
 
 namespace mozilla {
 namespace dom {
@@ -83,13 +84,15 @@ MediaKeyMessageEvent::Constructor(const GlobalObject& aGlobal,
   nsRefPtr<MediaKeyMessageEvent> e = new MediaKeyMessageEvent(owner);
   bool trusted = e->Init(owner);
   e->InitEvent(aType, aEventInitDict.mBubbles, aEventInitDict.mCancelable);
+  const uint8_t* data = nullptr;
+  size_t length = 0;
   if (aEventInitDict.mMessage.WasPassed()) {
     const auto& a = aEventInitDict.mMessage.Value();
     a.ComputeLengthAndData();
-    e->mMessage = Uint8Array::Create(aGlobal.GetContext(), owner, a.Length(), a.Data());
-  } else {
-    e->mMessage = Uint8Array::Create(aGlobal.GetContext(), owner, 0, nullptr);
+    data = a.Data();
+    length = a.Length();
   }
+  e->mMessage = ArrayBuffer::Create(aGlobal.Context(), length, data);
   if (!e->mMessage) {
     aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
     return nullptr;
@@ -99,22 +102,23 @@ MediaKeyMessageEvent::Constructor(const GlobalObject& aGlobal,
   return e.forget();
 }
 
-JSObject*
-MediaKeyMessageEvent::GetMessage(JSContext* cx, ErrorResult& aRv)
+void
+MediaKeyMessageEvent::GetMessage(JSContext* cx,
+                                 JS::MutableHandle<JSObject*> aMessage,
+                                 ErrorResult& aRv)
 {
   if (!mMessage) {
-    mMessage = Uint8Array::Create(cx,
-                                  this,
-                                  mRawMessage.Length(),
-                                  mRawMessage.Elements());
+    mMessage = ArrayBuffer::Create(cx,
+                                   mRawMessage.Length(),
+                                   mRawMessage.Elements());
     if (!mMessage) {
       aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
-      return nullptr;
+      return;
     }
     mRawMessage.Clear();
   }
   JS::ExposeObjectToActiveJS(mMessage);
-  return mMessage;
+  aMessage.set(mMessage);
 }
 
 void

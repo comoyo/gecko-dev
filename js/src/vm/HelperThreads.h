@@ -31,8 +31,6 @@ namespace jit {
   class IonBuilder;
 }
 
-#ifdef JS_THREADSAFE
-
 // Per-process state for off thread work items.
 class GlobalHelperThreadState
 {
@@ -86,6 +84,15 @@ class GlobalHelperThreadState
     GCHelperStateVector gcHelperWorklist_;
 
   public:
+    size_t maxIonCompilationThreads() const {
+        return 1;
+    }
+    size_t maxAsmJSCompilationThreads() const {
+        if (cpuCount < 2)
+            return 2;
+        return cpuCount;
+    }
+
     GlobalHelperThreadState();
 
     void ensureInitialized();
@@ -94,16 +101,20 @@ class GlobalHelperThreadState
     void lock();
     void unlock();
 
-# ifdef DEBUG
+#ifdef DEBUG
     bool isLocked();
-# endif
+#endif
 
     enum CondVar {
         // For notifying threads waiting for work that they may be able to make progress.
         CONSUMER,
 
         // For notifying threads doing work that they may be able to make progress.
-        PRODUCER
+        PRODUCER,
+
+        // For notifying threads doing work which are paused that they may be
+        // able to resume making progress.
+        PAUSE
     };
 
     void wait(CondVar which, uint32_t timeoutMillis = 0);
@@ -165,6 +176,14 @@ class GlobalHelperThreadState
     bool canStartCompressionTask();
     bool canStartGCHelperTask();
 
+    // Unlike the methods above, the value returned by this method can change
+    // over time, even if the helper thread state lock is held throughout.
+    bool pendingIonCompileHasSufficientPriority();
+
+    jit::IonBuilder *highestPriorityPendingIonCompile(bool remove = false);
+    HelperThread *lowestPriorityUnpausedIonCompileAtThreshold();
+    HelperThread *highestPriorityPausedIonCompile();
+
     uint32_t harvestFailedAsmJSJobs() {
         JS_ASSERT(isLocked());
         uint32_t n = numAsmJSFailedJobs;
@@ -200,13 +219,23 @@ class GlobalHelperThreadState
      * used by all condition variables.
      */
     PRLock *helperLock;
-# ifdef DEBUG
+#ifdef DEBUG
     PRThread *lockOwner;
-# endif
+#endif
 
     /* Condvars for threads waiting/notifying each other. */
     PRCondVar *consumerWakeup;
     PRCondVar *producerWakeup;
+    PRCondVar *pauseWakeup;
+
+    PRCondVar *whichWakeup(CondVar which) {
+        switch (which) {
+          case CONSUMER: return consumerWakeup;
+          case PRODUCER: return producerWakeup;
+          case PAUSE: return pauseWakeup;
+          default: MOZ_CRASH();
+        }
+    }
 
     /*
      * Number of AsmJS jobs that encountered failure for the active module.
@@ -234,8 +263,18 @@ struct HelperThread
     mozilla::Maybe<PerThreadData> threadData;
     PRThread *thread;
 
-    /* Indicate to an idle thread that it should finish executing. */
+    /*
+     * Indicate to a thread that it should terminate itself. This is only read
+     * or written with the helper thread state lock held.
+     */
     bool terminate;
+
+    /*
+     * Indicate to a thread that it should pause execution. This is only
+     * written with the helper thread state lock held, but may be read from
+     * without the lock held.
+     */
+    mozilla::Atomic<bool, mozilla::Relaxed> pause;
 
     /* Any builder currently being compiled by Ion on this thread. */
     jit::IonBuilder *ionBuilder;
@@ -268,8 +307,6 @@ struct HelperThread
     void threadLoop();
 };
 
-#endif /* JS_THREADSAFE */
-
 /* Methods for interacting with helper threads. */
 
 // Initialize helper threads unless already initialized.
@@ -281,7 +318,9 @@ EnsureHelperThreadsInitialized(ExclusiveContext *cx);
 void
 SetFakeCPUCount(size_t count);
 
-#ifdef JS_ION
+// Pause the current thread until it's pause flag is unset.
+void
+PauseCurrentHelperThread();
 
 /* Perform MIR optimization and LIR generation on a single function. */
 bool
@@ -293,8 +332,6 @@ StartOffThreadAsmJSCompile(ExclusiveContext *cx, AsmJSParallelTask *asmData);
  */
 bool
 StartOffThreadIonCompile(JSContext *cx, jit::IonBuilder *builder);
-
-#endif // JS_ION
 
 /*
  * Cancel a scheduled or in progress Ion compilation for script. If script is
@@ -331,7 +368,6 @@ class AutoLockHelperThreadState
 {
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 
-#ifdef JS_THREADSAFE
   public:
     explicit AutoLockHelperThreadState(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM)
     {
@@ -342,13 +378,6 @@ class AutoLockHelperThreadState
     ~AutoLockHelperThreadState() {
         HelperThreadState().unlock();
     }
-#else
-  public:
-    AutoLockHelperThreadState(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM)
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-    }
-#endif
 };
 
 class AutoUnlockHelperThreadState
@@ -360,20 +389,15 @@ class AutoUnlockHelperThreadState
     explicit AutoUnlockHelperThreadState(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-#ifdef JS_THREADSAFE
         HelperThreadState().unlock();
-#endif
     }
 
     ~AutoUnlockHelperThreadState()
     {
-#ifdef JS_THREADSAFE
         HelperThreadState().lock();
-#endif
     }
 };
 
-#ifdef JS_ION
 struct AsmJSParallelTask
 {
     JSRuntime *runtime;     // Associated runtime.
@@ -394,7 +418,6 @@ struct AsmJSParallelTask
         this->lir = nullptr;
     }
 };
-#endif
 
 struct ParseTask
 {
@@ -435,7 +458,7 @@ struct ParseTask
     bool init(JSContext *cx, const ReadOnlyCompileOptions &options);
 
     void activate(JSRuntime *rt);
-    void finish();
+    bool finish(JSContext *cx);
 
     bool runtimeMatches(JSRuntime *rt) {
         return exclusiveContextGlobal->runtimeFromAnyThread() == rt;
@@ -444,12 +467,10 @@ struct ParseTask
     ~ParseTask();
 };
 
-#ifdef JS_THREADSAFE
 // Return whether, if a new parse task was started, it would need to wait for
 // an in-progress GC to complete before starting.
 extern bool
 OffThreadParsingMustWaitForGC(JSRuntime *rt);
-#endif
 
 // Compression tasks are allocated on the stack by their triggering thread,
 // which will block on the compression completing as the task goes out of scope
@@ -457,12 +478,10 @@ OffThreadParsingMustWaitForGC(JSRuntime *rt);
 struct SourceCompressionTask
 {
     friend class ScriptSource;
-    friend class HelperThread;
+    friend struct HelperThread;
 
-#ifdef JS_THREADSAFE
     // Thread performing the compression.
     HelperThread *helperThread;
-#endif
 
   private:
     // Context from the triggering thread. Don't use this off thread!
@@ -482,16 +501,13 @@ struct SourceCompressionTask
     } result;
     void *compressed;
     size_t compressedBytes;
+    HashNumber compressedHash;
 
   public:
     explicit SourceCompressionTask(ExclusiveContext *cx)
-      : cx(cx), ss(nullptr), abort_(false),
-        result(OOM), compressed(nullptr), compressedBytes(0)
-    {
-#ifdef JS_THREADSAFE
-        helperThread = nullptr;
-#endif
-    }
+      : helperThread(nullptr), cx(cx), ss(nullptr), abort_(false),
+        result(OOM), compressed(nullptr), compressedBytes(0), compressedHash(0)
+    {}
 
     ~SourceCompressionTask()
     {

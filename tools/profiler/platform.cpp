@@ -38,8 +38,8 @@ mozilla::ThreadLocal<void *> tlsStackTop;
 // it as the flag itself.
 bool stack_key_initialized;
 
-TimeStamp   sLastTracerEvent; // is raced on
-TimeStamp   sStartTime;
+mozilla::TimeStamp   sLastTracerEvent; // is raced on
+mozilla::TimeStamp   sStartTime;
 int         sFrameNumber = 0;
 int         sLastFrameNumber = 0;
 int         sInitCount = 0; // Each init must have a matched shutdown.
@@ -97,6 +97,20 @@ void Sampler::Shutdown() {
   // we need to point to null to ignore such a call after shutdown.
   sRegisteredThreadsMutex = nullptr;
   sRegisteredThreads = nullptr;
+}
+
+ThreadInfo::ThreadInfo(const char* aName, int aThreadId,
+                       bool aIsMainThread, PseudoStack* aPseudoStack,
+                       void* aStackTop)
+  : mName(strdup(aName))
+  , mThreadId(aThreadId)
+  , mIsMainThread(aIsMainThread)
+  , mPseudoStack(aPseudoStack)
+  , mPlatformData(Sampler::AllocPlatformData(aThreadId))
+  , mProfile(nullptr)
+  , mStackTop(aStackTop)
+{
+  mThread = NS_GetCurrentThread();
 }
 
 ThreadInfo::~ThreadInfo() {
@@ -830,28 +844,11 @@ bool mozilla_sampler_is_active()
   return sIsProfiling;
 }
 
-static double sResponsivenessTimes[100];
-static unsigned int sResponsivenessLoc = 0;
-void mozilla_sampler_responsiveness(const TimeStamp& aTime)
+void mozilla_sampler_responsiveness(const mozilla::TimeStamp& aTime)
 {
-  if (!sLastTracerEvent.IsNull()) {
-    if (sResponsivenessLoc == 100) {
-      for(size_t i = 0; i < 100-1; i++) {
-        sResponsivenessTimes[i] = sResponsivenessTimes[i+1];
-      }
-      sResponsivenessLoc--;
-    }
-    TimeDuration delta = aTime - sLastTracerEvent;
-    sResponsivenessTimes[sResponsivenessLoc++] = delta.ToMilliseconds();
-  }
   sCurrentEventGeneration++;
 
   sLastTracerEvent = aTime;
-}
-
-const double* mozilla_sampler_get_responsiveness()
-{
-  return sResponsivenessTimes;
 }
 
 void mozilla_sampler_frame_number(int frameNumber)
@@ -881,6 +878,10 @@ void mozilla_sampler_unlock()
 
 bool mozilla_sampler_register_thread(const char* aName, void* stackTop)
 {
+  if (sInitCount == 0) {
+    return false;
+  }
+
 #if defined(MOZ_WIDGET_GONK) && !defined(MOZ_PROFILING)
   // The only way to profile secondary threads on b2g
   // is to build with profiling OR have the profiler
@@ -898,6 +899,10 @@ bool mozilla_sampler_register_thread(const char* aName, void* stackTop)
 
 void mozilla_sampler_unregister_thread()
 {
+  if (sInitCount == 0) {
+    return;
+  }
+
   Sampler::UnregisterCurrentThread();
 
   PseudoStack *stack = tlsPseudoStack.get();
@@ -909,6 +914,10 @@ void mozilla_sampler_unregister_thread()
 }
 
 void mozilla_sampler_sleep_start() {
+    if (sInitCount == 0) {
+	return;
+    }
+
     PseudoStack *stack = tlsPseudoStack.get();
     if (stack == nullptr) {
       return;
@@ -917,6 +926,10 @@ void mozilla_sampler_sleep_start() {
 }
 
 void mozilla_sampler_sleep_end() {
+    if (sInitCount == 0) {
+	return;
+    }
+
     PseudoStack *stack = tlsPseudoStack.get();
     if (stack == nullptr) {
       return;
@@ -924,18 +937,18 @@ void mozilla_sampler_sleep_end() {
     stack->setSleeping(0);
 }
 
-double mozilla_sampler_time(const TimeStamp& aTime)
+double mozilla_sampler_time(const mozilla::TimeStamp& aTime)
 {
   if (!mozilla_sampler_is_active()) {
     return 0.0;
   }
-  TimeDuration delta = aTime - sStartTime;
+  mozilla::TimeDuration delta = aTime - sStartTime;
   return delta.ToMilliseconds();
 }
 
 double mozilla_sampler_time()
 {
-  return mozilla_sampler_time(TimeStamp::Now());
+  return mozilla_sampler_time(mozilla::TimeStamp::Now());
 }
 
 ProfilerBacktrace* mozilla_sampler_get_backtrace()
@@ -1003,7 +1016,7 @@ void mozilla_sampler_add_marker(const char *aMarker, ProfilerMarkerPayload *aPay
   if (!stack) {
     return;
   }
-  TimeDuration delta = TimeStamp::Now() - sStartTime;
+  mozilla::TimeDuration delta = mozilla::TimeStamp::Now() - sStartTime;
   stack->addMarker(aMarker, payload.forget(), static_cast<float>(delta.ToMilliseconds()));
 }
 

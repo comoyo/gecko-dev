@@ -125,7 +125,7 @@ JSSHELL_BINS += \
 endif # Darwin
 endif # WINNT
 endif # MOZ_STATIC_JS
-MAKE_JSSHELL  = $(PYTHON) $(topsrcdir)/toolkit/mozapps/installer/dozip.py $(PKG_JSSHELL) $(abspath $(JSSHELL_BINS))
+MAKE_JSSHELL  = $(PYTHON) $(MOZILLA_DIR)/toolkit/mozapps/installer/dozip.py $(PKG_JSSHELL) $(abspath $(JSSHELL_BINS))
 endif # LIBXUL_SDK
 
 _ABS_DIST = $(abspath $(DIST))
@@ -217,7 +217,7 @@ RPM_CMD = \
   --define 'moz_numeric_app_version $(MOZ_NUMERIC_APP_VERSION)' \
   --define 'moz_rpm_release $(MOZ_RPM_RELEASE)' \
   --define 'buildid $(BUILDID)' \
-  --define 'moz_source_repo $(MOZ_SOURCE_REPO)' \
+  $(if $(MOZ_SOURCE_REPO),--define 'moz_source_repo $(MOZ_SOURCE_REPO)') \
   --define 'moz_source_stamp $(MOZ_SOURCE_STAMP)' \
   --define 'moz_branding_directory $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)' \
   --define '_topdir $(RPMBUILD_TOPDIR)' \
@@ -612,10 +612,10 @@ NO_PKG_FILES += \
 	res/samples \
 	res/throbber \
 	shlibsign* \
-	ssltunnel* \
 	certutil* \
 	pk12util* \
 	BadCertServer* \
+	ClientAuthServer* \
 	OCSPStaplingServer* \
 	GenerateOCSPResponse* \
 	winEmbed.exe \
@@ -628,6 +628,13 @@ NO_PKG_FILES += \
 	necko_unit_tests \
 	*.dSYM \
 	$(NULL)
+
+# If a manifest has not been supplied, the following
+# files should be excluded from the package too
+ifndef MOZ_PKG_MANIFEST
+NO_PKG_FILES += \
+	ssltunnel*
+endif
 
 # browser/locales/Makefile uses this makefile for its variable defs, but
 # doesn't want the libs:: rule.
@@ -735,6 +742,19 @@ ifdef MOZ_PACKAGE_JSSHELL
 	$(MAKE_JSSHELL)
 endif # MOZ_PACKAGE_JSSHELL
 endif # LIBXUL_SDK
+ifdef MOZ_CODE_COVERAGE
+	# Package code coverage gcno tree
+	@echo 'Packaging code coverage data...'
+	$(RM) $(CODE_COVERAGE_ARCHIVE_BASENAME).zip
+	$(PYTHON) -mmozbuild.codecoverage.packager \
+		--output-file='$(DIST)/$(PKG_PATH)$(CODE_COVERAGE_ARCHIVE_BASENAME).zip'
+endif
+ifeq (Darwin, $(OS_ARCH))
+ifdef MOZ_ASAN
+	@echo "Rewriting ASan runtime dylib paths for all binaries in $(DIST)/$(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH) ..."
+	$(PYTHON) $(MOZILLA_DIR)/build/unix/rewrite_asan_dylib.py $(DIST)/$(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH)
+endif # MOZ_ASAN
+endif # Darwin
 
 prepare-package: stage-package
 
@@ -751,14 +771,16 @@ GARBAGE += make-package
 make-sourcestamp-file::
 	$(NSINSTALL) -D $(DIST)/$(PKG_PATH)
 	@echo '$(BUILDID)' > $(MOZ_SOURCESTAMP_FILE)
+ifdef MOZ_SOURCE_REPO
 	@echo '$(MOZ_SOURCE_REPO)/rev/$(MOZ_SOURCE_STAMP)' >> $(MOZ_SOURCESTAMP_FILE)
+endif
 
 .PHONY: make-buildinfo-file
 make-buildinfo-file:
 	$(PYTHON) $(MOZILLA_DIR)/toolkit/mozapps/installer/informulate.py \
 		$(MOZ_BUILDINFO_FILE) \
 		BUILDID=$(BUILDID) \
-		MOZ_SOURCE_REPO=$(MOZ_SOURCE_REPO) \
+		$(addprefix MOZ_SOURCE_REPO=,MOZ_SOURCE_REPO=$(MOZ_SOURCE_REPO)) \
 		MOZ_SOURCE_STAMP=$(MOZ_SOURCE_STAMP) \
 		MOZ_PKG_PLATFORM=$(MOZ_PKG_PLATFORM)
 
@@ -881,6 +903,11 @@ UPLOAD_FILES= \
 ifdef MOZ_CRASHREPORTER_UPLOAD_FULL_SYMBOLS
 UPLOAD_FILES += \
   $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(SYMBOL_FULL_ARCHIVE_BASENAME).zip)
+endif
+
+ifdef MOZ_CODE_COVERAGE
+UPLOAD_FILES += \
+  $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(CODE_COVERAGE_ARCHIVE_BASENAME).zip)
 endif
 
 SIGN_CHECKSUM_CMD=

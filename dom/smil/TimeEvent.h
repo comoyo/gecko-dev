@@ -19,7 +19,7 @@ class TimeEvent MOZ_FINAL : public Event,
 public:
   TimeEvent(EventTarget* aOwner,
             nsPresContext* aPresContext,
-            WidgetEvent* aEvent);
+            InternalSMILTimeEvent* aEvent);
 
   // nsISupports interface:
   NS_DECL_ISUPPORTS_INHERITED
@@ -53,6 +53,8 @@ public:
   }
 
 private:
+  ~TimeEvent() {}
+
   nsCOMPtr<nsIDOMWindow> mView;
   int32_t mDetail;
 };

@@ -50,19 +50,21 @@ public:
   int32_t index;
 };
 
-class nsSplitterFrameInner : public nsIDOMEventListener
+class nsSplitterFrameInner MOZ_FINAL : public nsIDOMEventListener
 {
+protected:
+  virtual ~nsSplitterFrameInner();
+
 public:
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSIDOMEVENTLISTENER
 
-  nsSplitterFrameInner(nsSplitterFrame* aSplitter)
+  explicit nsSplitterFrameInner(nsSplitterFrame* aSplitter)
   {
     mOuter = aSplitter;
     mPressed = false;
   }
-  virtual ~nsSplitterFrameInner();
 
   void Disconnect() { mOuter = nullptr; }
 

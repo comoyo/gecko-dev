@@ -8,10 +8,11 @@
 #include "JavaScriptChild.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/BindingUtils.h"
+#include "mozilla/ipc/MessageChannel.h"
 #include "nsContentUtils.h"
 #include "xpcprivate.h"
 #include "jsfriendapi.h"
-#include "nsCxPusher.h"
+#include "AccessCheck.h"
 
 using namespace JS;
 using namespace mozilla;
@@ -55,4 +56,10 @@ JavaScriptChild::finalize(JSFreeOp *fop)
 {
     objects_.finalize(fop);
     objectIds_.finalize(fop);
+}
+
+JSObject *
+JavaScriptChild::defaultScope()
+{
+    return xpc::PrivilegedJunkScope();
 }

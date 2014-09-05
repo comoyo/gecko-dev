@@ -7,45 +7,6 @@ include $(topsrcdir)/config/makefiles/rcs.mk
 
 PREF_JS_EXPORTS = $(srcdir)/b2g.js
 
-ifndef LIBXUL_SDK
-
-ifeq (gonk,$(MOZ_WIDGET_TOOLKIT))
-LIBS += \
-  -lui \
-  -lEGL \
-  -lhardware_legacy \
-  -lhardware \
-  -lcutils \
-  $(DEPTH)/media/libpng/$(LIB_PREFIX)mozpng.$(LIB_SUFFIX) \
-  $(DEPTH)/widget/gonk/libdisplay/$(LIB_PREFIX)display.$(LIB_SUFFIX) \
-  $(MOZ_ZLIB_LIBS) \
-  $(NULL)
-ifeq ($(ANDROID_VERSION),$(findstring $(ANDROID_VERSION),17 18 19))
-LIBS += \
-  -lgui \
-  -lsuspend \
-  $(NULL)
-endif
-endif
-
-LIBS += $(JEMALLOC_LIBS)
-
-LIBS += \
-  $(XPCOM_STANDALONE_GLUE_LDOPTS) \
-  $(NULL)
-
-ifeq (gonk,$(MOZ_WIDGET_TOOLKIT))
-LIBS += \
-  -lbinder \
-  -lutils \
-  $(NULL)
-endif
-
-ifeq ($(OS_ARCH),WINNT)
-OS_LIBS += $(call EXPAND_LIBNAME,version)
-endif
-endif #LIBXUL_SDK
-
 UA_UPDATE_FILE = ua-update.json
 
 $(UA_UPDATE_FILE): % : %.in
@@ -62,11 +23,6 @@ NSDISTMODE = copy
 include $(topsrcdir)/config/rules.mk
 
 APP_ICON = b2g
-
-source_repo ?= $(call getSourceRepo,$(srcdir)/..)
-ifneq (,$(filter http%,$(source_repo)))
-  DEFINES += -DMOZ_SOURCE_REPO='$(source_repo)'
-endif
 
 ifeq ($(OS_ARCH),WINNT)
 REDIT_PATH = $(LIBXUL_DIST)/bin
@@ -124,14 +80,9 @@ else # MOZ_WIDGET_TOOLKIT != cocoa
 libs::
 ifdef LIBXUL_SDK
 	cp $(LIBXUL_DIST)/bin/xulrunner-stub$(BIN_SUFFIX) $(DIST)/bin/$(APP_BINARY)
-endif
-ifndef SKIP_COPY_XULRUNNER
-ifdef LIBXUL_SDK
 	$(NSINSTALL) -D $(DIST)/bin/xulrunner
 	(cd $(LIBXUL_SDK)/bin && tar $(TAR_CREATE_FLAGS) - .) | (cd $(DIST)/bin/xulrunner && tar -xf -)
 endif
-endif # SKIP_COPY_XULRUNNER
-
 	$(NSINSTALL) -D $(DIST)/bin/chrome/icons/default
 
 # Copy the app icon for b2g-desktop

@@ -40,9 +40,8 @@ class nsAnonymousContentList;
 class nsXBLBinding MOZ_FINAL
 {
 public:
-  nsXBLBinding(nsXBLPrototypeBinding* aProtoBinding);
+  explicit nsXBLBinding(nsXBLPrototypeBinding* aProtoBinding);
   nsXBLBinding(mozilla::dom::ShadowRoot* aShadowRoot, nsXBLPrototypeBinding* aProtoBinding);
-  ~nsXBLBinding();
 
   /**
    * XBLBindings are refcounted.  They are held onto in 3 ways:
@@ -85,6 +84,8 @@ public:
   bool HasField(nsString& aName);
 
 protected:
+
+  ~nsXBLBinding();
 
   /*
    * Internal version. Requires that aCx is in appropriate xbl scope.

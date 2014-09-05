@@ -7,8 +7,6 @@
 #ifndef jit_IonFrames_h
 #define jit_IonFrames_h
 
-#ifdef JS_ION
-
 #include <stdint.h>
 
 #include "jscntxt.h"
@@ -71,7 +69,7 @@ ScriptFromCalleeToken(CalleeToken token)
       case CalleeToken_Function:
         return CalleeTokenToFunction(token)->nonLazyScript();
     }
-    MOZ_ASSUME_UNREACHABLE("invalid callee token tag");
+    MOZ_CRASH("invalid callee token tag");
 }
 
 // In between every two frames lies a small header describing both frames. This
@@ -264,14 +262,15 @@ void HandleParallelFailure(ResumeFromException *rfe);
 
 void EnsureExitFrame(IonCommonFrameLayout *frame);
 
-void MarkJitActivations(JSRuntime *rt, JSTracer *trc);
+void MarkJitActivations(PerThreadData *ptd, JSTracer *trc);
 void MarkIonCompilerRoots(JSTracer *trc);
 
 JSCompartment *
 TopmostIonActivationCompartment(JSRuntime *rt);
 
 #ifdef JSGC_GENERATIONAL
-void UpdateJitActivationsForMinorGC(JSRuntime *rt, JSTracer *trc);
+template<typename T>
+void UpdateJitActivationsForMinorGC(PerThreadData *ptd, JSTracer *trc);
 #endif
 
 static inline uint32_t
@@ -300,6 +299,17 @@ GetTopIonJSScript(uint8_t *jitTop, void **returnAddrOut, ExecutionMode mode)
     JS_ASSERT(iter.isScripted());
     return iter.script();
 }
+
+#ifdef JS_CODEGEN_MIPS
+uint8_t *alignDoubleSpillWithOffset(uint8_t *pointer, int32_t offset);
+#else
+inline uint8_t *
+alignDoubleSpillWithOffset(uint8_t *pointer, int32_t offset)
+{
+    // This is NO-OP on non-MIPS platforms.
+    return pointer;
+}
+#endif
 
 // Layout of the frame prefix. This assumes the stack architecture grows down.
 // If this is ever not the case, we'll have to refactor.
@@ -443,7 +453,9 @@ class IonExitFooterFrame
     // This should only be called for function()->outParam == Type_Handle
     template <typename T>
     T *outParam() {
-        return reinterpret_cast<T *>(reinterpret_cast<char *>(this) - sizeof(T));
+        uint8_t *address = reinterpret_cast<uint8_t *>(this);
+        address = alignDoubleSpillWithOffset(address, sizeof(intptr_t));
+        return reinterpret_cast<T *>(address - sizeof(T));
     }
 };
 
@@ -817,7 +829,7 @@ class IonBaselineStubFrameLayout : public IonCommonFrameLayout
 // An invalidation bailout stack is at the stack pointer for the callee frame.
 class InvalidationBailoutStack
 {
-    mozilla::Array<double, FloatRegisters::Total> fpregs_;
+    mozilla::Array<double, FloatRegisters::TotalPhys> fpregs_;
     mozilla::Array<uintptr_t, Registers::Total> regs_;
     IonScript   *ionScript_;
     uint8_t       *osiPointReturnAddress_;
@@ -855,7 +867,5 @@ MarkCalleeToken(JSTracer *trc, CalleeToken token);
 
 } /* namespace jit */
 } /* namespace js */
-
-#endif // JS_ION
 
 #endif /* jit_IonFrames_h */

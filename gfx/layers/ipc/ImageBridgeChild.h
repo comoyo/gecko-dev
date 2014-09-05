@@ -17,6 +17,7 @@
 #include "mozilla/layers/PImageBridgeChild.h"
 #include "nsDebug.h"                    // for NS_RUNTIMEABORT
 #include "nsRegion.h"                   // for nsIntRegion
+
 class MessageLoop;
 struct nsIntPoint;
 struct nsIntRect;
@@ -38,7 +39,7 @@ class ImageClient;
 class ImageContainer;
 class ImageBridgeParent;
 class CompositableClient;
-class CompositableTransaction;
+struct CompositableTransaction;
 class Image;
 class TextureClient;
 
@@ -170,7 +171,7 @@ public:
    *
    * Can be called from any thread.
    */
-  MessageLoop * GetMessageLoop() const;
+  virtual MessageLoop * GetMessageLoop() const MOZ_OVERRIDE;
 
   PCompositableChild* AllocPCompositableChild(const TextureInfo& aInfo, uint64_t* aID) MOZ_OVERRIDE;
   bool DeallocPCompositableChild(PCompositableChild* aActor) MOZ_OVERRIDE;
@@ -223,6 +224,10 @@ public:
   virtual void UseComponentAlphaTextures(CompositableClient* aCompositable,
                                          TextureClient* aClientOnBlack,
                                          TextureClient* aClientOnWhite) MOZ_OVERRIDE;
+#ifdef MOZ_WIDGET_GONK
+  virtual void UseOverlaySource(CompositableClient* aCompositable,
+                                const OverlaySource& aOverlay) MOZ_OVERRIDE;
+#endif
 
   virtual void SendFenceHandle(AsyncTransactionTracker* aTracker,
                                PTextureChild* aTexture,

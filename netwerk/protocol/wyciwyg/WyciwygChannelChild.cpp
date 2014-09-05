@@ -213,9 +213,10 @@ WyciwygChannelChild::OnDataAvailable(const nsCString& data,
   if (NS_FAILED(rv))
     Cancel(rv);
 
-  if (mProgressSink && NS_SUCCEEDED(rv) && !(mLoadFlags & LOAD_BACKGROUND))
+  if (mProgressSink && NS_SUCCEEDED(rv)) {
     mProgressSink->OnProgress(this, nullptr, offset + data.Length(),
                               uint64_t(mContentLength));
+  }
 }
 
 class WyciwygStopRequestEvent : public ChannelEvent
@@ -451,16 +452,27 @@ WyciwygChannelChild::GetURI(nsIURI * *aURI)
 NS_IMETHODIMP
 WyciwygChannelChild::GetOwner(nsISupports * *aOwner)
 {
-  NS_PRECONDITION(mOwner, "Must have a principal!");
-  NS_ENSURE_STATE(mOwner);
-
-  NS_ADDREF(*aOwner = mOwner);
+  NS_IF_ADDREF(*aOwner = mOwner);
   return NS_OK;
 }
 NS_IMETHODIMP
 WyciwygChannelChild::SetOwner(nsISupports * aOwner)
 {
   mOwner = aOwner;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+WyciwygChannelChild::GetLoadInfo(nsILoadInfo **aLoadInfo)
+{
+  NS_IF_ADDREF(*aLoadInfo = mLoadInfo);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+WyciwygChannelChild::SetLoadInfo(nsILoadInfo* aLoadInfo)
+{
+  mLoadInfo = aLoadInfo;
   return NS_OK;
 }
 
@@ -587,9 +599,9 @@ WyciwygChannelChild::AsyncOpen(nsIStreamListener *aListener, nsISupports *aConte
 
   // The only places creating wyciwyg: channels should be
   // HTMLDocument::OpenCommon and session history.  Both should be setting an
-  // owner.
-  NS_PRECONDITION(mOwner, "Must have a principal");
-  NS_ENSURE_STATE(mOwner);
+  // owner or loadinfo.
+  NS_PRECONDITION(mOwner || mLoadInfo, "Must have a principal");
+  NS_ENSURE_STATE(mOwner || mLoadInfo);
 
   NS_ENSURE_ARG_POINTER(aListener);
   NS_ENSURE_TRUE(!mIsPending, NS_ERROR_IN_PROGRESS);

@@ -638,9 +638,9 @@ is(e.value, Infinity, "Uninitialized value should be positive infinity");
 e = new DeviceOrientationEvent("hello");
 is(e.type, "hello", "Wrong event type!");
 ok(!e.isTrusted, "Event should not be trusted");
-is(e.alpha, 0);
-is(e.beta, 0);
-is(e.gamma, 0);
+is(e.alpha, null);
+is(e.beta, null);
+is(e.gamma, null);
 is(e.absolute, false);
 
 e = new DeviceOrientationEvent("hello", { alpha: 1, beta: 2, gamma: 3, absolute: true } );
@@ -747,29 +747,6 @@ e = new PopupBlockedEvent("hello",
 is(e.requestingWindow, window);
 is(e.popupWindowFeatures, "features");
 is(e.popupWindowName, "name");
-
-
-// SmartCardEvent
-
-try {
-  e = new SmartCardEvent();
-} catch(exp) {
-  ex = true;
-}
-ok(ex, "SmartCardEvent: First parameter is required!");
-ex = false;
-
-e = new SmartCardEvent("hello");
-is(e.type, "hello", "SmartCardEvent: Wrong event type!");
-ok(!e.isTrusted, "SmartCardEvent: Event shouldn't be trusted!");
-ok(!e.bubbles, "SmartCardEvent: Event shouldn't bubble!");
-ok(!e.cancelable, "SmartCardEvent: Event shouldn't be cancelable!");
-is(e.tokenName, "");
-document.dispatchEvent(e);
-is(receivedEvent, e, "SmartCardEvent: Wrong event!");
-
-e = new SmartCardEvent("hello", { tokenName: "foo" });
-is(e.tokenName, "foo");
 
 // WheelEvent
 

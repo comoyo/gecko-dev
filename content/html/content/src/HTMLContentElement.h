@@ -9,7 +9,7 @@
 #include "nsINodeList.h"
 #include "nsGenericHTMLElement.h"
 
-class nsCSSSelectorList;
+struct nsCSSSelectorList;
 
 namespace mozilla {
 namespace dom {
@@ -19,8 +19,9 @@ class DistributedContentList;
 class HTMLContentElement MOZ_FINAL : public nsGenericHTMLElement
 {
 public:
-  HTMLContentElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
-  virtual ~HTMLContentElement();
+  explicit HTMLContentElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
+
+  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLContentElement, content)
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
@@ -28,7 +29,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLContentElement,
                                            nsGenericHTMLElement)
 
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const;
 
   virtual nsIDOMNode* AsDOMNode() { return this; }
 
@@ -70,6 +71,8 @@ public:
   }
 
 protected:
+  virtual ~HTMLContentElement();
+
   virtual JSObject* WrapNode(JSContext *aCx) MOZ_OVERRIDE;
 
   /**
@@ -95,8 +98,7 @@ protected:
 class DistributedContentList : public nsINodeList
 {
 public:
-  DistributedContentList(HTMLContentElement* aHostElement);
-  virtual ~DistributedContentList();
+  explicit DistributedContentList(HTMLContentElement* aHostElement);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(DistributedContentList)
@@ -111,6 +113,7 @@ public:
   virtual uint32_t Length() const;
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 protected:
+  virtual ~DistributedContentList();
   nsRefPtr<HTMLContentElement> mParent;
   nsCOMArray<nsIContent> mDistributedNodes;
 };

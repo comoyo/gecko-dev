@@ -11,6 +11,7 @@
 
 #include "mozilla/DebugOnly.h"
 #include "mozilla/PodOperations.h"
+#include "mozilla/UniquePtr.h"
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -19,171 +20,14 @@
 #include "jscntxt.h"
 #include "jspubtd.h"
 
+#include "frontend/TokenKind.h"
 #include "js/Vector.h"
 #include "vm/RegExpObject.h"
 
+struct KeywordInfo;
+
 namespace js {
 namespace frontend {
-
-// Values of this type are used to index into arrays such as isExprEnding[],
-// so the first value must be zero.
-enum TokenKind {
-    TOK_ERROR = 0,                 // well-known as the only code < EOF
-    TOK_EOF,                       // end of file
-    TOK_EOL,                       // end of line; only returned by peekTokenSameLine()
-    TOK_SEMI,                      // semicolon
-    TOK_COMMA,                     // comma operator
-    TOK_HOOK, TOK_COLON,           // conditional (?:)
-    TOK_INC, TOK_DEC,              // increment/decrement (++ --)
-    TOK_DOT,                       // member operator (.)
-    TOK_TRIPLEDOT,                 // for rest arguments (...)
-    TOK_LB, TOK_RB,                // left and right brackets
-    TOK_LC, TOK_RC,                // left and right curlies (braces)
-    TOK_LP, TOK_RP,                // left and right parentheses
-    TOK_NAME,                      // identifier
-    TOK_NUMBER,                    // numeric constant
-    TOK_STRING,                    // string constant
-    TOK_REGEXP,                    // RegExp constant
-    TOK_TRUE,                      // true
-    TOK_FALSE,                     // false
-    TOK_NULL,                      // null
-    TOK_THIS,                      // this
-    TOK_FUNCTION,                  // function keyword
-    TOK_IF,                        // if keyword
-    TOK_ELSE,                      // else keyword
-    TOK_SWITCH,                    // switch keyword
-    TOK_CASE,                      // case keyword
-    TOK_DEFAULT,                   // default keyword
-    TOK_WHILE,                     // while keyword
-    TOK_DO,                        // do keyword
-    TOK_FOR,                       // for keyword
-    TOK_BREAK,                     // break keyword
-    TOK_CONTINUE,                  // continue keyword
-    TOK_VAR,                       // var keyword
-    TOK_CONST,                     // const keyword
-    TOK_WITH,                      // with keyword
-    TOK_RETURN,                    // return keyword
-    TOK_NEW,                       // new keyword
-    TOK_DELETE,                    // delete keyword
-    TOK_TRY,                       // try keyword
-    TOK_CATCH,                     // catch keyword
-    TOK_FINALLY,                   // finally keyword
-    TOK_THROW,                     // throw keyword
-    TOK_DEBUGGER,                  // debugger keyword
-    TOK_YIELD,                     // yield from generator function
-    TOK_LET,                       // let keyword
-    TOK_EXPORT,                    // export keyword
-    TOK_IMPORT,                    // import keyword
-    TOK_RESERVED,                  // reserved keywords
-    TOK_STRICT_RESERVED,           // reserved keywords in strict mode
-
-    // The following token types occupy contiguous ranges to enable easy
-    // range-testing.
-
-    // Binary operators tokens, TOK_OR thru TOK_MOD. These must be in the same
-    // order as F(OR) and friends in FOR_EACH_PARSE_NODE_KIND in ParseNode.h.
-    TOK_OR,                        // logical or (||)
-    TOK_BINOP_FIRST = TOK_OR,
-    TOK_AND,                       // logical and (&&)
-    TOK_BITOR,                     // bitwise-or (|)
-    TOK_BITXOR,                    // bitwise-xor (^)
-    TOK_BITAND,                    // bitwise-and (&)
-
-    // Equality operation tokens, per TokenKindIsEquality.
-    TOK_STRICTEQ,
-    TOK_EQUALITY_START = TOK_STRICTEQ,
-    TOK_EQ,
-    TOK_STRICTNE,
-    TOK_NE,
-    TOK_EQUALITY_LAST = TOK_NE,
-
-    // Relational ops (< <= > >=), per TokenKindIsRelational.
-    TOK_LT,
-    TOK_RELOP_START = TOK_LT,
-    TOK_LE,
-    TOK_GT,
-    TOK_GE,
-    TOK_RELOP_LAST = TOK_GE,
-
-    TOK_INSTANCEOF,                // |instanceof| keyword
-    TOK_IN,                        // |in| keyword
-
-    // Shift ops (<< >> >>>), per TokenKindIsShift.
-    TOK_LSH,
-    TOK_SHIFTOP_START = TOK_LSH,
-    TOK_RSH,
-    TOK_URSH,
-    TOK_SHIFTOP_LAST = TOK_URSH,
-
-    TOK_ADD,
-    TOK_SUB,
-    TOK_MUL,
-    TOK_DIV,
-    TOK_MOD,
-    TOK_BINOP_LAST = TOK_MOD,
-
-    // Unary operation tokens.
-    TOK_TYPEOF,
-    TOK_VOID,
-    TOK_NOT,
-    TOK_BITNOT,
-
-    TOK_ARROW,                     // function arrow (=>)
-
-    // Assignment ops (= += -= etc.), per TokenKindIsAssignment
-    TOK_ASSIGN,
-    TOK_ASSIGNMENT_START = TOK_ASSIGN,
-    TOK_ADDASSIGN,
-    TOK_SUBASSIGN,
-    TOK_BITORASSIGN,
-    TOK_BITXORASSIGN,
-    TOK_BITANDASSIGN,
-    TOK_LSHASSIGN,
-    TOK_RSHASSIGN,
-    TOK_URSHASSIGN,
-    TOK_MULASSIGN,
-    TOK_DIVASSIGN,
-    TOK_MODASSIGN,
-    TOK_ASSIGNMENT_LAST = TOK_MODASSIGN,
-
-    TOK_LIMIT                      // domain size
-};
-
-inline bool
-TokenKindIsBinaryOp(TokenKind tt)
-{
-    return TOK_BINOP_FIRST <= tt && tt <= TOK_BINOP_LAST;
-}
-
-inline bool
-TokenKindIsEquality(TokenKind tt)
-{
-    return TOK_EQUALITY_START <= tt && tt <= TOK_EQUALITY_LAST;
-}
-
-inline bool
-TokenKindIsRelational(TokenKind tt)
-{
-    return TOK_RELOP_START <= tt && tt <= TOK_RELOP_LAST;
-}
-
-inline bool
-TokenKindIsShift(TokenKind tt)
-{
-    return TOK_SHIFTOP_START <= tt && tt <= TOK_SHIFTOP_LAST;
-}
-
-inline bool
-TokenKindIsAssignment(TokenKind tt)
-{
-    return TOK_ASSIGNMENT_START <= tt && tt <= TOK_ASSIGNMENT_LAST;
-}
-
-inline bool
-TokenKindIsDecl(TokenKind tt)
-{
-    return tt == TOK_VAR || tt == TOK_LET;
-}
 
 struct TokenPos {
     uint32_t    begin;  // Offset of the token's first char.
@@ -275,7 +119,9 @@ struct Token
     }
 
     void setAtom(JSAtom *atom) {
-        JS_ASSERT(type == TOK_STRING);
+        JS_ASSERT (type == TOK_STRING ||
+                   type == TOK_TEMPLATE_HEAD ||
+                   type == TOK_NO_SUBS_TEMPLATE);
         JS_ASSERT(!IsPoisonedPtr(atom));
         u.atom = atom;
     }
@@ -300,7 +146,9 @@ struct Token
     }
 
     JSAtom *atom() const {
-        JS_ASSERT(type == TOK_STRING);
+        JS_ASSERT (type == TOK_STRING ||
+                   type == TOK_TEMPLATE_HEAD ||
+                   type == TOK_NO_SUBS_TEMPLATE);
         return u.atom;
     }
 
@@ -461,6 +309,34 @@ class MOZ_STACK_CLASS TokenStream
     // asm.js reporter
     void reportAsmJSError(uint32_t offset, unsigned errorNumber, ...);
 
+    JSAtom *getRawTemplateStringAtom() {
+        JS_ASSERT(currentToken().type == TOK_TEMPLATE_HEAD ||
+                  currentToken().type == TOK_NO_SUBS_TEMPLATE);
+        const jschar *cur = userbuf.base() + currentToken().pos.begin + 1;
+        const jschar *end;
+        if (currentToken().type == TOK_TEMPLATE_HEAD) {
+            // Of the form    |`...${|   or   |}...${|
+            end = userbuf.base() + currentToken().pos.end - 2;
+        } else {
+            // NO_SUBS_TEMPLATE is of the form   |`...`|   or   |}...`|
+            end = userbuf.base() + currentToken().pos.end - 1;
+        }
+
+        CharBuffer charbuf(cx);
+        while (cur < end) {
+            int32_t ch = *cur;
+            if (ch == '\r') {
+                ch = '\n';
+                if ((cur + 1 < end) && (*(cur + 1) == '\n'))
+                    cur++;
+            }
+            if (!charbuf.append(ch))
+                return nullptr;
+            cur++;
+        }
+        return AtomizeChars(cx, charbuf.begin(), charbuf.length());
+    }
+
   private:
     // These are private because they should only be called by the tokenizer
     // while tokenizing not by, for example, BytecodeEmitter.
@@ -493,6 +369,7 @@ class MOZ_STACK_CLASS TokenStream
                         //   we look for a regexp instead of just returning
                         //   TOK_DIV.
         KeywordIsName,  // Treat keywords as names by returning TOK_NAME.
+        TemplateTail,   // Treat next characters as part of a template string
     };
 
     // Get the next token from the stream, make it the current token, and
@@ -633,7 +510,7 @@ class MOZ_STACK_CLASS TokenStream
     }
 
     jschar *displayURL() {
-        return displayURL_;
+        return displayURL_.get();
     }
 
     bool hasSourceMapURL() const {
@@ -641,7 +518,7 @@ class MOZ_STACK_CLASS TokenStream
     }
 
     jschar *sourceMapURL() {
-        return sourceMapURL_;
+        return sourceMapURL_.get();
     }
 
     // If the name at s[0:length] is not a keyword in this version, return
@@ -654,7 +531,9 @@ class MOZ_STACK_CLASS TokenStream
     // null, report a SyntaxError ("if is a reserved identifier") and return
     // false. If ttp is non-null, return true with the keyword's TokenKind in
     // *ttp.
+    bool checkForKeyword(const KeywordInfo *kw, TokenKind *ttp);
     bool checkForKeyword(const jschar *s, size_t length, TokenKind *ttp);
+    bool checkForKeyword(JSAtom *atom, TokenKind *ttp);
 
     // This class maps a userbuf offset (which is 0-indexed) to a line number
     // (which is 1-indexed) and a column index (which is 0-indexed).
@@ -830,6 +709,8 @@ class MOZ_STACK_CLASS TokenStream
 
     TokenKind getTokenInternal(Modifier modifier);
 
+    bool getStringOrTemplateToken(int qc, Token **tp);
+
     int32_t getChar();
     int32_t getCharIgnoreEOL();
     void ungetChar(int32_t c);
@@ -843,7 +724,8 @@ class MOZ_STACK_CLASS TokenStream
     bool getDirectives(bool isMultiline, bool shouldWarnDeprecated);
     bool getDirective(bool isMultiline, bool shouldWarnDeprecated,
                       const char *directive, int directiveLength,
-                      const char *errorMsgPragma, jschar **destination);
+                      const char *errorMsgPragma,
+                      mozilla::UniquePtr<jschar[], JS::FreePolicy> *destination);
     bool getDisplayURL(bool isMultiline, bool shouldWarnDeprecated);
     bool getSourceMappingURL(bool isMultiline, bool shouldWarnDeprecated);
 
@@ -885,8 +767,8 @@ class MOZ_STACK_CLASS TokenStream
     const jschar        *prevLinebase;      // start of previous line;  nullptr if on the first line
     TokenBuf            userbuf;            // user input buffer
     const char          *filename;          // input filename or null
-    jschar              *displayURL_;       // the user's requested source URL or null
-    jschar              *sourceMapURL_;     // source map's filename or null
+    mozilla::UniquePtr<jschar[], JS::FreePolicy> displayURL_; // the user's requested source URL or null
+    mozilla::UniquePtr<jschar[], JS::FreePolicy> sourceMapURL_; // source map's filename or null
     CharBuffer          tokenbuf;           // current token string buffer
     bool                maybeEOL[256];      // probabilistic EOL lookup table
     bool                maybeStrSpecial[256];   // speeds up string scanning

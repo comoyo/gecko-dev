@@ -6,7 +6,6 @@
 
 #include "nsNodeUtils.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
 #include "nsINode.h"
 #include "nsIContent.h"
 #include "mozilla/dom/Element.h"
@@ -277,7 +276,6 @@ struct MOZ_STACK_CLASS nsHandlerData
   uint16_t mOperation;
   nsCOMPtr<nsIDOMNode> mSource;
   nsCOMPtr<nsIDOMNode> mDest;
-  nsCxPusher mPusher;
 };
 
 static void
@@ -291,9 +289,6 @@ CallHandler(void *aObject, nsIAtom *aKey, void *aHandler, void *aData)
     static_cast<nsIVariant*>(node->GetProperty(DOM_USER_DATA, aKey));
   NS_ASSERTION(data, "Handler without data?");
 
-  if (!handlerData->mPusher.RePush(node)) {
-    return;
-  }
   nsAutoString key;
   aKey->ToString(key);
   handler->Handle(handlerData->mOperation, key, data, handlerData->mSource,
@@ -311,6 +306,7 @@ nsNodeUtils::CallUserDataHandlers(nsCOMArray<nsINode> &aNodesWithProperties,
                   "cloned nodes.");
 
   if (!nsContentUtils::IsSafeToRunScript()) {
+    nsContentUtils::WarnScriptWasIgnored(aOwnerDocument);
     if (nsContentUtils::IsChromeDoc(aOwnerDocument)) {
       NS_WARNING("Fix the caller! Userdata callback disabled.");
     } else {
@@ -418,8 +414,8 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
   nsNodeInfoManager *nodeInfoManager = aNewNodeInfoManager;
 
   // aNode.
-  nsINodeInfo *nodeInfo = aNode->mNodeInfo;
-  nsCOMPtr<nsINodeInfo> newNodeInfo;
+  NodeInfo *nodeInfo = aNode->mNodeInfo;
+  nsRefPtr<NodeInfo> newNodeInfo;
   if (nodeInfoManager) {
 
     // Don't allow importing/adopting nodes from non-privileged "scriptable"
@@ -471,7 +467,7 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
     if (aNode->IsElement()) {
       Element* element = aNode->AsElement();
       oldDoc->ClearBoxObjectFor(element);
-      wasRegistered = oldDoc->UnregisterFreezableElement(element);
+      wasRegistered = oldDoc->UnregisterActivityObserver(element);
     }
 
     aNode->mNodeInfo.swap(newNodeInfo);
@@ -484,7 +480,7 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
       // XXX what if oldDoc is null, we don't know if this should be
       // registered or not! Can that really happen?
       if (wasRegistered) {
-        newDoc->RegisterFreezableElement(aNode->AsElement());
+        newDoc->RegisterActivityObserver(aNode->AsElement());
       }
 
       nsPIDOMWindow* window = newDoc->GetInnerWindow();

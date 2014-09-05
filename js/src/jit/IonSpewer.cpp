@@ -9,6 +9,8 @@
 #include "jit/IonSpewer.h"
 
 #include "jit/Ion.h"
+#include "jit/MIR.h"
+
 #include "vm/HelperThreads.h"
 
 #ifndef ION_SPEW_DIR
@@ -234,6 +236,7 @@ jit::CheckLogging()
             "  aborts     Compilation abort messages\n"
             "  scripts    Compiled scripts\n"
             "  mir        MIR information\n"
+            "  escape     Escape analysis\n"
             "  alias      Alias analysis\n"
             "  gvn        Global Value Numbering\n"
             "  licm       Loop invariant code motion\n"
@@ -248,8 +251,9 @@ jit::CheckLogging()
             "  pools      Literal Pools (ARM only for now)\n"
             "  cacheflush Instruction Cache flushes (ARM only for now)\n"
             "  range      Range Analysis\n"
+            "  unroll     Loop unrolling\n"
             "  logs       C1 and JSON visualization logging\n"
-            "  trace      Generate calls to js::jit::Trace() for effectful instructions\n"
+            "  profiling  Profiling-related information\n"
             "  all        Everything\n"
             "\n"
             "  bl-aborts  Baseline compiler abort messages\n"
@@ -268,6 +272,8 @@ jit::CheckLogging()
     }
     if (ContainsFlag(env, "aborts"))
         EnableChannel(IonSpew_Abort);
+    if (ContainsFlag(env, "escape"))
+        EnableChannel(IonSpew_Escape);
     if (ContainsFlag(env, "alias"))
         EnableChannel(IonSpew_Alias);
     if (ContainsFlag(env, "scripts"))
@@ -278,6 +284,8 @@ jit::CheckLogging()
         EnableChannel(IonSpew_GVN);
     if (ContainsFlag(env, "range"))
         EnableChannel(IonSpew_Range);
+    if (ContainsFlag(env, "unroll"))
+        EnableChannel(IonSpew_Unrolling);
     if (ContainsFlag(env, "licm"))
         EnableChannel(IonSpew_LICM);
     if (ContainsFlag(env, "regalloc"))
@@ -302,8 +310,8 @@ jit::CheckLogging()
         EnableChannel(IonSpew_CacheFlush);
     if (ContainsFlag(env, "logs"))
         EnableIonDebugLogging();
-    if (ContainsFlag(env, "trace"))
-        EnableChannel(IonSpew_Trace);
+    if (ContainsFlag(env, "profiling"))
+        EnableChannel(IonSpew_Profiling);
     if (ContainsFlag(env, "all"))
         LoggingBits = uint32_t(-1);
 
@@ -382,6 +390,18 @@ jit::IonSpew(IonSpewChannel channel, const char *fmt, ...)
 }
 
 void
+jit::IonSpewDef(IonSpewChannel channel, const char *str, MDefinition *def)
+{
+    if (!IonSpewEnabled(channel))
+        return;
+
+    IonSpewHeader(channel);
+    fprintf(IonSpewFile, "%s", str);
+    def->dump(IonSpewFile);
+    def->dumpLocation(IonSpewFile);
+}
+
+void
 jit::IonSpewStart(IonSpewChannel channel, const char *fmt, ...)
 {
     va_list ap;
@@ -426,6 +446,16 @@ jit::DisableChannel(IonSpewChannel channel)
 {
     JS_ASSERT(LoggingChecked);
     LoggingBits &= ~(1 << uint32_t(channel));
+}
+
+IonSpewFunction::IonSpewFunction(MIRGraph *graph, JS::HandleScript function)
+{
+    IonSpewNewFunction(graph, function);
+}
+
+IonSpewFunction::~IonSpewFunction()
+{
+    IonSpewEndFunction();
 }
 
 #endif /* DEBUG */

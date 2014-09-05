@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -229,14 +229,16 @@ LazyIdleThread::ScheduleTimer()
     shouldSchedule = !mIdleNotificationCount && !mPendingEventCount;
   }
 
-  if (NS_FAILED(mIdleTimer->Cancel())) {
-    NS_WARNING("Failed to cancel timer!");
-  }
+  if (mIdleTimer) {
+    if (NS_FAILED(mIdleTimer->Cancel())) {
+      NS_WARNING("Failed to cancel timer!");
+    }
 
-  if (shouldSchedule &&
-      NS_FAILED(mIdleTimer->InitWithCallback(this, mIdleTimeoutMS,
-                                             nsITimer::TYPE_ONE_SHOT))) {
-    NS_WARNING("Failed to schedule timer!");
+    if (shouldSchedule &&
+        NS_FAILED(mIdleTimer->InitWithCallback(this, mIdleTimeoutMS,
+                                               nsITimer::TYPE_ONE_SHOT))) {
+      NS_WARNING("Failed to schedule timer!");
+    }
   }
 }
 
@@ -251,6 +253,18 @@ LazyIdleThread::ShutdownThread()
   nsAutoTArray<nsCOMPtr<nsIRunnable>, 10> queuedRunnables;
 
   nsresult rv;
+
+  // Make sure to cancel the shutdown timer before spinning the event loop
+  // during |mThread->Shutdown()| below. Otherwise the timer might fire and we
+  // could reenter here.
+  if (mIdleTimer) {
+    rv = mIdleTimer->Cancel();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+    mIdleTimer = nullptr;
+  }
 
   if (mThread) {
     if (mShutdownMethod == AutomaticShutdown && NS_IsMainThread()) {
@@ -309,15 +323,6 @@ LazyIdleThread::ShutdownThread()
       MOZ_ASSERT(mThreadIsShuttingDown, "Huh?!");
       mThreadIsShuttingDown = false;
     }
-  }
-
-  if (mIdleTimer) {
-    rv = mIdleTimer->Cancel();
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    mIdleTimer = nullptr;
   }
 
   // If our temporary queue has any runnables then we need to dispatch them.

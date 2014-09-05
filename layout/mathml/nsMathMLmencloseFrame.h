@@ -89,7 +89,7 @@ public:
   }
 
 protected:
-  nsMathMLmencloseFrame(nsStyleContext* aContext);
+  explicit nsMathMLmencloseFrame(nsStyleContext* aContext);
   virtual ~nsMathMLmencloseFrame();
 
   nsresult PlaceInternal(nsRenderingContext& aRenderingContext,
@@ -109,6 +109,7 @@ protected:
   }
 
   nscoord mRuleThickness;
+  nscoord mRadicalRuleThickness;
   nsTArray<nsMathMLChar> mMathMLChar;
   int8_t mLongDivCharIndex, mRadicalCharIndex;
   nscoord mContentWidth;

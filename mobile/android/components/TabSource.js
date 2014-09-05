@@ -1,4 +1,4 @@
-/* -*- Mode: js; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,7 +8,9 @@ const { classes: Cc, interfaces: Ci, manager: Cm, utils: Cu, results: Cr } = Com
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Prompt.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "Prompt",
+                                  "resource://gre/modules/Prompt.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "sendMessageToJava",
                                   "resource://gre/modules/Messaging.jsm");
@@ -40,10 +42,10 @@ TabSource.prototype = {
       let label;
       if (tab.browser.contentTitle)
         label = tab.browser.contentTitle;
-      else if (tab.browser.contentURI && tab.browser.contentURI.spec)
+      else if (tab.browser.contentURI)
         label = tab.browser.contentURI.spec;
       else
-        label = tab.originalURI;
+        label = tab.originalURI.spec;
       return { label: label,
                icon: "thumbnail:" + tab.id }
     }));

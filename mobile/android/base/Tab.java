@@ -8,6 +8,7 @@ package org.mozilla.gecko;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -15,6 +16,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.mozilla.gecko.db.BrowserContract.Bookmarks;
 import org.mozilla.gecko.db.BrowserDB;
+import org.mozilla.gecko.db.URLMetadata;
 import org.mozilla.gecko.gfx.Layer;
 import org.mozilla.gecko.util.ThreadUtils;
 
@@ -68,7 +70,7 @@ public class Tab {
     private ErrorType mErrorType = ErrorType.NONE;
     private static final int MAX_HISTORY_LIST_SIZE = 50;
     private volatile int mLoadProgress;
-    private volatile int mRecordingCount = 0;
+    private volatile int mRecordingCount;
     private String mMostRecentHomePanel;
 
     public static final int STATE_DELAYED = 0;
@@ -94,27 +96,14 @@ public class Tab {
     public Tab(Context context, int id, String url, boolean external, int parentId, String title) {
         mAppContext = context.getApplicationContext();
         mId = id;
-        mLastUsed = 0;
         mUrl = url;
         mBaseDomain = "";
         mUserSearch = "";
         mExternal = external;
         mParentId = parentId;
         mTitle = title == null ? "" : title;
-        mFavicon = null;
-        mFaviconUrl = null;
-        mFaviconSize = 0;
-        mHasFeeds = false;
-        mHasOpenSearch = false;
         mSiteIdentity = new SiteIdentity();
-        mReaderEnabled = false;
-        mEnteringReaderMode = false;
-        mThumbnail = null;
         mHistoryIndex = -1;
-        mHistorySize = 0;
-        mBookmark = false;
-        mReadingListItem = false;
-        mFaviconLoadId = 0;
         mContentType = "";
         mZoomConstraints = new ZoomConstraints(false);
         mPluginViews = new ArrayList<View>();
@@ -301,6 +290,21 @@ public class Tab {
 
     public void setErrorType(ErrorType type) {
         mErrorType = type;
+    }
+
+    public void setMetadata(JSONObject metadata) {
+        if (metadata == null) {
+            return;
+        }
+
+        final ContentResolver cr = mAppContext.getContentResolver();
+        final Map<String, Object> data = URLMetadata.fromJSON(metadata);
+        ThreadUtils.postToBackgroundThread(new Runnable() {
+            @Override
+            public void run() {
+                URLMetadata.save(cr, mUrl, data);
+            }
+        });
     }
 
     public ErrorType getErrorType() {

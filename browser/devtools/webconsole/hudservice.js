@@ -1,4 +1,4 @@
-/* -*- js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+/* -*- js-indent-level: 2; indent-tabs-mode: nil -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -492,8 +492,8 @@ WebConsole.prototype = {
         });
         return;
       }
-      toolbox.selectTool("webconsole");
-      this.viewSource(aSourceURL, aSourceLine);
+      toolbox.selectTool("webconsole")
+             .then(() => this.viewSource(aSourceURL, aSourceLine));
     }
 
     // If the Debugger was already open, switch to it and try to show the
@@ -578,6 +578,30 @@ WebConsole.prototype = {
       };
     }
     return null;
+  },
+
+  /**
+   * Retrieves the current selection from the Inspector, if such a selection
+   * exists. This is used to pass the ID of the selected actor to the Web
+   * Console server for the $0 helper.
+   *
+   * @return object|null
+   *         A Selection referring to the currently selected node in the
+   *         Inspector.
+   *         If the inspector was never opened, or no node was ever selected,
+   *         then |null| is returned.
+   */
+  getInspectorSelection: function WC_getInspectorSelection()
+  {
+    let toolbox = gDevTools.getToolbox(this.target);
+    if (!toolbox) {
+      return null;
+    }
+    let panel = toolbox.getPanel("inspector");
+    if (!panel || !panel.selection) {
+      return null;
+    }
+    return panel.selection;
   },
 
   /**

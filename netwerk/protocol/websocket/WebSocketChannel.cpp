@@ -2425,11 +2425,16 @@ WebSocketChannel::OnProxyAvailable(nsICancelable *aRequest, nsIURI *aURI,
     LOG(("WebSocket OnProxyAvailable [%p] Proxy found skip DNS lookup\n", this));
     // call DNS callback directly without DNS resolver
     OnLookupComplete(nullptr, nullptr, NS_ERROR_FAILURE);
-    return NS_OK;
+  } else {
+    LOG(("WebSocketChannel::OnProxyAvailable[%] checking DNS resolution\n", this));
+    nsresult rv = DoAdmissionDNS();
+    if (NS_FAILED(rv)) {
+      LOG(("WebSocket OnProxyAvailable [%p] DNS lookup failed\n", this));
+      // call DNS callback directly without DNS resolver
+      OnLookupComplete(nullptr, nullptr, NS_ERROR_FAILURE);
+    }
   }
 
-  LOG(("WebSocketChannel::OnProxyAvailable[%] checking DNS resolution\n", this));
-  DoAdmissionDNS();
   return NS_OK;
 }
 
@@ -3262,6 +3267,7 @@ WebSocketChannel::OnOutputStreamReady(nsIAsyncOutputStream *aStream)
       } else {
         mHdrOut += amtSent;
         mHdrOutToSend -= amtSent;
+        mSocketOut->AsyncWait(this, 0, 0, mSocketThread);
       }
     } else {
       if (amtSent == toSend) {
@@ -3274,6 +3280,7 @@ WebSocketChannel::OnOutputStreamReady(nsIAsyncOutputStream *aStream)
         PrimeNewOutgoingMessage();
       } else {
         mCurrentOutSent += amtSent;
+        mSocketOut->AsyncWait(this, 0, 0, mSocketThread);
       }
     }
   }

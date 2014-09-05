@@ -21,6 +21,7 @@
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/ShadowRoot.h"
@@ -41,7 +42,6 @@
 #include "nsDOMString.h"
 #include "nsDOMTokenList.h"
 #include "nsFocusManager.h"
-#include "nsFrameManager.h"
 #include "nsFrameSelection.h"
 #include "nsGenericHTMLElement.h"
 #include "nsGkAtoms.h"
@@ -62,7 +62,8 @@
 #include "nsIEditor.h"
 #include "nsIEditorIMESupport.h"
 #include "nsILinkHandler.h"
-#include "nsINodeInfo.h"
+#include "mozilla/dom/NodeInfo.h"
+#include "mozilla/dom/NodeInfoInlines.h"
 #include "nsIPresShell.h"
 #include "nsIScriptError.h"
 #include "nsIScriptGlobalObject.h"
@@ -91,6 +92,7 @@
 #include "nsUnicharUtils.h"
 #include "nsXBLBinding.h"
 #include "nsXBLPrototypeBinding.h"
+#include "mozilla/Preferences.h"
 #include "prprf.h"
 #include "xpcpublic.h"
 #include "nsCSSRuleProcessor.h"
@@ -378,13 +380,13 @@ nsINode::ChildNodes()
 }
 
 void
-nsINode::GetTextContentInternal(nsAString& aTextContent)
+nsINode::GetTextContentInternal(nsAString& aTextContent, ErrorResult& aError)
 {
   SetDOMStringToNull(aTextContent);
 }
 
 nsIDocument*
-nsINode::GetCrossShadowCurrentDocInternal() const
+nsINode::GetComposedDocInternal() const
 {
   MOZ_ASSERT(HasFlag(NODE_IS_IN_SHADOW_TREE) && IsContent(),
              "Should only be caled on nodes in the shadow tree.");
@@ -779,33 +781,33 @@ nsINode::SetUserData(const nsAString &aKey, nsIVariant *aData,
   return NS_OK;
 }
 
-JS::Value
+void
 nsINode::SetUserData(JSContext* aCx, const nsAString& aKey,
                      JS::Handle<JS::Value> aData,
-                     nsIDOMUserDataHandler* aHandler, ErrorResult& aError)
+                     nsIDOMUserDataHandler* aHandler,
+                     JS::MutableHandle<JS::Value> aRetval,
+                     ErrorResult& aError)
 {
   nsCOMPtr<nsIVariant> data;
-  JS::Rooted<JS::Value> dataVal(aCx, aData);
-  aError = nsContentUtils::XPConnect()->JSValToVariant(aCx, dataVal, getter_AddRefs(data));
+  aError = nsContentUtils::XPConnect()->JSValToVariant(aCx, aData, getter_AddRefs(data));
   if (aError.Failed()) {
-    return JS::UndefinedValue();
+    return;
   }
 
   nsCOMPtr<nsIVariant> oldData;
   aError = SetUserData(aKey, data, aHandler, getter_AddRefs(oldData));
   if (aError.Failed()) {
-    return JS::UndefinedValue();
+    return;
   }
 
   if (!oldData) {
-    return JS::NullValue();
+    aRetval.setNull();
+    return;
   }
 
-  JS::Rooted<JS::Value> result(aCx);
   JSAutoCompartment ac(aCx, GetWrapper());
   aError = nsContentUtils::XPConnect()->VariantToJS(aCx, GetWrapper(), oldData,
-                                                    &result);
-  return result;
+                                                    aRetval);
 }
 
 nsIVariant*
@@ -820,19 +822,19 @@ nsINode::GetUserData(const nsAString& aKey)
   return static_cast<nsIVariant*>(GetProperty(DOM_USER_DATA, key));
 }
 
-JS::Value
-nsINode::GetUserData(JSContext* aCx, const nsAString& aKey, ErrorResult& aError)
+void
+nsINode::GetUserData(JSContext* aCx, const nsAString& aKey,
+                     JS::MutableHandle<JS::Value> aRetval, ErrorResult& aError)
 {
   nsIVariant* data = GetUserData(aKey);
   if (!data) {
-    return JS::NullValue();
+    aRetval.setNull();
+    return;
   }
 
-  JS::Rooted<JS::Value> result(aCx);
   JSAutoCompartment ac(aCx, GetWrapper());
   aError = nsContentUtils::XPConnect()->VariantToJS(aCx, GetWrapper(), data,
-                                                    &result);
-  return result;
+                                                    aRetval);
 }
 
 uint16_t
@@ -971,8 +973,8 @@ nsINode::IsEqualNode(nsINode* aOther)
       return false;
     }
 
-    nsINodeInfo* nodeInfo1 = node1->mNodeInfo;
-    nsINodeInfo* nodeInfo2 = node2->mNodeInfo;
+    mozilla::dom::NodeInfo* nodeInfo1 = node1->mNodeInfo;
+    mozilla::dom::NodeInfo* nodeInfo2 = node2->mNodeInfo;
     if (!nodeInfo1->Equals(nodeInfo2) ||
         nodeInfo1->GetExtraName() != nodeInfo2->GetExtraName()) {
       return false;
@@ -1477,8 +1479,10 @@ static nsresult
 CheckForOutdatedParent(nsINode* aParent, nsINode* aNode)
 {
   if (JSObject* existingObjUnrooted = aNode->GetWrapper()) {
+    JSRuntime* runtime = JS_GetObjectRuntime(existingObjUnrooted);
+    JS::Rooted<JSObject*> existingObj(runtime, existingObjUnrooted);
+
     AutoJSContext cx;
-    JS::Rooted<JSObject*> existingObj(cx, existingObjUnrooted);
     nsIGlobalObject* global = aParent->OwnerDoc()->GetScopeObject();
     MOZ_ASSERT(global);
 
@@ -1993,17 +1997,17 @@ nsINode::ReplaceOrInsertBefore(bool aReplace, nsINode* aNewChild,
     // into the DOM.
     uint32_t count = newContent->GetChildCount();
 
-    fragChildren.construct();
+    fragChildren.emplace();
 
     // Copy the children into a separate array to avoid having to deal with
     // mutations to the fragment later on here.
-    fragChildren.ref().SetCapacity(count);
+    fragChildren->SetCapacity(count);
     for (nsIContent* child = newContent->GetFirstChild();
          child;
          child = child->GetNextSibling()) {
       NS_ASSERTION(child->GetCurrentDoc() == nullptr,
                    "How did we get a child with a current doc?");
-      fragChildren.ref().AppendElement(child);
+      fragChildren->AppendElement(child);
     }
 
     // Hold a strong ref to nodeToInsertBefore across the removals
@@ -2036,7 +2040,7 @@ nsINode::ReplaceOrInsertBefore(bool aReplace, nsINode* aNewChild,
 
       // Verify that all the things in fragChildren have no parent.
       for (uint32_t i = 0; i < count; ++i) {
-        if (fragChildren.ref().ElementAt(i)->GetParentNode()) {
+        if (fragChildren->ElementAt(i)->GetParentNode()) {
           aError.Throw(NS_ERROR_DOM_HIERARCHY_REQUEST_ERR);
           return nullptr;
         }
@@ -2067,7 +2071,7 @@ nsINode::ReplaceOrInsertBefore(bool aReplace, nsINode* aNewChild,
       if (IsNodeOfType(nsINode::eDOCUMENT)) {
         bool sawElement = false;
         for (uint32_t i = 0; i < count; ++i) {
-          nsIContent* child = fragChildren.ref().ElementAt(i);
+          nsIContent* child = fragChildren->ElementAt(i);
           if (child->IsElement()) {
             if (sawElement) {
               // No good
@@ -2155,7 +2159,7 @@ nsINode::ReplaceOrInsertBefore(bool aReplace, nsINode* aNewChild,
       mutationBatch->SetNextSibling(GetChildAt(insPos));
     }
 
-    uint32_t count = fragChildren.ref().Length();
+    uint32_t count = fragChildren->Length();
     if (!count) {
       return result;
     }
@@ -2163,14 +2167,14 @@ nsINode::ReplaceOrInsertBefore(bool aReplace, nsINode* aNewChild,
     bool appending =
       !IsNodeOfType(eDOCUMENT) && uint32_t(insPos) == GetChildCount();
     int32_t firstInsPos = insPos;
-    nsIContent* firstInsertedContent = fragChildren.ref().ElementAt(0);
+    nsIContent* firstInsertedContent = fragChildren->ElementAt(0);
 
     // Iterate through the fragment's children, and insert them in the new
     // parent
     for (uint32_t i = 0; i < count; ++i, ++insPos) {
       // XXXbz how come no reparenting here?  That seems odd...
       // Insert the child.
-      aError = InsertChildAt(fragChildren.ref().ElementAt(i), insPos,
+      aError = InsertChildAt(fragChildren->ElementAt(i), insPos,
                              !appending);
       if (aError.Failed()) {
         // Make sure to notify on any children that we did succeed to insert
@@ -2197,7 +2201,7 @@ nsINode::ReplaceOrInsertBefore(bool aReplace, nsINode* aNewChild,
       // Optimize for the case when there are no listeners
       if (nsContentUtils::
             HasMutationListeners(doc, NS_EVENT_BITS_MUTATION_NODEINSERTED)) {
-        Element::FireNodeInserted(doc, this, fragChildren.ref());
+        Element::FireNodeInserted(doc, this, *fragChildren);
       }
     }
   }
@@ -2736,3 +2740,33 @@ EventTarget::DispatchEvent(Event& aEvent,
   aRv = DispatchEvent(&aEvent, &result);
   return result;
 }
+
+Element*
+nsINode::GetParentElementCrossingShadowRoot() const
+{
+  if (!mParent) {
+    return nullptr;
+  }
+
+  if (mParent->IsElement()) {
+    return mParent->AsElement();
+  }
+
+  ShadowRoot* shadowRoot = ShadowRoot::FromNode(mParent);
+  if (shadowRoot) {
+    nsIContent* host = shadowRoot->GetHost();
+    MOZ_ASSERT(host, "ShowRoots should always have a host");
+    MOZ_ASSERT(host->IsElement(), "ShadowRoot hosts should always be Elements");
+    return host->AsElement();
+  }
+
+  return nullptr;
+}
+
+bool
+nsINode::HasBoxQuadsSupport(JSContext* aCx, JSObject* /* unused */)
+{
+  return xpc::AccessCheck::isChrome(js::GetContextCompartment(aCx)) ||
+         Preferences::GetBool("layout.css.getBoxQuads.enabled");
+}
+

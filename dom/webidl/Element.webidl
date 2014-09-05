@@ -34,7 +34,7 @@ interface Element : Node {
   readonly attribute DOMTokenList classList;
 
   [SameObject]
-  readonly attribute MozNamedAttrMap attributes;
+  readonly attribute NamedNodeMap attributes;
   [Pure]
   DOMString? getAttribute(DOMString name);
   [Pure]
@@ -51,6 +51,9 @@ interface Element : Node {
   boolean hasAttribute(DOMString name);
   [Pure]
   boolean hasAttributeNS(DOMString? namespace, DOMString localName);
+
+  [Throws, Pure]
+  boolean matches(DOMString selector);
 
   [Pure]
   HTMLCollection getElementsByTagName(DOMString localName);
@@ -153,7 +156,7 @@ partial interface Element {
 
   // scrolling
   void scrollIntoView();
-  void scrollIntoView(boolean top);
+  void scrollIntoView(boolean top, optional ScrollOptions options);
   // None of the CSSOM attributes are [Pure], because they flush
            attribute long scrollTop;   // scroll on setting
            attribute long scrollLeft;  // scroll on setting
@@ -201,14 +204,15 @@ partial interface Element {
 
 // http://w3c.github.io/webcomponents/spec/shadow/#extensions-to-element-interface
 partial interface Element {
-  [Throws,Pref="dom.webcomponents.enabled"]
+  [Throws,Func="nsDocument::IsWebComponentsEnabled"]
   ShadowRoot createShadowRoot();
-  [Pref="dom.webcomponents.enabled"]
+  [Func="nsDocument::IsWebComponentsEnabled"]
   NodeList getDestinationInsertionPoints();
-  [Pref="dom.webcomponents.enabled"]
+  [Func="nsDocument::IsWebComponentsEnabled"]
   readonly attribute ShadowRoot? shadowRoot;
 };
 
 Element implements ChildNode;
 Element implements NonDocumentTypeChildNode;
 Element implements ParentNode;
+Element implements Animatable;

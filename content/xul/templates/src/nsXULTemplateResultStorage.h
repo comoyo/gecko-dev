@@ -22,9 +22,11 @@ public:
 
     NS_DECL_NSIXULTEMPLATERESULT
 
-    nsXULTemplateResultStorage(nsXULTemplateResultSetStorage* aResultSet);
+    explicit nsXULTemplateResultStorage(nsXULTemplateResultSetStorage* aResultSet);
 
 protected:
+
+    ~nsXULTemplateResultStorage();
 
     nsRefPtr<nsXULTemplateResultSetStorage> mResultSet;
 

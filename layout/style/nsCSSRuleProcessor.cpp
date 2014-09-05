@@ -454,7 +454,7 @@ struct NodeMatchContext;
 
 class RuleHash {
 public:
-  RuleHash(bool aQuirksMode);
+  explicit RuleHash(bool aQuirksMode);
   ~RuleHash();
   void AppendRule(const RuleSelectorPair &aRuleInfo);
   void EnumerateAllRules(Element* aElement, ElementDependentRuleProcessorData* aData,
@@ -560,9 +560,7 @@ RuleHash::~RuleHash()
         RuleValue* value = &(mUniversalRules[i]);
         nsAutoString selectorText;
         uint32_t lineNumber = value->mRule->GetLineNumber();
-        nsCOMPtr<nsIStyleSheet> sheet;
-        value->mRule->GetStyleSheet(*getter_AddRefs(sheet));
-        nsRefPtr<nsCSSStyleSheet> cssSheet = do_QueryObject(sheet);
+        nsRefPtr<CSSStyleSheet> cssSheet = value->mRule->GetStyleSheet();
         value->mSelector->ToString(selectorText, cssSheet);
 
         printf("    line %d, %s\n",
@@ -633,7 +631,7 @@ void RuleHash::AppendRule(const RuleSelectorPair& aRuleInfo)
       PL_DHashTableInit(&mIdTable,
                         mQuirksMode ? &RuleHash_IdTable_CIOps.ops
                                     : &RuleHash_IdTable_CSOps.ops,
-                        nullptr, sizeof(RuleHashTableEntry), 16);
+                        nullptr, sizeof(RuleHashTableEntry));
     }
     AppendRuleToTable(&mIdTable, selector->mIDList->mAtom, aRuleInfo);
     RULE_HASH_STAT_INCREMENT(mIdSelectors);
@@ -643,7 +641,7 @@ void RuleHash::AppendRule(const RuleSelectorPair& aRuleInfo)
       PL_DHashTableInit(&mClassTable,
                         mQuirksMode ? &RuleHash_ClassTable_CIOps.ops
                                     : &RuleHash_ClassTable_CSOps.ops,
-                        nullptr, sizeof(RuleHashTableEntry), 16);
+                        nullptr, sizeof(RuleHashTableEntry));
     }
     AppendRuleToTable(&mClassTable, selector->mClassList->mAtom, aRuleInfo);
     RULE_HASH_STAT_INCREMENT(mClassSelectors);
@@ -652,7 +650,7 @@ void RuleHash::AppendRule(const RuleSelectorPair& aRuleInfo)
     RuleValue ruleValue(aRuleInfo, mRuleCount++, mQuirksMode);
     if (!mTagTable.ops) {
       PL_DHashTableInit(&mTagTable, &RuleHash_TagTable_Ops, nullptr,
-                        sizeof(RuleHashTagTableEntry), 16);
+                        sizeof(RuleHashTagTableEntry));
     }
     AppendRuleToTagTable(&mTagTable, selector->mLowercaseTag, ruleValue);
     RULE_HASH_STAT_INCREMENT(mTagSelectors);
@@ -665,7 +663,7 @@ void RuleHash::AppendRule(const RuleSelectorPair& aRuleInfo)
   else if (kNameSpaceID_Unknown != selector->mNameSpace) {
     if (!mNameSpaceTable.ops) {
       PL_DHashTableInit(&mNameSpaceTable, &RuleHash_NameSpaceTable_Ops, nullptr,
-                        sizeof(RuleHashTableEntry), 16);
+                        sizeof(RuleHashTableEntry));
     }
     AppendRuleToTable(&mNameSpaceTable,
                       NS_INT32_TO_PTR(selector->mNameSpace), aRuleInfo);
@@ -927,7 +925,8 @@ struct RuleCascadeData {
     : mRuleHash(aQuirksMode),
       mStateSelectors(),
       mSelectorDocumentStates(0),
-      mKeyframesRuleTable(16),
+      mKeyframesRuleTable(),
+      mCounterStyleRuleTable(),
       mCacheKey(aMedium),
       mNext(nullptr),
       mQuirksMode(aQuirksMode)
@@ -935,21 +934,21 @@ struct RuleCascadeData {
     // mAttributeSelectors is matching on the attribute _name_, not the value,
     // and we case-fold names at parse-time, so this is a case-sensitive match.
     PL_DHashTableInit(&mAttributeSelectors, &AtomSelector_CSOps, nullptr,
-                      sizeof(AtomSelectorEntry), 16);
+                      sizeof(AtomSelectorEntry));
     PL_DHashTableInit(&mAnonBoxRules, &RuleHash_TagTable_Ops, nullptr,
-                      sizeof(RuleHashTagTableEntry), 16);
+                      sizeof(RuleHashTagTableEntry));
     PL_DHashTableInit(&mIdSelectors,
                       aQuirksMode ? &AtomSelector_CIOps.ops :
                                     &AtomSelector_CSOps,
-                      nullptr, sizeof(AtomSelectorEntry), 16);
+                      nullptr, sizeof(AtomSelectorEntry));
     PL_DHashTableInit(&mClassSelectors,
                       aQuirksMode ? &AtomSelector_CIOps.ops :
                                     &AtomSelector_CSOps,
-                      nullptr, sizeof(AtomSelectorEntry), 16);
+                      nullptr, sizeof(AtomSelectorEntry));
     memset(mPseudoElementRuleHashes, 0, sizeof(mPseudoElementRuleHashes));
 #ifdef MOZ_XUL
     PL_DHashTableInit(&mXULTreeRules, &RuleHash_TagTable_Ops, nullptr,
-                      sizeof(RuleHashTagTableEntry), 16);
+                      sizeof(RuleHashTagTableEntry));
 #endif
   }
 
@@ -988,8 +987,10 @@ struct RuleCascadeData {
   nsTArray<nsCSSKeyframesRule*> mKeyframesRules;
   nsTArray<nsCSSFontFeatureValuesRule*> mFontFeatureValuesRules;
   nsTArray<nsCSSPageRule*> mPageRules;
+  nsTArray<nsCSSCounterStyleRule*> mCounterStyleRules;
 
   nsDataHashtable<nsStringHashKey, nsCSSKeyframesRule*> mKeyframesRuleTable;
+  nsDataHashtable<nsStringHashKey, nsCSSCounterStyleRule*> mCounterStyleRuleTable;
 
   // Looks up or creates the appropriate list in |mAttributeSelectors|.
   // Returns null only on allocation failure.
@@ -1006,6 +1007,22 @@ SizeOfSelectorsEntry(PLDHashEntryHdr* aHdr, MallocSizeOf aMallocSizeOf, void *)
 {
   AtomSelectorEntry* entry = static_cast<AtomSelectorEntry*>(aHdr);
   return entry->mSelectors.SizeOfExcludingThis(aMallocSizeOf);
+}
+
+static size_t
+SizeOfKeyframesRuleEntryExcludingThis(nsStringHashKey::KeyType aKey,
+                                      nsCSSKeyframesRule* const& aData,
+                                      mozilla::MallocSizeOf aMallocSizeOf,
+                                      void* aUserArg)
+{
+  // We don't own the nsCSSKeyframesRule objects so we don't count them. We do
+  // care about the size of the keys' nsAString members' buffers though.
+  //
+  // Note that we depend on nsStringHashKey::GetKey() returning a reference,
+  // since otherwise aKey would be a copy of the string key and we would not be
+  // measuring the right object here.
+
+  return aKey.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
 }
 
 size_t
@@ -1042,6 +1059,10 @@ RuleCascadeData::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
   n += mKeyframesRules.SizeOfExcludingThis(aMallocSizeOf);
   n += mFontFeatureValuesRules.SizeOfExcludingThis(aMallocSizeOf);
   n += mPageRules.SizeOfExcludingThis(aMallocSizeOf);
+  n += mCounterStyleRules.SizeOfExcludingThis(aMallocSizeOf);
+  n += mKeyframesRuleTable.SizeOfExcludingThis(SizeOfKeyframesRuleEntryExcludingThis,
+                                               aMallocSizeOf,
+                                               nullptr);
 
   return n;
 }
@@ -1081,14 +1102,37 @@ nsCSSRuleProcessor::nsCSSRuleProcessor(const sheet_array_type& aSheets,
 
 nsCSSRuleProcessor::~nsCSSRuleProcessor()
 {
+  ClearSheets();
+  ClearRuleCascades();
+}
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsCSSRuleProcessor)
+  NS_INTERFACE_MAP_ENTRY(nsIStyleRuleProcessor)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_CYCLE_COLLECTING_ADDREF(nsCSSRuleProcessor)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(nsCSSRuleProcessor)
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsCSSRuleProcessor)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsCSSRuleProcessor)
+  tmp->ClearSheets();
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mScopeElement)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsCSSRuleProcessor)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSheets)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mScopeElement)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+void
+nsCSSRuleProcessor::ClearSheets()
+{
   for (sheet_array_type::size_type i = mSheets.Length(); i-- != 0; ) {
     mSheets[i]->DropRuleProcessor(this);
   }
   mSheets.Clear();
-  ClearRuleCascades();
 }
-
-NS_IMPL_ISUPPORTS(nsCSSRuleProcessor, nsIStyleRuleProcessor)
 
 /* static */ nsresult
 nsCSSRuleProcessor::Startup()
@@ -1171,6 +1215,11 @@ InitSystemMetrics()
   rv = LookAndFeel::GetInt(LookAndFeel::eIntID_MacLionTheme, &metricResult);
   if (NS_SUCCEEDED(rv) && metricResult) {
     sSystemMetrics->AppendElement(nsGkAtoms::mac_lion_theme);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_MacYosemiteTheme, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::mac_yosemite_theme);
   }
 
   rv = LookAndFeel::GetInt(LookAndFeel::eIntID_DWMCompositor, &metricResult);
@@ -2501,7 +2550,7 @@ nsCSSRuleProcessor::RulesMatching(AnonBoxRuleProcessorData* aData)
 {
   RuleCascadeData* cascade = GetRuleCascade(aData->mPresContext);
 
-  if (cascade && cascade->mAnonBoxRules.entryCount) {
+  if (cascade && cascade->mAnonBoxRules.EntryCount()) {
     RuleHashTagTableEntry* entry = static_cast<RuleHashTagTableEntry*>
       (PL_DHashTableOperate(&cascade->mAnonBoxRules, aData->mPseudoTag,
                             PL_DHASH_LOOKUP));
@@ -2522,7 +2571,7 @@ nsCSSRuleProcessor::RulesMatching(XULTreeRuleProcessorData* aData)
 {
   RuleCascadeData* cascade = GetRuleCascade(aData->mPresContext);
 
-  if (cascade && cascade->mXULTreeRules.entryCount) {
+  if (cascade && cascade->mXULTreeRules.EntryCount()) {
     RuleHashTagTableEntry* entry = static_cast<RuleHashTagTableEntry*>
       (PL_DHashTableOperate(&cascade->mXULTreeRules, aData->mPseudoTag,
                             PL_DHASH_LOOKUP));
@@ -2671,7 +2720,7 @@ nsCSSRuleProcessor::HasDocumentStateDependentStyle(StateRuleProcessorData* aData
 }
 
 struct AttributeEnumData {
-  AttributeEnumData(AttributeRuleProcessorData *aData)
+  explicit AttributeEnumData(AttributeRuleProcessorData *aData)
     : data(aData), change(nsRestyleHint(0)) {}
 
   AttributeRuleProcessorData *data;
@@ -2860,6 +2909,19 @@ nsCSSRuleProcessor::KeyframesRuleForName(nsPresContext* aPresContext,
 
   if (cascade) {
     return cascade->mKeyframesRuleTable.Get(aName);
+  }
+
+  return nullptr;
+}
+
+nsCSSCounterStyleRule*
+nsCSSRuleProcessor::CounterStyleRuleForName(nsPresContext* aPresContext,
+                                            const nsAString& aName)
+{
+  RuleCascadeData* cascade = GetRuleCascade(aPresContext);
+
+  if (cascade) {
+    return cascade->mCounterStyleRuleTable.Get(aName);
   }
 
   return nullptr;
@@ -3205,6 +3267,7 @@ struct CascadeEnumData {
                   nsTArray<nsCSSKeyframesRule*>& aKeyframesRules,
                   nsTArray<nsCSSFontFeatureValuesRule*>& aFontFeatureValuesRules,
                   nsTArray<nsCSSPageRule*>& aPageRules,
+                  nsTArray<nsCSSCounterStyleRule*>& aCounterStyleRules,
                   nsMediaQueryResultCacheKey& aKey,
                   uint8_t aSheetType)
     : mPresContext(aPresContext),
@@ -3212,11 +3275,12 @@ struct CascadeEnumData {
       mKeyframesRules(aKeyframesRules),
       mFontFeatureValuesRules(aFontFeatureValuesRules),
       mPageRules(aPageRules),
+      mCounterStyleRules(aCounterStyleRules),
       mCacheKey(aKey),
       mSheetType(aSheetType)
   {
     if (!PL_DHashTableInit(&mRulesByWeight, &gRulesByWeightOps, nullptr,
-                           sizeof(RuleByWeightEntry), 64, fallible_t()))
+                           sizeof(RuleByWeightEntry), fallible_t(), 32))
       mRulesByWeight.ops = nullptr;
 
     // Initialize our arena
@@ -3236,6 +3300,7 @@ struct CascadeEnumData {
   nsTArray<nsCSSKeyframesRule*>& mKeyframesRules;
   nsTArray<nsCSSFontFeatureValuesRule*>& mFontFeatureValuesRules;
   nsTArray<nsCSSPageRule*>& mPageRules;
+  nsTArray<nsCSSCounterStyleRule*>& mCounterStyleRules;
   nsMediaQueryResultCacheKey& mCacheKey;
   PLArenaPool mArena;
   // Hooray, a manual PLDHashTable since nsClassHashtable doesn't
@@ -3255,6 +3320,7 @@ struct CascadeEnumData {
  *  (4) add any @font-feature-value rules, in order,
  *      into data->mFontFeatureValuesRules.
  *  (5) add any @page rules, in order, into data->mPageRules.
+ *  (6) add any @counter-style rules, in order, into data->mCounterStyleRules.
  */
 static bool
 CascadeRuleEnumFunc(css::Rule* aRule, void* aData)
@@ -3320,16 +3386,23 @@ CascadeRuleEnumFunc(css::Rule* aRule, void* aData)
       return false;
     }
   }
+  else if (css::Rule::COUNTER_STYLE_RULE == type) {
+    nsCSSCounterStyleRule* counterStyleRule =
+      static_cast<nsCSSCounterStyleRule*>(aRule);
+    if (!data->mCounterStyleRules.AppendElement(counterStyleRule)) {
+      return false;
+    }
+  }
   return true;
 }
 
 /* static */ bool
-nsCSSRuleProcessor::CascadeSheet(nsCSSStyleSheet* aSheet, CascadeEnumData* aData)
+nsCSSRuleProcessor::CascadeSheet(CSSStyleSheet* aSheet, CascadeEnumData* aData)
 {
   if (aSheet->IsApplicable() &&
       aSheet->UseForPresentation(aData->mPresContext, aData->mCacheKey) &&
       aSheet->mInner) {
-    nsCSSStyleSheet* child = aSheet->mInner->mFirstChild;
+    CSSStyleSheet* child = aSheet->mInner->mFirstChild;
     while (child) {
       CascadeSheet(child, aData);
       child = child->mNext;
@@ -3352,7 +3425,7 @@ static int CompareWeightData(const void* aArg1, const void* aArg2,
 
 
 struct FillWeightArrayData {
-  FillWeightArrayData(PerWeightData* aArrayData) :
+  explicit FillWeightArrayData(PerWeightData* aArrayData) :
     mIndex(0),
     mWeightArray(aArrayData)
   {
@@ -3424,6 +3497,7 @@ nsCSSRuleProcessor::RefreshRuleCascade(nsPresContext* aPresContext)
                            newCascade->mKeyframesRules,
                            newCascade->mFontFeatureValuesRules,
                            newCascade->mPageRules,
+                           newCascade->mCounterStyleRules,
                            newCascade->mCacheKey,
                            mSheetType);
       if (!data.mRulesByWeight.ops)
@@ -3435,7 +3509,7 @@ nsCSSRuleProcessor::RefreshRuleCascade(nsPresContext* aPresContext)
       }
 
       // Sort the hash table of per-weight linked lists by weight.
-      uint32_t weightCount = data.mRulesByWeight.entryCount;
+      uint32_t weightCount = data.mRulesByWeight.EntryCount();
       nsAutoArrayPtr<PerWeightData> weightArray(new PerWeightData[weightCount]);
       FillWeightArrayData fwData(weightArray);
       PL_DHashTableEnumerate(&data.mRulesByWeight, FillWeightArray, &fwData);
@@ -3460,6 +3534,13 @@ nsCSSRuleProcessor::RefreshRuleCascade(nsPresContext* aPresContext)
              iEnd = newCascade->mKeyframesRules.Length(); i < iEnd; ++i) {
         nsCSSKeyframesRule* rule = newCascade->mKeyframesRules[i];
         newCascade->mKeyframesRuleTable.Put(rule->GetName(), rule);
+      }
+
+      // Build mCounterStyleRuleTable
+      for (nsTArray<nsCSSCounterStyleRule*>::size_type i = 0,
+           iEnd = newCascade->mCounterStyleRules.Length(); i < iEnd; ++i) {
+        nsCSSCounterStyleRule* rule = newCascade->mCounterStyleRules[i];
+        newCascade->mCounterStyleRuleTable.Put(rule->GetName(), rule);
       }
 
       // Ensure that the current one is always mRuleCascades.
@@ -3519,13 +3600,8 @@ TreeMatchContext::InitAncestors(Element *aElement)
     Element* cur = aElement;
     do {
       ancestors.AppendElement(cur);
-      nsINode* parent = cur->GetParentNode();
-      if (!parent->IsElement()) {
-        break;
-      }
-
-      cur = parent->AsElement();
-    } while (true);
+      cur = cur->GetParentElementCrossingShadowRoot();
+    } while (cur);
 
     // Now push them in reverse order.
     for (uint32_t i = ancestors.Length(); i-- != 0; ) {
@@ -3546,13 +3622,8 @@ TreeMatchContext::InitStyleScopes(Element* aElement)
     Element* cur = aElement;
     do {
       ancestors.AppendElement(cur);
-      nsINode* parent = cur->GetParentNode();
-      if (!parent || !parent->IsElement()) {
-        break;
-      }
-
-      cur = parent->AsElement();
-    } while (true);
+      cur = cur->GetParentElementCrossingShadowRoot();
+    } while (cur);
 
     // Now push them in reverse order.
     for (uint32_t i = ancestors.Length(); i-- != 0; ) {
@@ -3616,10 +3687,22 @@ AncestorFilter::PopAncestor()
 void
 AncestorFilter::AssertHasAllAncestors(Element *aElement) const
 {
-  nsINode* cur = aElement->GetParentNode();
-  while (cur && cur->IsElement()) {
+  Element* cur = aElement->GetParentElementCrossingShadowRoot();
+  while (cur) {
     MOZ_ASSERT(mElements.Contains(cur));
-    cur = cur->GetParentNode();
+    cur = cur->GetParentElementCrossingShadowRoot();
+  }
+}
+
+void
+TreeMatchContext::AssertHasAllStyleScopes(Element* aElement) const
+{
+  Element* cur = aElement->GetParentElementCrossingShadowRoot();
+  while (cur) {
+    if (cur->IsScopedStyleRoot()) {
+      MOZ_ASSERT(mStyleScopes.Contains(cur));
+    }
+    cur = cur->GetParentElementCrossingShadowRoot();
   }
 }
 #endif

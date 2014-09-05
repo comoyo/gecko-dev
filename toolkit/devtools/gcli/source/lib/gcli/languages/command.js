@@ -25,7 +25,6 @@ var Status = require('../types/types').Status;
 var cli = require('../cli');
 var Requisition = require('../cli').Requisition;
 var CommandAssignment = require('../cli').CommandAssignment;
-var fields = require('../fields/fields');
 var intro = require('../ui/intro');
 
 var RESOLVED = Promise.resolve(true);
@@ -72,7 +71,7 @@ var commandLanguage = exports.commandLanguage = {
   constructor: function(terminal) {
     this.terminal = terminal;
     this.document = terminal.document;
-    this.focusManager = this.terminal.focusManager;
+    this.focusManager = terminal.focusManager;
 
     var options = this.terminal.options;
     this.requisition = options.requisition;
@@ -83,7 +82,7 @@ var commandLanguage = exports.commandLanguage = {
         options.environment.window = options.environment.document.defaultView;
       }
 
-      this.requisition = new Requisition(options);
+      this.requisition = new Requisition(terminal.system, options);
     }
 
     // We also keep track of the last known arg text for the current assignment
@@ -106,6 +105,8 @@ var commandLanguage = exports.commandLanguage = {
       var mapping = cli.getMapping(this.requisition.executionContext);
       mapping.terminal = this.terminal;
 
+      this.requisition.onExternalUpdate.add(this.textChanged, this);
+
       return this;
     }.bind(this));
   },
@@ -115,6 +116,7 @@ var commandLanguage = exports.commandLanguage = {
     delete mapping.terminal;
 
     this.requisition.commandOutputManager.onOutput.remove(this.outputted, this);
+    this.requisition.onExternalUpdate.remove(this.textChanged, this);
 
     this.terminal = undefined;
     this.requisition = undefined;
@@ -163,7 +165,14 @@ var commandLanguage = exports.commandLanguage = {
   // Called internally whenever we think that the current assignment might
   // have changed, typically on mouse-clicks or key presses.
   caretMoved: function(start) {
+    if (!this.requisition.isUpToDate()) {
+      return;
+    }
     var newAssignment = this.requisition.getAssignmentAt(start);
+    if (newAssignment == null) {
+      return;
+    }
+
     if (this.assignment !== newAssignment) {
       if (this.assignment.param.type.onLeave) {
         this.assignment.param.type.onLeave(this.assignment);
@@ -207,7 +216,8 @@ var commandLanguage = exports.commandLanguage = {
       field.destroy();
     }
 
-    field = this.terminal.field = fields.getField(this.assignment.param.type, {
+    var fields = this.terminal.system.fields;
+    field = this.terminal.field = fields.get(this.assignment.param.type, {
       document: this.terminal.document,
       requisition: this.requisition
     });

@@ -210,6 +210,8 @@ BluetoothParent::RecvPBluetoothRequestConstructor(
       return actor->DoRequest(aRequest.get_PairedDevicePropertiesRequest());
     case Request::TConnectedDevicePropertiesRequest:
       return actor->DoRequest(aRequest.get_ConnectedDevicePropertiesRequest());
+    case Request::TFetchUuidsRequest:
+      return actor->DoRequest(aRequest.get_FetchUuidsRequest());
     case Request::TSetPinCodeRequest:
       return actor->DoRequest(aRequest.get_SetPinCodeRequest());
     case Request::TSetPasskeyRequest:
@@ -432,7 +434,8 @@ BluetoothRequestParent::DoRequest(const PairedDevicePropertiesRequest& aRequest)
 }
 
 bool
-BluetoothRequestParent::DoRequest(const ConnectedDevicePropertiesRequest& aRequest)
+BluetoothRequestParent::DoRequest(
+    const ConnectedDevicePropertiesRequest& aRequest)
 {
   MOZ_ASSERT(mService);
   MOZ_ASSERT(mRequestType == Request::TConnectedDevicePropertiesRequest);
@@ -445,17 +448,27 @@ BluetoothRequestParent::DoRequest(const ConnectedDevicePropertiesRequest& aReque
 }
 
 bool
+BluetoothRequestParent::DoRequest(const FetchUuidsRequest& aRequest)
+{
+  MOZ_ASSERT(mService);
+  MOZ_ASSERT(mRequestType == Request::TFetchUuidsRequest);
+  nsresult rv =
+    mService->FetchUuidsInternal(aRequest.address(), mReplyRunnable.get());
+
+  NS_ENSURE_SUCCESS(rv, false);
+
+  return true;
+}
+
+bool
 BluetoothRequestParent::DoRequest(const SetPinCodeRequest& aRequest)
 {
   MOZ_ASSERT(mService);
   MOZ_ASSERT(mRequestType == Request::TSetPinCodeRequest);
 
-  bool result =
-    mService->SetPinCodeInternal(aRequest.path(),
-                                 aRequest.pincode(),
-                                 mReplyRunnable.get());
-
-  NS_ENSURE_TRUE(result, false);
+  mService->SetPinCodeInternal(aRequest.path(),
+                               aRequest.pincode(),
+                               mReplyRunnable.get());
 
   return true;
 }
@@ -466,12 +479,9 @@ BluetoothRequestParent::DoRequest(const SetPasskeyRequest& aRequest)
   MOZ_ASSERT(mService);
   MOZ_ASSERT(mRequestType == Request::TSetPasskeyRequest);
 
-  bool result =
-    mService->SetPasskeyInternal(aRequest.path(),
-                                 aRequest.passkey(),
-                                 mReplyRunnable.get());
-
-  NS_ENSURE_TRUE(result, false);
+  mService->SetPasskeyInternal(aRequest.path(),
+                               aRequest.passkey(),
+                               mReplyRunnable.get());
 
   return true;
 }
@@ -483,12 +493,9 @@ BluetoothRequestParent::DoRequest(const ConfirmPairingConfirmationRequest&
   MOZ_ASSERT(mService);
   MOZ_ASSERT(mRequestType == Request::TConfirmPairingConfirmationRequest);
 
-  bool result =
-    mService->SetPairingConfirmationInternal(aRequest.path(),
-                                             true,
-                                             mReplyRunnable.get());
-
-  NS_ENSURE_TRUE(result, false);
+  mService->SetPairingConfirmationInternal(aRequest.path(),
+                                           true,
+                                           mReplyRunnable.get());
 
   return true;
 }
@@ -500,12 +507,9 @@ BluetoothRequestParent::DoRequest(const DenyPairingConfirmationRequest&
   MOZ_ASSERT(mService);
   MOZ_ASSERT(mRequestType == Request::TDenyPairingConfirmationRequest);
 
-  bool result =
-    mService->SetPairingConfirmationInternal(aRequest.path(),
-                                             false,
-                                             mReplyRunnable.get());
-
-  NS_ENSURE_TRUE(result, false);
+  mService->SetPairingConfirmationInternal(aRequest.path(),
+                                           false,
+                                           mReplyRunnable.get());
 
   return true;
 }

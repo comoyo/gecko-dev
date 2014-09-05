@@ -44,7 +44,7 @@ EXTRA_COMPONENTS += [
 
 FAIL_ON_WARNINGS = True
 
-# For nsDependentJSString
+# For nsAutoJSString
 LOCAL_INCLUDES += ["/dom/base"]
 
 LOCAL_INCLUDES += [
@@ -54,4 +54,4 @@ LOCAL_INCLUDES += [
     '/content/base/src',
 ]
 
-FINAL_LIBRARY = 'gklayout'
+FINAL_LIBRARY = 'xul'

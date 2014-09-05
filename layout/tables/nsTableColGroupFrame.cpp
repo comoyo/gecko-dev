@@ -14,6 +14,8 @@
 #include "nsCSSRendering.h"
 #include "nsIPresShell.h"
 
+using namespace mozilla;
+
 #define COL_GROUP_TYPE_BITS          (NS_FRAME_STATE_BIT(30) | \
                                       NS_FRAME_STATE_BIT(31))
 #define COL_GROUP_TYPE_OFFSET        30
@@ -328,20 +330,20 @@ nsTableColGroupFrame::RemoveFrame(ChildListID     aListID,
   }
 }
 
-int
+nsIFrame::LogicalSides
 nsTableColGroupFrame::GetLogicalSkipSides(const nsHTMLReflowState* aReflowState) const
 {
   if (MOZ_UNLIKELY(StyleBorder()->mBoxDecorationBreak ==
                      NS_STYLE_BOX_DECORATION_BREAK_CLONE)) {
-    return 0;
+    return LogicalSides();
   }
 
-  int skip = 0;
+  LogicalSides skip;
   if (nullptr != GetPrevInFlow()) {
-    skip |= 1 << LOGICAL_SIDE_B_START;
+    skip |= eLogicalSideBitsBStart;
   }
   if (nullptr != GetNextInFlow()) {
-    skip |= 1 << LOGICAL_SIDE_B_END;
+    skip |= eLogicalSideBitsBEnd;
   }
   return skip;
 }
@@ -370,15 +372,14 @@ nsTableColGroupFrame::Reflow(nsPresContext*          aPresContext,
     // Give the child frame a chance to reflow, even though we know it'll have 0 size
     nsHTMLReflowMetrics kidSize(aReflowState);
     nsHTMLReflowState kidReflowState(aPresContext, aReflowState, kidFrame,
-                                     nsSize(0,0));
+                                     LogicalSize(kidFrame->GetWritingMode()));
 
     nsReflowStatus status;
     ReflowChild(kidFrame, aPresContext, kidSize, kidReflowState, 0, 0, 0, status);
     FinishReflowChild(kidFrame, aPresContext, kidSize, nullptr, 0, 0, 0);
   }
 
-  aDesiredSize.Width() = 0;
-  aDesiredSize.Height() = 0;
+  aDesiredSize.ClearSize();
   aStatus = NS_FRAME_COMPLETE;
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aDesiredSize);
 }
@@ -520,3 +521,4 @@ void nsTableColGroupFrame::Dump(int32_t aIndent)
   delete [] indent;
 }
 #endif
+

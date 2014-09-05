@@ -28,10 +28,8 @@ public:
 
   NS_DECL_NSISPEECHTASK
 
-  nsSpeechTask(SpeechSynthesisUtterance* aUtterance);
+  explicit nsSpeechTask(SpeechSynthesisUtterance* aUtterance);
   nsSpeechTask(float aVolume, const nsAString& aText);
-
-  virtual ~nsSpeechTask();
 
   virtual void Pause();
 
@@ -48,6 +46,8 @@ public:
   void SetIndirectAudio(bool aIndirectAudio) { mIndirectAudio = aIndirectAudio; }
 
 protected:
+  virtual ~nsSpeechTask();
+
   virtual nsresult DispatchStartImpl();
 
   virtual nsresult DispatchEndImpl(float aElapsedTime, uint32_t aCharIndex);

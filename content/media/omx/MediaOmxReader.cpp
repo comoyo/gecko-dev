@@ -17,12 +17,7 @@
 #include "OmxDecoder.h"
 #include "MPAPI.h"
 #include "gfx2DGlue.h"
-
-#ifdef MOZ_AUDIO_OFFLOAD
-#include <stagefright/Utils.h>
-#include <cutils/properties.h>
-#include <stagefright/MetaData.h>
-#endif
+#include "MediaStreamSource.h"
 
 #define MAX_DROPPED_FRAMES 25
 // Try not to spend more than this much time in a single call to DecodeVideoFrame.
@@ -41,7 +36,7 @@ extern PRLogModuleInfo* gMediaDecoderLog;
 #endif
 
 MediaOmxReader::MediaOmxReader(AbstractMediaDecoder *aDecoder)
-  : MediaDecoderReader(aDecoder)
+  : MediaOmxCommonReader(aDecoder)
   , mHasVideo(false)
   , mHasAudio(false)
   , mVideoSeekTimeUs(-1)
@@ -59,14 +54,27 @@ MediaOmxReader::MediaOmxReader(AbstractMediaDecoder *aDecoder)
 
 MediaOmxReader::~MediaOmxReader()
 {
-  ReleaseMediaResources();
-  ReleaseDecoder();
-  mOmxDecoder.clear();
 }
 
 nsresult MediaOmxReader::Init(MediaDecoderReader* aCloneDonor)
 {
   return NS_OK;
+}
+
+void MediaOmxReader::ReleaseDecoder()
+{
+  if (mOmxDecoder.get()) {
+    mOmxDecoder->ReleaseDecoder();
+  }
+  mOmxDecoder.clear();
+}
+
+void MediaOmxReader::Shutdown()
+{
+  ReleaseMediaResources();
+  nsCOMPtr<nsIRunnable> event =
+    NS_NewRunnableMethod(this, &MediaOmxReader::ReleaseDecoder);
+  NS_DispatchToMainThread(event);
 }
 
 bool MediaOmxReader::IsWaitingMediaResources()
@@ -99,13 +107,6 @@ void MediaOmxReader::ReleaseMediaResources()
   }
 }
 
-void MediaOmxReader::ReleaseDecoder()
-{
-  if (mOmxDecoder.get()) {
-    mOmxDecoder->ReleaseDecoder();
-  }
-}
-
 nsresult MediaOmxReader::InitOmxDecoder()
 {
   if (!mOmxDecoder.get()) {
@@ -113,7 +114,7 @@ nsresult MediaOmxReader::InitOmxDecoder()
     DataSource::RegisterDefaultSniffers();
     mDecoder->GetResource()->SetReadMode(MediaCacheStream::MODE_METADATA);
 
-    sp<DataSource> dataSource = new MediaStreamSource(mDecoder->GetResource(), mDecoder);
+    sp<DataSource> dataSource = new MediaStreamSource(mDecoder->GetResource());
     dataSource->initCheck();
 
     mExtractor = MediaExtractor::Create(dataSource);
@@ -162,9 +163,6 @@ nsresult MediaOmxReader::ReadMetadata(MediaInfo* aInfo,
     mDecoder->SetMediaDuration(durationUs);
   }
 
-  // Check the MediaExtract flag if the source is seekable.
-  mDecoder->SetMediaSeekable(mExtractor->flags() & MediaExtractor::CAN_SEEK);
-
   if (mOmxDecoder->HasVideo()) {
     int32_t displayWidth, displayHeight, width, height;
     mOmxDecoder->GetVideoParameters(&displayWidth, &displayHeight,
@@ -203,6 +201,13 @@ nsresult MediaOmxReader::ReadMetadata(MediaInfo* aInfo,
  *aInfo = mInfo;
 
   return NS_OK;
+}
+
+bool
+MediaOmxReader::IsMediaSeekable()
+{
+  // Check the MediaExtract flag if the source is seekable.
+  return (mExtractor->flags() & MediaExtractor::CAN_SEEK);
 }
 
 bool MediaOmxReader::DecodeVideoFrame(bool &aKeyframeSkip,
@@ -317,7 +322,7 @@ bool MediaOmxReader::DecodeVideoFrame(bool &aKeyframeSkip,
     }
 
     decoded++;
-    NS_ASSERTION(decoded <= parsed, "Expect to decode fewer frames than parsed in MediaPlugin...");
+    NS_ASSERTION(decoded <= parsed, "Expect to decode fewer frames than parsed in OMX decoder...");
 
     mVideoQueue.Push(v);
 
@@ -375,7 +380,6 @@ nsresult MediaOmxReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndT
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
   EnsureActive();
 
-  ResetDecode();
   VideoFrameContainer* container = mDecoder->GetVideoFrameContainer();
   if (container && container->GetImageContainer()) {
     container->GetImageContainer()->ClearAllImagesExceptFront();
@@ -400,13 +404,6 @@ nsresult MediaOmxReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndT
   return NS_OK;
 }
 
-static uint64_t BytesToTime(int64_t offset, uint64_t length, uint64_t durationUs) {
-  double perc = double(offset) / double(length);
-  if (perc > 1.0)
-    perc = 1.0;
-  return uint64_t(double(durationUs) * perc);
-}
-
 void MediaOmxReader::SetIdle() {
   if (!mOmxDecoder.get()) {
     return;
@@ -422,41 +419,12 @@ void MediaOmxReader::EnsureActive() {
   NS_ASSERTION(result == NS_OK, "OmxDecoder should be in play state to continue decoding");
 }
 
-#ifdef MOZ_AUDIO_OFFLOAD
-void MediaOmxReader::CheckAudioOffload()
+android::sp<android::MediaSource> MediaOmxReader::GetAudioOffloadTrack()
 {
-  NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
-
-  char offloadProp[128];
-  property_get("audio.offload.disable", offloadProp, "0");
-  bool offloadDisable =  atoi(offloadProp) != 0;
-  if (offloadDisable) {
-    return;
+  if (!mOmxDecoder.get()) {
+    return nullptr;
   }
-
-  mAudioOffloadTrack = mOmxDecoder->GetAudioOffloadTrack();
-  sp<MetaData> meta = (mAudioOffloadTrack.get()) ?
-      mAudioOffloadTrack->getFormat() : nullptr;
-
-  // Supporting audio offload only when there is no video, no streaming
-  bool hasNoVideo = !mOmxDecoder->HasVideo();
-  bool isNotStreaming
-      = mDecoder->GetResource()->IsDataCachedToEndOfResource(0);
-
-  // Not much benefit in trying to offload other channel types. Most of them
-  // aren't supported and also duration would be less than a minute
-  bool isTypeMusic = mAudioChannel == dom::AudioChannel::Content;
-
-  DECODER_LOG(PR_LOG_DEBUG, ("%s meta %p, no video %d, no streaming %d,"
-      " channel type %d", __FUNCTION__, meta.get(), hasNoVideo,
-      isNotStreaming, mAudioChannel));
-
-  if ((meta.get()) && hasNoVideo && isNotStreaming && isTypeMusic &&
-      canOffloadStream(meta, false, false, AUDIO_STREAM_MUSIC)) {
-    DECODER_LOG(PR_LOG_DEBUG, ("Can offload this audio stream"));
-    mDecoder->SetCanOffloadAudio(true);
-  }
+  return mOmxDecoder->GetAudioOffloadTrack();
 }
-#endif
 
 } // namespace mozilla

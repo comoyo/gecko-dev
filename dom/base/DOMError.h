@@ -32,6 +32,9 @@ class DOMError : public nsISupports,
   nsString mName;
   nsString mMessage;
 
+protected:
+  virtual ~DOMError();
+
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(DOMError)
@@ -41,7 +44,7 @@ public:
   // aWindow can be null if this DOMError is not associated with a particular
   // window.
 
-  DOMError(nsPIDOMWindow* aWindow);
+  explicit DOMError(nsPIDOMWindow* aWindow);
 
   DOMError(nsPIDOMWindow* aWindow, nsresult aValue);
 
@@ -49,8 +52,6 @@ public:
 
   DOMError(nsPIDOMWindow* aWindow, const nsAString& aName,
            const nsAString& aMessage);
-
-  virtual ~DOMError();
 
   nsPIDOMWindow* GetParentObject() const
   {

@@ -18,15 +18,21 @@
 namespace mozilla {
 namespace dom {
 
-class Key;
+class CryptoKey;
+class KeyAlgorithm;
 
 enum KeyAlgorithmStructuredCloneTags {
   SCTAG_KEYALG,
   SCTAG_AESKEYALG,
+  SCTAG_ECKEYALG,
   SCTAG_HMACKEYALG,
   SCTAG_RSAKEYALG,
   SCTAG_RSAHASHEDKEYALG
 };
+
+}
+
+namespace dom {
 
 class KeyAlgorithm : public nsISupports,
                      public nsWrapperCache
@@ -38,8 +44,6 @@ public:
 public:
   KeyAlgorithm(nsIGlobalObject* aGlobal, const nsString& aName);
 
-  virtual ~KeyAlgorithm();
-
   nsIGlobalObject* GetParentObject() const
   {
     return mGlobal;
@@ -48,6 +52,8 @@ public:
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 
   void GetName(nsString& aRetVal) const;
+
+  virtual nsString ToJwkAlg() const;
 
   // Structured clone support methods
   virtual bool WriteStructuredClone(JSStructuredCloneWriter* aWriter) const;
@@ -61,6 +67,8 @@ public:
   }
 
 protected:
+  virtual ~KeyAlgorithm();
+
   nsRefPtr<nsIGlobalObject> mGlobal;
   nsString mName;
   CK_MECHANISM_TYPE mMechanism;

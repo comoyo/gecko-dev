@@ -13,11 +13,13 @@
 
 class nsNetAddr MOZ_FINAL : public nsINetAddr
 {
+  ~nsNetAddr() {}
+
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSINETADDR
 
-  nsNetAddr(mozilla::net::NetAddr* addr);
+  explicit nsNetAddr(mozilla::net::NetAddr* addr);
 
 private:
   mozilla::net::NetAddr mAddr;

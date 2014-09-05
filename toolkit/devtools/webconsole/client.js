@@ -1,4 +1,4 @@
-/* -*- js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+/* -*- js-indent-level: 2; indent-tabs-mode: nil -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -26,6 +26,7 @@ function WebConsoleClient(aDebuggerClient, aResponse)
   this._client = aDebuggerClient;
   this._longStrings = {};
   this.traits = aResponse.traits || {};
+  this.events = [];
 }
 exports.WebConsoleClient = WebConsoleClient;
 
@@ -103,6 +104,11 @@ WebConsoleClient.prototype = {
    *
    *        - url: the url to evaluate the script as. Defaults to
    *        "debugger eval code".
+   *
+   *        - selectedNodeActor: the NodeActor ID of the current selection in the
+   *        Inspector, if such a selection exists. This is used by helper functions
+   *        that can reference the currently selected node in the Inspector, like
+   *        $0.
    */
   evaluateJS: function WCC_evaluateJS(aString, aOnResponse, aOptions = {})
   {
@@ -113,6 +119,7 @@ WebConsoleClient.prototype = {
       bindObjectActor: aOptions.bindObjectActor,
       frameActor: aOptions.frameActor,
       url: aOptions.url,
+      selectedNodeActor: aOptions.selectedNodeActor,
     };
     this._client.request(packet, aOnResponse);
   },
@@ -391,7 +398,7 @@ WebConsoleClient.prototype = {
    * @param function aOnResponse
    *        Function to invoke when the server response is received.
    */
-  close: function WCC_close(aOnResponse)
+  detach: function WCC_detach(aOnResponse)
   {
     this.stopListeners(null, aOnResponse);
     this._longStrings = null;

@@ -37,6 +37,7 @@ public:
     , mOffset(aOffset)
     , mTime(aTimestamp)
     , mDuration(aDuration)
+    , mDiscontinuity(false)
   {}
 
   virtual ~MediaData() {}
@@ -53,6 +54,10 @@ public:
   // Duration of sample, in microseconds.
   const int64_t mDuration;
 
+  // True if this is the first sample after a gap or discontinuity in
+  // the stream. This is true for the first sample in a stream after a seek.
+  bool mDiscontinuity;
+
   int64_t GetEndTime() const { return mTime + mDuration; }
 
 };
@@ -66,10 +71,12 @@ public:
             int64_t aDuration,
             uint32_t aFrames,
             AudioDataValue* aData,
-            uint32_t aChannels)
+            uint32_t aChannels,
+            uint32_t aRate)
     : MediaData(AUDIO_SAMPLES, aOffset, aTime, aDuration)
     , mFrames(aFrames)
     , mChannels(aChannels)
+    , mRate(aRate)
     , mAudioData(aData)
   {
     MOZ_COUNT_CTOR(AudioData);
@@ -87,6 +94,7 @@ public:
 
   const uint32_t mFrames;
   const uint32_t mChannels;
+  const uint32_t mRate;
   // At least one of mAudioBuffer/mAudioData must be non-null.
   // mChannels channels, each with mFrames frames
   nsRefPtr<SharedBuffer> mAudioBuffer;
@@ -204,10 +212,17 @@ public:
   static VideoData* ShallowCopyUpdateTimestamp(VideoData* aOther,
                                                int64_t aTimestamp);
 
+  // Creates a new VideoData identical to aOther, but with a different
+  // specified timestamp and duration. All data from aOther is copied
+  // into the new VideoData, as ShallowCopyUpdateDuration() does.
+  static VideoData* ShallowCopyUpdateTimestampAndDuration(VideoData* aOther,
+                                                          int64_t aTimestamp,
+                                                          int64_t aDuration);
+
   // Initialize PlanarYCbCrImage. Only When aCopyData is true,
   // video data is copied to PlanarYCbCrImage.
   static void SetVideoDataToImage(PlanarYCbCrImage* aVideoImage,
-                                  VideoInfo& aInfo,                  
+                                  VideoInfo& aInfo,
                                   const YCbCrBuffer &aBuffer,
                                   const IntRect& aPicture,
                                   bool aCopyData);

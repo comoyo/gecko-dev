@@ -71,8 +71,8 @@ BEGIN_TEST(testChromeBuffer)
             JS::HandleObject global = JS::HandleObject::fromMarkedLocation(trusted_glob.unsafeGet());
             JS::CompileOptions options(cx);
             options.setFileAndLine("", 0);
-            CHECK(fun = JS_CompileFunction(cx, global, "trusted", 1, &paramName,
-                                           bytes, strlen(bytes), options));
+            CHECK(JS_CompileFunction(cx, global, "trusted", 1, &paramName,
+                                     bytes, strlen(bytes), options, &fun));
             trusted_fun = JS_GetFunctionObject(fun);
             if (!JS::AddNamedObjectRoot(cx, &trusted_fun, "trusted-function"))
                 return false;
@@ -93,8 +93,8 @@ BEGIN_TEST(testChromeBuffer)
                             "}                                          ";
         JS::CompileOptions options(cx);
         options.setFileAndLine("", 0);
-        CHECK(fun = JS_CompileFunction(cx, global, "untrusted", 1, &paramName,
-                                       bytes, strlen(bytes), options));
+        CHECK(JS_CompileFunction(cx, global, "untrusted", 1, &paramName,
+                                 bytes, strlen(bytes), options, &fun));
 
         JS::RootedValue rval(cx);
         CHECK(JS_CallFunction(cx, JS::NullPtr(), fun, JS::HandleValueArray(v), &rval));
@@ -112,13 +112,18 @@ BEGIN_TEST(testChromeBuffer)
             const char *bytes = "try {                                  "
                                 "  untrusted();                         "
                                 "} catch (e) {                          "
-                                "  return 'From trusted: ' + e;         "
+                                "  /*                                   "
+                                "   * Careful!  We must not reenter JS  "
+                                "   * that might try to push a frame.   "
+                                "   */                                  "
+                                "  return 'From trusted: ' +            "
+                                "         e.name + ': ' + e.message;    "
                                 "}                                      ";
             JS::HandleObject global = JS::HandleObject::fromMarkedLocation(trusted_glob.unsafeGet());
             JS::CompileOptions options(cx);
             options.setFileAndLine("", 0);
-            CHECK(fun = JS_CompileFunction(cx, global, "trusted", 1, &paramName,
-                                           bytes, strlen(bytes), options));
+            CHECK(JS_CompileFunction(cx, global, "trusted", 1, &paramName,
+                                     bytes, strlen(bytes), options, &fun));
             trusted_fun = JS_GetFunctionObject(fun);
         }
 
@@ -133,8 +138,8 @@ BEGIN_TEST(testChromeBuffer)
                             "}                                          ";
         JS::CompileOptions options(cx);
         options.setFileAndLine("", 0);
-        CHECK(fun = JS_CompileFunction(cx, global, "untrusted", 1, &paramName,
-                                       bytes, strlen(bytes), options));
+        CHECK(JS_CompileFunction(cx, global, "untrusted", 1, &paramName,
+                                 bytes, strlen(bytes), options, &fun));
 
         JS::RootedValue rval(cx);
         CHECK(JS_CallFunction(cx, JS::NullPtr(), fun, JS::HandleValueArray(v), &rval));
@@ -154,8 +159,8 @@ BEGIN_TEST(testChromeBuffer)
             JS::HandleObject global = JS::HandleObject::fromMarkedLocation(trusted_glob.unsafeGet());
             JS::CompileOptions options(cx);
             options.setFileAndLine("", 0);
-            CHECK(fun = JS_CompileFunction(cx, global, "trusted", 0, nullptr,
-                                           bytes, strlen(bytes), options));
+            CHECK(JS_CompileFunction(cx, global, "trusted", 0, nullptr,
+                                     bytes, strlen(bytes), options, &fun));
             trusted_fun = JS_GetFunctionObject(fun);
         }
 
@@ -170,8 +175,8 @@ BEGIN_TEST(testChromeBuffer)
                             "}                                          ";
         JS::CompileOptions options(cx);
         options.setFileAndLine("", 0);
-        CHECK(fun = JS_CompileFunction(cx, global, "untrusted", 1, &paramName,
-                                       bytes, strlen(bytes), options));
+        CHECK(JS_CompileFunction(cx, global, "untrusted", 1, &paramName,
+                                 bytes, strlen(bytes), options, &fun));
 
         JS::RootedValue arg(cx, JS::ObjectValue(*callTrusted));
         JS::RootedValue rval(cx);

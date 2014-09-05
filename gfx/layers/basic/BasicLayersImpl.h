@@ -49,17 +49,20 @@ class BasicReadbackLayer : public ReadbackLayer,
                            public BasicImplData
 {
 public:
-  BasicReadbackLayer(BasicLayerManager* aLayerManager) :
+  explicit BasicReadbackLayer(BasicLayerManager* aLayerManager) :
     ReadbackLayer(aLayerManager,
                   static_cast<BasicImplData*>(MOZ_THIS_IN_INITIALIZER_LIST()))
   {
     MOZ_COUNT_CTOR(BasicReadbackLayer);
   }
+
+protected:
   virtual ~BasicReadbackLayer()
   {
     MOZ_COUNT_DTOR(BasicReadbackLayer);
   }
 
+public:
   virtual void SetVisibleRegion(const nsIntRegion& aRegion)
   {
     NS_ASSERTION(BasicManager()->InConstruction(),

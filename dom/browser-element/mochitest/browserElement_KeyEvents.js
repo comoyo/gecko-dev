@@ -76,7 +76,17 @@ function eventHandler(e) {
 
   nbEvents--;
 
+  // Prevent default for F5 because on desktop that reloads the page.
+  if (e.keyCode === Ci.nsIDOMKeyEvent.DOM_VK_F5) {
+    e.preventDefault();
+  }
+
   if (nbEvents == 0) {
+    //removeEventListener, otherwise a key event is fired
+    //for some reason, with keyCode 95
+    removeEventListener('keydown', eventHandler);
+    removeEventListener('keypress', eventHandler);
+    removeEventListener('keyup', eventHandler);
     SimpleTest.finish();
     return;
   }

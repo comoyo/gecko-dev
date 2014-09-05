@@ -16,15 +16,17 @@ class JSObject;
 struct JSContext;
 
 class nsPIDOMWindow;
-class nsIDOMMozVoicemailStatus;
 
 namespace mozilla {
 namespace dom {
 
-class Voicemail MOZ_FINAL : public DOMEventTargetHelper
+class MozVoicemailStatus;
+
+class Voicemail MOZ_FINAL : public DOMEventTargetHelper,
+                            private nsIVoicemailListener
 {
   /**
-   * Class Voicemail doesn't actually inherit nsIVoicemailListener. Instead, it
+   * Class Voicemail doesn't actually expose nsIVoicemailListener. Instead, it
    * owns an nsIVoicemailListener derived instance mListener and passes it to
    * nsIVoicemailProvider. The onreceived events are first delivered to
    * mListener and then forwarded to its owner, Voicemail. See also bug 775997
@@ -32,14 +34,15 @@ class Voicemail MOZ_FINAL : public DOMEventTargetHelper
    */
   class Listener;
 
+  virtual ~Voicemail();
+
 public:
+  NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIVOICEMAILLISTENER
 
   NS_REALLY_FORWARD_NSIDOMEVENTTARGET(DOMEventTargetHelper)
 
   Voicemail(nsPIDOMWindow* aWindow, nsIVoicemailProvider* aProvider);
-
-  virtual ~Voicemail();
 
   nsPIDOMWindow*
   GetParentObject() const
@@ -50,7 +53,7 @@ public:
   virtual JSObject*
   WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 
-  already_AddRefed<nsIDOMMozVoicemailStatus>
+  already_AddRefed<MozVoicemailStatus>
   GetStatus(const Optional<uint32_t>& aServiceId, ErrorResult& aRv) const;
 
   void

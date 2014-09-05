@@ -14,6 +14,7 @@
 #include "skia/SkCanvas.h"
 
 #include "2D.h"
+#include "HelpersSkia.h"
 #include "Rect.h"
 #include "PathSkia.h"
 #include <sstream>
@@ -31,7 +32,8 @@ public:
   DrawTargetSkia();
   virtual ~DrawTargetSkia();
 
-  virtual BackendType GetType() const { return BackendType::SKIA; }
+  virtual DrawTargetType GetType() const MOZ_OVERRIDE;
+  virtual BackendType GetBackendType() const { return BackendType::SKIA; }
   virtual TemporaryRef<SourceSurface> Snapshot();
   virtual IntSize GetSize() { return mSize; }
   virtual void Flush();
@@ -129,12 +131,12 @@ private:
   bool UsingSkiaGPU() const;
 
 #ifdef USE_SKIA_GPU
-  SkRefPtr<GrContext> mGrContext;
+  RefPtrSkia<GrContext> mGrContext;
   uint32_t mTexture;
 #endif
 
   IntSize mSize;
-  SkRefPtr<SkCanvas> mCanvas;
+  RefPtrSkia<SkCanvas> mCanvas;
   SourceSurfaceSkia* mSnapshot;
 };
 

@@ -35,7 +35,6 @@
 #include <ui/GraphicBuffer.h>
 #endif
 
-class gfx3DMatrix;
 class nsIWidget;
 
 namespace mozilla {
@@ -86,7 +85,7 @@ public:
 class PerUnitTexturePoolOGL : public CompositorTexturePoolOGL
 {
 public:
-  PerUnitTexturePoolOGL(gl::GLContext* aGL)
+  explicit PerUnitTexturePoolOGL(gl::GLContext* aGL)
   : mTextureTarget(0) // zero is never a valid texture target
   , mGL(aGL)
   {}
@@ -125,7 +124,7 @@ protected:
 class PerFrameTexturePoolOGL : public CompositorTexturePoolOGL
 {
 public:
-  PerFrameTexturePoolOGL(gl::GLContext* aGL)
+  explicit PerFrameTexturePoolOGL(gl::GLContext* aGL)
   : mTextureTarget(0) // zero is never a valid texture target
   , mGL(aGL)
   {}
@@ -163,11 +162,13 @@ class CompositorOGL MOZ_FINAL : public Compositor
 
   std::map<ShaderConfigOGL, ShaderProgramOGL*> mPrograms;
 public:
-  CompositorOGL(nsIWidget *aWidget, int aSurfaceWidth = -1, int aSurfaceHeight = -1,
-                bool aUseExternalSurfaceSize = false);
+  explicit CompositorOGL(nsIWidget *aWidget, int aSurfaceWidth = -1, int aSurfaceHeight = -1,
+                         bool aUseExternalSurfaceSize = false);
 
+protected:
   virtual ~CompositorOGL();
 
+public:
   virtual TemporaryRef<DataTextureSource>
   CreateDataTextureSource(TextureFlags aFlags = TextureFlags::NO_FLAGS) MOZ_OVERRIDE;
 
@@ -185,6 +186,7 @@ public:
                                SupportsPartialTextureUpdate());
     result.mSupportedBlendModes += gfx::CompositionOp::OP_SCREEN;
     result.mSupportedBlendModes += gfx::CompositionOp::OP_MULTIPLY;
+    result.mSupportedBlendModes += gfx::CompositionOp::OP_SOURCE;
     return result;
   }
 
@@ -332,7 +334,8 @@ private:
 
   ShaderConfigOGL GetShaderConfigFor(Effect *aEffect,
                                      MaskType aMask = MaskType::MaskNone,
-                                     gfx::CompositionOp aOp = gfx::CompositionOp::OP_OVER) const;
+                                     gfx::CompositionOp aOp = gfx::CompositionOp::OP_OVER,
+                                     bool aColorMatrix = false) const;
   ShaderProgramOGL* GetShaderProgramFor(const ShaderConfigOGL &aConfig);
 
   /**

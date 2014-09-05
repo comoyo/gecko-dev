@@ -38,19 +38,23 @@
 
 #include "builtin/TypedObject.h"
 #include "ctypes/Library.h"
+#include "gc/Zone.h"
 
 using namespace std;
 using mozilla::NumericLimits;
 
+using JS::AutoCheckCannotGC;
+
 namespace js {
 namespace ctypes {
 
+template <typename CharT>
 size_t
-GetDeflatedUTF8StringLength(JSContext *maybecx, const jschar *chars,
+GetDeflatedUTF8StringLength(JSContext *maybecx, const CharT *chars,
                             size_t nchars)
 {
     size_t nbytes;
-    const jschar *end;
+    const CharT *end;
     unsigned c, c2;
     char buffer[10];
 
@@ -83,6 +87,7 @@ GetDeflatedUTF8StringLength(JSContext *maybecx, const jschar *chars,
 
   bad_surrogate:
     if (maybecx) {
+        js::gc::AutoSuppressGC suppress(maybecx);
         JS_snprintf(buffer, 10, "0x%x", c);
         JS_ReportErrorFlagsAndNumber(maybecx, JSREPORT_ERROR, js_GetErrorMessage,
                                      nullptr, JSMSG_BAD_SURROGATE_CHAR, buffer);
@@ -90,9 +95,29 @@ GetDeflatedUTF8StringLength(JSContext *maybecx, const jschar *chars,
     return (size_t) -1;
 }
 
+template size_t
+GetDeflatedUTF8StringLength(JSContext *maybecx, const Latin1Char *chars,
+                            size_t nchars);
+
+template size_t
+GetDeflatedUTF8StringLength(JSContext *maybecx, const jschar *chars,
+                            size_t nchars);
+
+static size_t
+GetDeflatedUTF8StringLength(JSContext *maybecx, JSLinearString *str)
+{
+    size_t length = str->length();
+
+    JS::AutoCheckCannotGC nogc;
+    return str->hasLatin1Chars()
+           ? GetDeflatedUTF8StringLength(maybecx, str->latin1Chars(nogc), length)
+           : GetDeflatedUTF8StringLength(maybecx, str->twoByteChars(nogc), length);
+}
+
+template <typename CharT>
 bool
-DeflateStringToUTF8Buffer(JSContext *maybecx, const jschar *src, size_t srclen,
-                              char *dst, size_t *dstlenp)
+DeflateStringToUTF8Buffer(JSContext *maybecx, const CharT *src, size_t srclen,
+                          char *dst, size_t *dstlenp)
 {
     size_t i, utf8Len;
     jschar c, c2;
@@ -147,10 +172,31 @@ badSurrogate:
 bufferTooSmall:
     *dstlenp = (origDstlen - dstlen);
     if (maybecx) {
+        js::gc::AutoSuppressGC suppress(maybecx);
         JS_ReportErrorNumber(maybecx, js_GetErrorMessage, nullptr,
                              JSMSG_BUFFER_TOO_SMALL);
     }
     return false;
+}
+
+template bool
+DeflateStringToUTF8Buffer(JSContext *maybecx, const Latin1Char *src, size_t srclen,
+                          char *dst, size_t *dstlenp);
+
+template bool
+DeflateStringToUTF8Buffer(JSContext *maybecx, const jschar *src, size_t srclen,
+                          char *dst, size_t *dstlenp);
+
+static bool
+DeflateStringToUTF8Buffer(JSContext *maybecx, JSLinearString *str, char *dst,
+                          size_t *dstlenp)
+{
+    size_t length = str->length();
+
+    JS::AutoCheckCannotGC nogc;
+    return str->hasLatin1Chars()
+           ? DeflateStringToUTF8Buffer(maybecx, str->latin1Chars(nogc), length, dst, dstlenp)
+           : DeflateStringToUTF8Buffer(maybecx, str->twoByteChars(nogc), length, dst, dstlenp);
 }
 
 /*******************************************************************************
@@ -825,14 +871,14 @@ GetABICode(JSObject* obj)
 }
 
 static const JSErrorFormatString ErrorFormatString[CTYPESERR_LIMIT] = {
-#define MSG_DEF(name, number, count, exception, format) \
+#define MSG_DEF(name, count, exception, format) \
   { format, count, exception } ,
 #include "ctypes/ctypes.msg"
 #undef MSG_DEF
 };
 
 static const JSErrorFormatString*
-GetErrorMessage(void* userRef, const char* locale, const unsigned errorNumber)
+GetErrorMessage(void* userRef, const unsigned errorNumber)
 {
   if (0 < errorNumber && errorNumber < CTYPESERR_LIMIT)
     return &ErrorFormatString[errorNumber];
@@ -1742,17 +1788,13 @@ jsvalToFloat(JSContext *cx, jsval val, FloatType* result)
   return false;
 }
 
-template<class IntegerType>
+template <class IntegerType, class CharT>
 static bool
-StringToInteger(JSContext* cx, JSString* string, IntegerType* result)
+StringToInteger(JSContext* cx, CharT* cp, size_t length, IntegerType* result)
 {
   JS_STATIC_ASSERT(NumericLimits<IntegerType>::is_exact);
 
-  const jschar* cp = string->getChars(nullptr);
-  if (!cp)
-    return false;
-
-  const jschar* end = cp + string->length();
+  const CharT* end = cp + length;
   if (cp == end)
     return false;
 
@@ -1794,6 +1836,21 @@ StringToInteger(JSContext* cx, JSString* string, IntegerType* result)
 
   *result = i;
   return true;
+}
+
+template<class IntegerType>
+static bool
+StringToInteger(JSContext* cx, JSString* string, IntegerType* result)
+{
+  JSLinearString *linear = string->ensureLinear(cx);
+  if (!linear)
+    return false;
+
+  AutoCheckCannotGC nogc;
+  size_t length = linear->length();
+  return string->hasLatin1Chars()
+         ? StringToInteger<IntegerType>(cx, linear->latin1Chars(nogc), length, result)
+         : StringToInteger<IntegerType>(cx, linear->twoByteChars(nogc), length, result);
 }
 
 // Implicitly convert val to IntegerType, allowing int, double,
@@ -1873,9 +1930,9 @@ jsvalToSize(JSContext* cx, jsval val, bool allowString, size_t* result)
 template<class IntegerType>
 static bool
 jsidToBigInteger(JSContext* cx,
-                  jsid val,
-                  bool allowString,
-                  IntegerType* result)
+                 jsid val,
+                 bool allowString,
+                 IntegerType* result)
 {
   JS_STATIC_ASSERT(NumericLimits<IntegerType>::is_exact);
 
@@ -1891,22 +1948,6 @@ jsidToBigInteger(JSContext* cx,
     // to the JS array element operator, which will automatically call
     // toString() on the object for us.)
     return StringToInteger(cx, JSID_TO_STRING(val), result);
-  }
-  if (JSID_IS_OBJECT(val)) {
-    // Allow conversion from an Int64 or UInt64 object directly.
-    JSObject* obj = JSID_TO_OBJECT(val);
-
-    if (UInt64::IsUInt64(obj)) {
-      // Make sure the integer fits in IntegerType.
-      uint64_t i = Int64Base::GetInt(obj);
-      return ConvertExact(i, result);
-    }
-
-    if (Int64::IsInt64(obj)) {
-      // Make sure the integer fits in IntegerType.
-      int64_t i = Int64Base::GetInt(obj);
-      return ConvertExact(i, result);
-    }
   }
   return false;
 }
@@ -2168,7 +2209,7 @@ ConvertToJS(JSContext* cx,
     break;
   }
   case TYPE_function:
-    MOZ_ASSUME_UNREACHABLE("cannot return a FunctionType");
+    MOZ_CRASH("cannot return a FunctionType");
   }
 
   return true;
@@ -2184,29 +2225,29 @@ bool CanConvertTypedArrayItemTo(JSObject *baseType, JSObject *valObj, JSContext 
   }
   TypeCode elementTypeCode;
   switch (JS_GetArrayBufferViewType(valObj)) {
-  case ScalarTypeDescr::TYPE_INT8:
+  case Scalar::Int8:
     elementTypeCode = TYPE_int8_t;
     break;
-  case ScalarTypeDescr::TYPE_UINT8:
-  case ScalarTypeDescr::TYPE_UINT8_CLAMPED:
+  case Scalar::Uint8:
+  case Scalar::Uint8Clamped:
     elementTypeCode = TYPE_uint8_t;
     break;
-  case ScalarTypeDescr::TYPE_INT16:
+  case Scalar::Int16:
     elementTypeCode = TYPE_int16_t;
     break;
-  case ScalarTypeDescr::TYPE_UINT16:
+  case Scalar::Uint16:
     elementTypeCode = TYPE_uint16_t;
     break;
-  case ScalarTypeDescr::TYPE_INT32:
+  case Scalar::Int32:
     elementTypeCode = TYPE_int32_t;
     break;
-  case ScalarTypeDescr::TYPE_UINT32:
+  case Scalar::Uint32:
     elementTypeCode = TYPE_uint32_t;
     break;
-  case ScalarTypeDescr::TYPE_FLOAT32:
+  case Scalar::Float32:
     elementTypeCode = TYPE_float32_t;
     break;
-  case ScalarTypeDescr::TYPE_FLOAT64:
+  case Scalar::Float64:
     elementTypeCode = TYPE_float64_t;
     break;
   default:
@@ -2316,10 +2357,10 @@ ImplicitConvert(JSContext* cx,
       JSString* str = val.toString();                                    \
       if (str->length() != 1)                                                  \
         return TypeError(cx, #name, val);                                      \
-      const jschar *chars = str->getChars(cx);                                 \
-      if (!chars)                                                              \
+      JSLinearString *linear = str->ensureLinear(cx);                          \
+      if (!linear)                                                             \
         return false;                                                          \
-      result = chars[0];                                                       \
+      result = linear->latin1OrTwoByteChar(0);                                 \
     } else if (!jsvalToInteger(cx, val, &result)) {                            \
       return TypeError(cx, #name, val);                                        \
     }                                                                          \
@@ -2362,8 +2403,8 @@ ImplicitConvert(JSContext* cx,
       // TODO: Extend this so we can safely convert strings at other times also.
       JSString* sourceString = val.toString();
       size_t sourceLength = sourceString->length();
-      const jschar* sourceChars = sourceString->getChars(cx);
-      if (!sourceChars)
+      JSLinearString* sourceLinear = sourceString->ensureLinear(cx);
+      if (!sourceLinear)
         return false;
 
       switch (CType::GetTypeCode(baseType)) {
@@ -2371,8 +2412,7 @@ ImplicitConvert(JSContext* cx,
       case TYPE_signed_char:
       case TYPE_unsigned_char: {
         // Convert from UTF-16 to UTF-8.
-        size_t nbytes =
-          GetDeflatedUTF8StringLength(cx, sourceChars, sourceLength);
+        size_t nbytes = GetDeflatedUTF8StringLength(cx, sourceLinear);
         if (nbytes == (size_t) -1)
           return false;
 
@@ -2383,8 +2423,7 @@ ImplicitConvert(JSContext* cx,
           return false;
         }
 
-        ASSERT_OK(DeflateStringToUTF8Buffer(cx, sourceChars, sourceLength,
-                    *charBuffer, &nbytes));
+        ASSERT_OK(DeflateStringToUTF8Buffer(cx, sourceLinear, *charBuffer, &nbytes));
         (*charBuffer)[nbytes] = 0;
         *freePointer = true;
         break;
@@ -2401,7 +2440,13 @@ ImplicitConvert(JSContext* cx,
         }
 
         *freePointer = true;
-        memcpy(*jscharBuffer, sourceChars, sourceLength * sizeof(jschar));
+        if (sourceLinear->hasLatin1Chars()) {
+            AutoCheckCannotGC nogc;
+            CopyAndInflateChars(*jscharBuffer, sourceLinear->latin1Chars(nogc), sourceLength);
+        } else {
+            AutoCheckCannotGC nogc;
+            mozilla::PodCopy(*jscharBuffer, sourceLinear->twoByteChars(nogc), sourceLength);
+        }
         (*jscharBuffer)[sourceLength] = 0;
         break;
       }
@@ -2438,17 +2483,17 @@ ImplicitConvert(JSContext* cx,
     if (val.isString()) {
       JSString* sourceString = val.toString();
       size_t sourceLength = sourceString->length();
-      const jschar* sourceChars = sourceString->getChars(cx);
-      if (!sourceChars)
+      JSLinearString* sourceLinear = sourceString->ensureLinear(cx);
+      if (!sourceLinear)
         return false;
 
       switch (CType::GetTypeCode(baseType)) {
       case TYPE_char:
       case TYPE_signed_char:
       case TYPE_unsigned_char: {
-        // Convert from UTF-16 to UTF-8.
+        // Convert from UTF-16 or Latin1 to UTF-8.
         size_t nbytes =
-          GetDeflatedUTF8StringLength(cx, sourceChars, sourceLength);
+          GetDeflatedUTF8StringLength(cx, sourceLinear);
         if (nbytes == (size_t) -1)
           return false;
 
@@ -2458,8 +2503,8 @@ ImplicitConvert(JSContext* cx,
         }
 
         char* charBuffer = static_cast<char*>(buffer);
-        ASSERT_OK(DeflateStringToUTF8Buffer(cx, sourceChars, sourceLength,
-                    charBuffer, &nbytes));
+        ASSERT_OK(DeflateStringToUTF8Buffer(cx, sourceLinear, charBuffer,
+                                            &nbytes));
 
         if (targetLength > nbytes)
           charBuffer[nbytes] = 0;
@@ -2474,9 +2519,17 @@ ImplicitConvert(JSContext* cx,
           return false;
         }
 
-        memcpy(buffer, sourceChars, sourceLength * sizeof(jschar));
+        jschar *dest = static_cast<jschar*>(buffer);
+        if (sourceLinear->hasLatin1Chars()) {
+            AutoCheckCannotGC nogc;
+            CopyAndInflateChars(dest, sourceLinear->latin1Chars(nogc), sourceLength);
+        } else {
+            AutoCheckCannotGC nogc;
+            mozilla::PodCopy(dest, sourceLinear->twoByteChars(nogc), sourceLength);
+        }
+
         if (targetLength > sourceLength)
-          static_cast<jschar*>(buffer)[sourceLength] = 0;
+          dest[sourceLength] = 0;
 
         break;
       }
@@ -2609,7 +2662,7 @@ ImplicitConvert(JSContext* cx,
   }
   case TYPE_void_t:
   case TYPE_function:
-    MOZ_ASSUME_UNREACHABLE("invalid type");
+    MOZ_CRASH("invalid type");
   }
 
   return true;
@@ -2678,7 +2731,7 @@ ExplicitConvert(JSContext* cx, HandleValue val, HandleObject targetType, void* b
     return false;
   case TYPE_void_t:
   case TYPE_function:
-    MOZ_ASSUME_UNREACHABLE("invalid type");
+    MOZ_CRASH("invalid type");
   }
   return true;
 }
@@ -2850,7 +2903,7 @@ BuildTypeSource(JSContext* cx,
       AppendString(result, "ctypes.winapi_abi, ");
       break;
     case INVALID_ABI:
-      MOZ_ASSUME_UNREACHABLE("invalid abi");
+      MOZ_CRASH("invalid abi");
     }
 
     // Recursively build the source string describing the function return and
@@ -3095,7 +3148,7 @@ BuildDataSource(JSContext* cx,
     break;
   }
   case TYPE_void_t:
-    MOZ_ASSUME_UNREACHABLE("invalid type");
+    MOZ_CRASH("invalid type");
   }
 
   return true;
@@ -3348,10 +3401,10 @@ CType::Trace(JSTracer* trc, JSObject* obj)
     FieldInfoHash* fields = static_cast<FieldInfoHash*>(slot.toPrivate());
     for (FieldInfoHash::Enum e(*fields); !e.empty(); e.popFront()) {
       JSString *key = e.front().key();
-      JS_CallStringTracer(trc, &key, "fieldName");
+      JS_CallUnbarrieredStringTracer(trc, &key, "fieldName");
       if (key != e.front().key())
           e.rekeyFront(JS_ASSERT_STRING_IS_FLAT(key));
-      JS_CallHeapObjectTracer(trc, &e.front().value().mType, "fieldType");
+      JS_CallObjectTracer(trc, &e.front().value().mType, "fieldType");
     }
 
     break;
@@ -3366,10 +3419,10 @@ CType::Trace(JSTracer* trc, JSObject* obj)
     JS_ASSERT(fninfo);
 
     // Identify our objects to the tracer.
-    JS_CallHeapObjectTracer(trc, &fninfo->mABI, "abi");
-    JS_CallHeapObjectTracer(trc, &fninfo->mReturnType, "returnType");
+    JS_CallObjectTracer(trc, &fninfo->mABI, "abi");
+    JS_CallObjectTracer(trc, &fninfo->mReturnType, "returnType");
     for (size_t i = 0; i < fninfo->mArgTypes.length(); ++i)
-      JS_CallHeapObjectTracer(trc, &fninfo->mArgTypes[i], "argType");
+      JS_CallObjectTracer(trc, &fninfo->mArgTypes[i], "argType");
 
     break;
   }
@@ -3552,7 +3605,7 @@ CType::GetFFIType(JSContext* cx, JSObject* obj)
     break;
 
   default:
-    MOZ_ASSUME_UNREACHABLE("simple types must have an ffi_type");
+    MOZ_CRASH("simple types must have an ffi_type");
   }
 
   if (!result)
@@ -4306,8 +4359,8 @@ ArrayType::ConstructData(JSContext* cx,
       // including space for the terminator.
       JSString* sourceString = args[0].toString();
       size_t sourceLength = sourceString->length();
-      const jschar* sourceChars = sourceString->getChars(cx);
-      if (!sourceChars)
+      JSLinearString* sourceLinear = sourceString->ensureLinear(cx);
+      if (!sourceLinear)
         return false;
 
       switch (CType::GetTypeCode(baseType)) {
@@ -4315,7 +4368,7 @@ ArrayType::ConstructData(JSContext* cx,
       case TYPE_signed_char:
       case TYPE_unsigned_char: {
         // Determine the UTF-8 length.
-        length = GetDeflatedUTF8StringLength(cx, sourceChars, sourceLength);
+        length = GetDeflatedUTF8StringLength(cx, sourceLinear);
         if (length == (size_t) -1)
           return false;
 
@@ -4376,7 +4429,7 @@ ArrayType::GetSafeLength(JSObject* obj, size_t* result)
   // The "length" property can be an int, a double, or JSVAL_VOID
   // (for arrays of undefined length), and must always fit in a size_t.
   if (length.isInt32()) {
-    *result = length.toInt32();;
+    *result = length.toInt32();
     return true;
   }
   if (length.isDouble()) {
@@ -4402,7 +4455,7 @@ ArrayType::GetLength(JSObject* obj)
   // (for arrays of undefined length), and must always fit in a size_t.
   // For callers who know it can never be JSVAL_VOID, return a size_t directly.
   if (length.isInt32())
-    return length.toInt32();;
+    return length.toInt32();
   return Convert<size_t>(length.toDouble());
 }
 
@@ -4699,8 +4752,12 @@ AddFieldToArray(JSContext* cx,
 
   *element = OBJECT_TO_JSVAL(fieldObj);
 
+  AutoStableStringChars nameChars(cx);
+  if (!nameChars.initTwoByte(cx, name))
+      return false;
+
   if (!JS_DefineUCProperty(cx, fieldObj,
-         name->chars(), name->length(),
+         nameChars.twoByteChars(), name->length(),
          typeObj,
          JSPROP_ENUMERATE | JSPROP_READONLY | JSPROP_PERMANENT))
     return false;
@@ -4762,7 +4819,7 @@ PostBarrierCallback(JSTracer *trc, JSString *key, void *data)
 
     UnbarrieredFieldInfoHash *table = reinterpret_cast<UnbarrieredFieldInfoHash*>(data);
     JSString *prior = key;
-    JS_CallStringTracer(trc, &key, "CType fieldName");
+    JS_CallUnbarrieredStringTracer(trc, &key, "CType fieldName");
     table->rekeyIfMoved(JS_ASSERT_STRING_IS_FLAT(prior), JS_ASSERT_STRING_IS_FLAT(key));
 }
 
@@ -4832,8 +4889,12 @@ StructType::DefineInternal(JSContext* cx, JSObject* typeObj_, JSObject* fieldsOb
       }
 
       // Add the field to the StructType's 'prototype' property.
+      AutoStableStringChars nameChars(cx);
+      if (!nameChars.initTwoByte(cx, name))
+          return false;
+
       if (!JS_DefineUCProperty(cx, prototype,
-             name->chars(), name->length(), UndefinedHandleValue,
+             nameChars.twoByteChars(), name->length(), UndefinedHandleValue,
              JSPROP_SHARED | JSPROP_ENUMERATE | JSPROP_PERMANENT,
              StructType::FieldGetter, StructType::FieldSetter))
         return false;
@@ -5408,13 +5469,13 @@ IsEllipsis(JSContext* cx, jsval v, bool* isEllipsis)
   JSString* str = v.toString();
   if (str->length() != 3)
     return true;
-  const jschar* chars = str->getChars(cx);
-  if (!chars)
+  JSLinearString *linear = str->ensureLinear(cx);
+  if (!linear)
     return false;
   jschar dot = '.';
-  *isEllipsis = (chars[0] == dot &&
-                 chars[1] == dot &&
-                 chars[2] == dot);
+  *isEllipsis = (linear->latin1OrTwoByteChar(0) == dot &&
+                 linear->latin1OrTwoByteChar(1) == dot &&
+                 linear->latin1OrTwoByteChar(2) == dot);
   return true;
 }
 
@@ -5495,7 +5556,7 @@ FunctionType::BuildSymbolName(JSString* name,
   }
 
   case INVALID_ABI:
-    MOZ_ASSUME_UNREACHABLE("invalid abi");
+    MOZ_CRASH("invalid abi");
   }
 }
 
@@ -5805,7 +5866,7 @@ FunctionType::Call(JSContext* cx,
         // Since we know nothing about the CTypes of the ... arguments,
         // they absolutely must be CData objects already.
         JS_ReportError(cx, "argument %d of type %s is not a CData object",
-                       i, JS_GetTypeName(cx, JS_TypeOfValue(cx, args[i])));
+                       i, InformalValueTypeName(args[i]));
         return false;
       }
       if (!(type = CData::GetCType(obj)) ||
@@ -6037,7 +6098,7 @@ CClosure::Create(JSContext* cx,
 
     // Allocate a buffer for the return value.
     size_t rvSize = CType::GetSize(fninfo->mReturnType);
-    cinfo->errResult = cx->malloc_(rvSize);
+    cinfo->errResult = result->zone()->pod_malloc<uint8_t>(rvSize);
     if (!cinfo->errResult)
       return nullptr;
 
@@ -6092,10 +6153,10 @@ CClosure::Trace(JSTracer* trc, JSObject* obj)
 
   // Identify our objects to the tracer. (There's no need to identify
   // 'closureObj', since that's us.)
-  JS_CallHeapObjectTracer(trc, &cinfo->typeObj, "typeObj");
-  JS_CallHeapObjectTracer(trc, &cinfo->jsfnObj, "jsfnObj");
+  JS_CallObjectTracer(trc, &cinfo->typeObj, "typeObj");
+  JS_CallObjectTracer(trc, &cinfo->jsfnObj, "jsfnObj");
   if (cinfo->thisObj)
-    JS_CallHeapObjectTracer(trc, &cinfo->thisObj, "thisObj");
+    JS_CallObjectTracer(trc, &cinfo->thisObj, "thisObj");
 }
 
 void
@@ -6322,7 +6383,7 @@ CData::Create(JSContext* cx,
   } else {
     // Initialize our own buffer.
     size_t size = CType::GetSize(typeObj);
-    data = (char*)cx->malloc_(size);
+    data = dataObj->zone()->pod_malloc<char>(size);
     if (!data) {
       // Report a catchable allocation error.
       JS_ReportAllocationOverflow(cx);
@@ -6778,7 +6839,7 @@ CDataFinalizer::Methods::ToString(JSContext *cx, unsigned argc, jsval *vp)
       return false;
     }
   } else if (!CDataFinalizer::GetValue(cx, objThis, value.address())) {
-    MOZ_ASSUME_UNREACHABLE("Could not convert an empty CDataFinalizer");
+    MOZ_CRASH("Could not convert an empty CDataFinalizer");
   } else {
     strMessage = ToString(cx, value);
     if (!strMessage) {
@@ -6846,7 +6907,7 @@ CDataFinalizer::GetValue(JSContext *cx, JSObject *obj, jsval *aResult)
   }
 
   RootedObject ctype(cx, GetCType(cx, obj));
-  return ConvertToJS(cx, ctype, /*parent*/NullPtr(), p -> cargs, false, true, aResult);
+  return ConvertToJS(cx, ctype, /*parent*/NullPtr(), p->cargs, false, true, aResult);
 }
 
 /*
@@ -6989,7 +7050,7 @@ CDataFinalizer::Construct(JSContext* cx, unsigned argc, jsval *vp)
       objBestArgType = CData::GetCType(objData);
       size_t sizeBestArg;
       if (!CType::GetSafeSize(objBestArgType, &sizeBestArg)) {
-        MOZ_ASSUME_UNREACHABLE("object with unknown size");
+        MOZ_CRASH("object with unknown size");
       }
       if (sizeBestArg != sizeArg) {
         return TypeError(cx, "(an object with the same size as that expected by the C finalization function)", valData);
@@ -7065,7 +7126,8 @@ CDataFinalizer::CallFinalizer(CDataFinalizer::Private *p,
   SetLastError(0);
 #endif // defined(XP_WIN)
 
-  ffi_call(&p->CIF, FFI_FN(p->code), p->rvalue, &p->cargs);
+  void* args[1] = {p->cargs};
+  ffi_call(&p->CIF, FFI_FN(p->code), p->rvalue, args);
 
   if (errnoStatus) {
     *errnoStatus = errno;

@@ -58,7 +58,7 @@ this.TabCrashReporter = {
     if (!dumpID)
       return
 
-    if (CrashSubmit.submit(dumpID)) {
+    if (CrashSubmit.submit(dumpID, { recordSubmission: true })) {
       this.childMap.set(childID, null); // Avoid resubmission.
     }
   },
@@ -79,7 +79,7 @@ this.TabCrashReporter = {
           continue;
 
         let url = browser.currentURI.spec;
-        window.gBrowser.updateBrowserRemoteness(browser, url);
+        window.gBrowser.updateBrowserRemotenessByURL(browser, url);
         browser.loadURIWithFlags(url, Ci.nsIWebNavigation.LOAD_FLAGS_NONE, null, null, null);
       }
     }

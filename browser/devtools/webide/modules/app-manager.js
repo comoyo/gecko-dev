@@ -6,6 +6,7 @@ const {Cu} = require("chrome");
 
 let { Promise: promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
 
+const {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 const {Devices} = Cu.import("resource://gre/modules/devtools/Devices.jsm");
 const {Services} = Cu.import("resource://gre/modules/Services.jsm");
 const {FileUtils} = Cu.import("resource://gre/modules/FileUtils.jsm");
@@ -18,11 +19,16 @@ const {AppValidator} = require("devtools/app-manager/app-validator");
 const {ConnectionManager, Connection} = require("devtools/client/connection-manager");
 const AppActorFront = require("devtools/app-actor-front");
 const {getDeviceFront} = require("devtools/server/actors/device");
+const {getPreferenceFront} = require("devtools/server/actors/preference");
 const {setTimeout} = require("sdk/timers");
 const {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
-const {USBRuntime, SimulatorRuntime, gLocalRuntime, gRemoteRuntime} = require("devtools/webide/runtimes");
+const {USBRuntime, WiFiRuntime, SimulatorRuntime,
+       gLocalRuntime, gRemoteRuntime} = require("devtools/webide/runtimes");
+const discovery = require("devtools/toolkit/discovery/discovery");
 
-const Strings = Services.strings.createBundle("chrome://webide/content/webide.properties");
+const Strings = Services.strings.createBundle("chrome://browser/locale/devtools/webide.properties");
+
+const WIFI_SCANNING_PREF = "devtools.remote.wifi.scan";
 
 exports.AppManager = AppManager = {
 
@@ -42,19 +48,33 @@ exports.AppManager = AppManager = {
     this.webAppsStore = new WebappsStore(this.connection);
     this.webAppsStore.on("store-ready", this.onWebAppsStoreready);
 
-    this.runtimeList = {usb: [], simulator: [], custom: [gRemoteRuntime]};
+    this.runtimeList = {
+      usb: [],
+      wifi: [],
+      simulator: [],
+      custom: [gRemoteRuntime]
+    };
     if (Services.prefs.getBoolPref("devtools.webide.enableLocalRuntime")) {
       this.runtimeList.custom.push(gLocalRuntime);
     }
     this.trackUSBRuntimes();
+    this.trackWiFiRuntimes();
     this.trackSimulatorRuntimes();
+
+    this.onInstallProgress = this.onInstallProgress.bind(this);
+    AppActorFront.on("install-progress", this.onInstallProgress);
+
+    this.observe = this.observe.bind(this);
+    Services.prefs.addObserver(WIFI_SCANNING_PREF, this, false);
   },
 
   uninit: function() {
+    AppActorFront.off("install-progress", this.onInstallProgress);
     this._unlistenToApps();
     this.selectedProject = null;
     this.selectedRuntime = null;
     this.untrackUSBRuntimes();
+    this.untrackWiFiRuntimes();
     this.untrackSimulatorRuntimes();
     this._runningApps.clear();
     this.runtimeList = null;
@@ -65,6 +85,17 @@ exports.AppManager = AppManager = {
     this._listTabsResponse = null;
     this.connection.disconnect();
     this.connection = null;
+    Services.prefs.removeObserver(WIFI_SCANNING_PREF, this);
+  },
+
+  observe: function(subject, topic, data) {
+    if (data !== WIFI_SCANNING_PREF) {
+      return;
+    }
+    // Cycle WiFi tracking to reflect the new value
+    this.untrackWiFiRuntimes();
+    this.trackWiFiRuntimes();
+    this._updateWiFiRuntimes();
   },
 
   update: function(what, details) {
@@ -107,6 +138,10 @@ exports.AppManager = AppManager = {
     }
 
     this.update("connection");
+  },
+
+  onInstallProgress: function(event, details) {
+    this.update("install-progress", details);
   },
 
   onWebAppsStoreready: function() {
@@ -157,6 +192,9 @@ exports.AppManager = AppManager = {
   },
 
   isProjectRunning: function() {
+    if (this.selectedProject.type == "mainProcess") {
+      return true;
+    }
     let manifest = this.getProjectManifestURL(this.selectedProject);
     return manifest && this._runningApps.has(manifest);
   },
@@ -172,6 +210,14 @@ exports.AppManager = AppManager = {
   },
 
   getTarget: function() {
+    if (this.selectedProject.type == "mainProcess") {
+      return devtools.TargetFactory.forRemoteTab({
+        form: this._listTabsResponse,
+        client: this.connection.client,
+        chrome: true
+      });
+    }
+
     let manifest = this.getProjectManifestURL(this.selectedProject);
     if (!manifest) {
       console.error("Can't find manifestURL for selected project");
@@ -227,7 +273,9 @@ exports.AppManager = AppManager = {
       if (this.selectedProject) {
         if (this.selectedProject.type == "runtimeApp") {
           this.runRuntimeApp();
-        } else {
+        }
+        if (this.selectedProject.type == "packaged" ||
+            this.selectedProject.type == "hosted") {
           this.validateProject(this.selectedProject);
         }
       }
@@ -250,9 +298,9 @@ exports.AppManager = AppManager = {
   _selectedRuntime: null,
   set selectedRuntime(value) {
     this._selectedRuntime = value;
-    if (!value &&
-      this.selectedProject &&
-      this.selectedProject.type == "runtimeApp") {
+    if (!value && this.selectedProject &&
+        (this.selectedProject.type == "mainProcess" ||
+         this.selectedProject.type == "runtimeApp")) {
       this.selectedProject = null;
     }
     this.update("runtime");
@@ -263,33 +311,45 @@ exports.AppManager = AppManager = {
   },
 
   connectToRuntime: function(runtime) {
-    if (this.connection.status == Connection.Status.CONNECTED) {
-      return promise.reject("Already connected");
+
+    if (this.connection.status == Connection.Status.CONNECTED &&
+        this.selectedRuntime === runtime) {
+      // Already connected
+      return promise.resolve();
     }
-    this.selectedRuntime = runtime;
+
     let deferred = promise.defer();
 
-    let onConnectedOrDisconnected = () => {
-      this.connection.off(Connection.Events.CONNECTED, onConnectedOrDisconnected);
-      this.connection.off(Connection.Events.DISCONNECTED, onConnectedOrDisconnected);
-      if (this.connection.status == Connection.Status.CONNECTED) {
-        deferred.resolve();
-      } else {
+    this.disconnectRuntime().then(() => {
+      this.selectedRuntime = runtime;
+
+      let onConnectedOrDisconnected = () => {
+        this.connection.off(Connection.Events.CONNECTED, onConnectedOrDisconnected);
+        this.connection.off(Connection.Events.DISCONNECTED, onConnectedOrDisconnected);
+        if (this.connection.status == Connection.Status.CONNECTED) {
+          deferred.resolve();
+        } else {
+          deferred.reject();
+        }
+      }
+      this.connection.on(Connection.Events.CONNECTED, onConnectedOrDisconnected);
+      this.connection.on(Connection.Events.DISCONNECTED, onConnectedOrDisconnected);
+      try {
+        this.selectedRuntime.connect(this.connection).then(
+          () => {},
+          deferred.reject.bind(deferred));
+      } catch(e) {
+        console.error(e);
         deferred.reject();
       }
-    }
-    this.connection.on(Connection.Events.CONNECTED, onConnectedOrDisconnected);
-    this.connection.on(Connection.Events.DISCONNECTED, onConnectedOrDisconnected);
-    try {
-      this.selectedRuntime.connect(this.connection).then(
-        () => {},
-        () => {deferred.reject()});
-    } catch(e) {
-      console.error(e);
-      deferred.reject();
-    }
+    }, deferred.reject);
 
     return deferred.promise;
+  },
+
+  isMainProcessDebuggable: function() {
+    return this._listTabsResponse &&
+           this._listTabsResponse.consoleActor;
   },
 
   get deviceFront() {
@@ -297,6 +357,13 @@ exports.AppManager = AppManager = {
       return null;
     }
     return getDeviceFront(this.connection.client, this._listTabsResponse);
+  },
+
+  get preferenceFront() {
+    if (!this._listTabsResponse) {
+      return null;
+    }
+    return getPreferenceFront(this.connection.client, this._listTabsResponse);
   },
 
   disconnectRuntime: function() {
@@ -316,7 +383,11 @@ exports.AppManager = AppManager = {
     let client = this.connection.client;
     let actor = this._listTabsResponse.webappsActor;
     let manifest = this.getProjectManifestURL(this.selectedProject);
-    return AppActorFront.launchApp(client, actor, manifest);
+    if (!this.isProjectRunning()) {
+      return AppActorFront.launchApp(client, actor, manifest);
+    } else {
+      return AppActorFront.reloadApp(client, actor, manifest);
+    }
   },
 
   installAndRunProject: function() {
@@ -377,7 +448,8 @@ exports.AppManager = AppManager = {
                                           project.manifest);
       }
 
-      function waitUntilProjectRuns() {
+      let manifest = self.getProjectManifestURL(project);
+      if (!self._runningApps.has(manifest)) {
         let deferred = promise.defer();
         self.on("app-manager-update", function onUpdate(event, what) {
           if (what == "project-is-running") {
@@ -385,13 +457,8 @@ exports.AppManager = AppManager = {
             deferred.resolve();
           }
         });
-        return deferred.promise;
-      }
-
-      let manifest = self.getProjectManifestURL(project);
-      if (!self._runningApps.has(manifest)) {
         yield AppActorFront.launchApp(client, actor, manifest);
-        yield waitUntilProjectRuns();
+        yield deferred.promise;
 
       } else {
         yield AppActorFront.reloadApp(client, actor, manifest);
@@ -504,7 +571,44 @@ exports.AppManager = AppManager = {
   _updateUSBRuntimes: function() {
     this.runtimeList.usb = [];
     for (let id of Devices.available()) {
-      this.runtimeList.usb.push(new USBRuntime(id));
+      let r = new USBRuntime(id);
+      this.runtimeList.usb.push(r);
+      r.updateNameFromADB().then(
+        () => this.update("runtimelist"), () => {});
+    }
+    this.update("runtimelist");
+  },
+
+  get isWiFiScanningEnabled() {
+    return Services.prefs.getBoolPref(WIFI_SCANNING_PREF);
+  },
+  scanForWiFiRuntimes: function() {
+    if (!this.isWiFiScanningEnabled) {
+      return;
+    }
+    discovery.scan();
+  },
+  trackWiFiRuntimes: function() {
+    if (!this.isWiFiScanningEnabled) {
+      return;
+    }
+    this._updateWiFiRuntimes = this._updateWiFiRuntimes.bind(this);
+    discovery.on("devtools-device-added", this._updateWiFiRuntimes);
+    discovery.on("devtools-device-updated", this._updateWiFiRuntimes);
+    discovery.on("devtools-device-removed", this._updateWiFiRuntimes);
+  },
+  untrackWiFiRuntimes: function() {
+    if (!this.isWiFiScanningEnabled) {
+      return;
+    }
+    discovery.off("devtools-device-added", this._updateWiFiRuntimes);
+    discovery.off("devtools-device-updated", this._updateWiFiRuntimes);
+    discovery.off("devtools-device-removed", this._updateWiFiRuntimes);
+  },
+  _updateWiFiRuntimes: function() {
+    this.runtimeList.wifi = [];
+    for (let device of discovery.getRemoteDevicesWithService("devtools")) {
+      this.runtimeList.wifi.push(new WiFiRuntime(device));
     }
     this.update("runtimelist");
   },

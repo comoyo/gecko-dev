@@ -690,20 +690,8 @@
      *   nuses: (argc+2)
      */ \
     macro(JSOP_NEW,       82, js_new_str,   NULL,         3, -1,  1,  JOF_UINT16|JOF_INVOKE|JOF_TYPESET) \
-    /*
-     * Pops the top three values on the stack as 'iterator', 'index' and 'obj',
-     * iterates over 'iterator' and stores the iteration values as 'index + i'
-     * elements of 'obj', pushes 'obj' and 'index + iteration count' onto the
-     * stack.
-     *
-     * This opcode is used in Array literals with spread and spreadcall
-     * arguments as well as in destructing assignment with rest element.
-     *   Category: Literals
-     *   Type: Array
-     *   Operands:
-     *   Stack: obj, index, iterator => obj, (index + iteration count)
-     */ \
-    macro(JSOP_SPREAD,    83, "spread",     NULL,         1,  3,  2,  JOF_BYTE|JOF_ELEM|JOF_SET) \
+    \
+    macro(JSOP_UNUSED83,  83, "unused83",   NULL,         1,  0,  0,  JOF_BYTE) \
     \
     /*
      * Fast get op for function arguments and local variables.
@@ -894,9 +882,28 @@
      *   Stack: obj, id, val => obj
      */ \
     macro(JSOP_INITELEM_SETTER, 100, "initelem_setter",   NULL, 1,  3,  1, JOF_BYTE|JOF_ELEM|JOF_SET|JOF_DETECTING) \
+    /*
+     * Pushes the call site object specified by objectIndex onto the stack. Defines the raw
+     * property specified by objectIndex + 1 on the call site object and freezes both the call site
+     * object as well as its raw property.
+     *   Category: Literals
+     *   Type: Object
+     *   Operands: uint32_t objectIndex
+     *   Stack: => obj
+     */ \
+    macro(JSOP_CALLSITEOBJ,     101, "callsiteobj",     NULL,         5,  0,  1,  JOF_OBJECT) \
     \
-    macro(JSOP_UNUSED101,  101, "unused101",   NULL,         1,  0,  0,  JOF_BYTE) \
-    macro(JSOP_UNUSED102,  102, "unused102",   NULL,         1,  0,  0,  JOF_BYTE) \
+    /*
+     * Pushes a newly created array onto the stack, whose elements are the same
+     * as that of a template object's copy on write elements.
+     *
+     *   Category: Literals
+     *   Type: Array
+     *   Operands: uint32_t objectIndex
+     *   Stack: => obj
+     */ \
+    macro(JSOP_NEWARRAY_COPYONWRITE, 102, "newarray_copyonwrite", NULL, 5, 0, 1, JOF_OBJECT) \
+    \
     macro(JSOP_UNUSED103,  103, "unused103",   NULL,         1,  0,  0,  JOF_BYTE) \
     macro(JSOP_UNUSED104,  104, "unused104",   NULL,         1,  0,  0,  JOF_BYTE) \
     macro(JSOP_UNUSED105,  105, "unused105",   NULL,         1,  0,  0,  JOF_BYTE) \
@@ -1138,8 +1145,9 @@
     macro(JSOP_DEFFUN,    127,"deffun",     NULL,         5,  0,  0,  JOF_OBJECT) \
     /*
      * Defines the new binding on the frame's current variables-object (the
-     * scope object on the scope chain designated to receive new variables)
-     * with 'READONLY' attribute.
+     * scope object on the scope chain designated to receive new variables) with
+     * 'READONLY' attribute. The binding is *not* JSPROP_PERMANENT. See bug
+     * 1019181 for the reason.
      *
      * This is used for global scripts and also in some cases for function
      * scripts where use of dynamic scoping inhibits optimization.
@@ -1649,14 +1657,20 @@
      *   Operands: uint8_t BITFIELD
      *   Stack: =>
      */ \
-    macro(JSOP_LOOPENTRY,     227, "loopentry",    NULL,  2,  0,  0,  JOF_UINT8)
+    macro(JSOP_LOOPENTRY,     227, "loopentry",    NULL,  2,  0,  0,  JOF_UINT8) \
+    /*
+     * Converts the value on the top of the stack to a String
+     *   Category: Other
+     *   Operands:
+     *   Stack: val => ToString(val)
+     */ \
+    macro(JSOP_TOSTRING,    228, "tostring",       NULL,  1,  1,  1,  JOF_BYTE)
 
 /*
  * In certain circumstances it may be useful to "pad out" the opcode space to
  * a power of two.  Use this macro to do so.
  */
 #define FOR_EACH_TRAILING_UNUSED_OPCODE(macro) \
-    macro(228) \
     macro(229) \
     macro(230) \
     macro(231) \

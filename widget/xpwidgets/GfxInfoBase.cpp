@@ -43,9 +43,10 @@ bool GfxInfoBase::mDriverInfoObserverInitialized;
 // Observes for shutdown so that the child GfxDriverInfo list is freed.
 class ShutdownObserver : public nsIObserver
 {
+  virtual ~ShutdownObserver() {}
+
 public:
   ShutdownObserver() {}
-  virtual ~ShutdownObserver() {}
 
   NS_DECL_ISUPPORTS
 
@@ -291,8 +292,8 @@ BlacklistFeatureToGfxFeature(const nsAString& aFeature)
 static int32_t
 BlacklistFeatureStatusToGfxFeatureStatus(const nsAString& aStatus)
 {
-  if (aStatus.EqualsLiteral("NO_INFO"))
-    return nsIGfxInfo::FEATURE_NO_INFO;
+  if (aStatus.EqualsLiteral("STATUS_OK"))
+    return nsIGfxInfo::FEATURE_STATUS_OK;
   else if (aStatus.EqualsLiteral("BLOCKED_DRIVER_VERSION"))
     return nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
   else if (aStatus.EqualsLiteral("BLOCKED_DEVICE"))
@@ -304,7 +305,7 @@ BlacklistFeatureStatusToGfxFeatureStatus(const nsAString& aStatus)
 
   // Do not allow it to set STATUS_UNKNOWN.
 
-  return nsIGfxInfo::FEATURE_NO_INFO;
+  return nsIGfxInfo::FEATURE_STATUS_OK;
 }
 
 static VersionComparisonOp
@@ -704,9 +705,30 @@ GfxInfoBase::FindBlocklistedDeviceInList(const nsTArray<GfxDriverInfo>& info,
     }
   }
 
+#if defined(XP_WIN)
+  // As a very special case, we block D2D on machines with an NVidia 310M GPU
+  // as either the primary or secondary adapter.  D2D is also blocked when the
+  // NV 310M is the primary adapter (using the standard blocklisting mechanism).
+  // If the primary GPU already matched something in the blocklist then we
+  // ignore this special rule.  See bug 1008759.
+  if (status == nsIGfxInfo::FEATURE_STATUS_UNKNOWN &&
+    (aFeature == nsIGfxInfo::FEATURE_DIRECT2D)) {
+    nsAutoString adapterVendorID2;
+    nsAutoString adapterDeviceID2;
+    if ((!NS_FAILED(GetAdapterVendorID2(adapterVendorID2))) &&
+      (!NS_FAILED(GetAdapterDeviceID2(adapterDeviceID2))))
+    {
+      nsAString &nvVendorID = (nsAString &)GfxDriverInfo::GetDeviceVendor(VendorNVIDIA);
+      const nsString nv310mDeviceId = NS_LITERAL_STRING("0x0A70");
+      if (nvVendorID.Equals(adapterVendorID2, nsCaseInsensitiveStringComparator()) &&
+        nv310mDeviceId.Equals(adapterDeviceID2, nsCaseInsensitiveStringComparator())) {
+        status = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+      }
+    }
+  }
+
   // Depends on Windows driver versioning. We don't pass a GfxDriverInfo object
   // back to the Windows handler, so we must handle this here.
-#if defined(XP_WIN)
   if (status == FEATURE_BLOCKED_DRIVER_VERSION) {
     if (info[i].mSuggestedVersion) {
         aSuggestedVersion.AppendPrintf("%s", info[i].mSuggestedVersion);
@@ -768,9 +790,9 @@ GfxInfoBase::GetFeatureStatusImpl(int32_t aFeature,
     status = FindBlocklistedDeviceInList(GetGfxDriverInfo(), aSuggestedVersion, aFeature, os);
   }
 
-  // It's now done being processed. It's safe to set the status to NO_INFO.
+  // It's now done being processed. It's safe to set the status to STATUS_OK.
   if (status == nsIGfxInfo::FEATURE_STATUS_UNKNOWN) {
-    *aStatus = nsIGfxInfo::FEATURE_NO_INFO;
+    *aStatus = nsIGfxInfo::FEATURE_STATUS_OK;
   } else {
     *aStatus = status;
   }
@@ -819,7 +841,7 @@ GfxInfoBase::EvaluateDownloadedBlacklist(nsTArray<GfxDriverInfo>& aDriverInfo)
   };
 
   // For every feature we know about, we evaluate whether this blacklist has a
-  // non-NO_INFO status. If it does, we set the pref we evaluate in
+  // non-STATUS_OK status. If it does, we set the pref we evaluate in
   // GetFeatureStatus above, so we don't need to hold on to this blacklist
   // anywhere permanent.
   int i = 0;
@@ -831,7 +853,7 @@ GfxInfoBase::EvaluateDownloadedBlacklist(nsTArray<GfxDriverInfo>& aDriverInfo)
                                           aDriverInfo))) {
       switch (status) {
         default:
-        case nsIGfxInfo::FEATURE_NO_INFO:
+        case nsIGfxInfo::FEATURE_STATUS_OK:
           RemovePrefForFeature(features[i]);
           break;
 

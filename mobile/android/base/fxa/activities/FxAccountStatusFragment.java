@@ -18,8 +18,10 @@ import org.mozilla.gecko.fxa.login.Married;
 import org.mozilla.gecko.fxa.login.State;
 import org.mozilla.gecko.fxa.sync.FxAccountSyncStatusHelper;
 import org.mozilla.gecko.fxa.tasks.FxAccountCodeResender;
+import org.mozilla.gecko.sync.ExtendedJSONObject;
 import org.mozilla.gecko.sync.SharedPreferencesClientsDataDelegate;
 import org.mozilla.gecko.sync.SyncConfiguration;
+import org.mozilla.gecko.util.HardwareUtils;
 
 import android.accounts.Account;
 import android.content.ContentResolver;
@@ -56,7 +58,17 @@ public class FxAccountStatusFragment
   // collection.
   private static final long DELAY_IN_MILLISECONDS_BEFORE_REQUESTING_SYNC = 5 * 1000;
 
+  // By default, the auth/account server preference is only shown when the
+  // account is configured to use a custom server. In debug mode, this is set.
+  private static boolean ALWAYS_SHOW_AUTH_SERVER = false;
+
+  // By default, the Sync server preference is only shown when the account is
+  // configured to use a custom Sync server. In debug mode, this is set.
+  private static boolean ALWAYS_SHOW_SYNC_SERVER = false;
+
+  protected PreferenceCategory accountCategory;
   protected Preference emailPreference;
+  protected Preference authServerPreference;
 
   protected Preference needsPasswordPreference;
   protected Preference needsUpgradePreference;
@@ -72,6 +84,8 @@ public class FxAccountStatusFragment
   protected CheckBoxPreference passwordsPreference;
 
   protected EditTextPreference deviceNamePreference;
+  protected Preference syncServerPreference;
+  protected Preference morePreference;
 
   protected volatile AndroidFxAccount fxAccount;
   // The contract is: when fxAccount is non-null, then clientsDataDelegate is
@@ -99,13 +113,22 @@ public class FxAccountStatusFragment
   @Override
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+
+    // We need to do this before we can query the hardware menu button state.
+    // We're guaranteed to have an activity at this point (onAttach is called
+    // before onCreate). It's okay to call this multiple times (with different
+    // contexts).
+    HardwareUtils.init(getActivity());
+
     addPreferences();
   }
 
   protected void addPreferences() {
     addPreferencesFromResource(R.xml.fxaccount_status_prefscreen);
 
+    accountCategory = (PreferenceCategory) ensureFindPreference("signed_in_as_category");
     emailPreference = ensureFindPreference("email");
+    authServerPreference = ensureFindPreference("auth_server");
 
     needsPasswordPreference = ensureFindPreference("needs_credentials");
     needsUpgradePreference = ensureFindPreference("needs_upgrade");
@@ -124,6 +147,8 @@ public class FxAccountStatusFragment
       removeDebugButtons();
     } else {
       connectDebugButtons();
+      ALWAYS_SHOW_AUTH_SERVER = true;
+      ALWAYS_SHOW_SYNC_SERVER = true;
     }
 
     needsPasswordPreference.setOnPreferenceClickListener(this);
@@ -137,6 +162,14 @@ public class FxAccountStatusFragment
 
     deviceNamePreference = (EditTextPreference) ensureFindPreference("device_name");
     deviceNamePreference.setOnPreferenceChangeListener(this);
+
+    syncServerPreference = ensureFindPreference("sync_server");
+    morePreference = ensureFindPreference("more");
+    morePreference.setOnPreferenceClickListener(this);
+
+    if (HardwareUtils.hasMenuButton()) {
+      syncCategory.removePreference(morePreference);
+    }
   }
 
   /**
@@ -152,6 +185,10 @@ public class FxAccountStatusFragment
   public boolean onPreferenceClick(Preference preference) {
     if (preference == needsPasswordPreference) {
       Intent intent = new Intent(getActivity(), FxAccountUpdateCredentialsActivity.class);
+      final Bundle extras = getExtrasForAccount();
+      if (extras != null) {
+        intent.putExtras(extras);
+      }
       // Per http://stackoverflow.com/a/8992365, this triggers a known bug with
       // the soft keyboard not being shown for the started activity. Why, Android, why?
       intent.setFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
@@ -187,7 +224,23 @@ public class FxAccountStatusFragment
       return true;
     }
 
+    if (preference == morePreference) {
+      getActivity().openOptionsMenu();
+      return true;
+    }
+
     return false;
+  }
+
+  protected Bundle getExtrasForAccount() {
+    final Bundle extras = new Bundle();
+    final ExtendedJSONObject o = new ExtendedJSONObject();
+    o.put(FxAccountAbstractSetupActivity.JSON_KEY_AUTH, fxAccount.getAccountServerURI());
+    final ExtendedJSONObject services = new ExtendedJSONObject();
+    services.put(FxAccountAbstractSetupActivity.JSON_KEY_SYNC, fxAccount.getTokenServerURI());
+    o.put(FxAccountAbstractSetupActivity.JSON_KEY_SERVICES, services);
+    extras.putString(FxAccountAbstractSetupActivity.EXTRA_EXTRAS, o.toJSONString());
+    return extras;
   }
 
   protected void setCheckboxesEnabled(boolean enabled) {
@@ -315,7 +368,7 @@ public class FxAccountStatusFragment
     }
     this.fxAccount = fxAccount;
     try {
-      this.clientsDataDelegate = new SharedPreferencesClientsDataDelegate(fxAccount.getSyncPrefs());
+      this.clientsDataDelegate = new SharedPreferencesClientsDataDelegate(fxAccount.getSyncPrefs(), getActivity().getApplicationContext());
     } catch (Exception e) {
       Logger.error(LOG_TAG, "Got exception fetching Sync prefs associated to Firefox Account; aborting.", e);
       // Something is terribly wrong; best to get a stack trace rather than
@@ -367,6 +420,8 @@ public class FxAccountStatusFragment
     }
 
     emailPreference.setTitle(fxAccount.getEmail());
+    updateAuthServerPreference();
+    updateSyncServerPreference();
 
     try {
       // There are error states determined by Android, not the login state
@@ -415,6 +470,38 @@ public class FxAccountStatusFragment
     final String clientName = clientsDataDelegate.getClientName();
     deviceNamePreference.setSummary(clientName);
     deviceNamePreference.setText(clientName);
+  }
+
+  protected void updateAuthServerPreference() {
+    final String authServer = fxAccount.getAccountServerURI();
+    final boolean shouldBeShown = ALWAYS_SHOW_AUTH_SERVER || !FxAccountConstants.DEFAULT_AUTH_SERVER_ENDPOINT.equals(authServer);
+    final boolean currentlyShown = null != findPreference(authServerPreference.getKey());
+    if (currentlyShown != shouldBeShown) {
+      if (shouldBeShown) {
+        accountCategory.addPreference(authServerPreference);
+      } else {
+        accountCategory.removePreference(authServerPreference);
+      }
+    }
+    // Always set the summary, because on first run, the preference is visible,
+    // and the above block will be skipped if there is a custom value.
+    authServerPreference.setSummary(authServer);
+  }
+
+  protected void updateSyncServerPreference() {
+    final String syncServer = fxAccount.getTokenServerURI();
+    final boolean shouldBeShown = ALWAYS_SHOW_SYNC_SERVER || !FxAccountConstants.DEFAULT_TOKEN_SERVER_ENDPOINT.equals(syncServer);
+    final boolean currentlyShown = null != findPreference(syncServerPreference.getKey());
+    if (currentlyShown != shouldBeShown) {
+      if (shouldBeShown) {
+        syncCategory.addPreference(syncServerPreference);
+      } else {
+        syncCategory.removePreference(syncServerPreference);
+      }
+    }
+    // Always set the summary, because on first run, the preference is visible,
+    // and the above block will be skipped if there is a custom value.
+    syncServerPreference.setSummary(syncServer);
   }
 
   /**

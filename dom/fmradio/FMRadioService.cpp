@@ -6,23 +6,20 @@
 
 #include "FMRadioService.h"
 #include "mozilla/Hal.h"
+#include "mozilla/ClearOnShutdown.h"
 #include "nsIAudioManager.h"
 #include "AudioManager.h"
 #include "nsDOMClassInfo.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/FMRadioChild.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "nsIObserverService.h"
 #include "nsISettingsService.h"
 #include "nsJSUtils.h"
-#include "nsCxPusher.h"
 
 #define BAND_87500_108000_kHz 1
 #define BAND_76000_108000_kHz 2
 #define BAND_76000_90000_kHz  3
-
-#define CHANNEL_WIDTH_200KHZ 200
-#define CHANNEL_WIDTH_100KHZ 100
-#define CHANNEL_WIDTH_50KHZ  50
 
 #define MOZSETTINGS_CHANGED_ID "mozsettings-changed"
 #define SETTING_KEY_AIRPLANEMODE_ENABLED "airplaneMode.enabled"
@@ -77,17 +74,28 @@ FMRadioService::FMRadioService()
       break;
   }
 
-  switch (Preferences::GetInt("dom.fmradio.channelWidth",
-                              CHANNEL_WIDTH_100KHZ)) {
-    case CHANNEL_WIDTH_200KHZ:
-      mChannelWidthInKHz = 200;
+  mChannelWidthInKHz = Preferences::GetInt("dom.fmradio.channelWidth", 100);
+  switch (mChannelWidthInKHz) {
+    case 50:
+    case 100:
+    case 200:
       break;
-    case CHANNEL_WIDTH_50KHZ:
-      mChannelWidthInKHz = 50;
-      break;
-    case CHANNEL_WIDTH_100KHZ:
     default:
+      NS_WARNING("Invalid channel width specified in dom.fmradio.channelwidth");
       mChannelWidthInKHz = 100;
+      break;
+  }
+
+  mPreemphasis = Preferences::GetInt("dom.fmradio.preemphasis", 50);
+  switch (mPreemphasis) {
+    // values in microseconds
+    case 0:
+    case 50:
+    case 75:
+      break;
+    default:
+      NS_WARNING("Invalid preemphasis specified in dom.fmradio.preemphasis");
+      mPreemphasis = 50;
       break;
   }
 
@@ -110,10 +118,13 @@ FMRadioService::~FMRadioService()
 class EnableRunnable MOZ_FINAL : public nsRunnable
 {
 public:
-  EnableRunnable(int32_t aUpperLimit, int32_t aLowerLimit, int32_t aSpaceType)
+  EnableRunnable(uint32_t aUpperLimit, uint32_t aLowerLimit, uint32_t aSpaceType, uint32_t aPreemphasis)
     : mUpperLimit(aUpperLimit)
     , mLowerLimit(aLowerLimit)
-    , mSpaceType(aSpaceType) { }
+    , mSpaceType(aSpaceType)
+    , mPreemphasis(aPreemphasis)
+  {
+  }
 
   NS_IMETHOD Run()
   {
@@ -121,16 +132,25 @@ public:
     info.upperLimit() = mUpperLimit;
     info.lowerLimit() = mLowerLimit;
     info.spaceType() = mSpaceType;
+    info.preEmphasis() = mPreemphasis;
 
     EnableFMRadio(info);
+
+    FMRadioService* fmRadioService = FMRadioService::Singleton();
+    if (!fmRadioService->mTuneThread) {
+      // SeekRunnable and SetFrequencyRunnable run on this thread.
+      // These call ioctls that can stall the main thread, so we run them here.
+      NS_NewNamedThread("FM Tuning", getter_AddRefs(fmRadioService->mTuneThread));
+    }
 
     return NS_OK;
   }
 
 private:
-  int32_t mUpperLimit;
-  int32_t mLowerLimit;
-  int32_t mSpaceType;
+  uint32_t mUpperLimit;
+  uint32_t mLowerLimit;
+  uint32_t mSpaceType;
+  uint32_t mPreemphasis;
 };
 
 /**
@@ -165,7 +185,8 @@ public:
       EnableRunnable* runnable =
         new EnableRunnable(fmRadioService->mUpperBoundInKHz,
                            fmRadioService->mLowerBoundInKHz,
-                           fmRadioService->mChannelWidthInKHz);
+                           fmRadioService->mChannelWidthInKHz,
+                           fmRadioService->mPreemphasis);
       NS_DispatchToMainThread(runnable);
     } else {
       // Airplane mode is enabled, set the state back to Disabled.
@@ -201,10 +222,15 @@ public:
 
   NS_IMETHOD Run()
   {
+    FMRadioService* fmRadioService = FMRadioService::Singleton();
+    if (fmRadioService->mTuneThread) {
+      fmRadioService->mTuneThread->Shutdown();
+      fmRadioService->mTuneThread = nullptr;
+    }
     // Fix Bug 796733. DisableFMRadio should be called before
     // SetFmRadioAudioEnabled to prevent the annoying beep sound.
     DisableFMRadio();
-    IFMRadioService::Singleton()->EnableAudio(false);
+    fmRadioService->EnableAudio(false);
 
     return NS_OK;
   }
@@ -285,7 +311,7 @@ FMRadioService::RemoveObserver(FMRadioEventObserver* aObserver)
   {
     // Turning off the FM radio HW because observer list is empty.
     if (IsFMRadioOn()) {
-      NS_DispatchToMainThread(new DisableRunnable());
+      DoDisable();
     }
   }
 }
@@ -457,7 +483,8 @@ FMRadioService::Enable(double aFrequencyInMHz,
 
   NS_DispatchToMainThread(new EnableRunnable(mUpperBoundInKHz,
                                              mLowerBoundInKHz,
-                                             mChannelWidthInKHz));
+                                             mChannelWidthInKHz,
+                                             mPreemphasis));
 }
 
 void
@@ -581,7 +608,8 @@ FMRadioService::SetFrequency(double aFrequencyInMHz,
     return;
   }
 
-  NS_DispatchToMainThread(new SetFrequencyRunnable(roundedFrequency));
+  mTuneThread->Dispatch(new SetFrequencyRunnable(roundedFrequency),
+                        nsIThread::DISPATCH_NORMAL);
 
   aReplyRunnable->SetReply(SuccessResponse());
   NS_DispatchToMainThread(aReplyRunnable);
@@ -622,7 +650,7 @@ FMRadioService::Seek(FMRadioSeekDirection aDirection,
   SetState(Seeking);
   mPendingRequest = aReplyRunnable;
 
-  NS_DispatchToMainThread(new SeekRunnable(aDirection));
+  mTuneThread->Dispatch(new SeekRunnable(aDirection), nsIThread::DISPATCH_NORMAL);
 }
 
 void
@@ -681,7 +709,7 @@ FMRadioService::Observe(nsISupports * aSubject,
   }
 
   JS::Rooted<JSString*> jsKey(cx, key.toString());
-  nsDependentJSString keyStr;
+  nsAutoJSString keyStr;
   if (!keyStr.init(cx, jsKey)) {
     return NS_OK;
   }
@@ -805,6 +833,7 @@ FMRadioService::Singleton()
 
   if (!sFMRadioService) {
     sFMRadioService = new FMRadioService();
+    ClearOnShutdown(&sFMRadioService);
   }
 
   return sFMRadioService;

@@ -65,6 +65,8 @@ private:
 class nsCacheService : public nsICacheServiceInternal,
                        public nsIMemoryReporter
 {
+    virtual ~nsCacheService();
+
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSICACHESERVICE
@@ -72,7 +74,6 @@ public:
     NS_DECL_NSIMEMORYREPORTER
 
     nsCacheService();
-    virtual ~nsCacheService();
 
     // Define a Create method to be used with a factory:
     static nsresult
@@ -392,7 +393,7 @@ private:
 // execution scope.
 class nsCacheServiceAutoLock {
 public:
-    nsCacheServiceAutoLock(mozilla::Telemetry::ID mainThreadLockerID) {
+    explicit nsCacheServiceAutoLock(mozilla::Telemetry::ID mainThreadLockerID) {
         nsCacheService::Lock(mainThreadLockerID);
     }
     ~nsCacheServiceAutoLock() {

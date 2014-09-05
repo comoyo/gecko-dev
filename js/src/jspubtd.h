@@ -25,6 +25,11 @@
 # define JSGC_TRACK_EXACT_ROOTS
 #endif
 
+#if (defined(JSGC_GENERATIONAL) && defined(JS_GC_ZEAL)) || \
+    (defined(JSGC_COMPACTING) && defined(DEBUG))
+# define JSGC_HASH_TABLE_CHECKS
+#endif
+
 namespace JS {
 
 class AutoIdVector;
@@ -71,6 +76,7 @@ enum JSType {
     JSTYPE_NUMBER,              /* number */
     JSTYPE_BOOLEAN,             /* boolean */
     JSTYPE_NULL,                /* null */
+    JSTYPE_SYMBOL,              /* symbol */
     JSTYPE_LIMIT
 };
 
@@ -104,6 +110,7 @@ enum JSIterateOp {
 enum JSGCTraceKind {
     JSTRACE_OBJECT,
     JSTRACE_STRING,
+    JSTRACE_SYMBOL,
     JSTRACE_SCRIPT,
 
     /*
@@ -142,11 +149,7 @@ class JS_PUBLIC_API(JSTracer);
 
 class JSFlatString;
 
-#ifdef JS_THREADSAFE
 typedef struct PRCallOnceType   JSCallOnceType;
-#else
-typedef bool                    JSCallOnceType;
-#endif
 typedef bool                    (*JSInitCallback)(void);
 
 /*
@@ -175,7 +178,7 @@ namespace shadow {
 struct Runtime
 {
     /* Restrict zone access during Minor GC. */
-    bool needsBarrier_;
+    bool needsIncrementalBarrier_;
 
 #ifdef JSGC_GENERATIONAL
   private:
@@ -188,14 +191,14 @@ struct Runtime
         js::gc::StoreBuffer *storeBuffer
 #endif
     )
-      : needsBarrier_(false)
+      : needsIncrementalBarrier_(false)
 #ifdef JSGC_GENERATIONAL
       , gcStoreBufferPtr_(storeBuffer)
 #endif
     {}
 
-    bool needsBarrier() const {
-        return needsBarrier_;
+    bool needsIncrementalBarrier() const {
+        return needsIncrementalBarrier_;
     }
 
 #ifdef JSGC_GENERATIONAL
@@ -266,6 +269,13 @@ class JS_PUBLIC_API(AutoGCRooter)
     static void traceAll(JSTracer *trc);
     static void traceAllWrappers(JSTracer *trc);
 
+    /* T must be a context type */
+    template<typename T>
+    static void traceAllInContext(T* cx, JSTracer *trc) {
+        for (AutoGCRooter *gcr = cx->autoGCRooters; gcr; gcr = gcr->down)
+            gcr->trace(trc);
+    }
+
   protected:
     AutoGCRooter * const down;
 
@@ -292,15 +302,14 @@ class JS_PUBLIC_API(AutoGCRooter)
         NAMEVECTOR =  -17, /* js::AutoNameVector */
         HASHABLEVALUE=-18, /* js::HashableValue */
         IONMASM =     -19, /* js::jit::MacroAssembler */
-        IONALLOC =    -20, /* js::jit::AutoTempAllocatorRooter */
-        WRAPVECTOR =  -21, /* js::AutoWrapperVector */
-        WRAPPER =     -22, /* js::AutoWrapperRooter */
-        OBJOBJHASHMAP=-23, /* js::AutoObjectObjectHashMap */
-        OBJU32HASHMAP=-24, /* js::AutoObjectUnsigned32HashMap */
-        OBJHASHSET =  -25, /* js::AutoObjectHashSet */
-        JSONPARSER =  -26, /* js::JSONParser */
-        CUSTOM =      -27, /* js::CustomAutoRooter */
-        FUNVECTOR =   -28  /* js::AutoFunctionVector */
+        WRAPVECTOR =  -20, /* js::AutoWrapperVector */
+        WRAPPER =     -21, /* js::AutoWrapperRooter */
+        OBJOBJHASHMAP=-22, /* js::AutoObjectObjectHashMap */
+        OBJU32HASHMAP=-23, /* js::AutoObjectUnsigned32HashMap */
+        OBJHASHSET =  -24, /* js::AutoObjectHashSet */
+        JSONPARSER =  -25, /* js::JSONParser */
+        CUSTOM =      -26, /* js::CustomAutoRooter */
+        FUNVECTOR =   -27  /* js::AutoFunctionVector */
     };
 
   private:
@@ -324,7 +333,7 @@ namespace js {
 enum ParallelResult { TP_SUCCESS, TP_RETRY_SEQUENTIALLY, TP_RETRY_AFTER_GC, TP_FATAL };
 
 struct ThreadSafeContext;
-struct ForkJoinContext;
+class ForkJoinContext;
 class ExclusiveContext;
 
 class Allocator;
@@ -336,6 +345,7 @@ enum ThingRootKind
     THING_ROOT_BASE_SHAPE,
     THING_ROOT_TYPE_OBJECT,
     THING_ROOT_STRING,
+    THING_ROOT_SYMBOL,
     THING_ROOT_JIT_CODE,
     THING_ROOT_SCRIPT,
     THING_ROOT_LAZY_SCRIPT,
@@ -379,6 +389,7 @@ template <> struct RootKind<JSObject *> : SpecificRootKind<JSObject *, THING_ROO
 template <> struct RootKind<JSFlatString *> : SpecificRootKind<JSFlatString *, THING_ROOT_STRING> {};
 template <> struct RootKind<JSFunction *> : SpecificRootKind<JSFunction *, THING_ROOT_OBJECT> {};
 template <> struct RootKind<JSString *> : SpecificRootKind<JSString *, THING_ROOT_STRING> {};
+template <> struct RootKind<JS::Symbol *> : SpecificRootKind<JS::Symbol *, THING_ROOT_SYMBOL> {};
 template <> struct RootKind<JSScript *> : SpecificRootKind<JSScript *, THING_ROOT_SCRIPT> {};
 template <> struct RootKind<jsid> : SpecificRootKind<jsid, THING_ROOT_ID> {};
 template <> struct RootKind<JS::Value> : SpecificRootKind<JS::Value, THING_ROOT_VALUE> {};

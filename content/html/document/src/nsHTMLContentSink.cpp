@@ -23,8 +23,7 @@
 #include "nsIURI.h"
 #include "nsNetUtil.h"
 #include "nsIContentViewer.h"
-#include "nsIMarkupDocumentViewer.h"
-#include "nsINodeInfo.h"
+#include "mozilla/dom/NodeInfo.h"
 #include "nsToken.h"
 #include "nsIAppShell.h"
 #include "nsCRT.h"
@@ -87,11 +86,11 @@ using namespace mozilla::dom;
 //----------------------------------------------------------------------
 
 typedef nsGenericHTMLElement*
-  (*contentCreatorCallback)(already_AddRefed<nsINodeInfo>&&,
+  (*contentCreatorCallback)(already_AddRefed<mozilla::dom::NodeInfo>&&,
                             FromParser aFromParser);
 
 nsGenericHTMLElement*
-NS_NewHTMLNOTUSEDElement(already_AddRefed<nsINodeInfo>&& aNodeInfo,
+NS_NewHTMLNOTUSEDElement(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                          FromParser aFromParser)
 {
   NS_NOTREACHED("The element ctor should never be called");
@@ -124,7 +123,6 @@ public:
   friend class SinkContext;
 
   HTMLContentSink();
-  virtual ~HTMLContentSink();
 
   NS_DECL_AND_IMPL_ZEROING_OPERATOR_NEW
 
@@ -152,6 +150,8 @@ public:
   NS_IMETHOD CloseContainer(ElementType aTag);
 
 protected:
+  virtual ~HTMLContentSink();
+
   nsCOMPtr<nsIHTMLDocument> mHTMLDocument;
 
   // The maximum length of a text run
@@ -177,7 +177,7 @@ protected:
   uint8_t mFramesEnabled : 1;
   uint8_t unused : 6;  // bits available if someone needs one
 
-  nsINodeInfo* mNodeInfoCache[NS_HTML_TAG_MAX + 1];
+  mozilla::dom::NodeInfo* mNodeInfoCache[NS_HTML_TAG_MAX + 1];
 
   nsresult FlushTags();
 
@@ -200,7 +200,7 @@ protected:
 class SinkContext
 {
 public:
-  SinkContext(HTMLContentSink* aSink);
+  explicit SinkContext(HTMLContentSink* aSink);
   ~SinkContext();
 
   nsresult Begin(nsHTMLTag aNodeType, nsGenericHTMLElement* aRoot,
@@ -242,12 +242,12 @@ public:
 };
 
 nsresult
-NS_NewHTMLElement(Element** aResult, already_AddRefed<nsINodeInfo>&& aNodeInfo,
+NS_NewHTMLElement(Element** aResult, already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                   FromParser aFromParser)
 {
   *aResult = nullptr;
 
-  nsCOMPtr<nsINodeInfo> nodeInfo = aNodeInfo;
+  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo = aNodeInfo;
 
   nsIParserService* parserService = nsContentUtils::GetParserService();
   if (!parserService)
@@ -288,7 +288,7 @@ NS_NewHTMLElement(Element** aResult, already_AddRefed<nsINodeInfo>&& aNodeInfo,
 
 already_AddRefed<nsGenericHTMLElement>
 CreateHTMLElement(uint32_t aNodeType,
-                  already_AddRefed<nsINodeInfo>&& aNodeInfo,
+                  already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                   FromParser aFromParser)
 {
   NS_ASSERTION(aNodeType <= NS_HTML_TAG_MAX ||
@@ -405,7 +405,7 @@ SinkContext::OpenBody()
     }
   }
 
-    nsCOMPtr<nsINodeInfo> nodeInfo =
+    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo =
       mSink->mNodeInfoManager->GetNodeInfo(nsGkAtoms::body, nullptr,
                                            kNameSpaceID_XHTML,
                                            nsIDOMNode::ELEMENT_NODE);
@@ -709,7 +709,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLContentSink,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mHead)
   for (uint32_t i = 0; i < ArrayLength(tmp->mNodeInfoCache); ++i) {
     NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mNodeInfoCache[i]");
-    cb.NoteXPCOMChild(tmp->mNodeInfoCache[i]);
+    cb.NoteNativeChild(tmp->mNodeInfoCache[i],
+                       NS_CYCLE_COLLECTION_PARTICIPANT(NodeInfo));
   }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -780,7 +781,7 @@ HTMLContentSink::Init(nsIDocument* aDoc,
   // large pages.  See bugzilla bug 77540.
   mMaxTextRun = Preferences::GetInt("content.maxtextrun", 8191);
 
-  nsCOMPtr<nsINodeInfo> nodeInfo;
+  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::html, nullptr,
                                            kNameSpaceID_XHTML,
                                            nsIDOMNode::ELEMENT_NODE);

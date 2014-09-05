@@ -1,8 +1,11 @@
-// -*- Mode: js2; tab-width: 2; indent-tabs-mode: nil; js2-basic-offset: 2; js2-skip-preprocessor-directives: t; -*-
+// -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
+
+// Define elements that bound phone number containers.
+const PHONE_NUMBER_CONTAINERS = "td,div";
 
 var SelectionHandler = {
   HANDLE_TYPE_START: "START",
@@ -304,9 +307,6 @@ var SelectionHandler = {
 
     this._initTargetInfo(aElement, this.TYPE_SELECTION);
 
-    // Clear any existing selection from the document
-    this._contentWindow.getSelection().removeAllRanges();
-
     // Perform the appropriate selection method, if we can't determine method, or it fails, return
     if (!this._performSelection(aOptions)) {
       this._deactivate();
@@ -318,42 +318,6 @@ var SelectionHandler = {
     if (!selection || selection.rangeCount == 0 || selection.getRangeAt(0).collapsed) {
       this._deactivate();
       return false;
-    }
-
-    if (this._isPhoneNumber(selection.toString())) {
-      let anchorNode = selection.anchorNode;
-      let anchorOffset = selection.anchorOffset;
-      let focusNode = null;
-      let focusOffset = null;
-      while (this._isPhoneNumber(selection.toString().trim())) {
-        focusNode = selection.focusNode;
-        focusOffset = selection.focusOffset;
-        selection.modify("extend", "forward", "word");
-        // if we hit the end of the text on the page, we can't advance the selection
-        if (focusNode == selection.focusNode && focusOffset == selection.focusOffset) {
-          break;
-        }
-      }
-
-      // reverse selection
-      selection.collapse(focusNode, focusOffset);
-      selection.extend(anchorNode, anchorOffset);
-
-      anchorNode = focusNode;
-      anchorOffset = focusOffset
-
-      while (this._isPhoneNumber(selection.toString().trim())) {
-        focusNode = selection.focusNode;
-        focusOffset = selection.focusOffset;
-        selection.modify("extend", "backward", "word");
-        // if we hit the end of the text on the page, we can't advance the selection
-        if (focusNode == selection.focusNode && focusOffset == selection.focusOffset) {
-          break;
-        }
-      }
-
-      selection.collapse(focusNode, focusOffset);
-      selection.extend(anchorNode, anchorOffset);
     }
 
     // Add a listener to end the selection if it's removed programatically
@@ -390,7 +354,18 @@ var SelectionHandler = {
    */
   _performSelection: function sh_performSelection(aOptions) {
     if (aOptions.mode == this.SELECT_AT_POINT) {
-      return this._domWinUtils.selectAtPoint(aOptions.x, aOptions.y, Ci.nsIDOMWindowUtils.SELECT_WORDNOSPACE);
+      // Clear any ranges selected outside SelectionHandler, by code such as Find-In-Page.
+      this._contentWindow.getSelection().removeAllRanges();
+      if (!this._domWinUtils.selectAtPoint(aOptions.x, aOptions.y, Ci.nsIDOMWindowUtils.SELECT_WORDNOSPACE)) {
+        return false;
+      }
+
+      // Perform additional phone-number "smart selection".
+      if (this._isPhoneNumber(this._getSelection().toString())) {
+        this._selectSmartPhoneNumber();
+      }
+
+      return true;
     }
 
     if (aOptions.mode != this.SELECT_ALL) {
@@ -404,7 +379,12 @@ var SelectionHandler = {
     }
 
     // Else default to selectALL Document
-    this._getSelectionController().selectAll();
+    let editor = this._getEditor();
+    if (editor) {
+      editor.selectAll();
+    } else {
+      this._getSelectionController().selectAll();
+    }
 
     // Selection is entire HTMLHtmlElement, remove any trailing document whitespace
     let selection = this._getSelection();
@@ -423,6 +403,71 @@ var SelectionHandler = {
     }
 
     return true;
+  },
+
+  /*
+   * Called to expand a selection that appears to represent a phone number. This enhances the basic
+   * SELECT_WORDNOSPACE logic employed in performSelection() in response to long-tap / selecting text.
+   */
+  _selectSmartPhoneNumber: function() {
+    this._extendPhoneNumberSelection("forward");
+    this._reversePhoneNumberSelectionDir();
+
+    this._extendPhoneNumberSelection("backward");
+    this._reversePhoneNumberSelectionDir();
+  },
+
+  /*
+   * Extend the current phone number selection in the requested direction.
+   */
+  _extendPhoneNumberSelection: function(direction) {
+    let selection = this._getSelection();
+
+    // Extend the phone number selection until we find a boundry.
+    while (true) {
+      // Save current focus position, and extend the selection.
+      let focusNode = selection.focusNode;
+      let focusOffset = selection.focusOffset;
+      selection.modify("extend", direction, "character");
+
+      // If the selection doesn't change, (can't extend further), we're done.
+      if (selection.focusNode == focusNode && selection.focusOffset == focusOffset) {
+        return;
+      }
+
+      // Don't extend past a valid phone number.
+      if (!this._isPhoneNumber(selection.toString().trim())) {
+        // Backout the undesired selection extend, and we're done.
+        selection.collapse(selection.anchorNode, selection.anchorOffset);
+        selection.extend(focusNode, focusOffset);
+        return;
+      }
+
+      // Don't extend the selection into a new container.
+      if (selection.focusNode != focusNode) {
+        let nextContainer = (selection.focusNode instanceof Text) ?
+          selection.focusNode.parentNode : selection.focusNode;
+        if (nextContainer.matches &&
+            nextContainer.matches(PHONE_NUMBER_CONTAINERS)) {
+          // Backout the undesired selection extend, and we're done.
+          selection.collapse(selection.anchorNode, selection.anchorOffset);
+          selection.extend(focusNode, focusOffset);
+          return
+        }
+      }
+    }
+  },
+
+  /*
+   * Reverse the the selection direction, swapping anchorNode <-+-> focusNode.
+   */
+  _reversePhoneNumberSelectionDir: function(direction) {
+    let selection = this._getSelection();
+
+    let anchorNode = selection.anchorNode;
+    let anchorOffset = selection.anchorOffset;
+    selection.collapse(selection.focusNode, selection.focusOffset);
+    selection.extend(anchorNode, anchorOffset);
   },
 
   /* Return true if the current selection (given by aPositions) is near to where the coordinates passed in */
@@ -516,7 +561,8 @@ var SelectionHandler = {
       id: "selectall_action",
       icon: "drawable://ab_select_all",
       action: function(aElement) {
-        SelectionHandler.startSelection(aElement)
+        SelectionHandler.startSelection(aElement);
+        UITelemetry.addEvent("action.1", "actionbar", null, "select_all");
       },
       order: 5,
       selector: {
@@ -539,6 +585,7 @@ var SelectionHandler = {
 
         // copySelection closes the selection. Show a caret where we just cut the text.
         SelectionHandler.attachCaret(aElement);
+        UITelemetry.addEvent("action.1", "actionbar", null, "cut");
       },
       order: 4,
       selector: {
@@ -555,6 +602,7 @@ var SelectionHandler = {
       icon: "drawable://ab_copy",
       action: function() {
         SelectionHandler.copySelection();
+        UITelemetry.addEvent("action.1", "actionbar", null, "copy");
       },
       order: 3,
       selector: {
@@ -579,6 +627,7 @@ var SelectionHandler = {
           target.editor.paste(Ci.nsIClipboard.kGlobalClipboard);
           target.focus();
           SelectionHandler._closeSelection();
+          UITelemetry.addEvent("action.1", "actionbar", null, "paste");
         }
       },
       order: 2,
@@ -599,6 +648,7 @@ var SelectionHandler = {
       icon: "drawable://ic_menu_share",
       action: function() {
         SelectionHandler.shareSelection();
+        UITelemetry.addEvent("action.1", "actionbar", null, "share");
       },
       selector: {
         matches: function() {
@@ -616,6 +666,7 @@ var SelectionHandler = {
       action: function() {
         SelectionHandler.searchSelection();
         SelectionHandler._closeSelection();
+        UITelemetry.addEvent("action.1", "actionbar", null, "search");
       },
       order: 1,
       selector: {
@@ -631,6 +682,7 @@ var SelectionHandler = {
       icon: "drawable://phone",
       action: function() {
         SelectionHandler.callSelection();
+        UITelemetry.addEvent("action.1", "actionbar", null, "call");
       },
       order: 1,
       selector: {
@@ -650,7 +702,7 @@ var SelectionHandler = {
   attachCaret: function sh_attachCaret(aElement) {
     // Ensure it isn't disabled, isn't handled by Android native dialog, and is editable text element
     if (aElement.disabled || InputWidgetHelper.hasInputWidget(aElement) || !this.isElementEditableText(aElement)) {
-      return;
+      return false;
     }
 
     this._initTargetInfo(aElement, this.TYPE_CURSOR);
@@ -670,6 +722,8 @@ var SelectionHandler = {
       handles: [this.HANDLE_TYPE_MIDDLE]
     });
     this._updateMenu();
+
+    return true;
   },
 
   // Target initialization for both TYPE_CURSOR and TYPE_SELECTION
@@ -713,6 +767,17 @@ var SelectionHandler = {
     }
 
     return selection.toString().trim();
+  },
+
+  _getEditor: function sh_getEditor() {
+    if (this._targetElement instanceof Ci.nsIDOMNSEditableElement) {
+      return this._targetElement.QueryInterface(Ci.nsIDOMNSEditableElement).editor;
+    }
+    return this._contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                              .getInterface(Ci.nsIWebNavigation)
+                              .QueryInterface(Ci.nsIInterfaceRequestor)
+                              .getInterface(Ci.nsIEditingSession)
+                              .getEditorForWindow(this._contentWindow);
   },
 
   _getSelectionController: function sh_getSelectionController() {

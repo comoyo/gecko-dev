@@ -356,9 +356,13 @@ nsSVGUtils::GetOuterSVGFrameAndCoveredRegion(nsIFrame* aFrame, nsRect* aRect)
   nsISVGChildFrame* svg = do_QueryFrame(aFrame);
   if (!svg)
     return nullptr;
+  nsSVGOuterSVGFrame* outer = GetOuterSVGFrame(aFrame);
+  if (outer == svg) {
+    return nullptr;
+  }
   *aRect = (aFrame->GetStateBits() & NS_FRAME_IS_NONDISPLAY) ?
              nsRect(0, 0, 0, 0) : svg->GetCoveredRegion();
-  return GetOuterSVGFrame(aFrame);
+  return outer;
 }
 
 gfxMatrix
@@ -373,10 +377,8 @@ nsSVGUtils::GetCanvasTM(nsIFrame *aFrame, uint32_t aFor,
 
   if (!(aFrame->GetStateBits() & NS_FRAME_IS_NONDISPLAY) &&
       !aTransformRoot) {
-    if ((aFor == nsISVGChildFrame::FOR_PAINTING &&
-         NS_SVGDisplayListPaintingEnabled()) ||
-        (aFor == nsISVGChildFrame::FOR_HIT_TESTING &&
-         NS_SVGDisplayListHitTestingEnabled())) {
+    if (aFor == nsISVGChildFrame::FOR_PAINTING &&
+        NS_SVGDisplayListPaintingEnabled()) {
       return nsSVGIntegrationUtils::GetCSSPxToDevPxMatrix(aFrame);
     }
   }
@@ -529,7 +531,10 @@ nsSVGUtils::PaintFrameWithEffects(nsRenderingContext *aContext,
       if (static_cast<nsSVGContainerFrame*>(aFrame)->
             HasChildrenOnlyTransform(&childrenOnlyTM)) {
         // Undo the children-only transform:
-        tm = ThebesMatrix(childrenOnlyTM).Invert() * tm;
+        if (!childrenOnlyTM.Invert()) {
+          return;
+        }
+        tm = ThebesMatrix(childrenOnlyTM) * tm;
       }
     }
     nsIntRect bounds = TransformFrameRectToOuterSVG(overflowRect,
@@ -604,7 +609,7 @@ nsSVGUtils::PaintFrameWithEffects(nsRenderingContext *aContext,
    */
   if (clipPathFrame && isTrivialClip) {
     gfx->Save();
-    clipPathFrame->ClipPaint(aContext, aFrame, matrix);
+    clipPathFrame->ApplyClipOrPaintClipMask(aContext, aFrame, matrix);
   }
 
   /* Paint the child */
@@ -648,14 +653,15 @@ nsSVGUtils::PaintFrameWithEffects(nsRenderingContext *aContext,
   gfx->PopGroupToSource();
 
   nsRefPtr<gfxPattern> maskSurface =
-    maskFrame ? maskFrame->ComputeMaskAlpha(aContext, aFrame,
-                                            matrix, opacity) : nullptr;
+    maskFrame ? maskFrame->GetMaskForMaskedFrame(aContext->ThebesContext(),
+                                                 aFrame, matrix, opacity)
+              : nullptr;
 
   nsRefPtr<gfxPattern> clipMaskSurface;
   if (clipPathFrame && !isTrivialClip) {
     gfx->PushGroup(gfxContentType::COLOR_ALPHA);
 
-    nsresult rv = clipPathFrame->ClipPaint(aContext, aFrame, matrix);
+    nsresult rv = clipPathFrame->ApplyClipOrPaintClipMask(aContext, aFrame, matrix);
     clipMaskSurface = gfx->PopGroup();
 
     if (NS_SUCCEEDED(rv) && clipMaskSurface) {
@@ -680,7 +686,7 @@ nsSVGUtils::PaintFrameWithEffects(nsRenderingContext *aContext,
 }
 
 bool
-nsSVGUtils::HitTestClip(nsIFrame *aFrame, const nsPoint &aPoint)
+nsSVGUtils::HitTestClip(nsIFrame *aFrame, const gfxPoint &aPoint)
 {
   nsSVGEffects::EffectProperties props =
     nsSVGEffects::GetEffectProperties(aFrame);
@@ -699,13 +705,28 @@ nsSVGUtils::HitTestClip(nsIFrame *aFrame, const nsPoint &aPoint)
     return true;
   }
 
-  return clipPathFrame->ClipHitTest(aFrame, GetCanvasTM(aFrame,
-                                    nsISVGChildFrame::FOR_HIT_TESTING), aPoint);
+  return clipPathFrame->PointIsInsideClipPath(aFrame, aPoint);
 }
 
 nsIFrame *
-nsSVGUtils::HitTestChildren(nsIFrame *aFrame, const nsPoint &aPoint)
+nsSVGUtils::HitTestChildren(nsSVGDisplayContainerFrame* aFrame,
+                            const gfxPoint& aPoint)
 {
+  // First we transform aPoint into the coordinate space established by aFrame
+  // for its children (e.g. take account of any 'viewBox' attribute):
+  gfxPoint point = aPoint;
+  if (aFrame->GetContent()->IsSVG()) { // must check before cast
+    gfxMatrix m = static_cast<const nsSVGElement*>(aFrame->GetContent())->
+                    PrependLocalTransformsTo(gfxMatrix(),
+                                             nsSVGElement::eChildToUserSpace);
+    if (!m.IsIdentity()) {
+      if (!m.Invert()) {
+        return nullptr;
+      }
+      point = m.Transform(point);
+    }
+  }
+
   // Traverse the list in reverse order, so that if we get a hit we know that's
   // the topmost frame that intersects the point; then we can just return it.
   nsIFrame* result = nullptr;
@@ -719,7 +740,21 @@ nsSVGUtils::HitTestChildren(nsIFrame *aFrame, const nsPoint &aPoint)
           !static_cast<const nsSVGElement*>(content)->HasValidDimensions()) {
         continue;
       }
-      result = SVGFrame->GetFrameForPoint(aPoint);
+      // GetFrameForPoint() expects a point in its frame's SVG user space, so
+      // we need to convert to that space:
+      gfxPoint p = point;
+      if (content->IsSVG()) { // must check before cast
+        gfxMatrix m = static_cast<const nsSVGElement*>(content)->
+                        PrependLocalTransformsTo(gfxMatrix(),
+                                                 nsSVGElement::eUserSpaceToParent);
+        if (!m.IsIdentity()) {
+          if (!m.Invert()) {
+            continue;
+          }
+          p = m.Transform(p);
+        }
+      }
+      result = SVGFrame->GetFrameForPoint(p);
       if (result)
         break;
     }
@@ -758,9 +793,9 @@ nsSVGUtils::TransformOuterSVGPointToChildFrame(nsPoint aPoint,
                     "Callers must not pass a singular matrix");
   gfxMatrix canvasDevToFrameUserSpace = aFrameToCanvasTM;
   canvasDevToFrameUserSpace.Invert();
-  gfxPoint devPt = gfxPoint(aPoint.x, aPoint.y) /
-    aPresContext->AppUnitsPerDevPixel();
-  gfxPoint userPt = canvasDevToFrameUserSpace.Transform(devPt);
+  gfxPoint cssPxPt =
+    gfxPoint(aPoint.x, aPoint.y) / aPresContext->AppUnitsPerCSSPixel();
+  gfxPoint userPt = canvasDevToFrameUserSpace.Transform(cssPxPt);
   gfxPoint appPt = (userPt * aPresContext->AppUnitsPerCSSPixel()).Round();
   userPt.x = clamped(appPt.x, gfxFloat(nscoord_MIN), gfxFloat(nscoord_MAX));
   userPt.y = clamped(appPt.y, gfxFloat(nscoord_MIN), gfxFloat(nscoord_MAX));
@@ -1111,11 +1146,10 @@ PathExtentsToMaxStrokeExtents(const gfxRect& aPathExtents,
   double style_expansion =
     aStyleExpansionFactor * nsSVGUtils::GetStrokeWidth(aFrame);
 
-  gfxMatrix matrix = aMatrix;
-  matrix.Multiply(nsSVGUtils::GetStrokeTransform(aFrame));
+  gfxMatrix matrix = aMatrix * nsSVGUtils::GetStrokeTransform(aFrame);
 
-  double dx = style_expansion * (fabs(matrix.xx) + fabs(matrix.xy));
-  double dy = style_expansion * (fabs(matrix.yy) + fabs(matrix.yx));
+  double dx = style_expansion * (fabs(matrix._11) + fabs(matrix._21));
+  double dy = style_expansion * (fabs(matrix._22) + fabs(matrix._12));
 
   gfxRect strokeExtents = aPathExtents;
   strokeExtents.Inflate(dx, dy);
@@ -1364,8 +1398,7 @@ nsSVGUtils::GetStrokeWidth(nsIFrame* aFrame, gfxTextContextPaint *aContextPaint)
 
   nsSVGElement *ctx = static_cast<nsSVGElement*>(content);
 
-  return SVGContentUtils::CoordToFloat(aFrame->PresContext(), ctx,
-                                       style->mStrokeWidth);
+  return SVGContentUtils::CoordToFloat(ctx, style->mStrokeWidth);
 }
 
 void
@@ -1420,7 +1453,6 @@ GetStrokeDashData(nsIFrame* aFrame,
                   gfxTextContextPaint *aContextPaint)
 {
   const nsStyleSVG* style = aFrame->StyleSVG();
-  nsPresContext *presContext = aFrame->PresContext();
   nsIContent *content = aFrame->GetContent();
   nsSVGElement *ctx = static_cast<nsSVGElement*>
     (content->IsNodeOfType(nsINode::eTEXT) ?
@@ -1456,8 +1488,7 @@ GetStrokeDashData(nsIFrame* aFrame,
     const nsStyleCoord *dasharray = style->mStrokeDasharray;
 
     for (uint32_t i = 0; i < count; i++) {
-      aDashes[i] = SVGContentUtils::CoordToFloat(presContext,
-                                                 ctx,
+      aDashes[i] = SVGContentUtils::CoordToFloat(ctx,
                                                  dasharray[i]) * pathScale;
       if (aDashes[i] < 0.0) {
         return false;
@@ -1469,8 +1500,7 @@ GetStrokeDashData(nsIFrame* aFrame,
   if (aContextPaint && style->mStrokeDashoffsetFromObject) {
     *aDashOffset = aContextPaint->GetStrokeDashOffset();
   } else {
-    *aDashOffset = SVGContentUtils::CoordToFloat(presContext,
-                                                 ctx,
+    *aDashOffset = SVGContentUtils::CoordToFloat(ctx,
                                                  style->mStrokeDashoffset);
   }
   

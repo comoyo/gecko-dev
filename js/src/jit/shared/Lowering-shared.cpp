@@ -9,6 +9,8 @@
 #include "jit/LIR.h"
 #include "jit/MIR.h"
 
+#include "vm/Symbol.h"
+
 using namespace js;
 using namespace jit;
 
@@ -23,6 +25,8 @@ LIRGeneratorShared::visitConstant(MConstant *ins)
         return define(new(alloc()) LInteger(v.toInt32()), ins);
       case MIRType_String:
         return define(new(alloc()) LPointer(v.toString()), ins);
+      case MIRType_Symbol:
+        return define(new(alloc()) LPointer(v.toSymbol()), ins);
       case MIRType_Object:
         return define(new(alloc()) LPointer(&v.toObject()), ins);
       default:
@@ -102,9 +106,7 @@ LIRGeneratorShared::buildSnapshot(LInstruction *ins, MResumePoint *rp, BailoutKi
         return nullptr;
 
     size_t index = 0;
-    LRecoverInfo::OperandIter it(recoverInfo->begin());
-    LRecoverInfo::OperandIter end(recoverInfo->end());
-    for (; it != end; ++it) {
+    for (LRecoverInfo::OperandIter it(recoverInfo); !it; ++it) {
         // Check that optimized out operands are in eliminable slots.
         MOZ_ASSERT(it.canOptimizeOutIfUnused());
 
@@ -134,10 +136,10 @@ LIRGeneratorShared::buildSnapshot(LInstruction *ins, MResumePoint *rp, BailoutKi
         // constants, including known types, we record a dummy placeholder,
         // since we can recover the same information, much cleaner, from MIR.
         if (ins->isConstant() || ins->isUnused()) {
-            *type = LConstantIndex::Bogus();
-            *payload = LConstantIndex::Bogus();
+            *type = LAllocation();
+            *payload = LAllocation();
         } else if (ins->type() != MIRType_Value) {
-            *type = LConstantIndex::Bogus();
+            *type = LAllocation();
             *payload = use(ins, LUse(LUse::KEEPALIVE));
         } else {
             *type = useType(ins, LUse::KEEPALIVE);
@@ -162,9 +164,7 @@ LIRGeneratorShared::buildSnapshot(LInstruction *ins, MResumePoint *rp, BailoutKi
         return nullptr;
 
     size_t index = 0;
-    LRecoverInfo::OperandIter it(recoverInfo->begin());
-    LRecoverInfo::OperandIter end(recoverInfo->end());
-    for (; it != end; ++it) {
+    for (LRecoverInfo::OperandIter it(recoverInfo); !it; ++it) {
         // Check that optimized out operands are in eliminable slots.
         MOZ_ASSERT(it.canOptimizeOutIfUnused());
 
@@ -187,7 +187,7 @@ LIRGeneratorShared::buildSnapshot(LInstruction *ins, MResumePoint *rp, BailoutKi
         LAllocation *a = snapshot->getEntry(index++);
 
         if (def->isUnused()) {
-            *a = LConstantIndex::Bogus();
+            *a = LAllocation();
             continue;
         }
 
@@ -214,7 +214,7 @@ LIRGeneratorShared::assignSnapshot(LInstruction *ins, BailoutKind kind)
 }
 
 bool
-LIRGeneratorShared::assignSafepoint(LInstruction *ins, MInstruction *mir)
+LIRGeneratorShared::assignSafepoint(LInstruction *ins, MInstruction *mir, BailoutKind kind)
 {
     JS_ASSERT(!osiPoint_);
     JS_ASSERT(!ins->safepoint());
@@ -222,7 +222,7 @@ LIRGeneratorShared::assignSafepoint(LInstruction *ins, MInstruction *mir)
     ins->initSafepoint(alloc());
 
     MResumePoint *mrp = mir->resumePoint() ? mir->resumePoint() : lastResumePoint_;
-    LSnapshot *postSnapshot = buildSnapshot(ins, mrp, Bailout_Normal);
+    LSnapshot *postSnapshot = buildSnapshot(ins, mrp, kind);
     if (!postSnapshot)
         return false;
 

@@ -17,12 +17,12 @@ class nsRenderingContext;
 
 typedef nsSVGContainerFrame nsSVGMaskFrameBase;
 
-class nsSVGMaskFrame : public nsSVGMaskFrameBase
+class nsSVGMaskFrame MOZ_FINAL : public nsSVGMaskFrameBase
 {
   friend nsIFrame*
   NS_NewSVGMaskFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 protected:
-  nsSVGMaskFrame(nsStyleContext* aContext)
+  explicit nsSVGMaskFrame(nsStyleContext* aContext)
     : nsSVGMaskFrameBase(aContext)
     , mInUse(false)
   {
@@ -33,10 +33,10 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
   // nsSVGMaskFrame method:
-  already_AddRefed<gfxPattern> ComputeMaskAlpha(nsRenderingContext *aContext,
-                                                nsIFrame* aParent,
-                                                const gfxMatrix &aMatrix,
-                                                float aOpacity = 1.0f);
+  already_AddRefed<gfxPattern> GetMaskForMaskedFrame(gfxContext* aContext,
+                                                     nsIFrame* aMaskedFrame,
+                                                     const gfxMatrix &aMatrix,
+                                                     float aOpacity);
 
   virtual nsresult AttributeChanged(int32_t         aNameSpaceID,
                                     nsIAtom*        aAttribute,
@@ -74,8 +74,8 @@ private:
   class MOZ_STACK_CLASS AutoMaskReferencer
   {
   public:
-    AutoMaskReferencer(nsSVGMaskFrame *aFrame
-                       MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit AutoMaskReferencer(nsSVGMaskFrame *aFrame
+                                MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
        : mFrame(aFrame) {
       MOZ_GUARD_OBJECT_NOTIFIER_INIT;
       NS_ASSERTION(!mFrame->mInUse, "reference loop!");

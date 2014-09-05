@@ -55,6 +55,22 @@ public:
   uint64_t mAsyncID;
 };
 
+void
+RemoveTextureFromCompositableTracker::ReleaseTextureClient()
+{
+  if (mTextureClient &&
+      mTextureClient->GetAllocator() &&
+      !mTextureClient->GetAllocator()->IsImageBridgeChild())
+  {
+    TextureClientReleaseTask* task = new TextureClientReleaseTask(mTextureClient);
+    RefPtr<ISurfaceAllocator> allocator = mTextureClient->GetAllocator();
+    mTextureClient = nullptr;
+    allocator->GetMessageLoop()->PostTask(FROM_HERE, task);
+  } else {
+    mTextureClient = nullptr;
+  }
+}
+
 /* static */ void
 CompositableClient::TransactionCompleteted(PCompositableChild* aActor, uint64_t aTransactionId)
 {
@@ -170,30 +186,35 @@ CompositableClient::GetAsyncID() const
 }
 
 TemporaryRef<BufferTextureClient>
-CompositableClient::CreateBufferTextureClient(SurfaceFormat aFormat,
-                                              TextureFlags aTextureFlags,
-                                              gfx::BackendType aMoz2DBackend)
+CompositableClient::CreateBufferTextureClient(gfx::SurfaceFormat aFormat,
+                                              gfx::IntSize aSize,
+                                              gfx::BackendType aMoz2DBackend,
+                                              TextureFlags aTextureFlags)
 {
-  return TextureClient::CreateBufferTextureClient(GetForwarder(), aFormat,
-                                                  aTextureFlags | mTextureFlags,
-                                                  aMoz2DBackend);
+  return TextureClient::CreateForRawBufferAccess(GetForwarder(),
+                                                 aFormat, aSize, aMoz2DBackend,
+                                                 aTextureFlags | mTextureFlags);
 }
 
 TemporaryRef<TextureClient>
-CompositableClient::CreateTextureClientForDrawing(SurfaceFormat aFormat,
-                                                  TextureFlags aTextureFlags,
+CompositableClient::CreateTextureClientForDrawing(gfx::SurfaceFormat aFormat,
+                                                  gfx::IntSize aSize,
                                                   gfx::BackendType aMoz2DBackend,
-                                                  const IntSize& aSizeHint)
+                                                  TextureFlags aTextureFlags,
+                                                  TextureAllocationFlags aAllocFlags)
 {
-  return TextureClient::CreateTextureClientForDrawing(GetForwarder(), aFormat,
-                                                      aTextureFlags | mTextureFlags,
-                                                      aMoz2DBackend,
-                                                      aSizeHint);
+  return TextureClient::CreateForDrawing(GetForwarder(),
+                                         aFormat, aSize, aMoz2DBackend,
+                                         aTextureFlags | mTextureFlags,
+                                         aAllocFlags);
 }
 
 bool
 CompositableClient::AddTextureClient(TextureClient* aClient)
 {
+  if(!aClient || !aClient->IsAllocated()) {
+    return false;
+  }
   return aClient->InitIPDLActor(mForwarder);
 }
 

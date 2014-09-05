@@ -85,6 +85,9 @@ TextRenderer::RenderText(const string& aText, const IntPoint& aOrigin,
   // Create a surface to draw our glyphs to.
   RefPtr<DataSourceSurface> textSurf =
     Factory::CreateDataSourceSurface(IntSize(maxWidth, numLines * sCellHeight), sTextureFormat);
+  if (NS_WARN_IF(!textSurf)) {
+    return;
+  }
 
   DataSourceSurface::MappedSurface map;
   textSurf->Map(DataSourceSurface::MapType::READ_WRITE, &map);
@@ -144,6 +147,9 @@ TextRenderer::EnsureInitialized()
   }
 
   mGlyphBitmaps = Factory::CreateDataSourceSurface(IntSize(sTextureWidth, sTextureHeight), sTextureFormat);
+  if (NS_WARN_IF(!mGlyphBitmaps)) {
+    return;
+  }
 
   mGlyphBitmaps->Map(DataSourceSurface::MapType::READ_WRITE, &mMap);
 

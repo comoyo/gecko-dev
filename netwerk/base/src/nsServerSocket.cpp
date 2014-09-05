@@ -407,8 +407,10 @@ namespace {
 
 class ServerSocketListenerProxy MOZ_FINAL : public nsIServerSocketListener
 {
+  ~ServerSocketListenerProxy() {}
+
 public:
-  ServerSocketListenerProxy(nsIServerSocketListener* aListener)
+  explicit ServerSocketListenerProxy(nsIServerSocketListener* aListener)
     : mListener(new nsMainThreadPtrHolder<nsIServerSocketListener>(aListener))
     , mTargetThread(do_GetCurrentThread())
   { }

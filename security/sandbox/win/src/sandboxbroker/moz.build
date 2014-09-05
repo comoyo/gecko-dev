@@ -5,7 +5,11 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 LIBRARY_NAME = 'sandboxbroker'
-EXPORT_LIBRARY = True
+
+USE_LIBS += [
+    'nspr',
+    'sandbox_s',
+]
 
 SOURCES += [
     'sandboxBroker.cpp',
@@ -28,3 +32,7 @@ LOCAL_INCLUDES += [
 ]
 
 DISABLE_STL_WRAPPING = True
+
+OS_LIBS += [
+    'dbghelp',
+]

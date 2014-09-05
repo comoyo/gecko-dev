@@ -752,6 +752,13 @@ function getBlackBoxButton(aPanel) {
   return aPanel.panelWin.document.getElementById("black-box");
 }
 
+/**
+ * Returns the node that has the black-boxed class applied to it.
+ */
+function getSelectedSourceElement(aPanel) {
+    return aPanel.panelWin.DebuggerView.Sources.selectedItem.prebuiltNode;
+}
+
 function toggleBlackBoxing(aPanel, aSource = null) {
   function clickBlackBoxButton() {
     getBlackBoxButton(aPanel).click();
@@ -919,3 +926,14 @@ function doInterrupt(aPanel) {
   return rdpInvoke(threadClient, threadClient.interrupt);
 }
 
+function pushPrefs(...aPrefs) {
+  let deferred = promise.defer();
+  SpecialPowers.pushPrefEnv({"set": aPrefs}, deferred.resolve);
+  return deferred.promise;
+}
+
+function popPrefs() {
+  let deferred = promise.defer();
+  SpecialPowers.popPrefEnv(deferred.resolve);
+  return deferred.promise;
+}

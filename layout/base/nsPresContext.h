@@ -69,6 +69,7 @@ class nsDeviceContext;
 namespace mozilla {
 class EventStateManager;
 class RestyleManager;
+class CounterStyleManager;
 namespace dom {
 class MediaQueryList;
 }
@@ -242,13 +243,17 @@ public:
   nsRefreshDriver* RefreshDriver() { return mRefreshDriver; }
 
   mozilla::RestyleManager* RestyleManager() { return mRestyleManager; }
+
+  mozilla::CounterStyleManager* CounterStyleManager() {
+    return mCounterStyleManager;
+  }
 #endif
 
   /**
    * Rebuilds all style data by throwing out the old rule tree and
    * building a new one, and additionally applying aExtraHint (which
    * must not contain nsChangeHint_ReconstructFrame) to the root frame.
-   * Also rebuild the user font set.
+   * Also rebuild the user font set and counter style manager.
    */
   void RebuildAllStyleData(nsChangeHint aExtraHint);
   /**
@@ -683,10 +688,6 @@ public:
   /**
    * Getter and setter for OMTA time counters
    */
-  bool ThrottledTransitionStyleIsUpToDate() const;
-  void TickLastUpdateThrottledTransitionStyle();
-  bool ThrottledAnimationStyleIsUpToDate() const;
-  void TickLastUpdateThrottledAnimationStyle();
   bool StyleUpdateForAllAnimationsIsUpToDate();
   void TickLastStyleUpdateForAllAnimations();
 
@@ -869,6 +870,9 @@ public:
   // user font set is changed and fonts become unavailable).
   void UserFontSetUpdated();
 
+  void FlushCounterStyles();
+  void RebuildCounterStyles(); // asynchronously
+
   // Ensure that it is safe to hand out CSS rules outside the layout
   // engine by ensuring that all CSS style sheets have unique inners
   // and, if necessary, synchronously rebuilding all style data.
@@ -933,7 +937,7 @@ public:
   friend class InterruptPreventer;
   class MOZ_STACK_CLASS InterruptPreventer {
   public:
-    InterruptPreventer(nsPresContext* aCtx) :
+    explicit InterruptPreventer(nsPresContext* aCtx) :
       mCtx(aCtx),
       mInterruptsEnabled(aCtx->mInterruptsEnabled),
       mHasPendingInterrupt(aCtx->mHasPendingInterrupt)
@@ -1065,28 +1069,26 @@ protected:
       : mLangGroup(nullptr)
       , mMinimumFontSize(0)
       , mDefaultVariableFont(mozilla::eFamily_serif, NS_FONT_STYLE_NORMAL,
-                             NS_FONT_VARIANT_NORMAL,
                              NS_FONT_WEIGHT_NORMAL,
                              NS_FONT_STRETCH_NORMAL, 0, 0)
       , mDefaultFixedFont(mozilla::eFamily_monospace, NS_FONT_STYLE_NORMAL,
-                          NS_FONT_VARIANT_NORMAL, NS_FONT_WEIGHT_NORMAL,
+                          NS_FONT_WEIGHT_NORMAL,
                           NS_FONT_STRETCH_NORMAL, 0, 0)
       , mDefaultSerifFont(mozilla::eFamily_serif, NS_FONT_STYLE_NORMAL,
-                          NS_FONT_VARIANT_NORMAL, NS_FONT_WEIGHT_NORMAL,
+                          NS_FONT_WEIGHT_NORMAL,
                           NS_FONT_STRETCH_NORMAL, 0, 0)
       , mDefaultSansSerifFont(mozilla::eFamily_sans_serif,
                               NS_FONT_STYLE_NORMAL,
-                              NS_FONT_VARIANT_NORMAL,
                               NS_FONT_WEIGHT_NORMAL,
                               NS_FONT_STRETCH_NORMAL, 0, 0)
       , mDefaultMonospaceFont(mozilla::eFamily_monospace, NS_FONT_STYLE_NORMAL,
-                              NS_FONT_VARIANT_NORMAL, NS_FONT_WEIGHT_NORMAL,
+                              NS_FONT_WEIGHT_NORMAL,
                               NS_FONT_STRETCH_NORMAL, 0, 0)
       , mDefaultCursiveFont(mozilla::eFamily_cursive, NS_FONT_STYLE_NORMAL,
-                            NS_FONT_VARIANT_NORMAL, NS_FONT_WEIGHT_NORMAL,
+                            NS_FONT_WEIGHT_NORMAL,
                             NS_FONT_STRETCH_NORMAL, 0, 0)
       , mDefaultFantasyFont(mozilla::eFamily_fantasy, NS_FONT_STYLE_NORMAL,
-                            NS_FONT_VARIANT_NORMAL, NS_FONT_WEIGHT_NORMAL,
+                            NS_FONT_WEIGHT_NORMAL,
                             NS_FONT_STRETCH_NORMAL, 0, 0)
     {}
 
@@ -1158,6 +1160,11 @@ protected:
     FlushUserFontSet();
   }
 
+  void HandleRebuildCounterStyles() {
+    mPostedFlushCounterStyles = false;
+    FlushCounterStyles();
+  }
+
   bool HavePendingInputEvent();
 
   // Can't be inline because we can't include nsStyleSet.h.
@@ -1182,6 +1189,7 @@ protected:
   nsRefPtr<nsTransitionManager> mTransitionManager;
   nsRefPtr<nsAnimationManager> mAnimationManager;
   nsRefPtr<mozilla::RestyleManager> mRestyleManager;
+  nsRefPtr<mozilla::CounterStyleManager> mCounterStyleManager;
   nsIAtom*              mMedium;        // initialized by subclass ctors;
                                         // weak pointer to static atom
   nsCOMPtr<nsIAtom> mMediaEmulated;
@@ -1268,10 +1276,6 @@ protected:
 
   mozilla::TimeStamp    mReflowStartTime;
 
-  // last time animations styles were flushed to their primary frames
-  mozilla::TimeStamp    mLastUpdateThrottledAnimationStyle;
-  // last time transition styles were flushed to their primary frames
-  mozilla::TimeStamp    mLastUpdateThrottledTransitionStyle;
   // last time we did a full style flush
   mozilla::TimeStamp    mLastStyleUpdateForAllAnimations;
 
@@ -1321,6 +1325,11 @@ protected:
   unsigned              mGetUserFontSetCalled : 1;
   // Do we currently have an event posted to call FlushUserFontSet?
   unsigned              mPostedFlushUserFontSet : 1;
+
+  // Is the current mCounterStyleManager valid?
+  unsigned              mCounterStylesDirty : 1;
+  // Do we currently have an event posted to call FlushCounterStyles?
+  unsigned              mPostedFlushCounterStyles: 1;
 
   // resize reflow is suppressed when the only change has been to zoom
   // the document rather than to change the document's dimensions
@@ -1481,7 +1490,7 @@ protected:
 
   class RunWillPaintObservers : public nsRunnable {
   public:
-    RunWillPaintObservers(nsRootPresContext* aPresContext) : mPresContext(aPresContext) {}
+    explicit RunWillPaintObservers(nsRootPresContext* aPresContext) : mPresContext(aPresContext) {}
     void Revoke() { mPresContext = nullptr; }
     NS_IMETHOD Run() MOZ_OVERRIDE
     {

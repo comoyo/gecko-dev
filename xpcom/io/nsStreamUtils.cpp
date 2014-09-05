@@ -233,11 +233,6 @@ public:
   {
   }
 
-  // virtual since subclasses call superclass Release()
-  virtual ~nsAStreamCopier()
-  {
-  }
-
   // kick off the async copy...
   nsresult Start(nsIInputStream* aSource,
                  nsIOutputStream* aSink,
@@ -475,6 +470,11 @@ protected:
   bool                           mCloseSink;
   bool                           mCanceled;
   nsresult                       mCancelStatus;
+
+  // virtual since subclasses call superclass Release()
+  virtual ~nsAStreamCopier()
+  {
+  }
 };
 
 NS_IMPL_ISUPPORTS(nsAStreamCopier,
@@ -616,8 +616,7 @@ NS_AsyncCopy(nsIInputStream*         aSource,
                      aCloseSource, aCloseSink, aProgressCallback);
 
   if (aCopierCtx) {
-    *aCopierCtx = static_cast<nsISupports*>(
-      static_cast<nsIRunnable*>(copier));
+    *aCopierCtx = static_cast<nsISupports*>(static_cast<nsIRunnable*>(copier));
     NS_ADDREF(*aCopierCtx);
   }
   NS_RELEASE(copier);
@@ -630,15 +629,16 @@ NS_AsyncCopy(nsIInputStream*         aSource,
 nsresult
 NS_CancelAsyncCopy(nsISupports* aCopierCtx, nsresult aReason)
 {
-  nsAStreamCopier* copier = static_cast<nsAStreamCopier*>(
-    static_cast<nsIRunnable *>(aCopierCtx));
+  nsAStreamCopier* copier =
+    static_cast<nsAStreamCopier*>(static_cast<nsIRunnable *>(aCopierCtx));
   return copier->Cancel(aReason);
 }
 
 //-----------------------------------------------------------------------------
 
 nsresult
-NS_ConsumeStream(nsIInputStream* aStream, uint32_t aMaxCount, nsACString& aResult)
+NS_ConsumeStream(nsIInputStream* aStream, uint32_t aMaxCount,
+                 nsACString& aResult)
 {
   nsresult rv = NS_OK;
   aResult.Truncate();
@@ -712,8 +712,7 @@ NS_InputStreamIsBuffered(nsIInputStream* aStream)
 
   bool result = false;
   uint32_t n;
-  nsresult rv = aStream->ReadSegments(TestInputStream,
-                                     &result, 1, &n);
+  nsresult rv = aStream->ReadSegments(TestInputStream, &result, 1, &n);
   return result || NS_SUCCEEDED(rv);
 }
 

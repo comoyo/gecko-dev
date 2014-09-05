@@ -29,16 +29,17 @@ OptimizationInfo::initNormalOptimizationInfo()
     inlineInterpreted_ = true;
     inlineNative_ = true;
     gvn_ = true;
-    gvnKind_ = GVN_Optimistic;
     licm_ = true;
     uce_ = true;
     rangeAnalysis_ = true;
+    loopUnrolling_ = true;
     autoTruncate_ = true;
     registerAllocator_ = RegisterAllocator_LSRA;
 
     inlineMaxTotalBytecodeLength_ = 1000;
     inliningMaxCallerBytecodeLength_ = 10000;
     maxInlineDepth_ = 3;
+    scalarReplacement_ = true;
     smallFunctionMaxInlineDepth_ = 10;
     usesBeforeCompile_ = 1000;
     usesBeforeInliningFactor_ = 0.125;
@@ -58,6 +59,7 @@ OptimizationInfo::initAsmjsOptimizationInfo()
     eliminateRedundantChecks_ = false;
     autoTruncate_ = false;
     registerAllocator_ = RegisterAllocator_Backtracking;
+    scalarReplacement_ = false;        // AsmJS has no objects.
 }
 
 uint32_t
@@ -118,7 +120,7 @@ OptimizationInfos::nextLevel(OptimizationLevel level) const
       case Optimization_DontCompile:
         return Optimization_Normal;
       default:
-        MOZ_ASSUME_UNREACHABLE("Unknown optimization level.");
+        MOZ_CRASH("Unknown optimization level.");
     }
 }
 

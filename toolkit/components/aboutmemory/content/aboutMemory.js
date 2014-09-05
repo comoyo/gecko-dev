@@ -1,4 +1,4 @@
-/* -*- Mode: js2; tab-width: 8; indent-tabs-mode: nil; js2-basic-offset: 2 -*-*/
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*-*/
 /* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -26,6 +26,7 @@ const CC = Components.Constructor;
 const KIND_NONHEAP           = Ci.nsIMemoryReporter.KIND_NONHEAP;
 const KIND_HEAP              = Ci.nsIMemoryReporter.KIND_HEAP;
 const KIND_OTHER             = Ci.nsIMemoryReporter.KIND_OTHER;
+
 const UNITS_BYTES            = Ci.nsIMemoryReporter.UNITS_BYTES;
 const UNITS_COUNT            = Ci.nsIMemoryReporter.UNITS_COUNT;
 const UNITS_COUNT_CUMULATIVE = Ci.nsIMemoryReporter.UNITS_COUNT_CUMULATIVE;
@@ -52,7 +53,8 @@ const gUnnamedProcessStr = "Main Process";
 
 let gIsDiff = false;
 
-const DMDFile = "out.dmd";
+const gAnalyzeReportsFile = "reports.dmd";
+const gAnalyzeHeapFile    = "heap.dmd";
 
 //---------------------------------------------------------------------------
 
@@ -130,6 +132,9 @@ let gFooter;
 
 // The "verbose" checkbox.
 let gVerbose;
+
+// The "anonymize" checkbox.
+let gAnonymize;
 
 // Values for the second argument to updateMainAndFooter.
 let HIDE_FOOTER = 0;
@@ -294,7 +299,10 @@ function onLoad()
                             "collection log.\n" +
                             "WARNING: These logs may be large (>1GB).";
 
-  const DMDEnabledDesc = "Run DMD analysis and save it to '" + DMDFile + "'.\n";
+  const AnalyzeReportsDesc = "Analyze memory reports coverage and save the " +
+                             "output to '" + gAnalyzeReportsFile + "'.\n";
+  const AnalyzeHeapDesc = "Analyze heap usage and save the output to '" +
+                          gAnalyzeHeapFile + "'.\n";
   const DMDDisabledDesc = "DMD is not running. Please re-start with $DMD and " +
                           "the other relevant environment variables set " +
                           "appropriately.";
@@ -303,14 +311,13 @@ function onLoad()
 
   let row1 = appendElement(ops, "div", "opsRow");
 
-  let labelDiv =
+  let labelDiv1 =
    appendElementWithText(row1, "div", "opsRowLabel", "Show memory reports");
-  let label = appendElementWithText(labelDiv, "label", "");
-  gVerbose = appendElement(label, "input", "");
+  let label1 = appendElementWithText(labelDiv1, "label", "");
+  gVerbose = appendElement(label1, "input", "");
   gVerbose.type = "checkbox";
   gVerbose.id = "verbose";   // used for testing
-
-  appendTextNode(label, "verbose");
+  appendTextNode(label1, "verbose");
 
   const kEllipsis = "\u2026";
 
@@ -324,8 +331,16 @@ function onLoad()
 
   let row2 = appendElement(ops, "div", "opsRow");
 
-  appendElementWithText(row2, "div", "opsRowLabel", "Save memory reports");
+  let labelDiv2 =
+    appendElementWithText(row2, "div", "opsRowLabel", "Save memory reports");
   appendButton(row2, SvDesc, saveReportsToFile, "Measure and save" + kEllipsis);
+
+  // XXX: this isn't a great place for this checkbox, but I can't think of
+  // anywhere better.
+  let label2 = appendElementWithText(labelDiv2, "label", "");
+  gAnonymize = appendElement(label2, "input", "");
+  gAnonymize.type = "checkbox";
+  appendTextNode(label2, "anonymize");
 
   let row3 = appendElement(ops, "div", "opsRow");
 
@@ -349,12 +364,20 @@ function onLoad()
   if (gMgr.isDMDEnabled) {
     let row5 = appendElement(ops, "div", "opsRow");
 
-    appendElementWithText(row5, "div", "opsRowLabel", "Save DMD output");
-    let enableButton = gMgr.isDMDRunning;
-    let dmdButton =
-      appendButton(row5, enableButton ? DMDEnabledDesc : DMDDisabledDesc,
-                   doDMD, "Save", "dmdButton");
-    dmdButton.disabled = !enableButton;
+    appendElementWithText(row5, "div", "opsRowLabel", "DMD operations");
+    let enableButtons = gMgr.isDMDRunning;
+
+    let analyzeReportsButton =
+      appendButton(row5,
+                   enableButtons ? AnalyzeReportsDesc : DMDDisabledDesc,
+                   doAnalyzeReports, "Analyze reports");
+    analyzeReportsButton.disabled = !enableButtons;
+
+    let analyzeHeapButton =
+      appendButton(row5,
+                   enableButtons ? AnalyzeHeapDesc : DMDDisabledDesc,
+                   doAnalyzeHeap, "Analyze heap");
+    analyzeHeapButton.disabled = !enableButtons;
   }
 
   // Generate the main div, where content ("section" divs) will go.  It's
@@ -435,12 +458,24 @@ function saveGCLogAndVerboseCCLog()
   dumpGCLogAndCCLog(true);
 }
 
-function doDMD()
+function doAnalyzeReports()
 {
   updateMainAndFooter('Saving DMD output...', HIDE_FOOTER);
   try {
-    let x = DMDReportAndDump('out.dmd');
-    updateMainAndFooter('Saved DMD output to ' + DMDFile, HIDE_FOOTER);
+    let x = DMDAnalyzeReports(gAnalyzeReportsFile);
+    updateMainAndFooter('Saved DMD output to ' + gAnalyzeReportsFile,
+                        HIDE_FOOTER);
+  } catch (ex) {
+    updateMainAndFooter(ex.toString(), HIDE_FOOTER);
+  }
+}
+
+function doAnalyzeHeap()
+{
+  updateMainAndFooter('Saving DMD output...', HIDE_FOOTER);
+  try {
+    let x = DMDAnalyzeHeap(gAnalyzeHeapFile);
+    updateMainAndFooter('Saved DMD output to ' + gAnalyzeHeapFile, HIDE_FOOTER);
   } catch (ex) {
     updateMainAndFooter(ex.toString(), HIDE_FOOTER);
   }
@@ -493,8 +528,8 @@ function updateAboutMemoryFromReporters()
         aDisplayReports();
       }
 
-      gMgr.getReports(handleReport, null,
-                      displayReportsAndFooter, null);
+      gMgr.getReports(handleReport, null, displayReportsAndFooter, null,
+                      gAnonymize.checked);
     }
 
     // Process the reports from the live memory reporters.
@@ -788,10 +823,13 @@ function makeDReportMap(aJSONReports)
     // e.g. PIDs, addresses, null principal UUIDs. (Note that we don't strip
     // out all UUIDs because some of them -- such as those used by add-ons --
     // are deterministic.)
-    let strippedProcess = jr.process.replace(/pid \d+/, "pid NNN");
-    let strippedPath = jr.path.replace(/0x[0-9A-Fa-f]+/, "0xNNN");
+    let pidRegex = /pid([ =])\d+/g;
+    let pidSubst = "pid$1NNN";
+    let strippedProcess = jr.process.replace(pidRegex, pidSubst);
+    let strippedPath = jr.path.replace(/0x[0-9A-Fa-f]+/g, "0xNNN");
+    strippedPath = strippedPath.replace(pidRegex, pidSubst);
     strippedPath = strippedPath.replace(
-      /moz-nullprincipal:{........-....-....-....-............}/,
+      /moz-nullprincipal:{........-....-....-....-............}/g,
       "moz-nullprincipal:{NNNNNNNN-NNNN-NNNN-NNNN-NNNNNNNNNNNN}");
     let processPath = strippedProcess + kProcessPathSep + strippedPath;
 
@@ -1962,7 +2000,8 @@ function saveReportsToFile()
       updateMainAndFooter("Saved reports to " + file.path, HIDE_FOOTER);
     }
 
-    dumper.dumpMemoryReportsToNamedFile(file.path, finishDumping, null);
+    dumper.dumpMemoryReportsToNamedFile(file.path, finishDumping, null,
+                                        gAnonymize.checked);
   }
 
   let fpCallback = function(aResult) {

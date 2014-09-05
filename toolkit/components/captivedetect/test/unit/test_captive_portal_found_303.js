@@ -1,4 +1,4 @@
-/* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,9 +6,11 @@
 
 const kInterfaceName = 'wifi';
 
-var server;
 var step = 0;
 var loginFinished = false;
+
+var gRedirectServer;
+var gRedirectServerURL;
 
 function xhr_handler(metadata, response) {
   if (loginFinished) {
@@ -18,7 +20,7 @@ function xhr_handler(metadata, response) {
     response.write('true');
   } else {
     response.setStatusLine(metadata.httpVersion, 303, "See Other");
-    response.setHeader("Location", "http://example.org/", false);
+    response.setHeader("Location", gRedirectServerURL, false);
     response.setHeader("Content-Type", "text/html", false);
   }
 }
@@ -38,7 +40,9 @@ function fakeUIResponse() {
   Services.obs.addObserver(function observe(subject, topic, data) {
     if (topic === 'captive-portal-login-success') {
       do_check_eq(++step, 4);
-      gServer.stop(do_test_finished);
+      gServer.stop(function () {
+        gRedirectServer.stop(do_test_finished);
+      });
     }
   }, 'captive-portal-login-success', false);
 }
@@ -62,5 +66,9 @@ function test_portal_found() {
 }
 
 function run_test() {
+  gRedirectServer = new HttpServer();
+  gRedirectServer.start(-1);
+  gRedirectServerURL = 'http://localhost:' + gRedirectServer.identity.primaryPort;
+
   run_captivedetect_test(xhr_handler, fakeUIResponse, test_portal_found);
 }

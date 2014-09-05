@@ -19,7 +19,7 @@
     { 0x99, 0x7, 0x0, 0x10, 0x83, 0x1, 0xe, 0x9b }   \
 }
 
-class nsMozIconURI : public nsIMozIconURI
+class nsMozIconURI MOZ_FINAL : public nsIMozIconURI
 {
 public:    
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -28,9 +28,9 @@ public:
 
   // nsMozIconURI
   nsMozIconURI();
-  virtual ~nsMozIconURI();
 
 protected:
+  virtual ~nsMozIconURI();
   nsCOMPtr<nsIURL> mIconURL; // a URL that we want the icon for
   uint32_t mSize; // the # of pixels in a row that we want for this image. Typically 16, 32, 128, etc.
   nsCString mContentType; // optional field explicitly specifying the content type

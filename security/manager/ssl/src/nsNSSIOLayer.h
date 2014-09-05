@@ -111,6 +111,11 @@ public:
     mSSLVersionUsed = version;
   }
 
+  void SetMACAlgorithmUsed(int16_t mac) { mMACAlgorithmUsed = mac; }
+
+protected:
+  virtual ~nsNSSSocketInfo();
+
 private:
   PRFileDesc* mFd;
 
@@ -141,10 +146,13 @@ private:
   int16_t mKEAExpected;
   uint32_t mKEAKeyBits;
   int16_t mSSLVersionUsed;
+  int16_t mMACAlgorithmUsed;
 
   uint32_t mProviderFlags;
   mozilla::TimeStamp mSocketCreationTimestamp;
   uint64_t mPlaintextBytesRead;
+
+  nsCOMPtr<nsIX509Cert> mClientCert;
 };
 
 class nsSSLIOLayerHelpers
