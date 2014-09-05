@@ -350,6 +350,8 @@ int AudioProcessingImpl::MaybeInitializeLocked(int sample_rate_hz,
 
 int AudioProcessingImpl::ProcessStream(AudioFrame* frame) {
   CriticalSectionScoped crit_scoped(crit_);
+  PROFILER_LABEL("AudioProcessingImpl", "ProcessStream",
+          js::ProfileEntry::Category::OTHER);
   int err = kNoError;
 
   if (frame == NULL) {
@@ -365,7 +367,8 @@ int AudioProcessingImpl::ProcessStream(AudioFrame* frame) {
 
 #ifdef WEBRTC_AUDIOPROC_DEBUG_DUMP
   if (debug_file_->Open()) {
-    PROFILER_LABEL("AudioProcessingImpl", "ProcessStream/DEBUG_DUMP");
+    PROFILER_LABEL("AudioProcessingImpl", "ProcessStream/DEBUG_DUMP",
+            js::ProfileEntry::Category::OTHER);
     event_msg_->set_type(audioproc::Event::STREAM);
     audioproc::Stream* msg = event_msg_->mutable_stream();
     const size_t data_size = sizeof(int16_t) *

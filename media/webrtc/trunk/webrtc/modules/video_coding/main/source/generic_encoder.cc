@@ -101,7 +101,8 @@ int32_t
 VCMGenericEncoder::Encode(const I420VideoFrame& inputFrame,
                           const CodecSpecificInfo* codecSpecificInfo,
                           const std::vector<FrameType>& frameTypes) {
-  PROFILER_LABEL("VCMGenericEncoder", "Encode");
+  PROFILER_LABEL("VCMGenericEncoder", "Encode",
+          js::ProfileEntry::Category::OTHER);
   std::vector<VideoFrameType> video_frame_types(frameTypes.size(),
                                                 kDeltaFrame);
   VCMEncodedFrame::ConvertFrameTypes(frameTypes, &video_frame_types);

@@ -53,7 +53,8 @@ VoiceDetectionImpl::VoiceDetectionImpl(const AudioProcessingImpl* apm)
 VoiceDetectionImpl::~VoiceDetectionImpl() {}
 
 int VoiceDetectionImpl::ProcessCaptureAudio(AudioBuffer* audio) {
-  PROFILER_LABEL("VoiceDetectionImpl", "ProcessCaptureAudio");
+  PROFILER_LABEL("VoiceDetectionImpl", "ProcessCaptureAudio",
+          js::ProfileEntry::Category::OTHER);
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }

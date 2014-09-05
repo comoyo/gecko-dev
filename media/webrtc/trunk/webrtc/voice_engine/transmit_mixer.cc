@@ -337,7 +337,8 @@ TransmitMixer::PrepareDemux(const void* audioSamples,
                             uint16_t currentMicLevel,
                             bool keyPressed)
 {
-    PROFILER_LABEL("TransmitMixer", "PrepareDemux");
+    PROFILER_LABEL("TransmitMixer", "PrepareDemux",
+            js::ProfileEntry::Category::OTHER);
     WEBRTC_TRACE(kTraceStream, kTraceVoice, VoEId(_instanceId, -1),
                  "TransmitMixer::PrepareDemux(nSamples=%u, nChannels=%u,"
                  "samplesPerSec=%u, totalDelayMS=%u, clockDrift=%d,"
@@ -424,7 +425,8 @@ TransmitMixer::PrepareDemux(const void* audioSamples,
 int32_t
 TransmitMixer::DemuxAndMix()
 {
-    PROFILER_LABEL("TransmitMixer", "DemuxAndMix");
+    PROFILER_LABEL("TransmitMixer", "DemuxAndMix",
+            js::ProfileEntry::Category::OTHER);
     WEBRTC_TRACE(kTraceStream, kTraceVoice, VoEId(_instanceId, -1),
                  "TransmitMixer::DemuxAndMix()");
 
@@ -447,7 +449,8 @@ TransmitMixer::DemuxAndMix()
 
 void TransmitMixer::DemuxAndMix(const int voe_channels[],
                                 int number_of_voe_channels) {
-  PROFILER_LABEL("TransmitMixer", "DemuxAndMix");
+  PROFILER_LABEL("TransmitMixer", "DemuxAndMix",
+          js::ProfileEntry::Category::OTHER);
   for (int i = 0; i < number_of_voe_channels; ++i) {
     voe::ChannelOwner ch = _channelManagerPtr->GetChannel(voe_channels[i]);
     voe::Channel* channel_ptr = ch.channel();
@@ -466,7 +469,8 @@ void TransmitMixer::DemuxAndMix(const int voe_channels[],
 int32_t
 TransmitMixer::EncodeAndSend()
 {
-    PROFILER_LABEL("TransmitMixer", "EncodeAndSend");
+    PROFILER_LABEL("TransmitMixer", "EncodeAndSend",
+            js::ProfileEntry::Category::OTHER);
     WEBRTC_TRACE(kTraceStream, kTraceVoice, VoEId(_instanceId, -1),
                  "TransmitMixer::EncodeAndSend()");
 
@@ -1187,7 +1191,8 @@ int TransmitMixer::GenerateAudioFrame(const int16_t audio[],
                                       int samples_per_channel,
                                       int num_channels,
                                       int sample_rate_hz) {
-  PROFILER_LABEL("TransmitMixer", "GenerateAudioFrame");
+  PROFILER_LABEL("TransmitMixer", "GenerateAudioFrame",
+          js::ProfileEntry::Category::OTHER);
   int destination_rate;
   int num_codec_channels;
   GetSendCodecInfo(&destination_rate, &num_codec_channels);
@@ -1319,8 +1324,8 @@ int32_t TransmitMixer::MixOrReplaceAudioWithFile(
 
 void TransmitMixer::ProcessAudio(int delay_ms, int clock_drift,
                                  int current_mic_level, bool key_pressed) {
-  PROFILER_LABEL("TransmitMixer", "ProcessAudio");
-
+  PROFILER_LABEL("TransmitMixer", "ProcessAudio",
+          js::ProfileEntry::Category::OTHER);
   if (audioproc_->set_stream_delay_ms(delay_ms) != 0) {
     // A redundant warning is reported in AudioDevice, which we've throttled
     // to avoid flooding the logs. Relegate this one to LS_VERBOSE to avoid

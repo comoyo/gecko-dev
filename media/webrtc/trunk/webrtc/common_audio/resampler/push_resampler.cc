@@ -67,7 +67,8 @@ int PushResampler::InitializeIfNeeded(int src_sample_rate_hz,
 
 int PushResampler::Resample(const int16_t* src, int src_length,
                             int16_t* dst, int dst_capacity) {
-  PROFILER_LABEL("PushResampler", "Resample");
+  PROFILER_LABEL("PushResampler", "Resample",
+          js::ProfileEntry::Category::OTHER);
   const int src_size_10ms = src_sample_rate_hz_ * num_channels_ / 100;
   const int dst_size_10ms = dst_sample_rate_hz_ * num_channels_ / 100;
   if (src_length != src_size_10ms || dst_capacity < dst_size_10ms)

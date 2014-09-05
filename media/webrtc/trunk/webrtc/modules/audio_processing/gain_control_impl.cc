@@ -55,7 +55,8 @@ GainControlImpl::GainControlImpl(const AudioProcessingImpl* apm)
 GainControlImpl::~GainControlImpl() {}
 
 int GainControlImpl::ProcessRenderAudio(AudioBuffer* audio) {
-  PROFILER_LABEL("GainControlImpl", "ProcessRenderAudio");
+  PROFILER_LABEL("GainControlImpl", "ProcessRenderAudio",
+          js::ProfileEntry::Category::OTHER);
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
@@ -134,7 +135,8 @@ int GainControlImpl::AnalyzeCaptureAudio(AudioBuffer* audio) {
 }
 
 int GainControlImpl::ProcessCaptureAudio(AudioBuffer* audio) {
-  PROFILER_LABEL("GainControlImpl", "ProcessCaptureAudio");
+  PROFILER_LABEL("GainControlImpl", "ProcessCaptureAudio",
+          js::ProfileEntry::Category::OTHER);
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }

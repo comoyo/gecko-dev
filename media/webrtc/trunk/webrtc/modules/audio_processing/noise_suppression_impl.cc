@@ -57,7 +57,8 @@ NoiseSuppressionImpl::NoiseSuppressionImpl(const AudioProcessingImpl* apm)
 NoiseSuppressionImpl::~NoiseSuppressionImpl() {}
 
 int NoiseSuppressionImpl::ProcessCaptureAudio(AudioBuffer* audio) {
-  PROFILER_LABEL("NoiseSuppressionImpl", "ProcessCaptureAudio");
+  PROFILER_LABEL("NoiseSuppressionImpl", "ProcessCaptureAudio",
+          js::ProfileEntry::Category::OTHER);
   int err = apm_->kNoError;
 
   if (!is_component_enabled()) {

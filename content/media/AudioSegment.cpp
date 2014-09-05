@@ -117,7 +117,8 @@ DownmixAndInterleave(const nsTArray<const void*>& aChannelData,
 
 void AudioSegment::ResampleChunks(SpeexResamplerState* aResampler, uint32_t aInRate, uint32_t aOutRate)
 {
-  PROFILER_LABEL("AudioSegment", "ResampleChunks");
+  PROFILER_LABEL("AudioSegment", "ResampleChunks",
+          js::ProfileEntry::Category::OTHER);
 
   if (mChunks.IsEmpty()) {
     return;
@@ -152,8 +153,8 @@ void AudioSegment::ResampleChunks(SpeexResamplerState* aResampler, uint32_t aInR
 void
 AudioSegment::WriteTo(uint64_t aID, AudioMixer& aMixer, uint32_t aOutputChannels, uint32_t aSampleRate)
 {
-  PROFILER_LABEL("AudioSegment", "WriteTo");
-
+  PROFILER_LABEL("AudioSegment", "WriteTo",
+          js::ProfileEntry::Category::OTHER);
   nsAutoTArray<AudioDataValue,AUDIO_PROCESSING_FRAMES*GUESS_AUDIO_CHANNELS> buf;
   nsAutoTArray<const void*,GUESS_AUDIO_CHANNELS> channelData;
   // Offset in the buffer that will end up sent to the AudioStream, in samples.

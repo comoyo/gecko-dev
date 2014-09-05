@@ -154,7 +154,8 @@ int32_t VCMGenericDecoder::InitDecode(const VideoCodec* settings,
 int32_t VCMGenericDecoder::Decode(const VCMEncodedFrame& frame,
                                         int64_t nowMs)
 {
-    PROFILER_LABEL("VCMGenericDecoder", "Decode");
+    PROFILER_LABEL("VCMGenericDecoder", "Decode",
+            js::ProfileEntry::Category::OTHER);
     _frameInfos[_nextFrameInfoIdx].decodeStartTimeMs = nowMs;
     _frameInfos[_nextFrameInfoIdx].renderTimeMs = frame.RenderTimeMs();
     _callback->Map(frame.TimeStamp(), &_frameInfos[_nextFrameInfoIdx]);

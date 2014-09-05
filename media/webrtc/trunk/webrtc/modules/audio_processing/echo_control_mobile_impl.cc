@@ -80,7 +80,8 @@ EchoControlMobileImpl::~EchoControlMobileImpl() {
 }
 
 int EchoControlMobileImpl::ProcessRenderAudio(const AudioBuffer* audio) {
-  PROFILER_LABEL("EchoControlMobileImpl", "ProcessRenderAudio");
+  PROFILER_LABEL("EchoControlMobileImpl", "ProcessRenderAudio",
+          js::ProfileEntry::Category::OTHER);
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
@@ -112,7 +113,8 @@ int EchoControlMobileImpl::ProcessRenderAudio(const AudioBuffer* audio) {
 }
 
 int EchoControlMobileImpl::ProcessCaptureAudio(AudioBuffer* audio) {
-  PROFILER_LABEL("EchoControlMobileImpl", "ProcessCaptureAudio");
+  PROFILER_LABEL("EchoControlMobileImpl", "ProcessCaptureAudio",
+          js::ProfileEntry::Category::OTHER);
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
@@ -129,7 +131,8 @@ int EchoControlMobileImpl::ProcessCaptureAudio(AudioBuffer* audio) {
   // The ordering convention must be followed to pass to the correct AECM.
   size_t handle_index = 0;
   for (int i = 0; i < audio->num_channels(); i++) {
-    PROFILER_LABEL("EchoControlMobileImpl", "ProcessCaptureAudio_WebRtcAecm_Process_channel");
+    PROFILER_LABEL("EchoControlMobileImpl", "ProcessCaptureAudio_WebRtcAecm_Process_channel",
+            js::ProfileEntry::Category::OTHER);
     // TODO(ajm): improve how this works, possibly inside AECM.
     //            This is kind of hacked up.
     int16_t* noisy = audio->low_pass_reference(i);
@@ -139,7 +142,8 @@ int EchoControlMobileImpl::ProcessCaptureAudio(AudioBuffer* audio) {
       clean = NULL;
     }
     for (int j = 0; j < apm_->num_reverse_channels(); j++) {
-      PROFILER_LABEL("EchoControlMobileImpl", "ProcessCaptureAudio_WebRtcAecm_Process_revchannel");
+      PROFILER_LABEL("EchoControlMobileImpl", "ProcessCaptureAudio_WebRtcAecm_Process_revchannel",
+              js::ProfileEntry::Category::OTHER);
       Handle* my_handle = static_cast<Handle*>(handle(handle_index));
       err = WebRtcAecm_Process(
           my_handle,

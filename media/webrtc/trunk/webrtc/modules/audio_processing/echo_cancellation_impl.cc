@@ -82,7 +82,8 @@ int EchoCancellationImpl::ProcessRenderAudio(const AudioBuffer* audio) {
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
-  PROFILER_LABEL("EchoCancellationImpl", "ProcessRenderAudio");
+  PROFILER_LABEL("EchoCancellationImpl", "ProcessRenderAudio",
+          js::ProfileEntry::Category::OTHER);
 
   assert(audio->samples_per_split_channel() <= 160);
   assert(audio->num_channels() == apm_->num_reverse_channels());
@@ -111,7 +112,8 @@ int EchoCancellationImpl::ProcessRenderAudio(const AudioBuffer* audio) {
 }
 
 int EchoCancellationImpl::ProcessCaptureAudio(AudioBuffer* audio) {
-  PROFILER_LABEL("EchoCancellationImpl", "ProcessCaptureAudio");
+  PROFILER_LABEL("EchoCancellationImpl", "ProcessCaptureAudio",
+          js::ProfileEntry::Category::OTHER);
   if (!is_component_enabled()) {
     return apm_->kNoError;
   }
@@ -133,9 +135,11 @@ int EchoCancellationImpl::ProcessCaptureAudio(AudioBuffer* audio) {
   size_t handle_index = 0;
   stream_has_echo_ = false;
   for (int i = 0; i < audio->num_channels(); i++) {
-    PROFILER_LABEL("EchoCancellationImpl", "ProcessCaptureAudio_WebRtcAec_Process_channel");
+    PROFILER_LABEL("EchoCancellationImpl", "ProcessCaptureAudio_WebRtcAec_Process_channel",
+            js::ProfileEntry::Category::OTHER);
     for (int j = 0; j < apm_->num_reverse_channels(); j++) {
-      PROFILER_LABEL("EchoCancellationImpl", "ProcessCaptureAudio_WebRtcAec_Process_revchannel");
+      PROFILER_LABEL("EchoCancellationImpl", "ProcessCaptureAudio_WebRtcAec_Process_revchannel",
+              js::ProfileEntry::Category::OTHER);
       Handle* my_handle = handle(handle_index);
       err = WebRtcAec_Process(
           my_handle,

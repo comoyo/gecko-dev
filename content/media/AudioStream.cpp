@@ -588,7 +588,8 @@ AudioInitTask::Run()
 nsresult
 AudioStream::Write(const AudioDataValue* aBuf, uint32_t aFrames, TimeStamp *aTime)
 {
-  PROFILER_LABEL("AudioStream", "Write");
+  PROFILER_LABEL("AudioStream", "Write",
+      js::ProfileEntry::Category::OTHER);
   MonitorAutoLock mon(mMonitor);
 
   // See if we need to start() the stream, since we must do that from this thread
@@ -678,7 +679,8 @@ AudioStream::Write(const AudioDataValue* aBuf, uint32_t aFrames, TimeStamp *aTim
 uint32_t
 AudioStream::Available()
 {
-  PROFILER_LABEL("AudioStream", "Available");
+  PROFILER_LABEL("AudioStream", "Available",
+      js::ProfileEntry::Category::OTHER);
   MonitorAutoLock mon(mMonitor);
   NS_ABORT_IF_FALSE(mBuffer.Length() % mBytesPerFrame == 0, "Buffer invariant violated.");
   return BytesToFrames(mBuffer.Available());
@@ -715,7 +717,8 @@ AudioStream::Cancel()
 void
 AudioStream::Drain()
 {
-  PROFILER_LABEL("AudioStream", "Drain");
+  PROFILER_LABEL("AudioStream", "Drain",
+      js::ProfileEntry::Category::OTHER);
   MonitorAutoLock mon(mMonitor);
   LOG(("AudioStream::Drain() for %p, state %d, avail %u", this, mState, mBuffer.Available()));
   if (mState != STARTED && mState != RUNNING) {
@@ -934,7 +937,8 @@ AudioStream::GetUnprocessed(void* aBuffer, long aFrames, int64_t &aTimeMs)
 long
 AudioStream::GetUnprocessedWithSilencePadding(void* aBuffer, long aFrames, int64_t& aTimeMs)
 {
-  PROFILER_LABEL("AudioStream", "GetUnprocessedWithSilencePadding");
+  PROFILER_LABEL("AudioStream", "GetUnprocessedWithSilencePadding",
+      js::ProfileEntry::Category::OTHER);
 
   mMonitor.AssertCurrentThreadOwns();
   uint32_t toPopBytes = FramesToBytes(aFrames);
