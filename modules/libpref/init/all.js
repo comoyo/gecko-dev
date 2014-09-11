@@ -340,6 +340,7 @@ pref("media.peerconnection.video.h261_forced_quality", 15);
 pref("media.peerconnection.video.h261_enabled", true);
 pref("media.peerconnection.video.h261_force_keyframes", true);
 pref("media.peerconnection.video.h261_force_quality", true);
+pref("media.peerconnection.video.h261_max_framerate", 10);
 pref("media.peerconnection.video.vp8_enabled", true);
 pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.default_iceservers", "[{\"url\": \"stun:stun.services.mozilla.com\"}]");
