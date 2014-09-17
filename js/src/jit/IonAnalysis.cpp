@@ -43,8 +43,6 @@ SplitCriticalEdgesForBlock(MIRGraph &graph, MBasicBlock *block)
         graph.insertBlockAfter(block, split);
         split->end(MGoto::New(graph.alloc(), target));
 
-        // The entry resume point will not be used for anything, and may have
-        // the wrong stack depth, so remove it.
         if (MResumePoint *rp = split->entryResumePoint()) {
             rp->discardUses();
             split->clearEntryResumePoint();
@@ -661,7 +659,7 @@ jit::EliminatePhis(MIRGenerator *mir, MIRGraph &graph,
 
             // If the phi is redundant, remove it here.
             if (MDefinition *redundant = IsPhiRedundant(*iter)) {
-                iter->replaceAllUsesWith(redundant);
+                iter->justReplaceAllUsesWith(redundant);
                 iter = block->discardPhiAt(iter);
                 continue;
             }
@@ -699,7 +697,7 @@ jit::EliminatePhis(MIRGenerator *mir, MIRGraph &graph,
                     }
                 }
             }
-            phi->replaceAllUsesWith(redundant);
+            phi->justReplaceAllUsesWith(redundant);
         } else {
             // Otherwise flag them as used.
             phi->setNotUnused();
@@ -1097,7 +1095,7 @@ TypeAnalyzer::replaceRedundantPhi(MPhi *phi)
     MConstant *c = MConstant::New(alloc(), v);
     // The instruction pass will insert the box
     block->insertBefore(*(block->begin()), c);
-    phi->replaceAllUsesWith(c);
+    phi->justReplaceAllUsesWith(c);
 }
 
 bool

@@ -8,7 +8,7 @@
 /*****************************************************************************/
 
 #include <stdint.h>
-const PRTime gPreloadListExpirationTime = INT64_C(1420280117245000);
+const PRTime gPreloadListExpirationTime = INT64_C(1421489317664000);
 
 class nsSTSPreload
 {
@@ -68,7 +68,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "blacklane.com", true },
   { "blocksatz-medien.de", true },
   { "blog.cyveillance.com", true },
-  { "blog.gparent.org", false },
+  { "blog.gparent.org", true },
   { "blog.linode.com", false },
   { "blog.torproject.org", false },
   { "bohramt.de", true },
@@ -152,7 +152,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "fairbill.com", true },
   { "faq.lookout.com", false },
   { "feedbin.com", false },
-  { "ferienhaus-polchow-ruegen.de", true },
+  { "ferienhaus-polchow-ruegen.de", false },
   { "fiken.no", true },
   { "firemail.io", true },
   { "fischer-its.com", true },
@@ -196,7 +196,6 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "helpium.de", true },
   { "hex2013.com", true },
   { "history.google.com", true },
-  { "hoerbuecher-und-hoerspiele.de", true },
   { "hostedtalkgadget.google.com", true },
   { "hostinginnederland.nl", true },
   { "hostix.de", true },
@@ -300,7 +299,6 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "neg9.org", false },
   { "neilwynne.com", false },
   { "netzbit.de", true },
-  { "netzpolitik.org", true },
   { "ng-security.com", true },
   { "npw.net", true },
   { "onedrive.com", true },
@@ -378,7 +376,6 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "servethecity-karlsruhe.de", true },
   { "sherbers.de", true },
   { "shodan.io", true },
-  { "siammedia.co", true },
   { "silentcircle.com", true },
   { "simbolo.co.uk", false },
   { "simple.com", false },
@@ -497,6 +494,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "www.heliosnet.com", true },
   { "www.intercom.io", false },
   { "www.irccloud.com", false },
+  { "www.lastpass.com", false },
   { "www.linode.com", false },
   { "www.lookout.com", false },
   { "www.makeyourlaws.org", true },
