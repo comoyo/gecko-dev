@@ -79,7 +79,24 @@ enum AsmJSSimdOperation
     AsmJSSimdOperation_add,
     AsmJSSimdOperation_sub,
     AsmJSSimdOperation_mul,
-    AsmJSSimdOperation_div
+    AsmJSSimdOperation_div,
+    AsmJSSimdOperation_max,
+    AsmJSSimdOperation_min,
+    AsmJSSimdOperation_lessThan,
+    AsmJSSimdOperation_lessThanOrEqual,
+    AsmJSSimdOperation_equal,
+    AsmJSSimdOperation_notEqual,
+    AsmJSSimdOperation_greaterThan,
+    AsmJSSimdOperation_greaterThanOrEqual,
+    AsmJSSimdOperation_and,
+    AsmJSSimdOperation_or,
+    AsmJSSimdOperation_xor,
+    AsmJSSimdOperation_select,
+    AsmJSSimdOperation_splat,
+    AsmJSSimdOperation_withX,
+    AsmJSSimdOperation_withY,
+    AsmJSSimdOperation_withZ,
+    AsmJSSimdOperation_withW
 };
 
 // These labels describe positions in the prologue/epilogue of functions while
@@ -393,6 +410,7 @@ class AsmJSModule
     struct ExitDatum
     {
         uint8_t *exit;
+        jit::IonScript *ionScript;
         HeapPtrFunction fun;
     };
 
@@ -789,7 +807,7 @@ class AsmJSModule
     uint8_t *                             code_;
     uint8_t *                             interruptExit_;
     StaticLinkData                        staticLinkData_;
-    HeapPtrArrayBufferObject              maybeHeap_;
+    HeapPtrArrayBufferObjectMaybeShared   maybeHeap_;
     bool                                  dynamicallyLinked_;
     bool                                  loadedFromCache_;
     bool                                  profilingEnabled_;
@@ -1115,18 +1133,21 @@ class AsmJSModule
     // the exported functions have been added.
 
     bool addExportedFunction(PropertyName *name,
-                             uint32_t srcStart,
-                             uint32_t srcEnd,
+                             uint32_t funcSrcBegin,
+                             uint32_t funcSrcEnd,
                              PropertyName *maybeFieldName,
                              ArgCoercionVector &&argCoercions,
                              ReturnType returnType)
     {
+        // NB: funcSrcBegin/funcSrcEnd are given relative to the ScriptSource
+        // (the entire file) and ExportedFunctions store offsets relative to
+        // the beginning of the module (so that they are caching-invariant).
         JS_ASSERT(isFinishedWithFunctionBodies() && !isFinished());
-        ExportedFunction func(name, srcStart, srcEnd, maybeFieldName,
-                              mozilla::Move(argCoercions), returnType);
-        if (exports_.length() >= UINT32_MAX)
-            return false;
-        return exports_.append(mozilla::Move(func));
+        JS_ASSERT(srcStart_ < funcSrcBegin);
+        JS_ASSERT(funcSrcBegin < funcSrcEnd);
+        ExportedFunction func(name, funcSrcBegin - srcStart_, funcSrcEnd - srcStart_,
+                              maybeFieldName, mozilla::Move(argCoercions), returnType);
+        return exports_.length() < UINT32_MAX && exports_.append(mozilla::Move(func));
     }
     unsigned numExportedFunctions() const {
         JS_ASSERT(isFinishedWithFunctionBodies());
@@ -1330,7 +1351,9 @@ class AsmJSModule
     }
     void detachIonCompilation(size_t exitIndex) const {
         JS_ASSERT(isFinished());
-        exitIndexToGlobalDatum(exitIndex).exit = interpExitTrampoline(exit(exitIndex));
+        ExitDatum &exitDatum = exitIndexToGlobalDatum(exitIndex);
+        exitDatum.exit = interpExitTrampoline(exit(exitIndex));
+        exitDatum.ionScript = nullptr;
     }
 
     /*************************************************************************/
@@ -1370,9 +1393,10 @@ class AsmJSModule
         dynamicallyLinked_ = true;
         JS_ASSERT(isDynamicallyLinked());
     }
-    void initHeap(Handle<ArrayBufferObject*> heap, JSContext *cx);
+    void initHeap(Handle<ArrayBufferObjectMaybeShared*> heap, JSContext *cx);
     bool clone(JSContext *cx, ScopedJSDeletePtr<AsmJSModule> *moduleOut) const;
-    void restoreToInitialState(uint8_t *prevCode, ArrayBufferObject *maybePrevBuffer,
+    void restoreToInitialState(uint8_t *prevCode,
+                               ArrayBufferObjectMaybeShared *maybePrevBuffer,
                                ExclusiveContext *cx);
 
     /*************************************************************************/
@@ -1390,7 +1414,7 @@ class AsmJSModule
         JS_ASSERT(isDynamicallyLinked());
         return heapDatum();
     }
-    ArrayBufferObject *maybeHeapBufferObject() const {
+    ArrayBufferObjectMaybeShared *maybeHeapBufferObject() const {
         JS_ASSERT(isDynamicallyLinked());
         return maybeHeap_;
     }

@@ -17,6 +17,7 @@
 #include "nsIDocShellTreeItem.h"
 #include "nsIDOMHTMLDocument.h"
 #include "nsIDOMHTMLElement.h"
+#include "nsIDOMNode.h"
 #include "nsIDOMWindowUtils.h"
 #include "nsIHttpChannel.h"
 #include "nsIInterfaceRequestor.h"
@@ -32,6 +33,8 @@
 #include "nsIWebNavigation.h"
 #include "nsIWritablePropertyBag2.h"
 #include "nsNetUtil.h"
+#include "nsNullPrincipal.h"
+#include "nsIContentPolicy.h"
 #include "nsSupportsPrimitives.h"
 #include "nsThreadUtils.h"
 #include "nsString.h"
@@ -519,18 +522,14 @@ getInnerWindowID(nsIRequest* aRequest) {
     return 0;
   }
 
-  uint64_t id = 0;
-  nsCOMPtr<nsIDOMWindowUtils> du = do_GetInterface(window);
-  if (!du) {
+  nsCOMPtr<nsPIDOMWindow> pwindow = do_QueryInterface(window);
+  if (!pwindow) {
     return 0;
   }
 
-  rv = du->GetCurrentInnerWindowID(&id);
-  if (NS_FAILED(rv)) {
-    return 0;
-  }
+  nsPIDOMWindow* inner = pwindow->IsInnerWindow() ? pwindow.get() : pwindow->GetCurrentInnerWindow();
 
-  return id;
+  return inner ? inner->WindowID() : 0;
 }
 
 NS_IMETHODIMP
@@ -553,6 +552,17 @@ nsCSPContext::SetRequestContext(nsIURI* aSelfURI,
   if (aChannel) {
     mInnerWindowID = getInnerWindowID(aChannel);
     aChannel->GetLoadGroup(getter_AddRefs(mCallingChannelLoadGroup));
+
+    // Storing the nsINode from the LoadInfo of the original channel,
+    // so we can reuse that information when sending reports.
+    nsCOMPtr<nsILoadInfo> loadInfo;
+    aChannel->GetLoadInfo(getter_AddRefs(loadInfo));
+    if (loadInfo) {
+      nsINode* loadingNode = loadInfo->LoadingNode();
+      if (loadingNode) {
+        mLoadingContext = do_GetWeakReference(loadingNode);
+      }
+    }
   }
   else {
     NS_WARNING("Channel needed (but null) in SetRequestContext.  Cannot query loadgroup, which means report sending may fail.");
@@ -678,6 +688,9 @@ nsCSPContext::SendReports(nsISupports* aBlockedContentSource,
   nsCOMPtr<nsIURI> reportURI;
   nsCOMPtr<nsIChannel> reportChannel;
 
+  nsCOMPtr<nsIDOMNode> loadingContext = do_QueryReferent(mLoadingContext);
+  nsCOMPtr<nsINode> loadingNode = do_QueryInterface(loadingContext);
+
   for (uint32_t r = 0; r < reportURIs.Length(); r++) {
     nsAutoCString reportURICstring = NS_ConvertUTF16toUTF8(reportURIs[r]);
     // try to create a new uri from every report-uri string
@@ -694,7 +707,24 @@ nsCSPContext::SendReports(nsISupports* aBlockedContentSource,
     }
 
     // try to create a new channel for every report-uri
-    rv = NS_NewChannel(getter_AddRefs(reportChannel), reportURI);
+    if (loadingNode) {
+      rv = NS_NewChannel(getter_AddRefs(reportChannel),
+                         reportURI,
+                         loadingNode,
+                         nsILoadInfo::SEC_NORMAL,
+                         nsIContentPolicy::TYPE_CSP_REPORT);
+    }
+    else {
+      nsCOMPtr<nsIPrincipal> nullPrincipal =
+        do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
+      NS_ENSURE_SUCCESS(rv, rv);
+      rv = NS_NewChannel(getter_AddRefs(reportChannel),
+                         reportURI,
+                         nullPrincipal,
+                         nsILoadInfo::SEC_NORMAL,
+                         nsIContentPolicy::TYPE_CSP_REPORT);
+    }
+
     if (NS_FAILED(rv)) {
       CSPCONTEXTLOG(("Could not create new channel for report URI %s",
                      reportURICstring.get()));

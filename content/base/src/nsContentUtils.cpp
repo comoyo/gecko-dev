@@ -108,7 +108,6 @@
 #include "nsIDOMNode.h"
 #include "nsIDOMNodeList.h"
 #include "nsIDOMScriptObjectFactory.h"
-#include "nsIDOMUserDataHandler.h"
 #include "nsIDOMXULCommandEvent.h"
 #include "nsIDragService.h"
 #include "nsIEditor.h"
@@ -2592,6 +2591,7 @@ nsIPrincipal*
 nsContentUtils::SubjectPrincipal()
 {
   MOZ_ASSERT(IsInitialized());
+  MOZ_ASSERT(NS_IsMainThread());
   JSContext* cx = GetCurrentJSContext();
   if (!cx) {
     return GetSystemPrincipal();
@@ -5670,7 +5670,7 @@ nsContentUtils::CheckSameOrigin(nsIChannel *aOldChannel, nsIChannel *aNewChannel
 
   nsCOMPtr<nsIPrincipal> oldPrincipal;
   nsContentUtils::GetSecurityManager()->
-    GetChannelPrincipal(aOldChannel, getter_AddRefs(oldPrincipal));
+    GetChannelResultPrincipal(aOldChannel, getter_AddRefs(oldPrincipal));
 
   nsCOMPtr<nsIURI> newURI;
   aNewChannel->GetURI(getter_AddRefs(newURI));
@@ -6396,10 +6396,11 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
   NS_ASSERTION(aDocument, "aDocument should be a valid pointer (not null)");
 
   AutoJSAPI jsapi;
-  if (NS_WARN_IF(!jsapi.Init(aDocument->GetWindow()))) {
-    return true;
-  }
+  jsapi.Init();
   JSContext* cx = jsapi.cx();
+  // We can use the junk scope here, because we're just using it for
+  // regexp evaluation, not actual script execution.
+  JSAutoCompartment ac(cx, xpc::UnprivilegedJunkScope());
 
   // The pattern has to match the entire value.
   aPattern.Insert(NS_LITERAL_STRING("^(?:"), 0);
@@ -6407,7 +6408,7 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
 
   JS::Rooted<JSObject*> re(cx,
     JS_NewUCRegExpObjectNoStatics(cx,
-                                  static_cast<jschar*>(aPattern.BeginWriting()),
+                                  static_cast<char16_t*>(aPattern.BeginWriting()),
                                   aPattern.Length(), 0));
   if (!re) {
     JS_ClearPendingException(cx);
@@ -6417,7 +6418,7 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
   JS::Rooted<JS::Value> rval(cx, JS::NullValue());
   size_t idx = 0;
   if (!JS_ExecuteRegExpNoStatics(cx, re,
-                                 static_cast<jschar*>(aValue.BeginWriting()),
+                                 static_cast<char16_t*>(aValue.BeginWriting()),
                                  aValue.Length(), &idx, true, &rval)) {
     JS_ClearPendingException(cx);
     return true;
@@ -6439,37 +6440,14 @@ nsContentUtils::URIInheritsSecurityContext(nsIURI *aURI, bool *aResult)
 
 // static
 bool
-nsContentUtils::SetUpChannelOwner(nsIPrincipal* aLoadingPrincipal,
-                                  nsIChannel* aChannel,
-                                  nsIURI* aURI,
-                                  bool aInheritForAboutBlank,
-                                  bool aIsSandboxed,
-                                  bool aForceInherit)
+nsContentUtils::ChannelShouldInheritPrincipal(nsIPrincipal* aLoadingPrincipal,
+                                              nsIURI* aURI,
+                                              bool aInheritForAboutBlank,
+                                              bool aForceInherit)
 {
-  nsCOMPtr<nsIPrincipal> loadingPrincipal = aLoadingPrincipal;
-  if (!loadingPrincipal) {
-    if (!aIsSandboxed) {
-      // Nothing to do here
-      return false;
-    }
+  MOZ_ASSERT(aLoadingPrincipal, "Can not check inheritance without a principal");
 
-    // Go ahead and create a nullprincipal to use as our loading principal,
-    // since we need to make sure to sandbox the load but we have no clue who's
-    // loading us.
-    loadingPrincipal = do_CreateInstance(NS_NULLPRINCIPAL_CONTRACTID);
-    if (!loadingPrincipal) {
-      NS_RUNTIMEABORT("Failed to create a principal?");
-    }
-  }
-
-  // If we're sandboxed, make sure to clear any owner the channel
-  // might already have.
-  if (aIsSandboxed) {
-    aChannel->SetOwner(nullptr);
-  }
-
-  // Set the loadInfo of the channel, but only tell the channel to
-  // inherit if it can't provide its own security context.
+  // Only tell the channel to inherit if it can't provide its own security context.
   //
   // XXX: If this is ever changed, check all callers for what owners
   //      they're passing in.  In particular, see the code and
@@ -6499,19 +6477,12 @@ nsContentUtils::SetUpChannelOwner(nsIPrincipal* aLoadingPrincipal,
       // based on its own codebase later.
       //
       (URIIsLocalFile(aURI) &&
-       NS_SUCCEEDED(loadingPrincipal->CheckMayLoad(aURI, false, false)) &&
+       NS_SUCCEEDED(aLoadingPrincipal->CheckMayLoad(aURI, false, false)) &&
        // One more check here.  CheckMayLoad will always return true for the
        // system principal, but we do NOT want to inherit in that case.
-       !IsSystemPrincipal(loadingPrincipal));
+       !IsSystemPrincipal(aLoadingPrincipal));
   }
-
-  nsCOMPtr<nsILoadInfo> loadInfo =
-    new LoadInfo(loadingPrincipal,
-                 inherit ?
-                   LoadInfo::eInheritPrincipal : LoadInfo::eDontInheritPrincipal,
-                 aIsSandboxed ? LoadInfo::eSandboxed : LoadInfo::eNotSandboxed);
-  aChannel->SetLoadInfo(loadInfo);
-  return inherit && !aIsSandboxed;
+  return inherit;
 }
 
 /* static */

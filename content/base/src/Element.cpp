@@ -93,7 +93,6 @@
 #include "nsNodeInfoManager.h"
 #include "nsICategoryManager.h"
 #include "nsIDOMDocumentType.h"
-#include "nsIDOMUserDataHandler.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIEditor.h"
 #include "nsIEditorIMESupport.h"
@@ -1577,7 +1576,8 @@ Element::SetSMILOverrideStyleRule(css::StyleRule* aStyleRule,
     if (doc) {
       nsCOMPtr<nsIPresShell> shell = doc->GetShell();
       if (shell) {
-        shell->RestyleForAnimation(this, eRestyle_Self);
+        shell->RestyleForAnimation(this,
+          eRestyle_StyleAttribute | eRestyle_ChangeAnimationPhase);
       }
     }
   }
@@ -2747,6 +2747,33 @@ Element::SetTokenList(nsIAtom* aAtom, nsIVariant* aValue)
   return rv.ErrorCode();
 }
 
+Element*
+Element::Closest(const nsAString& aSelector, ErrorResult& aResult)
+{
+  nsCSSSelectorList* selectorList = ParseSelectorList(aSelector, aResult);
+  if (!selectorList) {
+    // Either we failed (and aResult already has the exception), or this
+    // is a pseudo-element-only selector that matches nothing.
+    return nullptr;
+  }
+  OwnerDoc()->FlushPendingLinkUpdates();
+  TreeMatchContext matchingContext(false,
+                                   nsRuleWalker::eRelevantLinkUnvisited,
+                                   OwnerDoc(),
+                                   TreeMatchContext::eNeverMatchVisited);
+  matchingContext.SetHasSpecifiedScope();
+  matchingContext.AddScopeElement(this);
+  for (nsINode* node = this; node; node = node->GetParentNode()) {
+    if (node->IsElement() &&
+        nsCSSRuleProcessor::SelectorListMatches(node->AsElement(),
+                                                matchingContext,
+                                                selectorList)) {
+      return node->AsElement();
+    }
+  }
+  return nullptr;
+}
+
 bool
 Element::Matches(const nsAString& aSelector, ErrorResult& aError)
 {
@@ -3105,6 +3132,50 @@ Element::SetBoolAttr(nsIAtom* aAttr, bool aValue)
   }
 
   return UnsetAttr(kNameSpaceID_None, aAttr, true);
+}
+
+void
+Element::GetEnumAttr(nsIAtom* aAttr,
+                     const char* aDefault,
+                     nsAString& aResult) const
+{
+  GetEnumAttr(aAttr, aDefault, aDefault, aResult);
+}
+
+void
+Element::GetEnumAttr(nsIAtom* aAttr,
+                     const char* aDefaultMissing,
+                     const char* aDefaultInvalid,
+                     nsAString& aResult) const
+{
+  const nsAttrValue* attrVal = mAttrsAndChildren.GetAttr(aAttr);
+
+  aResult.Truncate();
+
+  if (!attrVal) {
+    if (aDefaultMissing) {
+      AppendASCIItoUTF16(nsDependentCString(aDefaultMissing), aResult);
+    } else {
+      SetDOMStringToNull(aResult);
+    }
+  } else {
+    if (attrVal->Type() == nsAttrValue::eEnum) {
+      attrVal->GetEnumString(aResult, true);
+    } else if (aDefaultInvalid) {
+      AppendASCIItoUTF16(nsDependentCString(aDefaultInvalid), aResult);
+    }
+  }
+}
+
+void
+Element::SetOrRemoveNullableStringAttr(nsIAtom* aName, const nsAString& aValue,
+                                       ErrorResult& aError)
+{
+  if (DOMStringIsNull(aValue)) {
+    UnsetAttr(aName, aError);
+  } else {
+    SetAttr(aName, aValue, aError);
+  }
 }
 
 Directionality

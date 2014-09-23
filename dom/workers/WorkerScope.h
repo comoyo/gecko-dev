@@ -14,6 +14,7 @@ namespace dom {
 
 class Console;
 class Function;
+class Promise;
 
 } // namespace dom
 } // namespace mozilla
@@ -36,7 +37,7 @@ class WorkerGlobalScope : public DOMEventTargetHelper,
 protected:
   WorkerPrivate* mWorkerPrivate;
 
-  WorkerGlobalScope(WorkerPrivate* aWorkerPrivate);
+  explicit WorkerGlobalScope(WorkerPrivate* aWorkerPrivate);
   virtual ~WorkerGlobalScope();
 
 public:
@@ -126,7 +127,7 @@ class DedicatedWorkerGlobalScope MOZ_FINAL : public WorkerGlobalScope
   ~DedicatedWorkerGlobalScope() { }
 
 public:
-  DedicatedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate);
+  explicit DedicatedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate);
 
   virtual JSObject*
   WrapGlobalObject(JSContext* aCx) MOZ_OVERRIDE;
@@ -189,11 +190,8 @@ public:
     // FIXME(nsm): Bug 982728
   }
 
-  void
-  Unregister()
-  {
-    // FIXME(nsm): Bug 982728
-  }
+  already_AddRefed<Promise>
+  Unregister(ErrorResult& aRv);
 
   IMPL_EVENT_HANDLER(activate)
   IMPL_EVENT_HANDLER(beforeevicted)

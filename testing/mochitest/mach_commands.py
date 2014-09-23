@@ -73,6 +73,8 @@ FLAVORS = {
     'mochitest': 'plain',
     'chrome': 'chrome',
     'browser-chrome': 'browser',
+    'jetpack-package': 'jetpack-package',
+    'jetpack-addon': 'jetpack-addon',
     'a11y': 'a11y',
     'webapprt-chrome': 'webapprt-chrome',
 }
@@ -200,7 +202,7 @@ class MochitestRunner(MozbuildObject):
         test files.
 
         suite is the type of mochitest to run. It can be one of ('plain',
-        'chrome', 'browser', 'metro', 'a11y').
+        'chrome', 'browser', 'metro', 'a11y', 'jetpack-package', 'jetpack-addon').
 
         debugger is a program name or path to a binary (presumably a debugger)
         to run the test in. e.g. 'gdb'
@@ -219,9 +221,9 @@ class MochitestRunner(MozbuildObject):
             print('Cannot specify both --rerun-failures and a test path.')
             return 1
 
-        # Need to call relpath before os.chdir() below.
+        # Make absolute paths relative before calling os.chdir() below.
         if test_paths:
-            test_paths = [self._wrap_path_argument(p).relpath() for p in test_paths]
+            test_paths = [self._wrap_path_argument(p).relpath() if os.path.isabs(p) else p for p in test_paths]
 
         failure_file_path = os.path.join(self.statedir, 'mochitest_failures.json')
 
@@ -269,6 +271,10 @@ class MochitestRunner(MozbuildObject):
         elif suite == 'devtools':
             options.browserChrome = True
             options.subsuite = 'devtools'
+        elif suite == 'jetpack-package':
+            options.jetpackPackage = True
+        elif suite == 'jetpack-addon':
+            options.jetpackAddon = True
         elif suite == 'metro':
             options.immersiveMode = True
             options.browserChrome = True
@@ -648,6 +654,20 @@ class MachCommands(MachCommandBase):
     def run_mochitest_devtools(self, test_paths, **kwargs):
         return self.run_mochitest(test_paths, 'devtools', **kwargs)
 
+    @Command('jetpack-package', category='testing',
+        conditions=[conditions.is_firefox],
+        description='Run a jetpack package test.')
+    @MochitestCommand
+    def run_mochitest_jetpack_package(self, test_paths, **kwargs):
+        return self.run_mochitest(test_paths, 'jetpack-package', **kwargs)
+
+    @Command('jetpack-addon', category='testing',
+        conditions=[conditions.is_firefox],
+        description='Run a jetpack addon test.')
+    @MochitestCommand
+    def run_mochitest_jetpack_addon(self, test_paths, **kwargs):
+        return self.run_mochitest(test_paths, 'jetpack-addon', **kwargs)
+
     @Command('mochitest-metro', category='testing',
         conditions=[conditions.is_firefox],
         description='Run a mochitest with metro browser chrome (tests for Windows touch interface).',
@@ -827,3 +847,39 @@ class B2GCommands(MachCommandBase):
 
         mochitest = self._spawn(MochitestRunner)
         return mochitest.run_b2g_test(test_paths=test_paths, **kwargs)
+
+
+@CommandProvider
+class AndroidCommands(MachCommandBase):
+    @Command('robocop', category='testing',
+        conditions=[conditions.is_android],
+        description='Run a Robocop test.')
+    @CommandArgument('test_path', default=None, nargs='?',
+        metavar='TEST',
+        help='Test to run. Can be specified as a Robocop test name (like "testLoad"), ' \
+             'or omitted. If omitted, the entire test suite is executed.')
+    def run_robocop(self, test_path):
+        self.tests_dir = os.path.join(self.topobjdir, '_tests')
+        self.mochitest_dir = os.path.join(self.tests_dir, 'testing', 'mochitest')
+        import imp
+        path = os.path.join(self.mochitest_dir, 'runtestsremote.py')
+        with open(path, 'r') as fh:
+            imp.load_module('runtestsremote', fh, path,
+                ('.py', 'r', imp.PY_SOURCE))
+        import runtestsremote
+
+        args = [
+            '--xre-path=' + os.environ.get('MOZ_HOST_BIN'),
+            '--dm_trans=adb',
+            '--deviceIP=',
+            '--console-level=INFO',
+            '--app=' + self.substs['ANDROID_PACKAGE_NAME'],
+            '--robocop-apk=' + os.path.join(self.topobjdir, 'build', 'mobile', 'robocop', 'robocop-debug.apk'),
+            '--robocop-ini=' + os.path.join(self.topobjdir, 'build', 'mobile', 'robocop', 'robocop.ini'),
+            '--log-mach=-',
+        ]
+
+        if test_path:
+            args.append('--test-path=%s' % test_path)
+
+        sys.exit(runtestsremote.main(args))

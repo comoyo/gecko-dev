@@ -1824,7 +1824,8 @@ ScrollFrameHelper::ScrollFrameHelper(nsContainerFrame* aOuter,
   , mOuter(aOuter)
   , mAsyncScroll(nullptr)
   , mAsyncSmoothMSDScroll(nullptr)
-  , mOriginOfLastScroll(nsGkAtoms::other)
+  , mLastScrollOrigin(nsGkAtoms::other)
+  , mLastSmoothScrollOrigin(nullptr)
   , mScrollGeneration(++sScrollGenerationCounter)
   , mDestination(0, 0)
   , mScrollPosAtLastPaint(0, 0)
@@ -2051,6 +2052,19 @@ ScrollFrameHelper::ScrollToWithOrigin(nsPoint aScrollPosition,
             currentVelocity = mAsyncScroll->VelocityAt(now);
           }
           mAsyncScroll = nullptr;
+        }
+
+        if (gfxPrefs::AsyncPanZoomEnabled()) {
+          // The animation will be handled in the compositor, pass the
+          // information needed to start the animation and skip the main-thread
+          // animation for this scroll.
+          mLastSmoothScrollOrigin = aOrigin;
+          mScrollGeneration = ++sScrollGenerationCounter;
+
+          // Schedule a paint to ensure that the frame metrics get updated on
+          // the compositor thread.
+          mOuter->SchedulePaint();
+          return;
         }
 
         mAsyncSmoothMSDScroll =
@@ -2404,7 +2418,8 @@ ScrollFrameHelper::ScrollToImpl(nsPoint aPt, const nsRect& aRange, nsIAtom* aOri
   nsPoint oldScrollFramePos = mScrolledFrame->GetPosition();
   // Update frame position for scrolling
   mScrolledFrame->SetPosition(mScrollPort.TopLeft() - pt);
-  mOriginOfLastScroll = aOrigin;
+  mLastScrollOrigin = aOrigin;
+  mLastSmoothScrollOrigin = nullptr;
   mScrollGeneration = ++sScrollGenerationCounter;
 
   // We pass in the amount to move visually
@@ -2712,32 +2727,6 @@ ClipListsExceptCaret(nsDisplayListCollection* aLists,
   ::ClipItemsExceptCaret(aLists->Content(), aBuilder, aClipFrame, aClip);
 }
 
-static bool
-DisplayportExceedsMaxTextureSize(nsPresContext* aPresContext, const nsRect& aDisplayPort, bool aLowPrecision)
-{
-#ifdef MOZ_WIDGET_GONK
-  // On B2G we actively run into max texture size limits because the displayport-sizing code
-  // in the AsyncPanZoomController code is slightly busted (bug 957668 will fix it properly).
-  // We sometimes end up requesting displayports for which the corresponding layer will be
-  // larger than the max GL texture size (which we assume to be 4096 here).
-  // If we run into this case, we should just not use the displayport at all and fall back to
-  // just making a ScrollInfoLayer so that we use the APZC's synchronous scrolling fallback
-  // mechanism.
-  // Note also that if we don't do this here, it is quite likely that the parent B2G process
-  // will kill this child process to prevent OOMs (see the patch that landed as part of bug
-  // 965945 for details).
-  gfxSize resolution = aPresContext->PresShell()->GetCumulativeResolution();
-  if (aLowPrecision) {
-    resolution.width *= gfxPrefs::LowPrecisionResolution();
-    resolution.height *= gfxPrefs::LowPrecisionResolution();
-  }
-  return (aPresContext->AppUnitsToDevPixels(aDisplayPort.width) * resolution.width > 4096) ||
-         (aPresContext->AppUnitsToDevPixels(aDisplayPort.height) * resolution.height > 4096);
-#else
-  return false;
-#endif
-}
-
 void
 ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                     const nsRect&           aDirtyRect,
@@ -2837,16 +2826,10 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     }
 
     bool usingLowPrecision = gfxPrefs::UseLowPrecisionBuffer();
-    if (usingDisplayport && DisplayportExceedsMaxTextureSize(mOuter->PresContext(), displayPort, usingLowPrecision)) {
-      usingDisplayport = false;
-    }
     if (usingDisplayport && usingLowPrecision) {
       // If we have low-res painting enabled we should check the critical displayport too
       nsRect critDp;
-      bool usingCritDp = nsLayoutUtils::GetCriticalDisplayPort(mOuter->GetContent(), &critDp);
-      if (usingCritDp && !critDp.IsEmpty() && DisplayportExceedsMaxTextureSize(mOuter->PresContext(), critDp, false)) {
-        usingDisplayport = false;
-      }
+      nsLayoutUtils::GetCriticalDisplayPort(mOuter->GetContent(), &critDp);
     }
 
     // Override the dirty rectangle if the displayport has been set.

@@ -40,77 +40,33 @@ XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
                                    "nsIUUIDGenerator");
 
 let SettingsPermissions = {
-  _mmPermissions: {},
-  addManager: function(aMessage) {
-    if (DEBUG) debug("Adding message manager permissions");
-    let mm = aMessage.target;
-    // In order for mochitests to work, we have to update permissions on every
-    // lock creation or observer addition. This still means we can cache
-    // permissions.
-    if (this._mmPermissions[mm]) {
-      if (DEBUG) debug("Manager already added, updating permissions");
+  checkPermission: function(aPrincipal, aPerm) {
+    if (aPrincipal.origin == "[System Principal]" ||
+        Services.perms.testExactPermissionFromPrincipal(aPrincipal, aPerm) == Ci.nsIPermissionManager.ALLOW_ACTION) {
+      return true;
     }
-    let perms = [];
-    let principal;
-    let isSystemPrincipal = false;
-    if (aMessage.principal.origin == "[System Principal]") {
-      isSystemPrincipal = true;
-    } else {
-      let uri = Services.io.newURI(aMessage.principal.origin, null, null);
-      principal = Services.scriptSecurityManager.getAppCodebasePrincipal(uri,
-                                                                         aMessage.principal.appId,
-                                                                         aMessage.principal.isInBrowserElement);
-    }
-    for (let i in AllPossiblePermissions) {
-      let permName = AllPossiblePermissions[i];
-      // We only care about permissions starting with the word "settings"
-      if (permName.indexOf("settings") != 0) {
-        continue;
-      }
-      if (isSystemPrincipal || Services.perms.testExactPermissionFromPrincipal(principal, permName) == Ci.nsIPermissionManager.ALLOW_ACTION) {
-        perms.push(permName);
-      }
-    }
-    this._mmPermissions[mm] = perms;
+    return false;
   },
-  removeManager: function(aMsgMgr) {
-    if (DEBUG) debug("Removing message manager permissions for " + aMsgMgr);
-    if (!this._mmPermissions[aMsgMgr]) {
-      if (DEBUG) debug("Manager not added!");
-      return;
-    }
-    delete this._mmPermissions[aMsgMgr];
+  hasAllReadPermission: function(aPrincipal) {
+    return this.checkPermission(aPrincipal, kAllSettingsReadPermission);
   },
-  checkPermission: function(aMsgMgr, aPerm) {
-    if (!this._mmPermissions[aMsgMgr]) {
-      if (DEBUG) debug("Manager not added!");
-      return false;
-    }
-    return (this._mmPermissions[aMsgMgr].indexOf(aPerm) != -1);
+  hasAllWritePermission: function(aPrincipal) {
+    return this.checkPermission(aPrincipal, kAllSettingsWritePermission);
   },
-  hasAllReadPermission: function(aMsgMgr) {
-    return this.checkPermission(aMsgMgr, kAllSettingsReadPermission);
+  hasSomeReadPermission: function(aPrincipal) {
+    return this.checkPermission(aPrincipal, kSomeSettingsReadPermission);
   },
-  hasAllWritePermission: function(aMsgMgr) {
-    return this.checkPermission(aMsgMgr, kAllSettingsWritePermission);
+  hasSomeWritePermission: function(aPrincipal) {
+    return this.checkPermission(aPrincipal, kSomeSettingsWritePermission);
   },
-  hasSomeReadPermission: function(aMsgMgr) {
-    return this.checkPermission(aMsgMgr, kSomeSettingsReadPermission);
+  hasClearPermission: function(aPrincipal) {
+    return this.checkPermission(aPrincipal, kSettingsClearPermission);
   },
-  hasSomeWritePermission: function(aMsgMgr) {
-    return this.checkPermission(aMsgMgr, kSomeSettingsWritePermission);
+  hasReadPermission: function(aPrincipal, aSettingsName) {
+    return this.hasAllReadPermission(aPrincipal) || this.checkPermission(aPrincipal, "settings:" + aSettingsName + kSettingsReadSuffix);
   },
-  hasClearPermission: function(aMsgMgr) {
-    return this.checkPermission(aMsgMgr, kSettingsClearPermission);
-  },
-  assertSomeReadPermission: function(aMsgMgr) {
-    aMsgMgr.assertPermission(kSomeSettingsReadPermission);
-  },
-  hasReadPermission: function(aMsgMgr, aSettingsName) {
-    return this.hasAllReadPermission(aMsgMgr) || this.checkPermission(aMsgMgr, "settings:" + aSettingsName + kSettingsReadSuffix);
-  },
-  hasWritePermission: function(aMsgMgr, aSettingsName) {
-    return this.hasAllWritePermission(aMsgMgr) || this.checkPermission(aMsgMgr, "settings:" + aSettingsName + kSettingsWriteSuffix);
+  hasWritePermission: function(aPrincipal, aSettingsName) {
+    return this.hasAllWritePermission(aPrincipal) || this.checkPermission(aPrincipal, "settings:" + aSettingsName + kSettingsWriteSuffix);
   }
 };
 
@@ -142,7 +98,7 @@ function SettingsLockInfo(aDB, aMsgMgr, aLockID, aIsServiceLock) {
     canClear: true,
     // Lets us know if this lock has been used to clear at any point.
     hasCleared: false,
-    getObjectStore: function() {
+    getObjectStore: function(aPrincipal) {
       if (DEBUG) debug("Getting transaction for " + this.lockID);
       let store;
       // Test for transaction validity via trying to get the
@@ -163,9 +119,11 @@ function SettingsLockInfo(aDB, aMsgMgr, aLockID, aIsServiceLock) {
       // slightly slower on apps with full settings permissions, but
       // it means we don't have to do our own transaction order
       // bookkeeping.
-      if (!SettingsPermissions.hasSomeWritePermission(this._mm)) {
+      if (!SettingsPermissions.hasSomeWritePermission(aPrincipal)) {
+        if (DEBUG) debug("Making READONLY transaction for " + this.lockID);
         this._transaction = aDB._db.transaction(SETTINGSSTORE_NAME, "readonly");
       } else {
+        if (DEBUG) debug("Making READWRITE transaction for " + this.lockID);
         this._transaction = aDB._db.transaction(SETTINGSSTORE_NAME, "readwrite");
       }
       this._transaction.oncomplete = function() {
@@ -186,9 +144,6 @@ function SettingsLockInfo(aDB, aMsgMgr, aLockID, aIsServiceLock) {
           }
       }
       return store;
-    },
-    get objectStore() {
-      return this.getObjectStore();
     }
   };
 }
@@ -207,6 +162,8 @@ let SettingsRequestManager = {
   // until they hit the front of the queue.
   settingsLockQueue: [],
   children: [],
+  mmPrincipals: new Map(),
+
   init: function() {
     if (DEBUG) debug("init");
     this.settingsDB.init();
@@ -247,7 +204,7 @@ let SettingsRequestManager = {
     });
   },
 
-  queueTask: function(aOperation, aData) {
+  queueTask: function(aOperation, aData, aPrincipal) {
     if (DEBUG) debug("Queueing task: " + aOperation);
 
     let defer = {};
@@ -262,11 +219,10 @@ let SettingsRequestManager = {
       aData.settings = this._serializePreservingBinaries(aData.settings);
     }
 
-
-
     this.lockInfo[aData.lockID].tasks.push({
       operation: aOperation,
       data: aData,
+      principal: aPrincipal,
       defer: defer
     });
 
@@ -289,7 +245,7 @@ let SettingsRequestManager = {
     if (DEBUG) debug("Making task queuing transaction request.");
     let data = aTask.data;
     let lock = this.lockInfo[data.lockID];
-    let store = lock.objectStore;
+    let store = lock.getObjectStore(aTask.principal);
     if (!store) {
       if (DEBUG) debug("Rejecting task queue on lock " + aTask.data.lockID);
       return Promise.reject({task: aTask, error: "Cannot get object store"});
@@ -339,7 +295,7 @@ let SettingsRequestManager = {
 
     lock.canClear = false;
     
-    if (!SettingsPermissions.hasReadPermission(lock._mm, data.name)) {
+    if (!SettingsPermissions.hasReadPermission(aTask.principal, data.name)) {
       if (DEBUG) debug("get not allowed for " + data.name);
       lock._failed = true;
       return Promise.reject({task: aTask, error: "No permission to get " + data.name});
@@ -355,7 +311,7 @@ let SettingsRequestManager = {
 
     // Create/Get transaction and make request
     if (DEBUG) debug("Making get transaction request for " + data.name);
-    let store = lock.objectStore;
+    let store = lock.getObjectStore(aTask.principal);
     if (!store) {
       if (DEBUG) debug("Rejecting Get task on lock " + aTask.data.lockID);
       return Promise.reject({task: aTask, error: "Cannot get object store"});
@@ -422,7 +378,7 @@ let SettingsRequestManager = {
     }
 
     for (let i = 0; i < keys.length; i++) {
-      if (!SettingsPermissions.hasWritePermission(lock._mm, keys[i])) {
+      if (!SettingsPermissions.hasWritePermission(aTask.principal, keys[i])) {
         if (DEBUG) debug("set not allowed on " + keys[i]);
         lock._failed = true;
         return Promise.reject({task: aTask, error: "No permission to set " + keys[i]});
@@ -471,7 +427,7 @@ let SettingsRequestManager = {
       return Promise.resolve({task: aTask});
     }
 
-    let store = lock.objectStore;
+    let store = lock.getObjectStore(aTask.principal);
     if (!store) {
       if (DEBUG) debug("Rejecting Set task on lock " + aTask.data.lockID);
       return Promise.reject({task: aTask, error: "Cannot get object store"});
@@ -566,7 +522,7 @@ let SettingsRequestManager = {
       return Promise.reject({task: aTask, error: "Cannot call clear after queuing other tasks, all requests now failing."});
     }
 
-    if (!SettingsPermissions.hasClearPermission(lock._mm)) {
+    if (!SettingsPermissions.hasClearPermission(aTask.principal)) {
       if (DEBUG) debug("clear not allowed");
       lock._failed = true;
       return Promise.reject({task: aTask, error: "No permission to clear DB"});
@@ -574,7 +530,7 @@ let SettingsRequestManager = {
 
     lock.hasCleared = true;
 
-    let store = lock.objectStore;
+    let store = lock.getObjectStore(aTask.principal);
     if (!store) {
       if (DEBUG) debug("Rejecting Clear task on lock " + aTask.data.lockID);
       return Promise.reject({task: aTask, error: "Cannot get object store"});
@@ -619,14 +575,16 @@ let SettingsRequestManager = {
       if (DEBUG) debug("Lock no longer alive, cannot run tasks");
       return;
     }
-    if (lock.finalizing) {
-      debug("TASK TRYING TO QUEUE AFTER FINALIZE CALLED. THIS IS BAD. Lock: " + aLockID);
-      return;
-    }
     let currentTask = lock.tasks.shift();
     let promises = [];
     while (currentTask) {
       if (DEBUG) debug("Running Operation " + currentTask.operation);
+      if (lock.finalizing) {
+        // We should really never get to this point, but if we do,
+        // fail every task that happens.
+        Cu.reportError("Settings lock trying to run more tasks after finalizing. Ignoring tasks, but this is bad. Lock: " + aLockID);
+        currentTask.defer.reject("Cannot call new task after finalizing");
+      } else {
       let p;
       switch (currentTask.operation) {
         case "get":
@@ -646,11 +604,12 @@ let SettingsRequestManager = {
           p.reject("Invalid operation: " + currentTask.operation);
       }
       p.then(function(ret) {
-        ret.task.defer.resolve(ret.results);
+        ret.task.defer.resolve("results" in ret ? ret.results : null);
       }.bind(currentTask), function(ret) {
         ret.task.defer.reject(ret.error);
       });
       promises.push(p);
+      }
       currentTask = lock.tasks.shift();
     }
   },
@@ -718,30 +677,41 @@ let SettingsRequestManager = {
   broadcastMessage: function broadcastMessage(aMsgName, aContent) {
     if (DEBUG) debug("Broadcast");
     this.children.forEach(function(msgMgr) {
-      if (SettingsPermissions.hasReadPermission(msgMgr, aContent.key)) {
+      let principal = this.mmPrincipals.get(msgMgr);
+      if (!principal) {
+        if (DEBUG) debug("Cannot find principal for message manager to check permissions");
+      }
+      else if (SettingsPermissions.hasReadPermission(principal, aContent.key)) {
         msgMgr.sendAsyncMessage(aMsgName, aContent);
       }
-    });
+    }.bind(this));
     if (DEBUG) debug("Finished Broadcasting");
   },
 
-  addObserver: function(aMsgMgr) {
-    if (DEBUG) debug("Add observer for" + aMsgMgr);
+  addObserver: function(aMsgMgr, aPrincipal) {
+    if (DEBUG) debug("Add observer for " + aPrincipal.origin);
     if (this.children.indexOf(aMsgMgr) == -1) {
       this.children.push(aMsgMgr);
+      this.mmPrincipals.set(aMsgMgr, aPrincipal);
     }
   },
 
   removeObserver: function(aMsgMgr) {
-    if (DEBUG) debug("Remove observer for" + aMsgMgr);
+    if (DEBUG) {
+      let principal = this.mmPrincipals.get(aMsgMgr);
+      debug("Remove observer for " + principal.origin);
+    }
     let index = this.children.indexOf(aMsgMgr);
     if (index != -1) {
       this.children.splice(index, 1);
+      this.mmPrincipals.delete(aMsgMgr);
     }
+    if (DEBUG) debug("Principal/MessageManager pairs left: " + this.mmPrincipals.size);
   },
 
   removeLock: function(aLockID) {
     if (DEBUG) debug("Removing lock " + aLockID);
+    if (this.lockInfo[aLockID]) {
     let transaction = this.lockInfo[aLockID]._transaction;
     if (transaction) {
       try {
@@ -755,6 +725,7 @@ let SettingsRequestManager = {
       }
     }
     delete this.lockInfo[aLockID];
+    }
     let index = this.settingsLockQueue.indexOf(aLockID);
     if (index > -1) {
       this.settingsLockQueue.splice(index, 1);
@@ -768,9 +739,8 @@ let SettingsRequestManager = {
   },
 
   removeMessageManager: function(aMsgMgr){
-    if (DEBUG) debug("Removing message manager " + aMsgMgr);
+    if (DEBUG) debug("Removing message manager");
     this.removeObserver(aMsgMgr);
-    SettingsPermissions.removeManager(aMsgMgr);
     let closedLockIDs = [];
     let lockIDs = Object.keys(this.lockInfo);
     for (let i in lockIDs) {
@@ -840,21 +810,19 @@ let SettingsRequestManager = {
         this.removeMessageManager(mm);
         break;
       case "Settings:RegisterForMessages":
-        SettingsPermissions.addManager(aMessage);
-        if (!SettingsPermissions.hasSomeReadPermission(mm)) {
+        if (!SettingsPermissions.hasSomeReadPermission(aMessage.principal)) {
           Cu.reportError("Settings message " + aMessage.name +
                          " from a content process with no 'settings-api-read' privileges.");
-          // Kill app after reporting error
-          SettingsPermissions.assertSomeReadPermission(mm);
+          aMessage.target.assertPermission("message-manager-no-read-kill");
           return;
         }
-        this.addObserver(mm);
+        this.addObserver(mm, aMessage.principal);
         break;
       case "Settings:UnregisterForMessages":
         this.removeObserver(mm);
         break;
       case "Settings:CreateLock":
-        if (DEBUG) debug("Received CreateLock for " + msg.lockID);
+        if (DEBUG) debug("Received CreateLock for " + msg.lockID + " from " + aMessage.principal.origin);
         // If we try to create a lock ID that collides with one
         // already in the system, consider it a security violation and
         // kill.
@@ -864,12 +832,11 @@ let SettingsRequestManager = {
           return;
         }
         this.settingsLockQueue.push(msg.lockID);
-        SettingsPermissions.addManager(aMessage);
         this.lockInfo[msg.lockID] = SettingsLockInfo(this.settingsDB, mm, msg.lockID, msg.isServiceLock);
         break;
       case "Settings:Get":
         if (DEBUG) debug("Received getRequest from " + msg.lockID);
-        this.queueTask("get", msg).then(function(settings) {
+        this.queueTask("get", msg, aMessage.principal).then(function(settings) {
             returnMessage("Settings:Get:OK", {
               lockID: msg.lockID,
               requestID: msg.requestID,
@@ -886,7 +853,7 @@ let SettingsRequestManager = {
         break;
       case "Settings:Set":
         if (DEBUG) debug("Received Set Request from " + msg.lockID);
-        this.queueTask("set", msg).then(function(settings) {
+        this.queueTask("set", msg, aMessage.principal).then(function(settings) {
           returnMessage("Settings:Set:OK", {
             lockID: msg.lockID,
             requestID: msg.requestID
@@ -901,7 +868,7 @@ let SettingsRequestManager = {
         break;
       case "Settings:Clear":
         if (DEBUG) debug("Received Clear Request from " + msg.lockID);
-        this.queueTask("clear", msg).then(function() {
+        this.queueTask("clear", msg, aMessage.principal).then(function() {
           returnMessage("Settings:Clear:OK", {
             lockID: msg.lockID,
             requestID: msg.requestID
@@ -916,7 +883,7 @@ let SettingsRequestManager = {
         break;
       case "Settings:Finalize":
         if (DEBUG) debug("Received Finalize");
-        this.queueTask("finalize", msg).then(function() {
+        this.queueTask("finalize", msg, aMessage.principal).then(function() {
           returnMessage("Settings:Finalize:OK", {
             lockID: msg.lockID
           });

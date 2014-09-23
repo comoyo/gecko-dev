@@ -34,6 +34,10 @@ XPCOMUtils.defineLazyServiceGetter(this, "gNetworkService",
                                    "@mozilla.org/network/service;1",
                                    "nsINetworkService");
 
+XPCOMUtils.defineLazyServiceGetter(this, "gMobileConnectionService",
+                                   "@mozilla.org/mobileconnection/mobileconnectionservice;1",
+                                   "nsIMobileConnectionService");
+
 const TOPIC_INTERFACE_REGISTERED     = "network-interface-registered";
 const TOPIC_INTERFACE_UNREGISTERED   = "network-interface-unregistered";
 const TOPIC_ACTIVE_CHANGED           = "network-active-changed";
@@ -816,10 +820,8 @@ NetworkManager.prototype = {
   _tetheringInterface: null,
 
   handleLastRequest: function() {
-    let count = this._requestCount;
-    this._requestCount = 0;
-
-    if (count === 1) {
+    if (this._requestCount === 1) {
+      this._requestCount = 0;
       if (this.wantConnectionEvent) {
         if (this.tetheringSettings[SETTINGS_USB_ENABLED]) {
           this.wantConnectionEvent.call(this);
@@ -829,7 +831,10 @@ NetworkManager.prototype = {
       return;
     }
 
-    if (count > 1) {
+    if (this._requestCount > 1) {
+      // Set this._requestCount to 1 to prevent from subsequent usb tethering toggles
+      // triggering |handleUSBTetheringToggle|.
+      this._requestCount = 1;
       this.handleUSBTetheringToggle(this.tetheringSettings[SETTINGS_USB_ENABLED]);
       this.wantConnectionEvent = null;
     }
@@ -854,10 +859,10 @@ NetworkManager.prototype = {
   dunRetryTimer: Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer),
   setupDunConnection: function() {
     this.dunRetryTimer.cancel();
-    let ril = this.mRil.getRadioInterface(this._dataDefaultServiceId);
-
-    if (ril.rilContext && ril.rilContext.data &&
-        ril.rilContext.data.state === "registered") {
+    let connection =
+      gMobileConnectionService.getItemByServiceId(this._dataDefaultServiceId);
+    let data = connection && connection.data;
+    if (data && data.state === "registered") {
       this.dunRetryTimes = 0;
       ril.setupDataCallByType("dun");
       this.dunConnectTimer.cancel();
@@ -927,12 +932,14 @@ NetworkManager.prototype = {
         (this._usbTetheringAction === TETHERING_STATE_ONGOING ||
          this._usbTetheringAction === TETHERING_STATE_ACTIVE)) {
       debug("Usb tethering already connecting/connected.");
+      this._requestCount = 0;
       return;
     }
 
     if (!enable &&
         this._usbTetheringAction === TETHERING_STATE_IDLE) {
       debug("Usb tethering already disconnected.");
+      this._requestCount = 0;
       return;
     }
 
@@ -1134,14 +1141,14 @@ NetworkManager.prototype = {
       }
       this.setUSBTethering(enable,
                            this._tetheringInterface[TETHERING_TYPE_USB],
-                           this.usbTetheringResultReport.bind(this));
+                           this.usbTetheringResultReport.bind(this, enable));
     } else {
       this.usbTetheringResultReport("Failed to set usb function");
       throw new Error("failed to set USB Function to adb");
     }
   },
 
-  usbTetheringResultReport: function(error) {
+  usbTetheringResultReport: function(enable, error) {
     let settingsLock = gSettingsService.createLock();
 
     // Disable tethering settings when fail to enable it.
@@ -1157,7 +1164,7 @@ NetworkManager.prototype = {
       }
 #endif
     } else {
-      if (this.tetheringSettings[SETTINGS_USB_ENABLED]) {
+      if (enable) {
         this._usbTetheringAction = TETHERING_STATE_ACTIVE;
       } else {
         this._usbTetheringAction = TETHERING_STATE_IDLE;

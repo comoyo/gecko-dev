@@ -7,5 +7,7 @@
  * @type {Object}
  */
 navigator.mozLoop = {
-  getLoopCharPref: function() {}
+  ensureRegistered: function() {},
+  getLoopCharPref: function() {},
+  getLoopBoolPref: function() {}
 };

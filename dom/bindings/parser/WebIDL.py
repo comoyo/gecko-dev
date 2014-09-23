@@ -1764,7 +1764,10 @@ class IDLNullableType(IDLType):
         assert not innerType.isVoid()
         assert not innerType == BuiltinTypes[IDLBuiltinType.Types.any]
 
-        IDLType.__init__(self, location, innerType.name)
+        name = innerType.name
+        if innerType.isComplete():
+            name += "OrNull"
+        IDLType.__init__(self, location, name)
         self.inner = innerType
         self.builtin = False
 
@@ -1877,7 +1880,7 @@ class IDLNullableType(IDLType):
                                   "be a union type that itself has a nullable "
                                   "type as a member type", [self.location])
 
-        self.name = self.inner.name
+        self.name = self.inner.name + "OrNull"
         return self
 
     def unroll(self):
@@ -1900,6 +1903,10 @@ class IDLSequenceType(IDLType):
         IDLType.__init__(self, location, parameterType.name)
         self.inner = parameterType
         self.builtin = False
+        # Need to set self.name up front if our inner type is already complete,
+        # since in that case our .complete() won't be called.
+        if self.inner.isComplete():
+            self.name = self.inner.name + "Sequence"
 
     def __eq__(self, other):
         return isinstance(other, IDLSequenceType) and self.inner == other.inner
@@ -1961,7 +1968,7 @@ class IDLSequenceType(IDLType):
 
     def complete(self, scope):
         self.inner = self.inner.complete(scope)
-        self.name = self.inner.name
+        self.name = self.inner.name + "Sequence"
         return self
 
     def unroll(self):
@@ -1987,6 +1994,10 @@ class IDLMozMapType(IDLType):
         IDLType.__init__(self, location, parameterType.name)
         self.inner = parameterType
         self.builtin = False
+        # Need to set self.name up front if our inner type is already complete,
+        # since in that case our .complete() won't be called.
+        if self.inner.isComplete():
+            self.name = self.inner.name + "MozMap"
 
     def __eq__(self, other):
         return isinstance(other, IDLMozMapType) and self.inner == other.inner
@@ -2012,7 +2023,7 @@ class IDLMozMapType(IDLType):
 
     def complete(self, scope):
         self.inner = self.inner.complete(scope)
-        self.name = self.inner.name
+        self.name = self.inner.name + "MozMap"
         return self
 
     def unroll(self):
@@ -2077,9 +2088,6 @@ class IDLUnionType(IDLType):
                 return typeName(type._identifier.object())
             if isinstance(type, IDLObjectWithIdentifier):
                 return typeName(type.identifier)
-            if (isinstance(type, IDLType) and
-                (type.isArray() or type.isSequence() or type.isMozMap)):
-                return str(type)
             return type.name
 
         for (i, type) in enumerate(self.memberTypes):
@@ -3354,7 +3362,8 @@ class IDLAttribute(IDLInterfaceMember):
               identifier == "AvailableIn" or
               identifier == "NewObject" or
               identifier == "UnsafeInPrerendering" or
-              identifier == "CheckPermissions"):
+              identifier == "CheckPermissions" or
+              identifier == "BinaryName"):
             # Known attributes that we don't need to do anything with here
             pass
         else:
@@ -3397,6 +3406,7 @@ class IDLArgument(IDLObjectWithIdentifier):
         self._allowTreatNonCallableAsNull = False
 
         assert not variadic or optional
+        assert not variadic or not defaultValue
 
     def addExtendedAttributes(self, attrs):
         attrs = self.checkForStringHandlingExtendedAttributes(
@@ -3445,9 +3455,9 @@ class IDLArgument(IDLObjectWithIdentifier):
 
         if ((self.type.isDictionary() or
              self.type.isUnion() and self.type.unroll().hasDictionaryType) and
-            self.optional and not self.defaultValue):
-            # Default optional dictionaries to null, for simplicity,
-            # so the codegen doesn't have to special-case this.
+            self.optional and not self.defaultValue and not self.variadic):
+            # Default optional non-variadic dictionaries to null,
+            # for simplicity, so the codegen doesn't have to special-case this.
             self.defaultValue = IDLNullValue(self.location)
         elif self.type.isAny():
             assert (self.defaultValue is None or
@@ -3473,6 +3483,9 @@ class IDLArgument(IDLObjectWithIdentifier):
         if self.defaultValue:
             deps.add(self.defaultValue)
         return deps
+
+    def canHaveMissingValue(self):
+        return self.optional and not self.defaultValue
 
 class IDLCallbackType(IDLType, IDLObjectWithScope):
     def __init__(self, location, parentScope, identifier, returnType, arguments):
@@ -3951,7 +3964,8 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
               identifier == "Pref" or
               identifier == "Func" or
               identifier == "AvailableIn" or
-              identifier == "CheckPermissions"):
+              identifier == "CheckPermissions" or
+              identifier == "BinaryName"):
             # Known attributes that we don't need to do anything with here
             pass
         else:
@@ -4141,8 +4155,8 @@ class Tokenizer(object):
         "long": "LONG",
         "object": "OBJECT",
         "octet": "OCTET",
-        "optional": "OPTIONAL",
         "Promise": "PROMISE",
+        "required": "REQUIRED",
         "sequence": "SEQUENCE",
         "MozMap": "MOZMAP",
         "short": "SHORT",
@@ -4427,15 +4441,21 @@ class Parser(Tokenizer):
 
     def p_DictionaryMember(self, p):
         """
-            DictionaryMember : Type IDENTIFIER Default SEMICOLON
+            DictionaryMember : Required Type IDENTIFIER Default SEMICOLON
         """
         # These quack a lot like optional arguments, so just treat them that way.
-        t = p[1]
+        t = p[2]
         assert isinstance(t, IDLType)
-        identifier = IDLUnresolvedIdentifier(self.getLocation(p, 2), p[2])
-        defaultValue = p[3]
+        identifier = IDLUnresolvedIdentifier(self.getLocation(p, 3), p[3])
+        defaultValue = p[4]
+        optional = not p[1]
 
-        p[0] = IDLArgument(self.getLocation(p, 2), identifier, t, optional=True,
+        if not optional and defaultValue:
+            raise WebIDLError("Required dictionary members can't have a default value.",
+                              [self.getLocation(p, 4)])
+
+        p[0] = IDLArgument(self.getLocation(p, 3), identifier, t,
+                           optional=optional,
                            defaultValue=defaultValue, variadic=False,
                            dictionaryMember=True)
 
@@ -4633,7 +4653,7 @@ class Parser(Tokenizer):
 
     def p_AttributeRest(self, p):
         """
-            AttributeRest : ReadOnly ATTRIBUTE Type IDENTIFIER SEMICOLON
+            AttributeRest : ReadOnly ATTRIBUTE Type AttributeName SEMICOLON
         """
         location = self.getLocation(p, 2)
         readonly = p[1]
@@ -4962,6 +4982,7 @@ class Parser(Tokenizer):
                          | INTERFACE
                          | LEGACYCALLER
                          | PARTIAL
+                         | REQUIRED
                          | SERIALIZER
                          | SETTER
                          | STATIC
@@ -4969,6 +4990,13 @@ class Parser(Tokenizer):
                          | JSONIFIER
                          | TYPEDEF
                          | UNRESTRICTED
+        """
+        p[0] = p[1]
+
+    def p_AttributeName(self, p):
+        """
+            AttributeName : IDENTIFIER
+                          | REQUIRED
         """
         p[0] = p[1]
 
@@ -4981,6 +5009,18 @@ class Parser(Tokenizer):
     def p_OptionalEmpty(self, p):
         """
             Optional :
+        """
+        p[0] = False
+
+    def p_Required(self, p):
+        """
+            Required : REQUIRED
+        """
+        p[0] = True
+
+    def p_RequiredEmpty(self, p):
+        """
+            Required :
         """
         p[0] = False
 

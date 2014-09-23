@@ -294,6 +294,7 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       const LayerAttributes& attrs = osla.attrs();
 
       const CommonLayerAttributes& common = attrs.common();
+      layer->SetLayerBounds(common.layerBounds());
       layer->SetVisibleRegion(common.visibleRegion());
       layer->SetEventRegions(common.eventRegions());
       layer->SetContentFlags(common.contentFlags());
@@ -571,8 +572,9 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
 
   TimeDuration latency = TimeStamp::Now() - aTransactionStart;
   // Theshold is 200ms to trigger, 1000ms to hit red
-  if (latency > TimeDuration::FromMilliseconds(200)) {
-    float severity = (latency - TimeDuration::FromMilliseconds(200)).ToMilliseconds() / 800;
+  if (latency > TimeDuration::FromMilliseconds(kVisualWarningTrigger)) {
+    float severity = (latency - TimeDuration::FromMilliseconds(kVisualWarningTrigger)).ToMilliseconds() /
+                       (kVisualWarningMax - kVisualWarningTrigger);
     if (severity > 1.f) {
       severity = 1.f;
     }
@@ -729,6 +731,20 @@ LayerTransactionParent::RecvGetAPZTestData(APZTestData* aOutData)
   mShadowLayersManager->GetAPZTestData(this, aOutData);
   return true;
 }
+
+bool
+LayerTransactionParent::RecvRequestProperty(const nsString& aProperty, float* aValue)
+{
+  if (aProperty.Equals(NS_LITERAL_STRING("overdraw"))) {
+    *aValue = layer_manager()->GetCompositor()->GetFillRatio();
+  } else if (aProperty.Equals(NS_LITERAL_STRING("missed_hwc"))) {
+    *aValue = layer_manager()->LastFrameMissedHWC() ? 1 : 0;
+  } else {
+    *aValue = -1;
+  }
+  return true;
+}
+
 
 bool
 LayerTransactionParent::Attach(ShadowLayerParent* aLayerParent,

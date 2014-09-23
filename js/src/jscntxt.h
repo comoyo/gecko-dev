@@ -460,9 +460,6 @@ struct JSContext : public js::ExclusiveContext,
     /* State for object and array toSource conversion. */
     js::ObjectSet       cycleDetectorSet;
 
-    /* Per-context optional error reporter. */
-    JSErrorReporter     errorReporter;
-
     /* Client opaque pointers. */
     void                *data;
     void                *data2;
@@ -492,9 +489,6 @@ struct JSContext : public js::ExclusiveContext,
     unsigned            outstandingRequests;/* number of JS_BeginRequest calls
                                                without the corresponding
                                                JS_EndRequest. */
-
-    /* Location to stash the iteration value between JSOP_MOREITER and JSOP_ITERNEXT. */
-    js::Value           iterValue;
 
     bool jitIsBroken;
 
@@ -722,7 +716,7 @@ js_ReportErrorNumberVA(JSContext *cx, unsigned flags, JSErrorCallback callback,
 extern bool
 js_ReportErrorNumberUCArray(JSContext *cx, unsigned flags, JSErrorCallback callback,
                             void *userRef, const unsigned errorNumber,
-                            const jschar **args);
+                            const char16_t **args);
 #endif
 
 extern bool
@@ -816,7 +810,7 @@ HandleExecutionInterrupt(JSContext *cx);
  * break out of its loop. This happens if, for example, the user clicks "Stop
  * script" on the slow script dialog; treat it as an uncatchable error.
  */
-inline bool
+MOZ_ALWAYS_INLINE bool
 CheckForInterrupt(JSContext *cx)
 {
     MOZ_ASSERT(cx->runtime()->requestDepth >= 1);
@@ -988,6 +982,7 @@ bool intrinsic_ToString(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_IsCallable(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_ThrowError(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_NewDenseArray(JSContext *cx, unsigned argc, Value *vp);
+bool intrinsic_IsConstructing(JSContext *cx, unsigned argc, Value *vp);
 
 bool intrinsic_UnsafePutElements(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_DefineDataProperty(JSContext *cx, unsigned argc, Value *vp);

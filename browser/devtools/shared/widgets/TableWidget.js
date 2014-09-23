@@ -206,7 +206,7 @@ TableWidget.prototype = {
     let checked = !!item.getAttribute("checked");
     let id = item.getAttribute("data-id");
     this.emit(EVENTS.HEADER_CONTEXT_MENU, id, checked);
-    let checked = this.menupopup.querySelectorAll("menuitem[checked]");
+    checked = this.menupopup.querySelectorAll("menuitem[checked]");
     let disabled = this.menupopup.querySelectorAll("menuitem[disabled]");
     if (checked.length == 2) {
       checked[checked.length - 1].setAttribute("disabled", "true");
@@ -593,7 +593,7 @@ Column.prototype = {
    * Selects the row at the `index` index
    */
   selectRowAt: function(index) {
-    if (this.selectedRow) {
+    if (this.selectedRow != null) {
       this.cells[this.items[this.selectedRow]].toggleClass("theme-selected");
     }
     if (index < 0) {
@@ -930,7 +930,7 @@ Cell.prototype = {
 
   set value(value) {
     this._value = value;
-    if (!value) {
+    if (value == null) {
       this.label.setAttribute("value", "");
       return;
     }

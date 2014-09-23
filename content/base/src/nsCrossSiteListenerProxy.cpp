@@ -30,6 +30,7 @@
 #include "nsILoadGroup.h"
 #include "nsILoadContext.h"
 #include "nsIConsoleService.h"
+#include "nsIDOMNode.h"
 #include "nsIDOMWindowUtils.h"
 #include "nsIDOMWindow.h"
 #include <algorithm>
@@ -682,13 +683,15 @@ nsCORSListenerProxy::AsyncOnChannelRedirect(nsIChannel *aOldChannel,
 
     if (mHasBeenCrossSite) {
       // Once we've been cross-site, cross-origin redirects reset our source
-      // origin.
+      // origin. Note that we need to call GetChannelURIPrincipal() because
+      // we are looking for the principal that is actually being loaded and not
+      // the principal that initiated the load.
       nsCOMPtr<nsIPrincipal> oldChannelPrincipal;
       nsContentUtils::GetSecurityManager()->
-        GetChannelPrincipal(aOldChannel, getter_AddRefs(oldChannelPrincipal));
+        GetChannelURIPrincipal(aOldChannel, getter_AddRefs(oldChannelPrincipal));
       nsCOMPtr<nsIPrincipal> newChannelPrincipal;
       nsContentUtils::GetSecurityManager()->
-        GetChannelPrincipal(aNewChannel, getter_AddRefs(newChannelPrincipal));
+        GetChannelURIPrincipal(aNewChannel, getter_AddRefs(newChannelPrincipal));
       if (!oldChannelPrincipal || !newChannelPrincipal) {
         rv = NS_ERROR_OUT_OF_MEMORY;
       }
@@ -1128,9 +1131,32 @@ NS_StartCORSPreflight(nsIChannel* aRequestChannel,
   rv = aRequestChannel->GetLoadFlags(&loadFlags);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  nsCOMPtr<nsILoadInfo> loadInfo;
+  rv = aRequestChannel->GetLoadInfo(getter_AddRefs(loadInfo));
+  NS_ENSURE_SUCCESS(rv, rv);
+
   nsCOMPtr<nsIChannel> preflightChannel;
-  rv = NS_NewChannel(getter_AddRefs(preflightChannel), uri, nullptr,
-                     loadGroup, nullptr, loadFlags);
+  if (loadInfo) {
+    rv = NS_NewChannelInternal(getter_AddRefs(preflightChannel),
+                               uri,
+                               loadInfo,
+                               nullptr,   // aChannelPolicy
+                               loadGroup,
+                               nullptr,   // aCallbacks
+                               loadFlags);
+  }
+  else {
+    rv = NS_NewChannelInternal(getter_AddRefs(preflightChannel),
+                               uri,
+                               nullptr, // aRequestingNode,
+                               nsContentUtils::GetSystemPrincipal(),
+                               nsILoadInfo::SEC_NORMAL,
+                               nsIContentPolicy::TYPE_OTHER,
+                               nullptr,   // aChannelPolicy
+                               loadGroup,
+                               nullptr,   // aCallbacks
+                               loadFlags);
+  }
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIHttpChannel> preHttp = do_QueryInterface(preflightChannel);

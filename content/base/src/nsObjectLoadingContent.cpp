@@ -1035,6 +1035,16 @@ nsObjectLoadingContent::BuildParametersArray()
   }
 
   nsAdoptingCString wmodeOverride = Preferences::GetCString("plugins.force.wmode");
+#if defined(XP_WIN) || defined(XP_LINUX)
+  // Bug 923745 (/Bug 1061995) - Until we support windowed mode plugins in
+  // content processes, force flash to use a windowless rendering mode. This
+  // hack should go away when bug 923746 lands. (OS X plugins always use some
+  // native widgets, so unfortunately this does not help there)
+  if (wmodeOverride.IsEmpty() &&
+      XRE_GetProcessType() == GeckoProcessType_Content) {
+    wmodeOverride.AssignLiteral("transparent");
+  }
+#endif
 
   for (uint32_t i = 0; i < mCachedAttributes.Length(); i++) {
     if (!wmodeOverride.IsEmpty() && mCachedAttributes[i].mName.EqualsIgnoreCase("wmode")) {
@@ -2493,10 +2503,31 @@ nsObjectLoadingContent::OpenChannel()
   }
   nsRefPtr<ObjectInterfaceRequestorShim> shim =
     new ObjectInterfaceRequestorShim(this);
-  rv = NS_NewChannel(getter_AddRefs(chan), mURI, nullptr, group, shim,
+
+  bool isSandBoxed = doc->GetSandboxFlags() & SANDBOXED_ORIGIN;
+  bool inherit = nsContentUtils::ChannelShouldInheritPrincipal(thisContent->NodePrincipal(),
+                                                               mURI,
+                                                               true,   // aInheritForAboutBlank
+                                                               false); // aForceInherit
+  nsSecurityFlags securityFlags = nsILoadInfo::SEC_NORMAL;
+  if (inherit) {
+    securityFlags |= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
+  }
+  if (isSandBoxed) {
+    securityFlags |= nsILoadInfo::SEC_SANDBOXED;
+  }
+
+  rv = NS_NewChannel(getter_AddRefs(chan),
+                     mURI,
+                     thisContent,
+                     securityFlags,
+                     nsIContentPolicy::TYPE_OBJECT,
+                     channelPolicy,
+                     group, // aLoadGroup
+                     shim,  // aCallbacks
                      nsIChannel::LOAD_CALL_CONTENT_SNIFFERS |
-                     nsIChannel::LOAD_CLASSIFY_URI,
-                     channelPolicy);
+                     nsIChannel::LOAD_CLASSIFY_URI);
+
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Referrer
@@ -2510,14 +2541,6 @@ nsObjectLoadingContent::OpenChannel()
       timedChannel->SetInitiatorType(thisContent->LocalName());
     }
   }
-
-  // Set up the channel's principal and such, like nsDocShell::DoURILoad does.
-  // If the content being loaded should be sandboxed with respect to origin we
-  // tell SetUpChannelOwner that.
-  nsContentUtils::SetUpChannelOwner(thisContent->NodePrincipal(), chan, mURI,
-                                    true,
-                                    doc->GetSandboxFlags() & SANDBOXED_ORIGIN,
-                                    false);
 
   nsCOMPtr<nsIScriptChannel> scriptChannel = do_QueryInterface(chan);
   if (scriptChannel) {

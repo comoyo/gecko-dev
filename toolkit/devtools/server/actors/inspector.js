@@ -126,16 +126,6 @@ loader.lazyGetter(this, "eventListenerService", function() {
            .getService(Ci.nsIEventListenerService);
 });
 
-exports.register = function(handle) {
-  handle.addGlobalActor(InspectorActor, "inspectorActor");
-  handle.addTabActor(InspectorActor, "inspectorActor");
-};
-
-exports.unregister = function(handle) {
-  handle.removeGlobalActor(InspectorActor);
-  handle.removeTabActor(InspectorActor);
-};
-
 // XXX: A poor man's makeInfallible until we move it out of transport.js
 // Which should be very soon.
 function makeInfallible(handler) {
@@ -300,8 +290,13 @@ var NodeActor = exports.NodeActor = protocol.ActorClass({
   get _hasEventListeners() {
     let parsers = this._eventParsers;
     for (let [,{hasListeners}] of parsers) {
-      if (hasListeners && hasListeners(this.rawNode)) {
-        return true;
+      try {
+        if (hasListeners && hasListeners(this.rawNode)) {
+          return true;
+        }
+      } catch(e) {
+        // An object attached to the node looked like a listener but wasn't...
+        // do nothing.
       }
     }
     return false;
@@ -341,18 +336,23 @@ var NodeActor = exports.NodeActor = protocol.ActorClass({
     let events = [];
 
     for (let [,{getListeners, normalizeHandler}] of parsers) {
-      let eventInfos = getListeners(node);
+      try {
+        let eventInfos = getListeners(node);
 
-      if (!eventInfos) {
-        continue;
-      }
-
-      for (let eventInfo of eventInfos) {
-        if (normalizeHandler) {
-          eventInfo.normalizeHandler = normalizeHandler;
+        if (!eventInfos) {
+          continue;
         }
 
-        this.processHandlerForEvent(node, events, dbg, eventInfo);
+        for (let eventInfo of eventInfos) {
+          if (normalizeHandler) {
+            eventInfo.normalizeHandler = normalizeHandler;
+          }
+
+          this.processHandlerForEvent(node, events, dbg, eventInfo);
+        }
+      } catch(e) {
+        // An object attached to the node looked like a listener but wasn't...
+        // do nothing.
       }
     }
 
@@ -2785,7 +2785,7 @@ var AttributeModificationList = Class({
  * Server side of the inspector actor, which is used to create
  * inspector-related actors, including the walker.
  */
-var InspectorActor = protocol.ActorClass({
+var InspectorActor = exports.InspectorActor = protocol.ActorClass({
   typeName: "inspector",
   initialize: function(conn, tabActor) {
     protocol.Actor.prototype.initialize.call(this, conn);

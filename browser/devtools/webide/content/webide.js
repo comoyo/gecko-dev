@@ -75,6 +75,8 @@ let UI = {
     }
     Services.prefs.setBoolPref("devtools.webide.autoinstallADBHelper", false);
 
+    this.lastConnectedRuntime = Services.prefs.getCharPref("devtools.webide.lastConnectedRuntime");
+
     this.setupDeck();
   },
 
@@ -114,7 +116,8 @@ let UI = {
     // not focused.
     if (AppManager.selectedProject &&
         AppManager.selectedProject.type != "mainProcess" &&
-        AppManager.selectedProject.type != "runtimeApp") {
+        AppManager.selectedProject.type != "runtimeApp" &&
+        AppManager.selectedProject.type != "tab") {
       AppManager.validateProject(AppManager.selectedProject);
     }
   },
@@ -124,6 +127,7 @@ let UI = {
     switch (what) {
       case "runtimelist":
         this.updateRuntimeList();
+        this.autoConnectRuntime();
         break;
       case "connection":
         this.updateRuntimeButton();
@@ -131,17 +135,20 @@ let UI = {
         break;
       case "project":
         this.updateTitle();
-        this.closeToolbox();
+        this.destroyToolbox();
         this.updateCommands();
         this.updateProjectButton();
         this.openProject();
+        this.autoStartProject();
         break;
       case "project-is-not-running":
       case "project-is-running":
+      case "list-tabs-response":
         this.updateCommands();
         break;
       case "runtime":
         this.updateRuntimeButton();
+        this.saveLastConnectedRuntime();
         break;
       case "project-validated":
         this.updateTitle();
@@ -340,6 +347,34 @@ let UI = {
     }
   },
 
+  autoConnectRuntime: function () {
+    // Automatically reconnect to the previously selected runtime,
+    // if available and has an ID
+    if (AppManager.selectedRuntime || !this.lastConnectedRuntime) {
+      return;
+    }
+    let [_, type, id] = this.lastConnectedRuntime.match(/^(\w+):(.+)$/);
+
+    type = type.toLowerCase();
+
+    // Local connection is mapped to AppManager.runtimeList.custom array
+    if (type == "local") {
+      type = "custom";
+    }
+
+    // We support most runtimes except simulator, that needs to be manually
+    // launched
+    if (type == "usb" || type == "wifi" || type == "custom") {
+      for (let runtime of AppManager.runtimeList[type]) {
+        // Some runtimes do not expose getID function and don't support
+        // autoconnect (like remote connection)
+        if (typeof(runtime.getID) == "function" && runtime.getID() == id) {
+          this.connectToRuntime(runtime);
+        }
+      }
+    }
+  },
+
   connectToRuntime: function(runtime) {
     let name = runtime.getName();
     let promise = AppManager.connectToRuntime(runtime);
@@ -354,6 +389,17 @@ let UI = {
       let name = AppManager.selectedRuntime.getName();
       labelNode.setAttribute("value", name);
     }
+  },
+
+  saveLastConnectedRuntime: function () {
+    if (AppManager.selectedRuntime &&
+        typeof(AppManager.selectedRuntime.getID) === "function") {
+      this.lastConnectedRuntime = AppManager.selectedRuntime.type + ":" + AppManager.selectedRuntime.getID();
+    } else {
+      this.lastConnectedRuntime = "";
+    }
+    Services.prefs.setCharPref("devtools.webide.lastConnectedRuntime",
+                               this.lastConnectedRuntime);
   },
 
   /********** PROJECTS **********/
@@ -479,6 +525,26 @@ let UI = {
     }, console.error);
   },
 
+  autoStartProject: function() {
+    let project = AppManager.selectedProject;
+
+    if (!project) {
+      return;
+    }
+    if (!(project.type == "runtimeApp" ||
+          project.type == "mainProcess" ||
+          project.type == "tab")) {
+      return; // For something that is not an editable app, we're done.
+    }
+
+    Task.spawn(function() {
+      if (project.type == "runtimeApp") {
+        yield UI.busyUntil(AppManager.launchRuntimeApp(), "running app");
+      }
+      yield UI.createToolbox();
+    });
+  },
+
   /********** DECK **********/
 
   setupDeck: function() {
@@ -562,6 +628,9 @@ let UI = {
       // If connected and a project is selected
       if (AppManager.selectedProject.type == "runtimeApp") {
         playCmd.removeAttribute("disabled");
+      } else if (AppManager.selectedProject.type == "tab") {
+        playCmd.removeAttribute("disabled");
+        stopCmd.setAttribute("disabled", "true");
       } else if (AppManager.selectedProject.type == "mainProcess") {
         playCmd.setAttribute("disabled", "true");
         stopCmd.setAttribute("disabled", "true");
@@ -592,16 +661,18 @@ let UI = {
 
     let runtimePanelButton = document.querySelector("#runtime-panel-button");
     if (AppManager.connection.status == Connection.Status.CONNECTED) {
-      screenshotCmd.removeAttribute("disabled");
-      permissionsCmd.removeAttribute("disabled");
+      if (AppManager.deviceFront) {
+        detailsCmd.removeAttribute("disabled");
+        permissionsCmd.removeAttribute("disabled");
+        screenshotCmd.removeAttribute("disabled");
+      }
       disconnectCmd.removeAttribute("disabled");
-      detailsCmd.removeAttribute("disabled");
       runtimePanelButton.setAttribute("active", "true");
     } else {
-      screenshotCmd.setAttribute("disabled", "true");
-      permissionsCmd.setAttribute("disabled", "true");
-      disconnectCmd.setAttribute("disabled", "true");
       detailsCmd.setAttribute("disabled", "true");
+      permissionsCmd.setAttribute("disabled", "true");
+      screenshotCmd.setAttribute("disabled", "true");
+      disconnectCmd.setAttribute("disabled", "true");
       runtimePanelButton.removeAttribute("active");
     }
 
@@ -622,13 +693,20 @@ let UI = {
     } catch(e) { console.error(e); }
   },
 
-  closeToolbox: function() {
+  destroyToolbox: function() {
     if (this.toolboxPromise) {
       this.toolboxPromise.then(toolbox => {
         toolbox.destroy();
         this.toolboxPromise = null;
       }, console.error);
     }
+  },
+
+  createToolbox: function() {
+    this.toolboxPromise = AppManager.getTarget().then((target) => {
+      return this.showToolbox(target);
+    }, console.error);
+    return this.busyUntil(this.toolboxPromise, "opening toolbox");
   },
 
   showToolbox: function(target) {
@@ -822,7 +900,13 @@ let Cmds = {
 
 
     let runtimeappsHeaderNode = document.querySelector("#panel-header-runtimeapps");
-    if (AppManager.connection.status == Connection.Status.CONNECTED) {
+    let sortedApps = AppManager.webAppsStore.object.all;
+    sortedApps = sortedApps.sort((a, b) => {
+      return a.name > b.name;
+    });
+    let mainProcess = AppManager.isMainProcessDebuggable();
+    if (AppManager.connection.status == Connection.Status.CONNECTED &&
+        (sortedApps.length > 0 || mainProcess)) {
       runtimeappsHeaderNode.removeAttribute("hidden");
     } else {
       runtimeappsHeaderNode.setAttribute("hidden", "true");
@@ -833,7 +917,7 @@ let Cmds = {
       runtimeAppsNode.firstChild.remove();
     }
 
-    if (AppManager.isMainProcessDebuggable()) {
+    if (mainProcess) {
       let panelItemNode = document.createElement("toolbarbutton");
       panelItemNode.className = "panel-item";
       panelItemNode.setAttribute("label", Strings.GetStringFromName("mainProcess_label"));
@@ -849,10 +933,6 @@ let Cmds = {
       }, true);
     }
 
-    let sortedApps = AppManager.webAppsStore.object.all;
-    sortedApps = sortedApps.sort((a, b) => {
-      return a.name > b.name;
-    });
     for (let i = 0; i < sortedApps.length; i++) {
       let app = sortedApps[i];
       let panelItemNode = document.createElement("toolbarbutton");
@@ -871,7 +951,61 @@ let Cmds = {
       }, true);
     }
 
+    // Build the tab list right now, so it's fast...
+    this._buildProjectPanelTabs();
+
+    // But re-list them and rebuild, in case any tabs navigated since the last
+    // time they were listed.
+    AppManager.listTabs().then(() => {
+      this._buildProjectPanelTabs();
+    });
+
     return deferred.promise;
+  },
+
+  _buildProjectPanelTabs: function() {
+    let tabs = AppManager.tabStore.tabs;
+    let tabsHeaderNode = document.querySelector("#panel-header-tabs");
+    if (AppManager.connection.status == Connection.Status.CONNECTED &&
+        tabs.length > 0) {
+      tabsHeaderNode.removeAttribute("hidden");
+    } else {
+      tabsHeaderNode.setAttribute("hidden", "true");
+    }
+
+    let tabsNode = document.querySelector("#project-panel-tabs");
+    while (tabsNode.hasChildNodes()) {
+      tabsNode.firstChild.remove();
+    }
+
+    for (let i = 0; i < tabs.length; i++) {
+      let tab = tabs[i];
+      let url = new URL(tab.url);
+      // Wanted to use nsIFaviconService here, but it only works for visited
+      // tabs, so that's no help for any remote tabs.  Maybe some favicon wizard
+      // knows how to get high-res favicons easily, or we could offer actor
+      // support for this (bug 1061654).
+      tab.favicon = url.origin + "/favicon.ico";
+      tab.name = tab.title || Strings.GetStringFromName("project_tab_loading");
+      if (url.protocol.startsWith("http")) {
+        tab.name = url.hostname + ": " + tab.name;
+      }
+      let panelItemNode = document.createElement("toolbarbutton");
+      panelItemNode.className = "panel-item";
+      panelItemNode.setAttribute("label", tab.name);
+      panelItemNode.setAttribute("image", tab.favicon);
+      tabsNode.appendChild(panelItemNode);
+      panelItemNode.addEventListener("click", () => {
+        UI.hidePanels();
+        AppManager.selectedProject = {
+          type: "tab",
+          app: tab,
+          icon: tab.favicon,
+          location: tab.url,
+          name: tab.name
+        };
+      }, true);
+    }
   },
 
   showRuntimePanel: function() {
@@ -923,7 +1057,9 @@ let Cmds = {
       case "hosted":
         return UI.busyUntil(AppManager.installAndRunProject(), "installing and running app");
       case "runtimeApp":
-        return UI.busyUntil(AppManager.runRuntimeApp(), "running app");
+        return UI.busyUntil(AppManager.launchOrReloadRuntimeApp(), "launching / reloading app");
+      case "tab":
+        return UI.busyUntil(AppManager.reloadTab(), "reloading tab");
     }
     return promise.reject();
   },
@@ -934,14 +1070,10 @@ let Cmds = {
 
   toggleToolbox: function() {
     if (UI.toolboxIframe) {
-      UI.closeToolbox();
+      UI.destroyToolbox();
       return promise.resolve();
     } else {
-      UI.toolboxPromise = AppManager.getTarget().then((target) => {
-        return UI.showToolbox(target);
-      }, console.error);
-      UI.busyUntil(UI.toolboxPromise, "opening toolbox");
-      return UI.toolboxPromise;
+      return UI.createToolbox();
     }
   },
 
