@@ -43,6 +43,9 @@
 #include "nsIController.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/HTMLInputElement.h"
+#include "nsNumberControlFrame.h"
+#include "nsFrameSelection.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -52,7 +55,7 @@ static NS_DEFINE_CID(kTextEditorCID, NS_TEXTEDITOR_CID);
 class MOZ_STACK_CLASS ValueSetter
 {
 public:
-  ValueSetter(nsIEditor* aEditor)
+  explicit ValueSetter(nsIEditor* aEditor)
     : mEditor(aEditor)
   {
     MOZ_ASSERT(aEditor);
@@ -182,7 +185,7 @@ SuppressEventHandlers(nsPresContext* aPresContext)
 class nsAnonDivObserver MOZ_FINAL : public nsStubMutationObserver
 {
 public:
-  nsAnonDivObserver(nsTextEditorState* aTextEditorState)
+  explicit nsAnonDivObserver(nsTextEditorState* aTextEditorState)
   : mTextEditorState(aTextEditorState) {}
   NS_DECL_ISUPPORTS
   NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATACHANGED
@@ -191,18 +194,20 @@ public:
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
 
 private:
+  ~nsAnonDivObserver() {}
   nsTextEditorState* mTextEditorState;
 };
 
 class nsTextInputSelectionImpl MOZ_FINAL : public nsSupportsWeakReference
                                          , public nsISelectionController
 {
+  ~nsTextInputSelectionImpl(){}
+
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsTextInputSelectionImpl, nsISelectionController)
 
   nsTextInputSelectionImpl(nsFrameSelection *aSel, nsIPresShell *aShell, nsIContent *aLimiter);
-  ~nsTextInputSelectionImpl(){}
 
   void SetScrollableFrame(nsIScrollableFrame *aScrollableFrame);
   nsFrameSelection* GetConstFrameSelection()
@@ -413,10 +418,8 @@ nsTextInputSelectionImpl::GetCaretVisible(bool *_retval)
   {
     nsRefPtr<nsCaret> caret = shell->GetCaret();
     if (caret) {
-      nsISelection* domSel = mFrameSelection->
-        GetSelection(nsISelectionController::SELECTION_NORMAL);
-      if (domSel)
-        return caret->GetCaretVisible(_retval);
+      *_retval = caret->IsVisible();
+      return NS_OK;
     }
   }
   return NS_ERROR_FAILURE;
@@ -542,7 +545,7 @@ nsTextInputSelectionImpl::CompleteMove(bool aForward, bool aExtend)
 
   // make the caret be either at the very beginning (0) or the very end
   int32_t offset = 0;
-  nsFrameSelection::HINT hint = nsFrameSelection::HINTLEFT;
+  CaretAssociationHint hint = CARET_ASSOCIATE_BEFORE;
   if (aForward)
   {
     offset = parentDIV->GetChildCount();
@@ -557,7 +560,7 @@ nsTextInputSelectionImpl::CompleteMove(bool aForward, bool aExtend)
       if (child->Tag() == nsGkAtoms::br)
       {
         --offset;
-        hint = nsFrameSelection::HINTRIGHT; // for Bug 106855
+        hint = CARET_ASSOCIATE_AFTER; // for Bug 106855
       }
     }
   }
@@ -652,9 +655,6 @@ public:
   /** the default constructor
    */ 
   explicit nsTextInputListener(nsITextControlElement* aTxtCtrlElement);
-  /** the default destructor. virtual due to the possibility of derivation.
-   */
-  virtual ~nsTextInputListener();
 
   /** SetEditor gives an address to the editor that will be accessed
    *  @param aEditor the editor this listener calls for editing operations
@@ -673,8 +673,13 @@ public:
   NS_DECL_NSIEDITOROBSERVER
 
 protected:
+  /** the default destructor. virtual due to the possibility of derivation.
+   */
+  virtual ~nsTextInputListener();
 
-  nsresult  UpdateTextInputCommands(const nsAString& commandsToUpdate);
+  nsresult  UpdateTextInputCommands(const nsAString& commandsToUpdate,
+                                    nsISelection* sel = nullptr,
+                                    int16_t reason = 0);
 
 protected:
 
@@ -763,7 +768,7 @@ nsTextInputListener::NotifySelectionChanged(nsIDOMDocument* aDoc, nsISelection* 
     nsIContent* content = mFrame->GetContent();
     if (content) 
     {
-      nsCOMPtr<nsIDocument> doc = content->GetDocument();
+      nsCOMPtr<nsIDocument> doc = content->GetComposedDoc();
       if (doc) 
       {
         nsCOMPtr<nsIPresShell> presShell = doc->GetShell();
@@ -778,16 +783,18 @@ nsTextInputListener::NotifySelectionChanged(nsIDOMDocument* aDoc, nsISelection* 
     }
   }
 
+  UpdateTextInputCommands(NS_LITERAL_STRING("selectionchange"), aSel, aReason);
+
   // if the collapsed state did not change, don't fire notifications
   if (collapsed == mSelectionWasCollapsed)
     return NS_OK;
-  
+
   mSelectionWasCollapsed = collapsed;
 
   if (!weakFrame.IsAlive() || !nsContentUtils::IsFocusedContent(mFrame->GetContent()))
     return NS_OK;
 
-  return UpdateTextInputCommands(NS_LITERAL_STRING("select"));
+  return UpdateTextInputCommands(NS_LITERAL_STRING("select"), aSel, aReason);
 }
 
 // END nsIDOMSelectionListener
@@ -924,22 +931,36 @@ nsTextInputListener::EditAction()
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsTextInputListener::BeforeEditAction()
+{
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsTextInputListener::CancelEditAction()
+{
+  return NS_OK;
+}
+
 // END nsIEditorObserver
 
 
 nsresult
-nsTextInputListener::UpdateTextInputCommands(const nsAString& commandsToUpdate)
+nsTextInputListener::UpdateTextInputCommands(const nsAString& commandsToUpdate,
+                                             nsISelection* sel,
+                                             int16_t reason)
 {
   nsIContent* content = mFrame->GetContent();
   NS_ENSURE_TRUE(content, NS_ERROR_FAILURE);
   
-  nsCOMPtr<nsIDocument> doc = content->GetDocument();
+  nsCOMPtr<nsIDocument> doc = content->GetComposedDoc();
   NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
 
   nsPIDOMWindow *domWindow = doc->GetWindow();
   NS_ENSURE_TRUE(domWindow, NS_ERROR_FAILURE);
 
-  return domWindow->UpdateCommands(commandsToUpdate);
+  return domWindow->UpdateCommands(commandsToUpdate, sel, reason);
 }
 
 // END nsTextInputListener
@@ -1034,7 +1055,7 @@ public:
   PrepareEditorEvent(nsTextEditorState &aState,
                      nsIContent *aOwnerContent,
                      const nsAString &aCurrentValue)
-    : mState(aState.asWeakPtr())
+    : mState(&aState)
     , mOwnerContent(aOwnerContent)
     , mCurrentValue(aCurrentValue)
   {
@@ -1403,7 +1424,8 @@ nsTextEditorState::PrepareEditor(const nsAString *aValue)
     newEditor->AddEditorObserver(mTextListener);
 
   // Restore our selection after being bound to a new frame
-  if (mSelectionCached) {
+  HTMLInputElement* number = GetParentNumberControl(mBoundFrame);
+  if (number ? number->IsSelectionCached() : mSelectionCached) {
     if (mRestoringSelection) // paranoia
       mRestoringSelection->Revoke();
     mRestoringSelection = new RestoreSelectionState(this, mBoundFrame);
@@ -1413,9 +1435,64 @@ nsTextEditorState::PrepareEditor(const nsAString *aValue)
   }
 
   // The selection cache is no longer going to be valid
-  mSelectionCached = false;
+  if (number) {
+    number->ClearSelectionCached();
+  } else {
+    mSelectionCached = false;
+  }
 
   return rv;
+}
+
+bool
+nsTextEditorState::IsSelectionCached() const
+{
+  if (mBoundFrame) {
+    HTMLInputElement* number = GetParentNumberControl(mBoundFrame);
+    if (number) {
+      return number->IsSelectionCached();
+    }
+  }
+  return mSelectionCached;
+}
+
+nsTextEditorState::SelectionProperties&
+nsTextEditorState::GetSelectionProperties()
+{
+  if (mBoundFrame) {
+    HTMLInputElement* number = GetParentNumberControl(mBoundFrame);
+    if (number) {
+      return number->GetSelectionProperties();
+    }
+  }
+  return mSelectionProperties;
+}
+
+HTMLInputElement*
+nsTextEditorState::GetParentNumberControl(nsFrame* aFrame) const
+{
+  MOZ_ASSERT(aFrame);
+  nsIContent* content = aFrame->GetContent();
+  MOZ_ASSERT(content);
+  nsIContent* parent = content->GetParent();
+  if (!parent) {
+    return nullptr;
+  }
+  nsIContent* parentOfParent = parent->GetParent();
+  if (!parentOfParent) {
+    return nullptr;
+  }
+  HTMLInputElement* input = HTMLInputElement::FromContent(parentOfParent);
+  if (input) {
+    // This function might be called during frame reconstruction as a result
+    // of changing the input control's type from number to something else. In
+    // that situation, the type of the control has changed, but its frame has
+    // not been reconstructed yet.  So we need to check the type of the input
+    // control in addition to the type of the frame.
+    return (input->GetType() == NS_FORM_INPUT_NUMBER) ? input : nullptr;
+  }
+
+  return nullptr;
 }
 
 void
@@ -1441,6 +1518,16 @@ nsTextEditorState::UnbindFromFrame(nsTextControlFrame* aFrame)
   NS_ASSERTION(!aFrame || aFrame == mBoundFrame, "Unbinding from the wrong frame");
   NS_ENSURE_TRUE_VOID(!aFrame || aFrame == mBoundFrame);
 
+  // If the editor is modified but nsIEditorObserver::EditAction() hasn't been
+  // called yet, we need to notify it here because editor may be destroyed
+  // before EditAction() is called if selection listener causes flushing layout.
+  bool isInEditAction = false;
+  if (mTextListener && mEditor && mEditorInitialized &&
+      NS_SUCCEEDED(mEditor->GetIsInEditAction(&isInEditAction)) &&
+      isInEditAction) {
+    mTextListener->EditAction();
+  }
+
   // We need to start storing the value outside of the editor if we're not
   // going to use it anymore, so retrieve it for now.
   nsAutoString value;
@@ -1458,10 +1545,21 @@ nsTextEditorState::UnbindFromFrame(nsTextControlFrame* aFrame)
   // GetSelectionRange before calling DestroyEditor, and only if
   // mEditorInitialized indicates that we actually have an editor available.
   if (mEditorInitialized) {
-    mBoundFrame->GetSelectionRange(&mSelectionProperties.mStart,
-                                   &mSelectionProperties.mEnd,
-                                   &mSelectionProperties.mDirection);
-    mSelectionCached = true;
+    HTMLInputElement* number = GetParentNumberControl(aFrame);
+    if (number) {
+      // If we are inside a number control, cache the selection on the
+      // parent control, because this text editor state will be destroyed
+      // together with the native anonymous text control.
+      SelectionProperties props;
+      mBoundFrame->GetSelectionRange(&props.mStart, &props.mEnd,
+                                     &props.mDirection);
+      number->SetSelectionProperties(props);
+    } else {
+      mBoundFrame->GetSelectionRange(&mSelectionProperties.mStart,
+                                     &mSelectionProperties.mEnd,
+                                     &mSelectionProperties.mDirection);
+      mSelectionCached = true;
+    }
   }
 
   // Destroy our editor
@@ -1577,7 +1675,7 @@ nsTextEditorState::CreateRootNode()
   NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
 
   // Now create a DIV and add it to the anonymous content child list.
-  nsCOMPtr<nsINodeInfo> nodeInfo;
+  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = doc->NodeInfoManager()->GetNodeInfo(nsGkAtoms::div, nullptr,
                                                  kNameSpaceID_XHTML,
                                                  nsIDOMNode::ELEMENT_NODE);
@@ -1660,7 +1758,7 @@ be called if @placeholder is the empty string when trimmed from line breaks");
 
   // Create a DIV for the placeholder
   // and add it to the anonymous content child list
-  nsCOMPtr<nsINodeInfo> nodeInfo;
+  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = pNodeInfoManager->GetNodeInfo(nsGkAtoms::div, nullptr,
                                            kNameSpaceID_XHTML,
                                            nsIDOMNode::ELEMENT_NODE);

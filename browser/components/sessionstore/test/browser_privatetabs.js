@@ -34,10 +34,8 @@ add_task(function() {
     SyncHandlers.get(tab2.linkedBrowser).flush();
 
     info("Checking out state");
-    yield SessionSaver.run();
-    let path = OS.Path.join(OS.Constants.Path.profileDir, "sessionstore.js");
-    let data = yield OS.File.read(path);
-    let state = new TextDecoder().decode(data);
+    let state = yield promiseRecoveryFileContents();
+
     info("State: " + state);
     // Ensure that sessionstore.js only knows about the public tab
     ok(state.indexOf(URL_PUBLIC) != -1, "State contains public tab");
@@ -67,7 +65,7 @@ add_task(function() {
 
 add_task(function () {
   const FRAME_SCRIPT = "data:," +
-    "docShell.QueryInterface%28Ci.nsILoadContext%29.usePrivateBrowsing%3Dtrue";
+    "docShell.QueryInterface%28Components.interfaces.nsILoadContext%29.usePrivateBrowsing%3Dtrue";
 
   // Clear the list of closed windows.
   while (ss.getClosedWindowCount()) {
@@ -94,13 +92,13 @@ add_task(function () {
   is(ss.getClosedTabCount(win), 0, "no tabs to restore");
 
   // Create a new tab in the new window that will load the frame script.
-  let tab = win.gBrowser.addTab("about:mozilla");
-  let browser = tab.linkedBrowser;
+  tab = win.gBrowser.addTab("about:mozilla");
+  browser = tab.linkedBrowser;
   yield promiseBrowserLoaded(browser);
   SyncHandlers.get(browser).flush();
 
   // Check that we consider the tab as private.
-  let state = JSON.parse(ss.getTabState(tab));
+  state = JSON.parse(ss.getTabState(tab));
   ok(state.isPrivate, "tab considered private");
 
   // Check that all private tabs are removed when the non-private

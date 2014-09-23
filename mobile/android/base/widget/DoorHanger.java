@@ -16,13 +16,11 @@ import org.json.JSONObject;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Rect;
-import android.os.Build;
 import android.text.SpannableString;
 import android.text.TextUtils;
 import android.text.method.LinkMovementMethod;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.URLSpan;
-import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -46,7 +44,7 @@ public class DoorHanger extends LinearLayout {
 
     private static LayoutParams sButtonParams;
     static {
-        sButtonParams = new LayoutParams(LayoutParams.FILL_PARENT, LayoutParams.FILL_PARENT, 1.0f);
+        sButtonParams = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT, 1.0f);
     }
 
     private final TextView mTextView;
@@ -67,9 +65,9 @@ public class DoorHanger extends LinearLayout {
     private List<PromptInput> mInputs;
     private CheckBox mCheckBox;
 
-    private int mPersistence = 0;
-    private boolean mPersistWhileVisible = false;
-    private long mTimeout = 0;
+    private int mPersistence;
+    private boolean mPersistWhileVisible;
+    private long mTimeout;
 
     // Color used for dividers above and between buttons.
     private int mDividerColor;
@@ -123,14 +121,14 @@ public class DoorHanger extends LinearLayout {
         if (theme == Theme.LIGHT) {
             // The default styles declared in doorhanger.xml are light-themed, so we just
             // need to set the divider color that we'll use in addButton.
-            mDividerColor = mResources.getColor(R.color.doorhanger_divider_light);
+            mDividerColor = mResources.getColor(R.color.divider_light);
 
         } else if (theme == Theme.DARK) {
-            mDividerColor = mResources.getColor(R.color.doorhanger_divider_dark);
+            mDividerColor = mResources.getColor(R.color.divider_dark);
 
             // Set a dark background, and use a smaller text size for dark-themed DoorHangers.
             setBackgroundColor(mResources.getColor(R.color.doorhanger_background_dark));
-            mTextView.setTextSize(mResources.getDimension(R.dimen.doorhanger_textsize_small));
+            mTextView.setTextAppearance(getContext(), R.style.TextAppearance_Widget_DoorHanger_Small);
         }
     }
 

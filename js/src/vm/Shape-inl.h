@@ -15,7 +15,7 @@
 
 #include "vm/Interpreter.h"
 #include "vm/ScopeObject.h"
-#include "vm/TypedArrayObject.h"
+#include "vm/TypedArrayCommon.h"
 
 #include "jsatominlines.h"
 #include "jscntxtinlines.h"
@@ -202,7 +202,7 @@ AutoRooterGetterSetter::AutoRooterGetterSetter(ThreadSafeContext *cx, uint8_t at
                                                MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
 {
     if (attrs & (JSPROP_GETTER | JSPROP_SETTER))
-        inner.construct(cx, attrs, pgetter, psetter);
+        inner.emplace(cx, attrs, pgetter, psetter);
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
 }
 
@@ -212,13 +212,22 @@ GetShapeAttributes(JSObject *obj, Shape *shape)
     JS_ASSERT(obj->isNative());
 
     if (IsImplicitDenseOrTypedArrayElement(shape)) {
-        if (obj->is<TypedArrayObject>())
+        if (IsAnyTypedArray(obj))
             return JSPROP_ENUMERATE | JSPROP_PERMANENT;
         return JSPROP_ENUMERATE;
     }
 
     return shape->attributes();
 }
+
+#ifdef JSGC_COMPACTING
+inline void
+BaseShape::fixupAfterMovingGC()
+{
+    if (hasTable())
+        table().fixupAfterMovingGC();
+}
+#endif
 
 } /* namespace js */
 

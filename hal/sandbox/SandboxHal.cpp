@@ -190,22 +190,6 @@ SetScreenBrightness(double aBrightness)
   Hal()->SendSetScreenBrightness(aBrightness);
 }
 
-bool
-SetLight(hal::LightType light, const hal::LightConfiguration& aConfig)
-{
-  bool status;
-  Hal()->SendSetLight(light, aConfig, &status);
-  return status;
-}
-
-bool
-GetLight(hal::LightType light, hal::LightConfiguration* aConfig)
-{
-  bool status;
-  Hal()->SendGetLight(light, aConfig, &status);
-  return status;
-}
-
 void 
 AdjustSystemClock(int64_t aDeltaMilliseconds)
 {
@@ -442,9 +426,13 @@ CancelFMRadioSeek()
 }
 
 void
-FactoryReset()
+FactoryReset(FactoryResetReason& aReason)
 {
-  Hal()->SendFactoryReset();
+  if (aReason == FactoryResetReason::Normal) {
+    Hal()->SendFactoryReset(NS_LITERAL_STRING("normal"));
+  } else if (aReason == FactoryResetReason::Wipe) {
+    Hal()->SendFactoryReset(NS_LITERAL_STRING("wipe"));
+  }
 }
 
 void
@@ -457,6 +445,12 @@ void
 StopDiskSpaceWatcher()
 {
   NS_RUNTIMEABORT("StopDiskSpaceWatcher() can't be called from sandboxed contexts.");
+}
+
+bool IsHeadphoneEventFromInputDev()
+{
+  NS_RUNTIMEABORT("IsHeadphoneEventFromInputDev() cannot be called from sandboxed contexts.");
+  return false;
 }
 
 class HalParent : public PHalParent
@@ -687,30 +681,6 @@ public:
   }
 
   virtual bool
-  RecvSetLight(const LightType& aLight,  const hal::LightConfiguration& aConfig, bool *status) MOZ_OVERRIDE
-  {
-    // XXX currently, the hardware key light and screen backlight are
-    // controlled as a unit.  Those are set through the power API, and
-    // there's no other way to poke lights currently, so we require
-    // "power" privileges here.
-    if (!AssertAppProcessPermission(this, "power")) {
-      return false;
-    }
-    *status = hal::SetLight(aLight, aConfig);
-    return true;
-  }
-
-  virtual bool
-  RecvGetLight(const LightType& aLight, LightConfiguration* aConfig, bool* status) MOZ_OVERRIDE
-  {
-    if (!AssertAppProcessPermission(this, "power")) {
-      return false;
-    }
-    *status = hal::GetLight(aLight, aConfig);
-    return true;
-  }
-
-  virtual bool
   RecvAdjustSystemClock(const int64_t &aDeltaMilliseconds) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "time")) {
@@ -875,12 +845,23 @@ public:
   }
 
   virtual bool
-  RecvFactoryReset()
+  RecvFactoryReset(const nsString& aReason) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    hal::FactoryReset();
+
+    FactoryResetReason reason = FactoryResetReason::Normal;
+    if (aReason.EqualsLiteral("normal")) {
+      reason = FactoryResetReason::Normal;
+    } else if (aReason.EqualsLiteral("wipe")) {
+      reason = FactoryResetReason::Wipe;
+    } else {
+      // Invalid factory reset reason. That should never happen.
+      return false;
+    }
+
+    hal::FactoryReset(reason);
     return true;
   }
 

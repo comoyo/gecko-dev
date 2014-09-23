@@ -35,6 +35,8 @@ public:
   nsApplicationCacheNamespace() : mItemType(0) {}
 
 private:
+  ~nsApplicationCacheNamespace() {}
+
   uint32_t mItemType;
   nsCString mNamespaceSpec;
   nsCString mData;
@@ -45,7 +47,7 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_MOZISTORAGEFUNCTION
 
-  nsOfflineCacheEvictionFunction(nsOfflineCacheDevice *device)
+  explicit nsOfflineCacheEvictionFunction(nsOfflineCacheDevice *device)
     : mDevice(device)
   {}
 
@@ -53,13 +55,15 @@ public:
   void Apply();
 
 private:
+  ~nsOfflineCacheEvictionFunction() {}
+
   nsOfflineCacheDevice *mDevice;
   nsCOMArray<nsIFile> mItems;
 
 };
 
-class nsOfflineCacheDevice : public nsCacheDevice
-                           , public nsISupports
+class nsOfflineCacheDevice MOZ_FINAL : public nsCacheDevice
+                                     , public nsISupports
 {
 public:
   nsOfflineCacheDevice();
@@ -188,8 +192,10 @@ public:
   uint32_t                CacheCapacity() { return mCacheCapacity; }
   uint32_t                CacheSize();
   uint32_t                EntryCount();
-  
+
 private:
+  ~nsOfflineCacheDevice();
+
   friend class nsApplicationCache;
 
   static PLDHashOperator ShutdownApplicationCache(const nsACString &key,

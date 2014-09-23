@@ -43,6 +43,7 @@ public:
     RTSPSource(
             nsIStreamingProtocolListener *aListener,
             const char *url,
+            const char *userAgent,
             bool uidValid = false,
             uid_t uid = 0);
 
@@ -54,6 +55,7 @@ public:
     void seek(uint64_t timeUs);
     void resume();
     void suspend();
+    void playbackEnded();
 
     status_t feedMoreTSData();
 
@@ -71,13 +73,14 @@ protected:
 
 private:
     enum {
-        kWhatNotify          = 'noti',
-        kWhatDisconnect      = 'disc',
-        kWhatPerformSeek     = 'seek',
-        kWhatPerformPlay     = 'play',
-        kWhatPerformPause    = 'paus',
-        kWhatPerformResume   = 'resu',
-        kWhatPerformSuspend  = 'susp',
+        kWhatNotify               = 'noti',
+        kWhatDisconnect           = 'disc',
+        kWhatPerformSeek          = 'seek',
+        kWhatPerformPlay          = 'play',
+        kWhatPerformPause         = 'paus',
+        kWhatPerformResume        = 'resu',
+        kWhatPerformSuspend       = 'susp',
+        kWhatPerformPlaybackEnded = 'ende',
     };
 
     enum State {
@@ -107,6 +110,7 @@ private:
     };
 
     AString mURL;
+    AString mUserAgent;
     bool mUIDValid;
     uid_t mUID;
     State mState;
@@ -139,6 +143,8 @@ private:
     void performResume();
 
     void performSuspend();
+
+    void performPlaybackEnded();
 
     void onTrackDataAvailable(size_t trackIndex);
 

@@ -323,7 +323,7 @@ function onLoadPageInfo()
              window.arguments[0];
 
   if (!args || !args.doc) {
-    gWindow = window.opener.content;
+    gWindow = window.opener.gBrowser.selectedBrowser.contentWindowAsCPOW;
     gDocument = gWindow.document;
   }
 
@@ -440,14 +440,6 @@ function loadTab(args)
   radioGroup.selectedItem = initialTab;
   radioGroup.selectedItem.doCommand();
   radioGroup.focus();
-}
-
-function onClickMore()
-{
-  var radioGrp = document.getElementById("viewGroup");
-  var radioElt = document.getElementById("securityTab");
-  radioGrp.selectedItem = radioElt;
-  showTab('security');
 }
 
 function toggleGroupbox(id)

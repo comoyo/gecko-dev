@@ -274,7 +274,7 @@ extern const char       js_EscapeMap[];
  * with the quote character at the beginning and end of the result string.
  */
 extern JSString *
-js_QuoteString(js::ExclusiveContext *cx, JSString *str, jschar quote);
+js_QuoteString(js::ExclusiveContext *cx, JSString *str, char16_t quote);
 
 namespace js {
 
@@ -678,7 +678,7 @@ GetBytecodeInteger(jsbytecode *pc)
       case JSOP_INT8:   return GET_INT8(pc);
       case JSOP_INT32:  return GET_INT32(pc);
       default:
-        MOZ_ASSUME_UNREACHABLE("Bad op");
+        MOZ_CRASH("Bad op");
     }
 }
 
@@ -835,12 +835,10 @@ js_Disassemble1(JSContext *cx, JS::Handle<JSScript*> script, jsbytecode *pc, uns
 void
 js_DumpPCCounts(JSContext *cx, JS::Handle<JSScript*> script, js::Sprinter *sp);
 
-#ifdef JS_ION
 namespace js {
 namespace jit { struct IonScriptCounts; }
 void
 DumpIonScriptCounts(js::Sprinter *sp, jit::IonScriptCounts *ionCounts);
 }
-#endif
 
 #endif /* jsopcode_h */

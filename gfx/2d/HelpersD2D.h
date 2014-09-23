@@ -44,7 +44,8 @@ static inline D2D1_SIZE_U D2DIntSize(const IntSize &aSize)
   return D2D1::SizeU(aSize.width, aSize.height);
 }
 
-static inline D2D1_RECT_F D2DRect(const Rect &aRect)
+template <typename T>
+static inline D2D1_RECT_F D2DRect(const T &aRect)
 {
   return D2D1::RectF(aRect.x, aRect.y, aRect.XMost(), aRect.YMost());
 }
@@ -193,6 +194,26 @@ static inline D2D1_PIXEL_FORMAT D2DPixelFormat(SurfaceFormat aFormat)
 }
 
 #ifdef USE_D2D1_1
+static inline bool D2DSupportsCompositeMode(CompositionOp aOp)
+{
+  switch(aOp) {
+  case CompositionOp::OP_OVER:
+  case CompositionOp::OP_ADD:
+  case CompositionOp::OP_ATOP:
+  case CompositionOp::OP_OUT:
+  case CompositionOp::OP_IN:
+  case CompositionOp::OP_SOURCE:
+  case CompositionOp::OP_DEST_IN:
+  case CompositionOp::OP_DEST_OUT:
+  case CompositionOp::OP_DEST_OVER:
+  case CompositionOp::OP_DEST_ATOP:
+  case CompositionOp::OP_XOR:
+    return true;
+  default:
+    return false;
+  }
+}
+
 static inline D2D1_COMPOSITE_MODE D2DCompositionMode(CompositionOp aOp)
 {
   switch(aOp) {
@@ -220,6 +241,44 @@ static inline D2D1_COMPOSITE_MODE D2DCompositionMode(CompositionOp aOp)
     return D2D1_COMPOSITE_MODE_XOR;
   default:
     return D2D1_COMPOSITE_MODE_SOURCE_OVER;
+  }
+}
+
+static inline D2D1_BLEND_MODE D2DBlendMode(CompositionOp aOp)
+{
+  switch (aOp) {
+  case CompositionOp::OP_MULTIPLY:
+    return D2D1_BLEND_MODE_MULTIPLY;
+  case CompositionOp::OP_SCREEN:
+    return D2D1_BLEND_MODE_SCREEN;
+  case CompositionOp::OP_OVERLAY:
+    return D2D1_BLEND_MODE_OVERLAY;
+  case CompositionOp::OP_DARKEN:
+    return D2D1_BLEND_MODE_DARKEN;
+  case CompositionOp::OP_LIGHTEN:
+    return D2D1_BLEND_MODE_LIGHTEN;
+  case CompositionOp::OP_COLOR_DODGE:
+    return D2D1_BLEND_MODE_COLOR_DODGE;
+  case CompositionOp::OP_COLOR_BURN:
+    return D2D1_BLEND_MODE_COLOR_BURN;
+  case CompositionOp::OP_HARD_LIGHT:
+    return D2D1_BLEND_MODE_HARD_LIGHT;
+  case CompositionOp::OP_SOFT_LIGHT:
+    return D2D1_BLEND_MODE_SOFT_LIGHT;
+  case CompositionOp::OP_DIFFERENCE:
+    return D2D1_BLEND_MODE_DIFFERENCE;
+  case CompositionOp::OP_EXCLUSION:
+    return D2D1_BLEND_MODE_EXCLUSION;
+  case CompositionOp::OP_HUE:
+    return D2D1_BLEND_MODE_HUE;
+  case CompositionOp::OP_SATURATION:
+    return D2D1_BLEND_MODE_SATURATION;
+  case CompositionOp::OP_COLOR:
+    return D2D1_BLEND_MODE_COLOR;
+  case CompositionOp::OP_LUMINOSITY:
+    return D2D1_BLEND_MODE_LUMINOSITY;
+  default:
+    return D2D1_BLEND_MODE_MULTIPLY;
   }
 }
 #endif
@@ -355,7 +414,7 @@ GetTransformedGeometry(ID2D1Geometry *aGeometry, const D2D1_MATRIX_3X2_F &aTrans
   aGeometry->Simplify(D2D1_GEOMETRY_SIMPLIFICATION_OPTION_CUBICS_AND_LINES,
                       aTransform, currentSink);
   currentSink->Close();
-  return tmpGeometry;
+  return tmpGeometry.forget();
 }
 
 static TemporaryRef<ID2D1Geometry>
@@ -368,7 +427,7 @@ IntersectGeometry(ID2D1Geometry *aGeometryA, ID2D1Geometry *aGeometryB)
   aGeometryA->CombineWithGeometry(aGeometryB, D2D1_COMBINE_MODE_INTERSECT, nullptr, sink);
   sink->Close();
 
-  return pathGeom;
+  return pathGeom.forget();
 }
 
 static TemporaryRef<ID2D1StrokeStyle>
@@ -442,7 +501,7 @@ CreateStrokeStyleForOptions(const StrokeOptions &aStrokeOptions)
     gfxWarning() << "Failed to create Direct2D stroke style.";
   }
 
-  return style;
+  return style.forget();
 }
 
 // This creates a (partially) uploaded bitmap for a DataSourceSurface. It
@@ -523,9 +582,9 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
                       D2D1::BitmapProperties(D2DPixelFormat(aSurface->GetFormat())),
                       byRef(bitmap));
 
-    aSourceTransform.Translate(uploadRect.x, uploadRect.y);
+    aSourceTransform.PreTranslate(uploadRect.x, uploadRect.y);
 
-    return bitmap;
+    return bitmap.forget();
   } else {
     int Bpp = BytesPerPixel(aSurface->GetFormat());
 
@@ -569,9 +628,9 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
                       D2D1::BitmapProperties(D2DPixelFormat(aSurface->GetFormat())),
                       byRef(bitmap));
 
-    aSourceTransform.Scale(Float(size.width / newSize.width),
-                           Float(size.height / newSize.height));
-    return bitmap;
+    aSourceTransform.PreScale(Float(size.width / newSize.width),
+                              Float(size.height / newSize.height));
+    return bitmap.forget();
   }
 }
 

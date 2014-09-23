@@ -149,7 +149,7 @@ InvokeConstructor(JSContext *cx, CallArgs args);
 
 /* See the fval overload of Invoke. */
 extern bool
-InvokeConstructor(JSContext *cx, Value fval, unsigned argc, Value *argv, Value *rval);
+InvokeConstructor(JSContext *cx, Value fval, unsigned argc, const Value *argv, Value *rval);
 
 /*
  * Executes a script with the given scopeChain/this. The 'type' indicates
@@ -203,10 +203,12 @@ class RunState
         return (GeneratorState *)this;
     }
 
-    JSScript *script() const { return script_; }
+    JS::HandleScript script() const { return script_; }
 
     virtual InterpreterFrame *pushInterpreterFrame(JSContext *cx) = 0;
     virtual void setReturnValue(Value v) = 0;
+
+    bool maybeCreateThisForConstructor(JSContext *cx);
 
   private:
     RunState(const RunState &other) MOZ_DELETE;
@@ -323,6 +325,15 @@ HasInstance(JSContext *cx, HandleObject obj, HandleValue v, bool *bp);
 extern void
 UnwindScope(JSContext *cx, ScopeIter &si, jsbytecode *pc);
 
+// Unwind all scopes.
+extern void
+UnwindAllScopes(JSContext *cx, ScopeIter &si);
+
+// Compute the pc needed to unwind the scope to the beginning of the block
+// pointed to by the try note.
+extern jsbytecode *
+UnwindScopeToTryPc(JSScript *script, JSTryNote *tn);
+
 /*
  * Unwind for an uncatchable exception. This means not running finalizers, etc;
  * just preserving the basic engine stack invariants.
@@ -438,12 +449,6 @@ ImplicitThisOperation(JSContext *cx, HandleObject scopeObj, HandlePropertyName n
                       MutableHandleValue res);
 
 bool
-IteratorMore(JSContext *cx, JSObject *iterobj, bool *cond, MutableHandleValue rval);
-
-bool
-IteratorNext(JSContext *cx, HandleObject iterobj, MutableHandleValue rval);
-
-bool
 RunOnceScriptPrologue(JSContext *cx, HandleScript script);
 
 bool
@@ -463,10 +468,6 @@ InitGetterSetterOperation(JSContext *cx, jsbytecode *pc, HandleObject obj, Handl
                           HandleObject val);
 
 bool
-SpreadOperation(JSContext *cx, HandleObject arr, HandleValue countVal,
-                HandleValue iterable, MutableHandleValue resultCountVal);
-
-bool
 SpreadCallOperation(JSContext *cx, HandleScript script, jsbytecode *pc, HandleValue thisv,
                     HandleValue callee, HandleValue arr, MutableHandleValue res);
 
@@ -477,6 +478,15 @@ SetConstOperation(JSContext *cx, HandleObject varobj, HandlePropertyName name, H
                                     JS_PropertyStub, JS_StrictPropertyStub,
                                     JSPROP_ENUMERATE | JSPROP_PERMANENT | JSPROP_READONLY);
 }
+
+void
+ReportUninitializedLexical(JSContext *cx, HandlePropertyName name);
+
+void
+ReportUninitializedLexical(JSContext *cx, HandleScript script, jsbytecode *pc);
+
+void
+ReportUninitializedLexical(JSContext *cx, HandleScript script, jsbytecode *pc, ScopeCoordinate sc);
 
 }  /* namespace js */
 

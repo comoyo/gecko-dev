@@ -23,13 +23,13 @@
 #define DEVICESTORAGE_SDCARD     "sdcard"
 #define DEVICESTORAGE_CRASHES    "crashes"
 
-class DeviceStorageFile;
 class nsIInputStream;
+class nsIOutputStream;
 
 namespace mozilla {
 class EventListenerManager;
 namespace dom {
-class DeviceStorageEnumerationParameters;
+struct DeviceStorageEnumerationParameters;
 class DOMCursor;
 class DOMRequest;
 class Promise;
@@ -92,6 +92,9 @@ public:
   nsresult Remove();
   nsresult Write(nsIInputStream* aInputStream);
   nsresult Write(InfallibleTArray<uint8_t>& bits);
+  nsresult Append(nsIInputStream* aInputStream);
+  nsresult Append(nsIInputStream* aInputStream,
+                  nsIOutputStream* aOutputStream);
   void CollectFiles(nsTArray<nsRefPtr<DeviceStorageFile> >& aFiles,
                     PRTime aSince = 0);
   void collectFilesInternal(nsTArray<nsRefPtr<DeviceStorageFile> >& aFiles,
@@ -115,6 +118,7 @@ public:
   nsresult CreateFileDescriptor(mozilla::ipc::FileDescriptor& aFileDescriptor);
 
 private:
+  ~DeviceStorageFile() {}
   void Init();
   void NormalizeFilePath();
   void AppendRelativePath(const nsAString& aPath);
@@ -141,6 +145,8 @@ private:
 class FileUpdateDispatcher MOZ_FINAL
   : public nsIObserver
 {
+  ~FileUpdateDispatcher() {}
+
  public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
@@ -188,7 +194,7 @@ public:
                                    bool aUseCapture,
                                    ErrorResult& aRv) MOZ_OVERRIDE;
 
-  nsDOMDeviceStorage(nsPIDOMWindow* aWindow);
+  explicit nsDOMDeviceStorage(nsPIDOMWindow* aWindow);
 
   nsresult Init(nsPIDOMWindow* aWindow, const nsAString& aType,
                 const nsAString& aVolName);
@@ -217,6 +223,13 @@ public:
   Add(nsIDOMBlob* aBlob, ErrorResult& aRv);
   already_AddRefed<DOMRequest>
   AddNamed(nsIDOMBlob* aBlob, const nsAString& aPath, ErrorResult& aRv);
+
+  already_AddRefed<DOMRequest>
+  AppendNamed(nsIDOMBlob* aBlob, const nsAString& aPath, ErrorResult& aRv);
+
+  already_AddRefed<DOMRequest>
+  AddOrAppendNamed(nsIDOMBlob* aBlob, const nsAString& aPath,
+                   const int32_t aRequestType, ErrorResult& aRv);
 
   already_AddRefed<DOMRequest>
   Get(const nsAString& aPath, ErrorResult& aRv)
@@ -264,7 +277,7 @@ public:
   // Uses XPCOM GetStorageName
 
   already_AddRefed<Promise>
-  GetRoot();
+  GetRoot(ErrorResult& aRv);
 
   static void
   CreateDeviceStorageFor(nsPIDOMWindow* aWin,
@@ -329,7 +342,9 @@ private:
 
 #ifdef MOZ_WIDGET_GONK
   nsString mLastStatus;
-  void DispatchMountChangeEvent(nsAString& aVolumeStatus);
+  nsString mLastStorageStatus;
+  void DispatchStatusChangeEvent(nsAString& aStatus);
+  void DispatchStorageStatusChangeEvent(nsAString& aStorageStatus);
 #endif
 
   // nsIDOMDeviceStorage.type

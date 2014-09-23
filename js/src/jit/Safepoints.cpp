@@ -9,7 +9,7 @@
 #include "mozilla/MathAlgorithms.h"
 
 #include "jit/BitSet.h"
-#include "jit/IonSpewer.h"
+#include "jit/JitSpewer.h"
 #include "jit/LIR.h"
 
 using namespace js;
@@ -30,7 +30,7 @@ SafepointWriter::init(TempAllocator &alloc, uint32_t slotCount)
 uint32_t
 SafepointWriter::startEntry()
 {
-    IonSpew(IonSpew_Safepoints, "Encoding safepoint (position %d):", stream_.length());
+    JitSpew(JitSpew_Safepoints, "Encoding safepoint (position %d):", stream_.length());
     return uint32_t(stream_.length());
 }
 
@@ -57,6 +57,33 @@ ReadRegisterMask(CompactBufferReader &stream)
     return stream.readUnsigned();
 }
 
+static void
+WriteFloatRegisterMask(CompactBufferWriter &stream, uint64_t bits)
+{
+    if (sizeof(FloatRegisters::SetType) == 1) {
+        stream.writeByte(bits);
+    } else if (sizeof(FloatRegisters::SetType) == 4) {
+        stream.writeUnsigned(bits);
+    } else {
+        JS_ASSERT(sizeof(FloatRegisters::SetType) == 8);
+        stream.writeUnsigned(bits & 0xffffffff);
+        stream.writeUnsigned(bits >> 32);
+    }
+}
+
+static int64_t
+ReadFloatRegisterMask(CompactBufferReader &stream)
+{
+    if (sizeof(FloatRegisters::SetType) == 1)
+        return stream.readByte();
+    if (sizeof(FloatRegisters::SetType) <= 4)
+        return stream.readUnsigned();
+    JS_ASSERT(sizeof(FloatRegisters::SetType) == 8);
+    uint64_t ret = stream.readUnsigned();
+    ret |= uint64_t(stream.readUnsigned()) << 32;
+    return ret;
+}
+
 void
 SafepointWriter::writeGcRegs(LSafepoint *safepoint)
 {
@@ -81,10 +108,10 @@ SafepointWriter::writeGcRegs(LSafepoint *safepoint)
     JS_ASSERT((valueRegs.bits() & ~spilledGpr.bits()) == 0);
     JS_ASSERT((gc.bits() & ~spilledGpr.bits()) == 0);
 
-    WriteRegisterMask(stream_, spilledFloat.bits());
+    WriteFloatRegisterMask(stream_, spilledFloat.bits());
 
 #ifdef DEBUG
-    if (IonSpewEnabled(IonSpew_Safepoints)) {
+    if (JitSpewEnabled(JitSpew_Safepoints)) {
         for (GeneralRegisterForwardIterator iter(spilledGpr); iter.more(); iter++) {
             const char *type = gc.has(*iter)
                                ? "gc"
@@ -93,10 +120,10 @@ SafepointWriter::writeGcRegs(LSafepoint *safepoint)
                                  : valueRegs.has(*iter)
                                    ? "value"
                                    : "any";
-            IonSpew(IonSpew_Safepoints, "    %s reg: %s", type, (*iter).name());
+            JitSpew(JitSpew_Safepoints, "    %s reg: %s", type, (*iter).name());
         }
         for (FloatRegisterForwardIterator iter(spilledFloat); iter.more(); iter++)
-            IonSpew(IonSpew_Safepoints, "    float reg: %s", (*iter).name());
+            JitSpew(JitSpew_Safepoints, "    float reg: %s", (*iter).name());
     }
 #endif
 }
@@ -129,7 +156,7 @@ SafepointWriter::writeGcSlots(LSafepoint *safepoint)
 
 #ifdef DEBUG
     for (uint32_t i = 0; i < slots.length(); i++)
-        IonSpew(IonSpew_Safepoints, "    gc slot: %d", slots[i]);
+        JitSpew(JitSpew_Safepoints, "    gc slot: %d", slots[i]);
 #endif
 
     MapSlotsToBitset(frameSlots_,
@@ -147,7 +174,7 @@ SafepointWriter::writeSlotsOrElementsSlots(LSafepoint *safepoint)
 
     for (uint32_t i = 0; i < slots.length(); i++) {
 #ifdef DEBUG
-        IonSpew(IonSpew_Safepoints, "    slots/elements slot: %d", slots[i]);
+        JitSpew(JitSpew_Safepoints, "    slots/elements slot: %d", slots[i]);
 #endif
         stream_.writeUnsigned(slots[i]);
     }
@@ -160,7 +187,7 @@ SafepointWriter::writeValueSlots(LSafepoint *safepoint)
 
 #ifdef DEBUG
     for (uint32_t i = 0; i < slots.length(); i++)
-        IonSpew(IonSpew_Safepoints, "    gc value: %d", slots[i]);
+        JitSpew(JitSpew_Safepoints, "    gc value: %d", slots[i]);
 #endif
 
     MapSlotsToBitset(frameSlots_, stream_, slots.length(), slots.begin());
@@ -171,11 +198,11 @@ static void
 DumpNunboxPart(const LAllocation &a)
 {
     if (a.isStackSlot()) {
-        fprintf(IonSpewFile, "stack %d", a.toStackSlot()->slot());
+        fprintf(JitSpewFile, "stack %d", a.toStackSlot()->slot());
     } else if (a.isArgument()) {
-        fprintf(IonSpewFile, "arg %d", a.toArgument()->index());
+        fprintf(JitSpewFile, "arg %d", a.toArgument()->index());
     } else {
-        fprintf(IonSpewFile, "reg %s", a.toGeneralReg()->reg().name());
+        fprintf(JitSpewFile, "reg %s", a.toGeneralReg()->reg().name());
     }
 }
 #endif // DEBUG
@@ -254,17 +281,17 @@ SafepointWriter::writeNunboxParts(LSafepoint *safepoint)
     LSafepoint::NunboxList &entries = safepoint->nunboxParts();
 
 # ifdef DEBUG
-    if (IonSpewEnabled(IonSpew_Safepoints)) {
+    if (JitSpewEnabled(JitSpew_Safepoints)) {
         for (uint32_t i = 0; i < entries.length(); i++) {
             SafepointNunboxEntry &entry = entries[i];
             if (entry.type.isUse() || entry.payload.isUse())
                 continue;
-            IonSpewHeader(IonSpew_Safepoints);
-            fprintf(IonSpewFile, "    nunbox (type in ");
+            JitSpewHeader(JitSpew_Safepoints);
+            fprintf(JitSpewFile, "    nunbox (type in ");
             DumpNunboxPart(entry.type);
-            fprintf(IonSpewFile, ", payload in ");
+            fprintf(JitSpewFile, ", payload in ");
             DumpNunboxPart(entry.payload);
-            fprintf(IonSpewFile, ")\n");
+            fprintf(JitSpewFile, ")\n");
         }
     }
 # endif
@@ -339,7 +366,7 @@ SafepointWriter::encode(LSafepoint *safepoint)
 void
 SafepointWriter::endEntry()
 {
-    IonSpew(IonSpew_Safepoints, "    -- entry ended at %d", uint32_t(stream_.length()));
+    JitSpew(JitSpew_Safepoints, "    -- entry ended at %d", uint32_t(stream_.length()));
 }
 
 SafepointReader::SafepointReader(IonScript *script, const SafepointIndex *si)
@@ -362,8 +389,7 @@ SafepointReader::SafepointReader(IonScript *script, const SafepointIndex *si)
         valueSpills_ = GeneralRegisterSet(ReadRegisterMask(stream_));
 #endif
     }
-
-    allFloatSpills_ = FloatRegisterSet(ReadRegisterMask(stream_));
+    allFloatSpills_ = FloatRegisterSet(ReadFloatRegisterMask(stream_));
 
     advanceFromGcRegs();
 }
@@ -371,7 +397,7 @@ SafepointReader::SafepointReader(IonScript *script, const SafepointIndex *si)
 uint32_t
 SafepointReader::osiReturnPointOffset() const
 {
-    return osiCallPointOffset_ + Assembler::patchWrite_NearCallSize();
+    return osiCallPointOffset_ + Assembler::PatchWrite_NearCallSize();
 }
 
 CodeLocationLabel

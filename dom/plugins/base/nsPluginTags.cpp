@@ -16,6 +16,7 @@
 #include "nsPluginLogging.h"
 #include "nsNPAPIPlugin.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/unused.h"
 #include <cctype>
 #include "mozilla/dom/EncodingUtils.h"
 
@@ -340,6 +341,22 @@ nsPluginTag::GetBlocklisted(bool* aBlocklisted)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsPluginTag::GetIsEnabledStateLocked(bool* aIsEnabledStateLocked)
+{
+  *aIsEnabledStateLocked = false;
+  nsCOMPtr<nsIPrefBranch> prefs(do_GetService(NS_PREFSERVICE_CONTRACTID));
+
+  if (NS_WARN_IF(!prefs)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  unused << prefs->PrefIsLocked(GetStatePrefNameForPlugin(this).get(),
+                                aIsEnabledStateLocked);
+
+  return NS_OK;
+}
+
 bool
 nsPluginTag::IsClicktoplay()
 {
@@ -485,11 +502,10 @@ void nsPluginTag::TryUnloadPlugin(bool inShutdown)
 {
   // We never want to send NPP_Shutdown to an in-process plugin unless
   // this process is shutting down.
-  if (mLibrary && !inShutdown) {
+  if (!mPlugin) {
     return;
   }
-
-  if (mPlugin) {
+  if (inShutdown || mPlugin->GetLibrary()->IsOOP()) {
     mPlugin->Shutdown();
     mPlugin = nullptr;
   }

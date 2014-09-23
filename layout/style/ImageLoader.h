@@ -26,14 +26,14 @@ class nsIPrincipal;
 namespace mozilla {
 namespace css {
 
-class ImageValue;
+struct ImageValue;
 
 class ImageLoader MOZ_FINAL : public imgINotificationObserver,
                               public imgIOnloadBlocker {
 public:
   typedef mozilla::css::ImageValue Image;
 
-  ImageLoader(nsIDocument* aDocument)
+  explicit ImageLoader(nsIDocument* aDocument)
   : mDocument(aDocument),
     mInClone(false)
   {
@@ -59,7 +59,10 @@ public:
 
   void SetAnimationMode(uint16_t aMode);
 
-  void ClearFrames();
+  // The prescontext for this ImageLoader's document. We need it to be passed
+  // in because this can be called during presentation destruction after the
+  // presshell pointer on the document has been cleared.
+  void ClearFrames(nsPresContext* aPresContext);
 
   void LoadImage(nsIURI* aURI, nsIPrincipal* aPrincipal, nsIURI* aReferrer,
                  Image* aCSSValue);
@@ -67,6 +70,8 @@ public:
   void DestroyRequest(imgIRequest* aRequest);
 
 private:
+  ~ImageLoader() {}
+
   // We need to be able to look up the frames associated with a request (for
   // delivering notifications) and the requests associated with a frame (when
   // the frame goes away). Thus we maintain hashtables going both ways.  These
@@ -90,6 +95,10 @@ private:
   static PLDHashOperator
   SetAnimationModeEnumerator(nsISupports* aKey, FrameSet* aValue,
                              void* aClosure);
+
+  static PLDHashOperator
+  DeregisterRequestEnumerator(nsISupports* aKey, FrameSet* aValue,
+                              void* aClosure);
 
   nsresult OnStartContainer(imgIRequest *aRequest, imgIContainer* aImage);
   nsresult OnStopFrame(imgIRequest *aRequest);

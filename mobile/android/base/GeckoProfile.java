@@ -5,17 +5,6 @@
 
 package org.mozilla.gecko;
 
-import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
-import org.mozilla.gecko.GeckoProfileDirectories.NoSuchProfileException;
-import org.mozilla.gecko.Telemetry;
-import org.mozilla.gecko.TelemetryContract;
-import org.mozilla.gecko.util.INIParser;
-import org.mozilla.gecko.util.INISection;
-
-import android.content.Context;
-import android.text.TextUtils;
-import android.util.Log;
-
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileReader;
@@ -26,21 +15,58 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Hashtable;
 
+import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
+import org.mozilla.gecko.GeckoProfileDirectories.NoSuchProfileException;
+import org.mozilla.gecko.db.BrowserDB;
+import org.mozilla.gecko.distribution.Distribution;
+import org.mozilla.gecko.mozglue.RobocopTarget;
+import org.mozilla.gecko.util.INIParser;
+import org.mozilla.gecko.util.INISection;
+
+import android.content.ContentResolver;
+import android.content.Context;
+import android.content.Intent;
+import android.support.v4.content.LocalBroadcastManager;
+import android.text.TextUtils;
+import android.util.Log;
+
 public final class GeckoProfile {
     private static final String LOGTAG = "GeckoProfile";
 
     // Used to "lock" the guest profile, so that we'll always restart in it
     private static final String LOCK_FILE_NAME = ".active_lock";
     public static final String DEFAULT_PROFILE = "default";
-    private static final String GUEST_PROFILE = "guest";
+    public static final String GUEST_PROFILE = "guest";
 
     private static HashMap<String, GeckoProfile> sProfileCache = new HashMap<String, GeckoProfile>();
-    private static String sDefaultProfileName = null;
+    private static String sDefaultProfileName;
 
-    public static boolean sIsUsingCustomProfile = false;
+    // Caches the guest profile dir.
+    private static File sGuestDir;
+    private static GeckoProfile sGuestProfile;
+
+    public static boolean sIsUsingCustomProfile;
+
     private final String mName;
     private final File mMozillaDir;
-    private File mProfileDir;             // Not final because this is lazily computed.
+    private final boolean mIsWebAppProfile;
+    private final Context mApplicationContext;
+
+    /**
+     * Access to this member should be synchronized to avoid
+     * races during creation -- particularly between getDir and GeckoView#init.
+     *
+     * Not final because this is lazily computed. 
+     */
+    private File mProfileDir;
+
+    // Caches whether or not a profile is "locked".
+    // Only used by the guest profile to determine if it should be reused or
+    // deleted on startup.
+    // These are volatile for an incremental improvement in thread safety,
+    // but this is not a complete solution for concurrency.
+    private volatile LockState mLocked = LockState.UNDEFINED;
+    private volatile boolean mInGuestMode;
 
     // Constants to cache whether or not a profile is "locked".
     private enum LockState {
@@ -48,17 +74,6 @@ public final class GeckoProfile {
         UNLOCKED,
         UNDEFINED
     };
-
-    // Caches whether or not a profile is "locked". Only used by the guest profile to determine if it should
-    // be reused or deleted on startup
-    private LockState mLocked = LockState.UNDEFINED;
-
-    // Caches the guest profile dir.
-    private static File sGuestDir = null;
-    private static GeckoProfile sGuestProfile = null;
-
-    private boolean mInGuestMode = false;
-
 
     public static GeckoProfile get(Context context) {
         boolean isGeckoApp = false;
@@ -75,10 +90,9 @@ public final class GeckoProfile {
             }
         }
 
-        // If the guest profile exists and is locked, return it
-        GeckoProfile guest = GeckoProfile.getGuestProfile(context);
-        if (guest != null && guest.locked()) {
-            return guest;
+        // If the guest profile should be used return it.
+        if (GuestSession.shouldUse(context, "")) {
+            return GeckoProfile.getGuestProfile(context);
         }
 
         if (isGeckoApp) {
@@ -108,6 +122,7 @@ public final class GeckoProfile {
         return get(context, profileName, (File)null);
     }
 
+    @RobocopTarget
     public static GeckoProfile get(Context context, String profileName, String profilePath) {
         File dir = null;
         if (!TextUtils.isEmpty(profilePath)) {
@@ -119,6 +134,7 @@ public final class GeckoProfile {
         return get(context, profileName, dir);
     }
 
+    @RobocopTarget
     public static GeckoProfile get(Context context, String profileName, File profileDir) {
         if (context == null) {
             throw new IllegalArgumentException("context must be non-null");
@@ -155,18 +171,21 @@ public final class GeckoProfile {
     }
 
     public static boolean removeProfile(Context context, String profileName) {
-        final boolean success;
-        try {
-            success = new GeckoProfile(context, profileName).remove();
-        } catch (NoMozillaDirectoryException e) {
-            Log.w(LOGTAG, "Unable to remove profile: no Mozilla directory.", e);
-            return true;
+        if (profileName == null) {
+            Log.w(LOGTAG, "Unable to remove profile: null profile name.");
+            return false;
         }
+
+        final GeckoProfile profile = get(context, profileName);
+        if (profile == null) {
+            return false;
+        }
+        final boolean success = profile.remove();
 
         if (success) {
             // Clear all shared prefs for the given profile.
             GeckoSharedPrefs.forProfileName(context, profileName)
-                            .edit().clear().commit();
+                            .edit().clear().apply();
         }
 
         return success;
@@ -174,12 +193,24 @@ public final class GeckoProfile {
 
     public static GeckoProfile createGuestProfile(Context context) {
         try {
-            removeGuestProfile(context);
             // We need to force the creation of a new guest profile if we want it outside of the normal profile path,
             // otherwise GeckoProfile.getDir will try to be smart and build it for us in the normal profiles dir.
             getGuestDir(context).mkdir();
             GeckoProfile profile = getGuestProfile(context);
-            profile.lock();
+
+            // If we're creating this guest session over the keyguard, don't lock it.
+            // This will force the guest session to exit if the user unlocks their phone
+            // and starts Fennec.
+            if (!GuestSession.isSecureKeyguardLocked(context)) {
+                profile.lock();
+            }
+
+            /*
+             * Now do the things that createProfileDirectory normally does --
+             * right now that's kicking off DB init.
+             */
+            profile.enqueueInitialization();
+
             return profile;
         } catch (Exception ex) {
             Log.e(LOGTAG, "Error creating guest profile", ex);
@@ -201,7 +232,7 @@ public final class GeckoProfile {
         return sGuestDir;
     }
 
-    private static GeckoProfile getGuestProfile(Context context) {
+    public static GeckoProfile getGuestProfile(Context context) {
         if (sGuestProfile == null) {
             File guestDir = getGuestDir(context);
             if (guestDir.exists()) {
@@ -215,10 +246,11 @@ public final class GeckoProfile {
 
     public static boolean maybeCleanupGuestProfile(final Context context) {
         final GeckoProfile profile = getGuestProfile(context);
-
         if (profile == null) {
             return false;
-        } else if (!profile.locked()) {
+        }
+
+        if (!profile.locked()) {
             profile.mInGuestMode = false;
 
             // If the guest dir exists, but it's unlocked, delete it
@@ -243,7 +275,7 @@ public final class GeckoProfile {
         if (success) {
             // Clear all shared prefs for the guest profile.
             GeckoSharedPrefs.forProfileName(context, GUEST_PROFILE)
-                            .edit().clear().commit();
+                            .edit().clear().apply();
         }
     }
 
@@ -266,7 +298,13 @@ public final class GeckoProfile {
     }
 
     private GeckoProfile(Context context, String profileName) throws NoMozillaDirectoryException {
+        if (TextUtils.isEmpty(profileName)) {
+            throw new IllegalArgumentException("Unable to create GeckoProfile for empty profile name.");
+        }
+
+        mApplicationContext = context.getApplicationContext();
         mName = profileName;
+        mIsWebAppProfile = profileName.startsWith("webapp");
         mMozillaDir = GeckoProfileDirectories.getMozillaDirectory(context);
     }
 
@@ -276,8 +314,13 @@ public final class GeckoProfile {
             return mLocked == LockState.LOCKED;
         }
 
-        // Don't use getDir() as it will create a dir if none exists
-        if (mProfileDir != null && mProfileDir.exists()) {
+        boolean profileExists;
+        synchronized (this) {
+            profileExists = mProfileDir != null && mProfileDir.exists();
+        }
+
+        // Don't use getDir() as it will create a dir if none exists.
+        if (profileExists) {
             File lockFile = new File(mProfileDir, LOCK_FILE_NAME);
             boolean res = lockFile.exists();
             mLocked = res ? LockState.LOCKED : LockState.UNLOCKED;
@@ -291,9 +334,9 @@ public final class GeckoProfile {
     public boolean lock() {
         try {
             // If this dir doesn't exist getDir will create it for us
-            File lockFile = new File(getDir(), LOCK_FILE_NAME);
-            boolean result = lockFile.createNewFile();
-            if (result) {
+            final File lockFile = new File(getDir(), LOCK_FILE_NAME);
+            final boolean result = lockFile.createNewFile();
+            if (lockFile.exists()) {
                 mLocked = LockState.LOCKED;
             } else {
                 mLocked = LockState.UNLOCKED;
@@ -307,14 +350,24 @@ public final class GeckoProfile {
     }
 
     public boolean unlock() {
-        // Don't use getDir() as it will create a dir
-        if (mProfileDir == null || !mProfileDir.exists()) {
+        final File profileDir;
+        synchronized (this) {
+            // Don't use getDir() as it will create a dir.
+            profileDir = mProfileDir;
+        }
+
+        if (profileDir == null || !profileDir.exists()) {
             return true;
         }
 
         try {
-            File lockFile = new File(mProfileDir, LOCK_FILE_NAME);
-            boolean result = delete(lockFile);
+            final File lockFile = new File(profileDir, LOCK_FILE_NAME);
+            if (!lockFile.exists()) {
+                mLocked = LockState.UNLOCKED;
+                return true;
+            }
+
+            final boolean result = delete(lockFile);
             if (result) {
                 mLocked = LockState.UNLOCKED;
             } else {
@@ -324,6 +377,7 @@ public final class GeckoProfile {
         } catch(IOException ex) {
             Log.e(LOGTAG, "Error unlocking profile", ex);
         }
+
         mLocked = LockState.LOCKED;
         return false;
     }
@@ -334,7 +388,9 @@ public final class GeckoProfile {
 
     private void setDir(File dir) {
         if (dir != null && dir.exists() && dir.isDirectory()) {
-            mProfileDir = dir;
+            synchronized (this) {
+                mProfileDir = dir;
+            }
         }
     }
 
@@ -445,16 +501,18 @@ public final class GeckoProfile {
 
     private boolean remove() {
         try {
-            final File dir = getDir();
-            if (dir.exists()) {
-                delete(dir);
-            }
+            synchronized (this) {
+                final File dir = getDir();
+                if (dir.exists()) {
+                    delete(dir);
+                }
 
-            try {
-                mProfileDir = findProfileDir();
-            } catch (NoSuchProfileException noSuchProfile) {
-                // If the profile doesn't exist, there's nothing left for us to do.
-                return false;
+                try {
+                    mProfileDir = findProfileDir();
+                } catch (NoSuchProfileException noSuchProfile) {
+                    // If the profile doesn't exist, there's nothing left for us to do.
+                    return false;
+                }
             }
 
             final INIParser parser = GeckoProfileDirectories.getProfilesINI(mMozillaDir);
@@ -576,7 +634,7 @@ public final class GeckoProfile {
             parser.addSection(generalSection);
         }
 
-        if (!isDefaultSet && !mName.startsWith("webapp")) {
+        if (!isDefaultSet && !mIsWebAppProfile) {
             // only set as default if this is the first non-webapp
             // profile we're creating
             profileSection.setProperty("Default", 1);
@@ -589,6 +647,11 @@ public final class GeckoProfile {
 
         parser.addSection(profileSection);
         parser.write();
+
+        // Trigger init for non-webapp profiles.
+        if (!mIsWebAppProfile) {
+            enqueueInitialization();
+        }
 
         // Write out profile creation time, mirroring the logic in nsToolkitProfileService.
         try {
@@ -604,6 +667,44 @@ public final class GeckoProfile {
             Log.w(LOGTAG, "Couldn't write times.json.", e);
         }
 
+        LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(mApplicationContext);
+        final Intent intent = new Intent(BrowserApp.ACTION_NEW_PROFILE);
+        lbm.sendBroadcast(intent);
+
         return profileDir;
+    }
+
+    /**
+     * This method is called once, immediately before creation of the profile
+     * directory completes.
+     *
+     * It queues up work to be done in the background to prepare the profile,
+     * such as adding default bookmarks.
+     *
+     * This is public for use *from tests only*!
+     */
+    @RobocopTarget
+    public void enqueueInitialization() {
+        Log.i(LOGTAG, "Enqueuing profile init.");
+        final Context context = mApplicationContext;
+
+        // Add everything when we're done loading the distribution.
+        final Distribution distribution = Distribution.getInstance(context);
+        distribution.addOnDistributionReadyCallback(new Runnable() {
+            @Override
+            public void run() {
+                Log.d(LOGTAG, "Running post-distribution task: bookmarks.");
+
+                final ContentResolver cr = context.getContentResolver();
+
+                // We pass the number of added bookmarks to ensure that the
+                // indices of the distribution and default bookmarks are
+                // contiguous. Because there are always at least as many
+                // bookmarks as there are favicons, we can also guarantee that
+                // the favicon IDs won't overlap.
+                final int offset = BrowserDB.addDistributionBookmarks(cr, distribution, 0);
+                BrowserDB.addDefaultBookmarks(context, cr, offset);
+            }
+        });
     }
 }

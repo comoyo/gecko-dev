@@ -9,6 +9,7 @@ EXPORTS += [
     'nsMIMEInputStream.h',
     'nsTemporaryFileInputStream.h',
     'nsURLHelper.h',
+    'nsURLParsers.h',
 ]
 
 EXPORTS.mozilla.net += [
@@ -47,6 +48,7 @@ UNIFIED_SOURCES += [
     'nsMIMEInputStream.cpp',
     'nsNetAddr.cpp',
     'nsNetStrings.cpp',
+    'nsNetUtil.cpp',
     'nsPACMan.cpp',
     'nsPreloadedStream.cpp',
     'nsProtocolProxyService.cpp',
@@ -75,6 +77,7 @@ UNIFIED_SOURCES += [
     'RedirectChannelRegistrar.cpp',
     'StreamingProtocolService.cpp',
     'Tickler.cpp',
+    'TLSServerSocket.cpp',
 ]
 
 # These files cannot be built in unified mode because they force NSPR logging.
@@ -114,7 +117,7 @@ MSVC_ENABLE_PGO = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
-FINAL_LIBRARY = 'necko'
+FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     '/dom/base',
     '/netwerk/protocol/http'
@@ -133,3 +136,6 @@ if CONFIG['MOZ_ENABLE_QTNETWORK']:
 
 if CONFIG['ENABLE_TESTS']:
     DEFINES['PREDICTOR_TESTS'] = True
+
+if CONFIG['MOZ_ENABLE_QTNETWORK']:
+    CXXFLAGS += CONFIG['MOZ_QT_CFLAGS']

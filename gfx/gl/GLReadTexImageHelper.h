@@ -14,8 +14,6 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/gfx/Types.h"
 
-class gfxImageSurface;
-
 namespace mozilla {
 
 namespace gfx {
@@ -43,7 +41,7 @@ class GLReadTexImageHelper MOZ_FINAL
 
 public:
 
-    GLReadTexImageHelper(GLContext* gl);
+    explicit GLReadTexImageHelper(GLContext* gl);
     ~GLReadTexImageHelper();
 
     /**

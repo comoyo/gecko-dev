@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -85,10 +85,10 @@ nsEventQueue::GetEvent(bool aMayWait, nsIRunnable** aResult)
 }
 
 void
-nsEventQueue::PutEvent(nsIRunnable *runnable)
+nsEventQueue::PutEvent(nsIRunnable* aRunnable)
 {
   // Avoid calling AddRef+Release while holding our monitor.
-  nsRefPtr<nsIRunnable> event(runnable);
+  nsRefPtr<nsIRunnable> event(aRunnable);
 
   if (ChaosMode::isActive()) {
     // With probability 0.5, yield so other threads have a chance to
@@ -108,7 +108,7 @@ nsEventQueue::PutEvent(nsIRunnable *runnable)
     mOffsetHead = 0;
     mOffsetTail = 0;
   } else if (mOffsetTail == EVENTS_PER_PAGE) {
-    Page *page = NewPage();
+    Page* page = NewPage();
     MOZ_ASSERT(page);
 
     mTail->mNext = page;
@@ -118,6 +118,6 @@ nsEventQueue::PutEvent(nsIRunnable *runnable)
 
   event.swap(mTail->mEvents[mOffsetTail]);
   ++mOffsetTail;
-  LOG(("EVENTQ(%p): notify\n", this)); 
+  LOG(("EVENTQ(%p): notify\n", this));
   mon.NotifyAll();
 }

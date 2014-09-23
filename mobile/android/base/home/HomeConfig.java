@@ -8,8 +8,8 @@ package org.mozilla.gecko.home;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.home.RemoteTabsPanel;
 import org.mozilla.gecko.util.ThreadUtils;
-
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -39,7 +39,9 @@ public final class HomeConfig {
         TOP_SITES("top_sites", TopSitesPanel.class),
         BOOKMARKS("bookmarks", BookmarksPanel.class),
         HISTORY("history", HistoryPanel.class),
+        REMOTE_TABS("remote_tabs", RemoteTabsPanel.class),
         READING_LIST("reading_list", ReadingListPanel.class),
+        RECENT_TABS("recent_tabs", RecentTabsPanel.class),
         DYNAMIC("dynamic", DynamicPanel.class);
 
         private final String mId;
@@ -105,14 +107,14 @@ public final class HomeConfig {
         private final AuthConfig mAuthConfig;
         private final EnumSet<Flags> mFlags;
 
-        private static final String JSON_KEY_TYPE = "type";
-        private static final String JSON_KEY_TITLE = "title";
-        private static final String JSON_KEY_ID = "id";
-        private static final String JSON_KEY_LAYOUT = "layout";
-        private static final String JSON_KEY_VIEWS = "views";
-        private static final String JSON_KEY_AUTH_CONFIG = "authConfig";
-        private static final String JSON_KEY_DEFAULT = "default";
-        private static final String JSON_KEY_DISABLED = "disabled";
+        static final String JSON_KEY_TYPE = "type";
+        static final String JSON_KEY_TITLE = "title";
+        static final String JSON_KEY_ID = "id";
+        static final String JSON_KEY_LAYOUT = "layout";
+        static final String JSON_KEY_VIEWS = "views";
+        static final String JSON_KEY_AUTH_CONFIG = "authConfig";
+        static final String JSON_KEY_DEFAULT = "default";
+        static final String JSON_KEY_DISABLED = "disabled";
 
         public enum Flags {
             DEFAULT_PANEL,
@@ -369,6 +371,11 @@ public final class HomeConfig {
         }
 
         @Override
+        public int hashCode() {
+            return super.hashCode();
+        }
+
+        @Override
         public int describeContents() {
             return 0;
         }
@@ -615,14 +622,14 @@ public final class HomeConfig {
         private final EmptyViewConfig mEmptyViewConfig;
         private final EnumSet<Flags> mFlags;
 
-        private static final String JSON_KEY_TYPE = "type";
-        private static final String JSON_KEY_DATASET = "dataset";
-        private static final String JSON_KEY_ITEM_TYPE = "itemType";
-        private static final String JSON_KEY_ITEM_HANDLER = "itemHandler";
-        private static final String JSON_KEY_BACK_IMAGE_URL = "backImageUrl";
-        private static final String JSON_KEY_FILTER = "filter";
-        private static final String JSON_KEY_EMPTY = "empty";
-        private static final String JSON_KEY_REFRESH_ENABLED = "refreshEnabled";
+        static final String JSON_KEY_TYPE = "type";
+        static final String JSON_KEY_DATASET = "dataset";
+        static final String JSON_KEY_ITEM_TYPE = "itemType";
+        static final String JSON_KEY_ITEM_HANDLER = "itemHandler";
+        static final String JSON_KEY_BACK_IMAGE_URL = "backImageUrl";
+        static final String JSON_KEY_FILTER = "filter";
+        static final String JSON_KEY_EMPTY = "empty";
+        static final String JSON_KEY_REFRESH_ENABLED = "refreshEnabled";
 
         public enum Flags {
             REFRESH_ENABLED
@@ -817,8 +824,8 @@ public final class HomeConfig {
         private final String mText;
         private final String mImageUrl;
 
-        private static final String JSON_KEY_TEXT = "text";
-        private static final String JSON_KEY_IMAGE_URL = "imageUrl";
+        static final String JSON_KEY_TEXT = "text";
+        static final String JSON_KEY_IMAGE_URL = "imageUrl";
 
         public EmptyViewConfig(JSONObject json) throws JSONException, IllegalArgumentException {
             mText = json.optString(JSON_KEY_TEXT, null);
@@ -887,9 +894,9 @@ public final class HomeConfig {
         private final String mButtonText;
         private final String mImageUrl;
 
-        private static final String JSON_KEY_MESSAGE_TEXT = "messageText";
-        private static final String JSON_KEY_BUTTON_TEXT = "buttonText";
-        private static final String JSON_KEY_IMAGE_URL = "imageUrl";
+        static final String JSON_KEY_MESSAGE_TEXT = "messageText";
+        static final String JSON_KEY_BUTTON_TEXT = "buttonText";
+        static final String JSON_KEY_IMAGE_URL = "imageUrl";
 
         public AuthConfig(JSONObject json) throws JSONException, IllegalArgumentException {
             mMessageText = json.optString(JSON_KEY_MESSAGE_TEXT);
@@ -1071,9 +1078,7 @@ public final class HomeConfig {
             mConfigMap = new HashMap<String, PanelConfig>();
             mConfigOrder = new LinkedList<String>();
             mEventQueue = new LinkedList<GeckoEvent>();
-            mEnabledCount = 0;
 
-            mHasChanged = false;
             mIsFromDefault = configState.isDefault();
 
             initFromState(configState);
@@ -1495,6 +1500,8 @@ public final class HomeConfig {
     private static final String BOOKMARKS_PANEL_ID = "7f6d419a-cd6c-4e34-b26f-f68b1b551907";
     private static final String READING_LIST_PANEL_ID = "20f4549a-64ad-4c32-93e4-1dcef792733b";
     private static final String HISTORY_PANEL_ID = "f134bf20-11f7-4867-ab8b-e8e705d7fbe8";
+    private static final String RECENT_TABS_PANEL_ID = "5c2601a5-eedc-4477-b297-ce4cef52adf8";
+    private static final String REMOTE_TABS_PANEL_ID = "72429afd-8d8b-43d8-9189-14b779c563d0";
 
     private final HomeConfigBackend mBackend;
 
@@ -1545,9 +1552,19 @@ public final class HomeConfig {
                 id = HISTORY_PANEL_ID;
                 break;
 
+            case REMOTE_TABS:
+                titleId = R.string.home_remote_tabs_title;
+                id = REMOTE_TABS_PANEL_ID;
+                break;
+
             case READING_LIST:
                 titleId = R.string.reading_list_title;
                 id = READING_LIST_PANEL_ID;
+                break;
+
+            case RECENT_TABS:
+                titleId = R.string.recent_tabs_title;
+                id = RECENT_TABS_PANEL_ID;
                 break;
 
             case DYNAMIC:

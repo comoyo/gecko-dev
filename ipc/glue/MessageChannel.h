@@ -11,6 +11,7 @@
 #include "base/basictypes.h"
 #include "base/message_loop.h"
 
+#include "mozilla/DebugOnly.h"
 #include "mozilla/Monitor.h"
 #include "mozilla/Vector.h"
 #include "mozilla/WeakPtr.h"
@@ -35,6 +36,9 @@ class RefCountedMonitor : public Monitor
     {}
 
     NS_INLINE_DECL_THREADSAFE_REFCOUNTING(RefCountedMonitor)
+
+  private:
+    ~RefCountedMonitor() {}
 };
 
 class MessageChannel : HasResultCodes
@@ -54,19 +58,19 @@ class MessageChannel : HasResultCodes
     typedef IPC::Message Message;
     typedef mozilla::ipc::Transport Transport;
 
-    MessageChannel(MessageListener *aListener);
+    explicit MessageChannel(MessageListener *aListener);
     ~MessageChannel();
 
     // "Open" from the perspective of the transport layer; the underlying
     // socketpair/pipe should already be created.
     //
-    // Returns true iff the transport layer was successfully connected,
+    // Returns true if the transport layer was successfully connected,
     // i.e., mChannelState == ChannelConnected.
     bool Open(Transport* aTransport, MessageLoop* aIOLoop=0, Side aSide=UnknownSide);
 
     // "Open" a connection to another thread in the same process.
     //
-    // Returns true iff the transport layer was successfully connected,
+    // Returns true if the transport layer was successfully connected,
     // i.e., mChannelState == ChannelConnected.
     //
     // For more details on the process of opening a channel between
@@ -84,6 +88,26 @@ class MessageChannel : HasResultCodes
     void SetAbortOnError(bool abort)
     {
         mAbortOnError = true;
+    }
+
+    // Misc. behavioral traits consumers can request for this channel
+    enum ChannelFlags {
+      REQUIRE_DEFAULT                         = 0,
+      // Windows: if this channel operates on the UI thread, indicates
+      // WindowsMessageLoop code should enable deferred native message
+      // handling to prevent deadlocks. Should only be used for protocols
+      // that manage child processes which might create native UI, like
+      // plugins.
+      REQUIRE_DEFERRED_MESSAGE_PROTECTION     = 1 << 0
+    };
+    void SetChannelFlags(ChannelFlags aFlags) { mFlags = aFlags; }
+    ChannelFlags GetChannelFlags() { return mFlags; }
+
+    void BlockScripts();
+
+    bool ShouldBlockScripts() const
+    {
+        return mBlockScripts;
     }
 
     // Asynchronously send a message to the other side of the channel
@@ -181,12 +205,12 @@ class MessageChannel : HasResultCodes
     void OnNotifyMaybeChannelError();
     void ReportConnectionError(const char* aChannelName) const;
     void ReportMessageRouteError(const char* channelName) const;
-    bool MaybeHandleError(Result code, const char* channelName);
+    bool MaybeHandleError(Result code, const Message& aMsg, const char* channelName);
 
     void Clear();
 
     // Send OnChannelConnected notification to listeners.
-    void DispatchOnChannelConnected(int32_t peer_pid);
+    void DispatchOnChannelConnected();
 
     // Any protocol that requires blocking until a reply arrives, will send its
     // outgoing message through this function. Currently, two protocols do this:
@@ -378,10 +402,12 @@ class MessageChannel : HasResultCodes
     class RefCountedTask
     {
       public:
-        RefCountedTask(CancelableTask* aTask)
+        explicit RefCountedTask(CancelableTask* aTask)
           : mTask(aTask)
         { }
+      private:
         ~RefCountedTask() { delete mTask; }
+      public:
         void Run() { mTask->Run(); }
         void Cancel() { mTask->Cancel(); }
 
@@ -396,7 +422,7 @@ class MessageChannel : HasResultCodes
     class DequeueTask : public Task
     {
       public:
-        DequeueTask(RefCountedTask* aTask)
+        explicit DequeueTask(RefCountedTask* aTask)
           : mTask(aTask)
         { }
         void Run() { mTask->Run(); }
@@ -436,7 +462,7 @@ class MessageChannel : HasResultCodes
 
     class AutoEnterPendingReply {
       public:
-        AutoEnterPendingReply(size_t &replyVar)
+        explicit AutoEnterPendingReply(size_t &replyVar)
           : mReplyVar(replyVar)
         {
             mReplyVar++;
@@ -482,7 +508,7 @@ class MessageChannel : HasResultCodes
     class AutoEnterRPCTransaction
     {
       public:
-       AutoEnterRPCTransaction(MessageChannel *aChan)
+       explicit AutoEnterRPCTransaction(MessageChannel *aChan)
         : mChan(aChan),
           mOldTransaction(mChan->mCurrentRPCTransaction)
        {
@@ -634,7 +660,23 @@ class MessageChannel : HasResultCodes
     // Should the channel abort the process from the I/O thread when
     // a channel error occurs?
     bool mAbortOnError;
+
+    // Should we prevent scripts from running while dispatching urgent messages?
+    bool mBlockScripts;
+
+    // See SetChannelFlags
+    ChannelFlags mFlags;
+
+    // Task and state used to asynchronously notify channel has been connected
+    // safely.  This is necessary to be able to cancel notification if we are
+    // closed at the same time.
+    nsRefPtr<RefCountedTask> mOnChannelConnectedTask;
+    DebugOnly<bool> mPeerPidSet;
+    int32_t mPeerPid;
 };
+
+bool
+ProcessingUrgentMessages();
 
 } // namespace ipc
 } // namespace mozilla

@@ -1,4 +1,4 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
  * vim: sw=2 ts=2 et lcs=trail\:.,tab\:>~ :
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -93,7 +93,7 @@ add_task(function test_removeAllPages() {
   for (let i = 0; i < 5; i++) {
     let pageURI = uri("http://item_anno." + i + ".mozilla.org/");
     // This visit will be expired.
-    yield promiseAddVisits({ uri: pageURI, visitDate: now++ });
+    yield promiseAddVisits({ uri: pageURI });
     let id = bs.insertBookmark(bs.unfiledBookmarksFolder, pageURI,
                                bs.DEFAULT_INDEX, null);
     // Will persist because it's an EXPIRE_NEVER item anno.
@@ -113,12 +113,11 @@ add_task(function test_removeAllPages() {
   }
 
   // Add some visited page and annotations for each.
-  let now = Date.now() * 1000;
   for (let i = 0; i < 5; i++) {
     // All page annotations related to these expired pages are expected to
     // expire as well.
     let pageURI = uri("http://page_anno." + i + ".mozilla.org/");
-    yield promiseAddVisits({ uri: pageURI, visitDate: now++ });
+    yield promiseAddVisits({ uri: pageURI });
     as.setPageAnnotation(pageURI, "expire", "test", 0, as.EXPIRE_NEVER);
     as.setPageAnnotation(pageURI, "expire_session", "test", 0, as.EXPIRE_SESSION);
     add_old_anno(pageURI, "expire_days", "test", as.EXPIRE_DAYS, 8);

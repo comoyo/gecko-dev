@@ -22,8 +22,6 @@ class ColorPickerParent : public PColorPickerParent
   , mInitialColor(aInitialColor)
   {}
 
-  virtual ~ColorPickerParent() {}
-
   virtual bool RecvOpen() MOZ_OVERRIDE;
   virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
 
@@ -31,7 +29,7 @@ class ColorPickerParent : public PColorPickerParent
     : public nsIColorPickerShownCallback
   {
   public:
-    ColorPickerShownCallback(ColorPickerParent* aColorPickerParnet)
+    explicit ColorPickerShownCallback(ColorPickerParent* aColorPickerParnet)
       : mColorPickerParent(aColorPickerParnet)
     {}
 
@@ -41,10 +39,13 @@ class ColorPickerParent : public PColorPickerParent
     void Destroy();
 
   private:
+    ~ColorPickerShownCallback() {}
     ColorPickerParent* mColorPickerParent;
   };
 
  private:
+  virtual ~ColorPickerParent() {}
+
   bool CreateColorPicker();
 
   nsRefPtr<ColorPickerShownCallback> mCallback;

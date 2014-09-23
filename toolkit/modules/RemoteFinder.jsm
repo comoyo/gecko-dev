@@ -1,4 +1,4 @@
-// -*- Mode: javascript; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
+// -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -17,6 +17,7 @@ function RemoteFinder(browser) {
   this._searchString = null;
 
   this._browser.messageManager.addMessageListener("Finder:Result", this);
+  this._browser.messageManager.addMessageListener("Finder:MatchesResult", this);
   this._browser.messageManager.sendAsyncMessage("Finder:Initialize");
 }
 
@@ -31,10 +32,18 @@ RemoteFinder.prototype = {
   },
 
   receiveMessage: function (aMessage) {
-    this._searchString = aMessage.data.searchString;
+    // Only Finder:Result messages have the searchString field.
+    if (aMessage.name == "Finder:Result") {
+      this._searchString = aMessage.data.searchString;
+    }
 
+    // The parent can receive either one of the two types of message.
     for (let l of this._listeners) {
-      l.onFindResult(aMessage.data);
+      if (aMessage.name == "Finder:Result") {
+        l.onFindResult(aMessage.data);
+      } else if (aMessage.name == "Finder:MatchesResult") {
+        l.onMatchesCountResult(aMessage.data);
+      }
     }
   },
 
@@ -74,6 +83,17 @@ RemoteFinder.prototype = {
   },
 
   focusContent: function () {
+    // Allow Finder listeners to cancel focusing the content.
+    for (let l of this._listeners) {
+      try {
+        if ("shouldFocusContent" in l &&
+            !l.shouldFocusContent())
+          return;
+      } catch (ex) {
+        Cu.reportError(ex);
+      }
+    }
+
     this._browser.messageManager.sendAsyncMessage("Finder:FocusContent");
   },
 
@@ -81,6 +101,13 @@ RemoteFinder.prototype = {
     this._browser.messageManager.sendAsyncMessage("Finder:KeyPress",
                                                   { keyCode: aEvent.keyCode,
                                                     shiftKey: aEvent.shiftKey });
+  },
+
+  requestMatchesCount: function (aSearchString, aMatchLimit, aLinksOnly) {
+    this._browser.messageManager.sendAsyncMessage("Finder:MatchesCount",
+                                                  { searchString: aSearchString,
+                                                    matchLimit: aMatchLimit,
+                                                    linksOnly: aLinksOnly });
   }
 }
 
@@ -104,17 +131,18 @@ RemoteFinderListener.prototype = {
     "Finder:EnableSelection",
     "Finder:RemoveSelection",
     "Finder:FocusContent",
-    "Finder:KeyPress"
+    "Finder:KeyPress",
+    "Finder:MatchesCount"
   ],
 
   onFindResult: function (aData) {
     this._global.sendAsyncMessage("Finder:Result", aData);
   },
 
-  //XXXmikedeboer-20131016: implement |shouldFocusContent| here to mitigate
-  //                        issues like bug 921338 and bug 921308.
-  shouldFocusContent: function () {
-    return true;
+  // When the child receives messages with results of requestMatchesCount,
+  // it passes them forward to the parent.
+  onMatchesCountResult: function (aData) {
+    this._global.sendAsyncMessage("Finder:MatchesResult", aData);
   },
 
   receiveMessage: function (aMessage) {
@@ -147,6 +175,10 @@ RemoteFinderListener.prototype = {
 
       case "Finder:KeyPress":
         this._finder.keyPress(data);
+        break;
+
+      case "Finder:MatchesCount":
+        this._finder.requestMatchesCount(data.searchString, data.matchLimit, data.linksOnly);
         break;
     }
   }

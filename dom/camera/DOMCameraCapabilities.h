@@ -40,7 +40,7 @@ public:
   // Great Renaming proposed in bug 983177.
   static bool HasSupport(JSContext* aCx, JSObject* aGlobal);
 
-  CameraCapabilities(nsPIDOMWindow* aWindow);
+  explicit CameraCapabilities(nsPIDOMWindow* aWindow);
 
   // Populate the camera capabilities interface from the specific
   // camera control object.
@@ -71,7 +71,7 @@ public:
   double MinExposureCompensation() const;
   double MaxExposureCompensation() const;
   double ExposureCompensationStep() const;
-  JS::Value RecorderProfiles(JSContext* cx) const;
+  void GetRecorderProfiles(JSContext* aCx, JS::MutableHandle<JS::Value> aRetval) const;
   void GetIsoModes(nsTArray<nsString>& aRetVal) const;
 
 protected:

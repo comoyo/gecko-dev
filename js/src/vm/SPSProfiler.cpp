@@ -35,11 +35,10 @@ SPSProfiler::SPSProfiler(JSRuntime *rt)
 bool
 SPSProfiler::init()
 {
-#ifdef JS_THREADSAFE
     lock_ = PR_NewLock();
     if (lock_ == nullptr)
         return false;
-#endif
+
     return true;
 }
 
@@ -49,10 +48,8 @@ SPSProfiler::~SPSProfiler()
         for (ProfileStringMap::Enum e(strings); !e.empty(); e.popFront())
             js_free(const_cast<char *>(e.front().value()));
     }
-#ifdef JS_THREADSAFE
     if (lock_)
         PR_DestroyLock(lock_);
-#endif
 }
 
 void
@@ -89,14 +86,12 @@ SPSProfiler::enable(bool enabled)
 
     enabled_ = enabled;
 
-#ifdef JS_ION
     /* Toggle SPS-related jumps on baseline jitcode.
      * The call to |ReleaseAllJITCode| above will release most baseline jitcode, but not
      * jitcode for scripts with active frames on the stack.  These scripts need to have
      * their profiler state toggled so they behave properly.
      */
     jit::ToggleBaselineSPS(rt, enabled);
-#endif
 }
 
 /* Lookup the string for the function/script, creating one if necessary */
@@ -204,7 +199,7 @@ SPSProfiler::exit(JSScript *script, JSFunction *maybeFun)
 }
 
 void
-SPSProfiler::enterNative(const char *string, void *sp)
+SPSProfiler::enterAsmJS(const char *string, void *sp)
 {
     /* these operations cannot be re-ordered, so volatile-ize operations */
     volatile ProfileEntry *stack = stack_;
@@ -215,7 +210,7 @@ SPSProfiler::enterNative(const char *string, void *sp)
     if (current < max_) {
         stack[current].setLabel(string);
         stack[current].setCppFrame(sp, 0);
-        JS_ASSERT(stack[current].flags() == js::ProfileEntry::IS_CPP_ENTRY);
+        stack[current].setFlag(ProfileEntry::ASMJS);
     }
     *size = current + 1;
 }
@@ -274,16 +269,8 @@ SPSProfiler::allocProfileString(JSScript *script, JSFunction *maybeFun)
     // Note: this profiler string is regexp-matched by
     // browser/devtools/profiler/cleopatra/js/parserWorker.js.
 
-    // Determine if the function (if any) has an explicit or guessed name.
-    bool hasAtom = maybeFun && maybeFun->displayAtom();
-
-    // Get the function name, if any, and its length.
-    const jschar *atom = nullptr;
-    size_t lenAtom = 0;
-    if (hasAtom) {
-        atom = maybeFun->displayAtom()->charsZ();
-        lenAtom = maybeFun->displayAtom()->length();
-    }
+    // Get the function name, if any.
+    JSAtom *atom = maybeFun ? maybeFun->displayAtom() : nullptr;
 
     // Get the script filename, if any, and its length.
     const char *filename = script->filename();
@@ -298,8 +285,8 @@ SPSProfiler::allocProfileString(JSScript *script, JSFunction *maybeFun)
 
     // Determine the required buffer size.
     size_t len = lenFilename + lenLineno + 1; // +1 for the ":" separating them.
-    if (hasAtom)
-        len += lenAtom + 3; // +3 for the " (" and ")" it adds.
+    if (atom)
+        len += atom->length() + 3; // +3 for the " (" and ")" it adds.
 
     // Allocate the buffer.
     char *cstr = js_pod_malloc<char>(len + 1);
@@ -308,10 +295,15 @@ SPSProfiler::allocProfileString(JSScript *script, JSFunction *maybeFun)
 
     // Construct the descriptive string.
     DebugOnly<size_t> ret;
-    if (hasAtom)
-        ret = JS_snprintf(cstr, len + 1, "%hs (%s:%llu)", atom, filename, lineno);
-    else
+    if (atom) {
+        JS::AutoCheckCannotGC nogc;
+        if (atom->hasLatin1Chars())
+            ret = JS_snprintf(cstr, len + 1, "%s (%s:%llu)", atom->latin1Chars(nogc), filename, lineno);
+        else
+            ret = JS_snprintf(cstr, len + 1, "%hs (%s:%llu)", atom->twoByteChars(nogc), filename, lineno);
+    } else {
         ret = JS_snprintf(cstr, len + 1, "%s:%llu", filename, lineno);
+    }
 
     MOZ_ASSERT(ret == len, "Computed length should match actual length!");
 
@@ -329,12 +321,16 @@ SPSEntryMarker::SPSEntryMarker(JSRuntime *rt,
         return;
     }
     size_before = *profiler->size_;
+    // We want to push a CPP frame so the profiler can correctly order JS and native stacks.
+    profiler->push("js::RunScript", this, nullptr, nullptr, /* copy = */ false);
+    // We also want to push a JS frame so the hang monitor can catch script hangs.
     profiler->push("js::RunScript", nullptr, script, script->code(), /* copy = */ false);
 }
 
 SPSEntryMarker::~SPSEntryMarker()
 {
     if (profiler != nullptr) {
+        profiler->pop();
         profiler->pop();
         JS_ASSERT(size_before == *profiler->size_);
     }
@@ -377,4 +373,32 @@ JS_FRIEND_API(jsbytecode*)
 js::ProfilingGetPC(JSRuntime *rt, JSScript *script, void *ip)
 {
     return rt->spsProfiler.ipToPC(script, size_t(ip));
+}
+
+
+
+AutoSuppressProfilerSampling::AutoSuppressProfilerSampling(JSContext *cx
+                                                           MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
+  : rt_(cx->runtime()),
+    previouslyEnabled_(rt_->isProfilerSamplingEnabled())
+{
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+    if (previouslyEnabled_)
+        rt_->disableProfilerSampling();
+}
+
+AutoSuppressProfilerSampling::AutoSuppressProfilerSampling(JSRuntime *rt
+                                                           MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
+  : rt_(rt),
+    previouslyEnabled_(rt_->isProfilerSamplingEnabled())
+{
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+    if (previouslyEnabled_)
+        rt_->disableProfilerSampling();
+}
+
+AutoSuppressProfilerSampling::~AutoSuppressProfilerSampling()
+{
+        if (previouslyEnabled_)
+            rt_->enableProfilerSampling();
 }

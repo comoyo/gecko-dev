@@ -21,9 +21,6 @@ class nsIURI;
 class nsIParser;
 class nsIPrincipal;
 
-extern bool
-IsValidHTTPToken(const nsCSubstring& aToken);
-
 nsresult
 NS_StartCORSPreflight(nsIChannel* aRequestChannel,
                       nsIStreamListener* aListener,
@@ -62,6 +59,8 @@ public:
   nsresult Init(nsIChannel* aChannel, bool aAllowDataURI = false);
 
 private:
+  ~nsCORSListenerProxy();
+
   nsresult UpdateChannel(nsIChannel* aChannel, bool aAllowDataURI = false);
   nsresult CheckRequestApproved(nsIRequest* aRequest);
 

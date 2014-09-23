@@ -58,6 +58,8 @@ public:
                                    nsCOMPtr<nsIRunnable>& aFinishRunnable);
 
 private:
+  ~FinishTransactionRunnable() {}
+
   IDBTransaction* mTransaction;
   nsCOMPtr<nsIRunnable> mFinishRunnable;
 };
@@ -454,7 +456,7 @@ TransactionThreadPool::AbortTransactionsForDatabase(IDBDatabase* aDatabase)
 
 struct MOZ_STACK_CLASS TransactionSearchInfo
 {
-  TransactionSearchInfo(nsIOfflineStorage* aDatabase)
+  explicit TransactionSearchInfo(nsIOfflineStorage* aDatabase)
     : db(aDatabase), found(false)
   {
   }

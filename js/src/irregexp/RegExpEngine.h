@@ -69,7 +69,6 @@ struct RegExpCompileData
 
 struct RegExpCode
 {
-#ifdef JS_ION
     jit::JitCode *jitCode;
     uint8_t *byteCode;
 
@@ -84,37 +83,24 @@ struct RegExpCode
     void destroy() {
         js_free(byteCode);
     }
-#else
-    uint8_t *byteCode;
-
-    RegExpCode()
-      : byteCode(nullptr)
-    {}
-
-    bool empty() {
-        return !byteCode;
-    }
-
-    void destroy() {
-        js_free(byteCode);
-    }
-#endif
 };
 
 RegExpCode
 CompilePattern(JSContext *cx, RegExpShared *shared, RegExpCompileData *data,
-               const jschar *sampleChars, size_t sampleLength,
-               bool is_global, bool ignore_case = false, bool is_ascii = false);
+               HandleLinearString sample,  bool is_global, bool ignore_case,
+               bool is_ascii, bool match_only);
 
 // Note: this may return RegExpRunStatus_Error if an interrupt was requested
 // while the code was executing.
+template <typename CharT>
 RegExpRunStatus
-ExecuteCode(JSContext *cx, jit::JitCode *codeBlock,
-            const jschar *chars, size_t start, size_t length, MatchPairs *matches);
+ExecuteCode(JSContext *cx, jit::JitCode *codeBlock, const CharT *chars, size_t start,
+            size_t length, MatchPairs *matches);
 
+template <typename CharT>
 RegExpRunStatus
-InterpretCode(JSContext *cx, const uint8_t *byteCode,
-              const jschar *chars, size_t start, size_t length, MatchPairs *matches);
+InterpretCode(JSContext *cx, const uint8_t *byteCode, const CharT *chars, size_t start,
+              size_t length, MatchPairs *matches);
 
 #define FOR_EACH_NODE_TYPE(VISIT)                                    \
   VISIT(End)                                                         \
@@ -153,29 +139,29 @@ class CharacterRange
       : from_(0), to_(0)
     {}
 
-    CharacterRange(jschar from, jschar to)
+    CharacterRange(char16_t from, char16_t to)
       : from_(from), to_(to)
     {}
 
-    static void AddClassEscape(LifoAlloc *alloc, jschar type, CharacterRangeVector *ranges);
+    static void AddClassEscape(LifoAlloc *alloc, char16_t type, CharacterRangeVector *ranges);
 
-    static inline CharacterRange Singleton(jschar value) {
+    static inline CharacterRange Singleton(char16_t value) {
         return CharacterRange(value, value);
     }
-    static inline CharacterRange Range(jschar from, jschar to) {
+    static inline CharacterRange Range(char16_t from, char16_t to) {
         JS_ASSERT(from <= to);
         return CharacterRange(from, to);
     }
     static inline CharacterRange Everything() {
         return CharacterRange(0, 0xFFFF);
     }
-    bool Contains(jschar i) { return from_ <= i && i <= to_; }
-    jschar from() const { return from_; }
-    void set_from(jschar value) { from_ = value; }
-    jschar to() const { return to_; }
-    void set_to(jschar value) { to_ = value; }
+    bool Contains(char16_t i) { return from_ <= i && i <= to_; }
+    char16_t from() const { return from_; }
+    void set_from(char16_t value) { from_ = value; }
+    char16_t to() const { return to_; }
+    void set_to(char16_t value) { to_ = value; }
     bool is_valid() { return from_ <= to_; }
-    bool IsEverything(jschar max) { return from_ == 0 && to_ >= max; }
+    bool IsEverything(char16_t max) { return from_ == 0 && to_ >= max; }
     bool IsSingleton() { return (from_ == to_); }
     void AddCaseEquivalents(bool is_ascii, CharacterRangeVector *ranges);
 
@@ -204,8 +190,8 @@ class CharacterRange
     static const int kPayloadMask = (1 << 24) - 1;
 
   private:
-    jschar from_;
-    jschar to_;
+    char16_t from_;
+    char16_t to_;
 };
 
 // A set of unsigned integers that behaves especially well on small
@@ -261,25 +247,25 @@ class DispatchTable
           : from_(0), to_(0), out_set_(nullptr)
         {}
 
-        Entry(jschar from, jschar to, OutSet* out_set)
+        Entry(char16_t from, char16_t to, OutSet* out_set)
           : from_(from), to_(to), out_set_(out_set)
         {}
 
-        jschar from() { return from_; }
-        jschar to() { return to_; }
-        void set_to(jschar value) { to_ = value; }
+        char16_t from() { return from_; }
+        char16_t to() { return to_; }
+        void set_to(char16_t value) { to_ = value; }
         void AddValue(LifoAlloc *alloc, int value) {
             out_set_ = out_set_->Extend(alloc, value);
         }
         OutSet* out_set() { return out_set_; }
       private:
-        jschar from_;
-        jschar to_;
+        char16_t from_;
+        char16_t to_;
         OutSet* out_set_;
     };
 
     void AddRange(LifoAlloc *alloc, CharacterRange range, int value);
-    OutSet* Get(jschar value);
+    OutSet* Get(char16_t value);
     void Dump();
 
   private:
@@ -436,8 +422,8 @@ class QuickCheckDetails
 
     struct Position {
         Position() : mask(0), value(0), determines_perfectly(false) { }
-        jschar mask;
-        jschar value;
+        char16_t mask;
+        char16_t value;
         bool determines_perfectly;
     };
 
@@ -520,11 +506,11 @@ class RegExpNode
     // implementation.  TODO(erikcorry):  This should share more code with
     // EatsAtLeast, GetQuickCheckDetails.  The budget argument is used to limit
     // the number of nodes we are willing to look at in order to create this data.
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
                               bool not_at_start) {
-        MOZ_ASSUME_UNREACHABLE("Bad call");
+        MOZ_CRASH("Bad call");
     }
 
     // If we know that the input is ASCII then there are some nodes that can
@@ -638,13 +624,10 @@ class SeqRegExpNode : public RegExpNode
     RegExpNode* on_success() { return on_success_; }
     void set_on_success(RegExpNode* node) { on_success_ = node; }
     virtual RegExpNode* FilterASCII(int depth, bool ignore_case);
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
-                              bool not_at_start) {
-        on_success_->FillInBMInfo(offset, budget - 1, bm, not_at_start);
-        if (offset == 0) set_bm_info(not_at_start, bm);
-    }
+                              bool not_at_start);
 
   protected:
     RegExpNode* FilterSuccessor(int depth, bool ignore_case);
@@ -699,7 +682,7 @@ class ActionNode : public SeqRegExpNode
         return on_success()->GetQuickCheckDetails(
                                                   details, compiler, filled_in, not_at_start);
     }
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
                               bool not_at_start);
@@ -769,7 +752,7 @@ class TextNode : public SeqRegExpNode
     virtual int GreedyLoopTextLength();
     virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
                                                          RegExpCompiler* compiler);
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
                               bool not_at_start);
@@ -833,7 +816,7 @@ class AssertionNode : public SeqRegExpNode
                                       RegExpCompiler* compiler,
                                       int filled_in,
                                       bool not_at_start);
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
                               bool not_at_start);
@@ -872,7 +855,7 @@ class BackReferenceNode : public SeqRegExpNode
                                       bool not_at_start) {
         return;
     }
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
                               bool not_at_start);
@@ -902,14 +885,14 @@ class EndNode : public RegExpNode
                                       bool not_at_start)
     {
         // Returning 0 from EatsAtLeast should ensure we never get here.
-        MOZ_ASSUME_UNREACHABLE("Bad call");
+        MOZ_CRASH("Bad call");
     }
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
                               bool not_at_start) {
         // Returning 0 from EatsAtLeast should ensure we never get here.
-        MOZ_ASSUME_UNREACHABLE("Bad call");
+        MOZ_CRASH("Bad call");
     }
 
   private:
@@ -1013,7 +996,7 @@ class ChoiceNode : public RegExpNode
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
                                       bool not_at_start);
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
                               bool not_at_start);
@@ -1065,15 +1048,10 @@ class NegativeLookaheadChoiceNode : public ChoiceNode
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
                                       bool not_at_start);
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
-                              bool not_at_start)
-    {
-        alternatives()[1].node()->FillInBMInfo(offset, budget - 1, bm, not_at_start);
-        if (offset == 0)
-            set_bm_info(not_at_start, bm);
-    }
+                              bool not_at_start);
 
     // For a negative lookahead we don't emit the quick check for the
     // alternative that is expected to fail.  This is because quick check code
@@ -1102,7 +1080,7 @@ class LoopChoiceNode : public ChoiceNode
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
                                       bool not_at_start);
-    virtual void FillInBMInfo(int offset,
+    virtual bool FillInBMInfo(int offset,
                               int budget,
                               BoyerMooreLookahead* bm,
                               bool not_at_start);
@@ -1247,6 +1225,8 @@ class BoyerMooreLookahead
         for (int i = from_map; i < length_; i++) SetAll(i);
     }
     bool EmitSkipInstructions(RegExpMacroAssembler* masm);
+
+    bool CheckOverRecursed();
 
   private:
     // This is the value obtained by EatsAtLeast.  If we do not have at least this

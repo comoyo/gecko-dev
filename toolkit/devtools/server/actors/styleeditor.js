@@ -32,23 +32,13 @@ transition-property: all !important;\
 
 let LOAD_ERROR = "error-load";
 
-exports.register = function(handle) {
-  handle.addTabActor(StyleEditorActor, "styleEditorActor");
-  handle.addGlobalActor(StyleEditorActor, "styleEditorActor");
-};
-
-exports.unregister = function(handle) {
-  handle.removeTabActor(StyleEditorActor);
-  handle.removeGlobalActor(StyleEditorActor);
-};
-
 types.addActorType("old-stylesheet");
 
 /**
  * Creates a StyleEditorActor. StyleEditorActor provides remote access to the
  * stylesheets of a document.
  */
-let StyleEditorActor = protocol.ActorClass({
+let StyleEditorActor = exports.StyleEditorActor = protocol.ActorClass({
   typeName: "styleeditor",
 
   /**
@@ -254,8 +244,6 @@ let StyleEditorFront = protocol.FrontClass(StyleEditorActor, {
   initialize: function(client, tabForm) {
     protocol.Front.prototype.initialize.call(this, client);
     this.actorID = tabForm.styleEditorActor;
-
-    client.addActorPool(this);
     this.manage(this);
   },
 
@@ -351,10 +339,10 @@ let OldStyleSheetActor = protocol.ActorClass({
     // if this sheet has an @import, then it's rules are loaded async
     let ownerNode = this.rawSheet.ownerNode;
     if (ownerNode) {
-      let onSheetLoaded = function(event) {
+      let onSheetLoaded = (event) => {
         ownerNode.removeEventListener("load", onSheetLoaded, false);
         this._notifyPropertyChanged("ruleCount");
-      }.bind(this);
+      };
 
       ownerNode.addEventListener("load", onSheetLoaded, false);
     }

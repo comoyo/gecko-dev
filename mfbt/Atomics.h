@@ -40,7 +40,14 @@
 #  elif MOZ_USING_LIBCXX
 #    define MOZ_HAVE_CXX11_ATOMICS
 #  endif
-#elif defined(_MSC_VER) && _MSC_VER >= 1700
+/*
+ * Although Visual Studio 2012's CRT supports <atomic>, its atomic load
+ * implementation unnecessarily uses an atomic intrinsic for the less
+ * restrictive memory orderings, which can be prohibitively expensive.
+ * Therefore, we require at least Visual Studio 2013 for using the CRT
+ * (bug 1061764).
+ */
+#elif defined(_MSC_VER) && _MSC_VER >= 1800
 #  if defined(DEBUG)
      /*
       * Provide our own failure code since we're having trouble linking to
@@ -285,7 +292,8 @@ private:
    * atomic<T*> is not the same as adding X to a T*.  Hence the need
    * for this function to provide the correct addend.
    */
-  static ptrdiff_t fixupAddend(ptrdiff_t aVal) {
+  static ptrdiff_t fixupAddend(ptrdiff_t aVal)
+  {
 #if defined(__clang__) || defined(_MSC_VER)
     return aVal;
 #elif defined(__GNUC__) && MOZ_GCC_VERSION_AT_LEAST(4, 6, 0) && \
@@ -514,19 +522,9 @@ struct AtomicIntrinsics<T*, Order> : public IntrinsicMemoryOps<T*, Order>,
  * version of Windows we support.  Therefore, we only provide operations
  * on 32-bit datatypes for 32-bit Windows versions; for 64-bit Windows
  * versions, we support 64-bit datatypes as well.
- *
- * To avoid namespace pollution issues, we declare whatever functions we
- * need ourselves.
  */
 
-extern "C" {
-long __cdecl _InterlockedExchangeAdd(long volatile* aDst, long aVal);
-long __cdecl _InterlockedOr(long volatile* aDst, long aVal);
-long __cdecl _InterlockedXor(long volatile* aDst, long aVal);
-long __cdecl _InterlockedAnd(long volatile* aDst, long aVal);
-long __cdecl _InterlockedExchange(long volatile *aDst, long aVal);
-long __cdecl _InterlockedCompareExchange(long volatile *aDst, long aNewVal, long aOldVal);
-}
+#  include <intrin.h>
 
 #  pragma intrinsic(_InterlockedExchangeAdd)
 #  pragma intrinsic(_InterlockedOr)
@@ -639,22 +637,6 @@ struct PrimitiveIntrinsics<4>
 
 #  if defined(_M_X64)
 
-extern "C" {
-long long __cdecl _InterlockedExchangeAdd64(long long volatile* aDst,
-                                            long long aVal);
-long long __cdecl _InterlockedOr64(long long volatile* aDst,
-                                   long long aVal);
-long long __cdecl _InterlockedXor64(long long volatile* aDst,
-                                    long long aVal);
-long long __cdecl _InterlockedAnd64(long long volatile* aDst,
-                                    long long aVal);
-long long __cdecl _InterlockedExchange64(long long volatile* aDst,
-                                         long long aVal);
-long long __cdecl _InterlockedCompareExchange64(long long volatile* aDst,
-                                                long long aNewVal,
-                                                long long aOldVal);
-}
-
 #    pragma intrinsic(_InterlockedExchangeAdd64)
 #    pragma intrinsic(_InterlockedOr64)
 #    pragma intrinsic(_InterlockedXor64)
@@ -712,8 +694,6 @@ struct PrimitiveIntrinsics<8>
 };
 
 #  endif
-
-extern "C" { void _ReadWriteBarrier(); }
 
 #  pragma intrinsic(_ReadWriteBarrier)
 

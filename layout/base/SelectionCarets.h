@@ -57,7 +57,6 @@ public:
   };
 
   explicit SelectionCarets(nsIPresShell *aPresShell);
-  virtual ~SelectionCarets();
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSISELECTIONLISTENER
@@ -92,6 +91,8 @@ public:
   }
 
 private:
+  virtual ~SelectionCarets();
+
   SelectionCarets() MOZ_DELETE;
 
   /**
@@ -117,10 +118,10 @@ private:
   nscoord GetCaretYCenterPosition();
 
   /**
-   * Simulate mouse down state when we change the selection range.
+   * Simulate drag state when we change the selection range.
    * Hence, the selection change event will fire normally.
    */
-  void SetMouseDownState(bool aState);
+  void SetSelectionDragState(bool aState);
 
   void SetSelectionDirection(bool aForward);
 
@@ -135,6 +136,16 @@ private:
    * In app units.
    */
   void SetEndFramePos(const nsPoint& aPosition);
+
+  /**
+   * Check if aPosition is on the start or end frame of the
+   * selection carets.
+   *
+   * @param aPosition should be relative to document's canvas frame
+   * in app units
+   */
+  bool IsOnStartFrame(const nsPoint& aPosition);
+  bool IsOnEndFrame(const nsPoint& aPosition);
 
   /**
    * Get rect of selection caret's start frame relative

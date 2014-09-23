@@ -71,7 +71,7 @@ NS_INTERFACE_TABLE_TAIL_INHERITING(SVGUseElementBase)
 //----------------------------------------------------------------------
 // Implementation
 
-SVGUseElement::SVGUseElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+SVGUseElement::SVGUseElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : SVGUseElementBase(aNodeInfo), mSource(MOZ_THIS_IN_INITIALIZER_LIST())
 {
 }
@@ -85,10 +85,10 @@ SVGUseElement::~SVGUseElement()
 // nsIDOMNode methods
 
 nsresult
-SVGUseElement::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
+SVGUseElement::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
 {
   *aResult = nullptr;
-  already_AddRefed<nsINodeInfo> ni = nsCOMPtr<nsINodeInfo>(aNodeInfo).forget();
+  already_AddRefed<mozilla::dom::NodeInfo> ni = nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();
   SVGUseElement *it = new SVGUseElement(ni);
 
   nsCOMPtr<nsINode> kungFuDeathGrip(it);
@@ -277,7 +277,7 @@ SVGUseElement::CreateAnonymousContent()
     if (!nodeInfoManager)
       return nullptr;
 
-    nsCOMPtr<nsINodeInfo> nodeInfo;
+    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
     nodeInfo = nodeInfoManager->GetNodeInfo(nsGkAtoms::svg, nullptr,
                                             kNameSpaceID_SVG,
                                             nsIDOMNode::ELEMENT_NODE);
@@ -425,9 +425,6 @@ SVGUseElement::UnlinkSource()
 SVGUseElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
                                         TransformTypes aWhich) const
 {
-  NS_ABORT_IF_FALSE(aWhich != eChildToUserSpace || aMatrix.IsIdentity(),
-                    "Skipping eUserSpaceToParent transforms makes no sense");
-
   // 'transform' attribute:
   gfxMatrix fromUserSpace =
     SVGUseElementBase::PrependLocalTransformsTo(aMatrix, aWhich);
@@ -437,9 +434,9 @@ SVGUseElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
   // our 'x' and 'y' attributes:
   float x, y;
   const_cast<SVGUseElement*>(this)->GetAnimatedLengthValues(&x, &y, nullptr);
-  gfxMatrix toUserSpace = gfxMatrix().Translate(gfxPoint(x, y));
+  gfxMatrix toUserSpace = gfxMatrix::Translation(x, y);
   if (aWhich == eChildToUserSpace) {
-    return toUserSpace;
+    return toUserSpace * aMatrix;
   }
   NS_ABORT_IF_FALSE(aWhich == eAllTransforms, "Unknown TransformTypes");
   return toUserSpace * fromUserSpace;

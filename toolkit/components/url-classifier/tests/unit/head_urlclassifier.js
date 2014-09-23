@@ -1,4 +1,4 @@
-//* -*- Mode: Javascript; tab-width: 8; indent-tabs-mode: nil; js-indent-level: 2 -*- *
+//* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- *
 function dumpn(s) {
   dump(s + "\n");
 }
@@ -33,6 +33,9 @@ prefBranch.setBoolPref("browser.safebrowsing.enabled", true);
 
 // Enable all completions for tests
 prefBranch.setCharPref("urlclassifier.disallow_completions", "");
+
+// Hash completion timeout
+prefBranch.setIntPref("urlclassifier.gethash.timeout_ms", 5000);
 
 function delFile(name) {
   try {
@@ -174,9 +177,8 @@ function doStreamUpdate(updateText, success, failure, downloadFailure) {
   if (!downloadFailure)
     downloadFailure = failure;
 
-  streamUpdater.updateUrl = dataUpdate;
   streamUpdater.downloadUpdates("test-phish-simple,test-malware-simple", "",
-                                success, failure, downloadFailure);
+                                dataUpdate, success, failure, downloadFailure);
 }
 
 var gAssertions = {

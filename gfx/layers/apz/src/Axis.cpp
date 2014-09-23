@@ -16,6 +16,7 @@
 #include "mozilla/mozalloc.h"           // for operator new
 #include "mozilla/FloatingPoint.h"      // for FuzzyEqualsAdditive
 #include "nsMathUtils.h"                // for NS_lround
+#include "nsPrintfCString.h"            // for nsPrintfCString
 #include "nsThreadUtils.h"              // for NS_DispatchToMainThread, etc
 #include "nscore.h"                     // for NS_IMETHOD
 #include "gfxPrefs.h"                   // for the preferences
@@ -33,15 +34,24 @@ Axis::Axis(AsyncPanZoomController* aAsyncPanZoomController)
 {
 }
 
-void Axis::UpdateWithTouchAtDevicePoint(int32_t aPos, uint32_t aTimestampMs) {
+void Axis::UpdateWithTouchAtDevicePoint(ScreenCoord aPos, uint32_t aTimestampMs) {
+  // mVelocityQueue is controller-thread only
+  AsyncPanZoomController::AssertOnControllerThread();
+
   if (aTimestampMs == mPosTimeMs) {
-    // Duplicate event?
+    // This could be a duplicate event, or it could be a legitimate event
+    // on some platforms that generate events really fast. As a compromise
+    // update mPos so we don't run into problems like bug 1042734, even though
+    // that means the velocity will be stale. Better than doing a divide-by-zero.
+    mPos = aPos;
     return;
   }
 
-  float newVelocity = mAxisLocked ? 0 : (float)(mPos - aPos) / (float)(aTimestampMs - mPosTimeMs);
+  float newVelocity = mAxisLocked ? 0.0f : (float)(mPos - aPos) / (float)(aTimestampMs - mPosTimeMs);
   if (gfxPrefs::APZMaxVelocity() > 0.0f) {
-    newVelocity = std::min(newVelocity, gfxPrefs::APZMaxVelocity() * APZCTreeManager::GetDPI());
+    ScreenPoint maxVelocity = MakePoint(gfxPrefs::APZMaxVelocity() * APZCTreeManager::GetDPI());
+    mAsyncPanZoomController->ToLocalScreenCoordinates(&maxVelocity, mAsyncPanZoomController->PanStart());
+    newVelocity = std::min(newVelocity, maxVelocity.Length());
   }
 
   mVelocity = newVelocity;
@@ -55,45 +65,49 @@ void Axis::UpdateWithTouchAtDevicePoint(int32_t aPos, uint32_t aTimestampMs) {
   }
 }
 
-void Axis::StartTouch(int32_t aPos, uint32_t aTimestampMs) {
+void Axis::StartTouch(ScreenCoord aPos, uint32_t aTimestampMs) {
   mStartPos = aPos;
   mPos = aPos;
   mPosTimeMs = aTimestampMs;
   mAxisLocked = false;
 }
 
-float Axis::AdjustDisplacement(float aDisplacement, float& aOverscrollAmountOut) {
+bool Axis::AdjustDisplacement(ScreenCoord aDisplacement,
+                              /* ScreenCoord */ float& aDisplacementOut,
+                              /* ScreenCoord */ float& aOverscrollAmountOut)
+{
   if (mAxisLocked) {
     aOverscrollAmountOut = 0;
-    return 0;
+    aDisplacementOut = 0;
+    return false;
   }
 
-  float displacement = aDisplacement;
+  ScreenCoord displacement = aDisplacement;
 
   // First consume any overscroll in the opposite direction along this axis.
+  ScreenCoord consumedOverscroll = 0;
   if (mOverscroll > 0 && aDisplacement < 0) {
-    float consumedOverscroll = std::min(mOverscroll, -aDisplacement);
-    mOverscroll -= consumedOverscroll;
-    displacement += consumedOverscroll;
+    consumedOverscroll = std::min(mOverscroll, -aDisplacement);
   } else if (mOverscroll < 0 && aDisplacement > 0) {
-    float consumedOverscroll = std::min(-mOverscroll, aDisplacement);
-    mOverscroll += consumedOverscroll;
-    displacement -= consumedOverscroll;
+    consumedOverscroll = 0.f - std::min(-mOverscroll, aDisplacement);
   }
+  mOverscroll -= consumedOverscroll;
+  displacement += consumedOverscroll;
 
   // Split the requested displacement into an allowed displacement that does
   // not overscroll, and an overscroll amount.
-  if (DisplacementWillOverscroll(displacement) != OVERSCROLL_NONE) {
+  aOverscrollAmountOut = DisplacementWillOverscrollAmount(displacement);
+  if (aOverscrollAmountOut != 0.0f) {
     // No need to have a velocity along this axis anymore; it won't take us
     // anywhere, so we're just spinning needlessly.
     mVelocity = 0.0f;
-    aOverscrollAmountOut = DisplacementWillOverscrollAmount(displacement);
     displacement -= aOverscrollAmountOut;
   }
-  return displacement;
+  aDisplacementOut = displacement;
+  return fabsf(consumedOverscroll) > EPSILON;
 }
 
-float Axis::ApplyResistance(float aRequestedOverscroll) const {
+ScreenCoord Axis::ApplyResistance(ScreenCoord aRequestedOverscroll) const {
   // 'resistanceFactor' is a value between 0 and 1, which:
   //   - tends to 1 as the existing overscroll tends to 0
   //   - tends to 0 as the existing overscroll tends to the composition length
@@ -101,23 +115,37 @@ float Axis::ApplyResistance(float aRequestedOverscroll) const {
   // factor; this should prevent overscrolling by more than the composition
   // length.
   float resistanceFactor = 1 - fabsf(mOverscroll) / GetCompositionLength();
-  return resistanceFactor < 0 ? 0 : aRequestedOverscroll * resistanceFactor;
+  return resistanceFactor < 0 ? ScreenCoord(0) : aRequestedOverscroll * resistanceFactor;
 }
 
-void Axis::OverscrollBy(float aOverscroll) {
+void Axis::OverscrollBy(ScreenCoord aOverscroll) {
   MOZ_ASSERT(CanScroll());
   aOverscroll = ApplyResistance(aOverscroll);
   if (aOverscroll > 0) {
-    MOZ_ASSERT(FuzzyEqualsAdditive(GetCompositionEnd(), GetPageEnd(), COORDINATE_EPSILON));
+#ifdef DEBUG
+    if (!FuzzyEqualsAdditive(GetCompositionEnd().value, GetPageEnd().value, COORDINATE_EPSILON)) {
+      nsPrintfCString message("composition end (%f) is not within COORDINATE_EPISLON of page end (%f)\n",
+                              GetCompositionEnd().value, GetPageEnd().value);
+      NS_ASSERTION(false, message.get());
+      MOZ_CRASH();
+    }
+#endif
     MOZ_ASSERT(mOverscroll >= 0);
   } else if (aOverscroll < 0) {
-    MOZ_ASSERT(FuzzyEqualsAdditive(GetOrigin(), GetPageStart(), COORDINATE_EPSILON));
+#ifdef DEBUG
+    if (!FuzzyEqualsAdditive(GetOrigin().value, GetPageStart().value, COORDINATE_EPSILON)) {
+      nsPrintfCString message("composition origin (%f) is not within COORDINATE_EPISLON of page origin (%f)\n",
+                              GetOrigin().value, GetPageStart().value);
+      NS_ASSERTION(false, message.get());
+      MOZ_CRASH();
+    }
+#endif
     MOZ_ASSERT(mOverscroll <= 0);
   }
   mOverscroll += aOverscroll;
 }
 
-float Axis::GetOverscroll() const {
+ScreenCoord Axis::GetOverscroll() const {
   return mOverscroll;
 }
 
@@ -142,28 +170,27 @@ bool Axis::SampleSnapBack(const TimeDuration& aDelta) {
   float force = -1 * kSpringStiffness * mOverscroll - kSpringFriction * mVelocity;
   float acceleration = force / kMass;
   mVelocity += acceleration * aDelta.ToMilliseconds();
-  float screenDisplacement = mVelocity * aDelta.ToMilliseconds();
-  float cssDisplacement = screenDisplacement / GetFrameMetrics().GetZoom().scale;
+  float displacement = mVelocity * aDelta.ToMilliseconds();
   if (mOverscroll > 0) {
-    if (cssDisplacement > 0) {
+    if (displacement > 0) {
       NS_WARNING("Overscroll snap-back animation is moving in the wrong direction!");
       return false;
     }
-    mOverscroll = std::max(mOverscroll + cssDisplacement, 0.0f);
+    mOverscroll = std::max(mOverscroll + displacement, 0.0f);
     // Overscroll relieved, do not continue animation.
-    if (mOverscroll == 0) {
+    if (mOverscroll == 0.f) {
       mVelocity = 0;
       return false;
     }
     return true;
   } else if (mOverscroll < 0) {
-    if (cssDisplacement < 0) {
+    if (displacement < 0) {
       NS_WARNING("Overscroll snap-back animation is moving in the wrong direction!");
       return false;
     }
-    mOverscroll = std::min(mOverscroll + cssDisplacement, 0.0f);
+    mOverscroll = std::min(mOverscroll + displacement, 0.0f);
     // Overscroll relieved, do not continue animation.
-    if (mOverscroll == 0) {
+    if (mOverscroll == 0.f) {
       mVelocity = 0;
       return false;
     }
@@ -174,22 +201,29 @@ bool Axis::SampleSnapBack(const TimeDuration& aDelta) {
 }
 
 bool Axis::IsOverscrolled() const {
-  return mOverscroll != 0;
+  return mOverscroll != 0.f;
 }
 
 void Axis::ClearOverscroll() {
   mOverscroll = 0;
 }
 
-float Axis::PanDistance() {
-  return fabsf(mPos - mStartPos);
+ScreenCoord Axis::PanStart() const {
+  return mStartPos;
 }
 
-float Axis::PanDistance(float aPos) {
-  return fabsf(aPos - mStartPos);
+ScreenCoord Axis::PanDistance() const {
+  return fabs(mPos - mStartPos);
+}
+
+ScreenCoord Axis::PanDistance(ScreenCoord aPos) const {
+  return fabs(aPos - mStartPos);
 }
 
 void Axis::EndTouch(uint32_t aTimestampMs) {
+  // mVelocityQueue is controller-thread only
+  AsyncPanZoomController::AssertOnControllerThread();
+
   mVelocity = 0;
   int count = 0;
   while (!mVelocityQueue.IsEmpty()) {
@@ -206,6 +240,9 @@ void Axis::EndTouch(uint32_t aTimestampMs) {
 }
 
 void Axis::CancelTouch() {
+  // mVelocityQueue is controller-thread only
+  AsyncPanZoomController::AssertOnControllerThread();
+
   mVelocity = 0.0f;
   while (!mVelocityQueue.IsEmpty()) {
     mVelocityQueue.RemoveElementAt(0);
@@ -235,41 +272,39 @@ bool Axis::FlingApplyFrictionOrCancel(const TimeDuration& aDelta,
   return true;
 }
 
-Axis::Overscroll Axis::DisplacementWillOverscroll(float aDisplacement) {
+ScreenCoord Axis::DisplacementWillOverscrollAmount(ScreenCoord aDisplacement) const {
+  ScreenCoord newOrigin = GetOrigin() + aDisplacement;
+  ScreenCoord newCompositionEnd = GetCompositionEnd() + aDisplacement;
   // If the current pan plus a displacement takes the window to the left of or
   // above the current page rect.
-  bool minus = GetOrigin() + aDisplacement < GetPageStart();
+  bool minus = newOrigin < GetPageStart();
   // If the current pan plus a displacement takes the window to the right of or
   // below the current page rect.
-  bool plus = GetCompositionEnd() + aDisplacement > GetPageEnd();
+  bool plus = newCompositionEnd > GetPageEnd();
   if (minus && plus) {
-    return OVERSCROLL_BOTH;
+    // Don't handle overscrolled in both directions; a displacement can't cause
+    // this, it must have already been zoomed out too far.
+    return 0;
   }
   if (minus) {
-    return OVERSCROLL_MINUS;
+    return newOrigin - GetPageStart();
   }
   if (plus) {
-    return OVERSCROLL_PLUS;
+    return newCompositionEnd - GetPageEnd();
   }
-  return OVERSCROLL_NONE;
+  return 0;
 }
 
-float Axis::DisplacementWillOverscrollAmount(float aDisplacement) {
-  switch (DisplacementWillOverscroll(aDisplacement)) {
-  case OVERSCROLL_MINUS: return (GetOrigin() + aDisplacement) - GetPageStart();
-  case OVERSCROLL_PLUS: return (GetCompositionEnd() + aDisplacement) - GetPageEnd();
-  // Don't handle overscrolled in both directions; a displacement can't cause
-  // this, it must have already been zoomed out too far.
-  default: return 0;
-  }
-}
-
-float Axis::ScaleWillOverscrollAmount(float aScale, float aFocus) {
-  float originAfterScale = (GetOrigin() + aFocus) - (aFocus / aScale);
+CSSCoord Axis::ScaleWillOverscrollAmount(float aScale, CSSCoord aFocus) const {
+  // Internally, do computations in Screen coordinates *before* the scale is
+  // applied.
+  CSSToScreenScale zoom = GetFrameMetrics().GetZoom();
+  ScreenCoord focus = aFocus * zoom;
+  ScreenCoord originAfterScale = (GetOrigin() + focus) - (focus / aScale);
 
   bool both = ScaleWillOverscrollBothSides(aScale);
-  bool minus = originAfterScale < GetPageStart();
-  bool plus = (originAfterScale + (GetCompositionLength() / aScale)) > GetPageEnd();
+  bool minus = GetPageStart() - originAfterScale > COORDINATE_EPSILON;
+  bool plus = (originAfterScale + (GetCompositionLength() / aScale)) - GetPageEnd() > COORDINATE_EPSILON;
 
   if ((minus && plus) || both) {
     // If we ever reach here it's a bug in the client code.
@@ -277,10 +312,10 @@ float Axis::ScaleWillOverscrollAmount(float aScale, float aFocus) {
     return 0;
   }
   if (minus) {
-    return originAfterScale - GetPageStart();
+    return (originAfterScale - GetPageStart()) / zoom;
   }
   if (plus) {
-    return originAfterScale + (GetCompositionLength() / aScale) - GetPageEnd();
+    return (originAfterScale + (GetCompositionLength() / aScale) - GetPageEnd()) / zoom;
   }
   return 0;
 }
@@ -293,40 +328,40 @@ void Axis::SetVelocity(float aVelocity) {
   mVelocity = aVelocity;
 }
 
-float Axis::GetCompositionEnd() const {
+ScreenCoord Axis::GetCompositionEnd() const {
   return GetOrigin() + GetCompositionLength();
 }
 
-float Axis::GetPageEnd() const {
+ScreenCoord Axis::GetPageEnd() const {
   return GetPageStart() + GetPageLength();
 }
 
-float Axis::GetOrigin() const {
-  CSSPoint origin = GetFrameMetrics().GetScrollOffset();
+ScreenCoord Axis::GetOrigin() const {
+  ScreenPoint origin = GetFrameMetrics().GetScrollOffset() * GetFrameMetrics().GetZoom();
   return GetPointOffset(origin);
 }
 
-float Axis::GetCompositionLength() const {
-  return GetRectLength(GetFrameMetrics().CalculateCompositedRectInCssPixels());
+ScreenCoord Axis::GetCompositionLength() const {
+  return GetRectLength(GetFrameMetrics().mCompositionBounds / GetFrameMetrics().mTransformScale);
 }
 
-float Axis::GetPageStart() const {
-  CSSRect pageRect = GetFrameMetrics().GetExpandedScrollableRect();
+ScreenCoord Axis::GetPageStart() const {
+  ScreenRect pageRect = GetFrameMetrics().GetExpandedScrollableRect() * GetFrameMetrics().GetZoom();
   return GetRectOffset(pageRect);
 }
 
-float Axis::GetPageLength() const {
-  CSSRect pageRect = GetFrameMetrics().GetExpandedScrollableRect();
+ScreenCoord Axis::GetPageLength() const {
+  ScreenRect pageRect = GetFrameMetrics().GetExpandedScrollableRect() * GetFrameMetrics().GetZoom();
   return GetRectLength(pageRect);
 }
 
-bool Axis::ScaleWillOverscrollBothSides(float aScale) {
+bool Axis::ScaleWillOverscrollBothSides(float aScale) const {
   const FrameMetrics& metrics = GetFrameMetrics();
 
-  CSSToParentLayerScale scale(metrics.GetZoomToParent().scale * aScale);
-  CSSRect cssCompositionBounds = metrics.mCompositionBounds / scale;
+  ScreenToParentLayerScale scale(metrics.mTransformScale.scale * aScale);
+  ScreenRect screenCompositionBounds = metrics.mCompositionBounds / scale;
 
-  return GetRectLength(metrics.GetExpandedScrollableRect()) < GetRectLength(cssCompositionBounds);
+  return GetRectLength(screenCompositionBounds) - GetPageLength() > COORDINATE_EPSILON;
 }
 
 const FrameMetrics& Axis::GetFrameMetrics() const {
@@ -340,19 +375,24 @@ AxisX::AxisX(AsyncPanZoomController* aAsyncPanZoomController)
 
 }
 
-float AxisX::GetPointOffset(const CSSPoint& aPoint) const
+ScreenCoord AxisX::GetPointOffset(const ScreenPoint& aPoint) const
 {
   return aPoint.x;
 }
 
-float AxisX::GetRectLength(const CSSRect& aRect) const
+ScreenCoord AxisX::GetRectLength(const ScreenRect& aRect) const
 {
   return aRect.width;
 }
 
-float AxisX::GetRectOffset(const CSSRect& aRect) const
+ScreenCoord AxisX::GetRectOffset(const ScreenRect& aRect) const
 {
   return aRect.x;
+}
+
+ScreenPoint AxisX::MakePoint(ScreenCoord aCoord) const
+{
+  return ScreenPoint(aCoord, 0);
 }
 
 AxisY::AxisY(AsyncPanZoomController* aAsyncPanZoomController)
@@ -361,19 +401,24 @@ AxisY::AxisY(AsyncPanZoomController* aAsyncPanZoomController)
 
 }
 
-float AxisY::GetPointOffset(const CSSPoint& aPoint) const
+ScreenCoord AxisY::GetPointOffset(const ScreenPoint& aPoint) const
 {
   return aPoint.y;
 }
 
-float AxisY::GetRectLength(const CSSRect& aRect) const
+ScreenCoord AxisY::GetRectLength(const ScreenRect& aRect) const
 {
   return aRect.height;
 }
 
-float AxisY::GetRectOffset(const CSSRect& aRect) const
+ScreenCoord AxisY::GetRectOffset(const ScreenRect& aRect) const
 {
   return aRect.y;
+}
+
+ScreenPoint AxisY::MakePoint(ScreenCoord aCoord) const
+{
+  return ScreenPoint(0, aCoord);
 }
 
 }

@@ -7,7 +7,7 @@
 if CONFIG['DEHYDRA_PATH']:
     DIRS += ['analysis-tests']
 
-if CONFIG['JS_NATIVE_EDITLINE']:
+if CONFIG['JS_BUNDLED_EDITLINE']:
     DIRS += ['editline']
 
 # editline needs to get built before the shell
@@ -15,10 +15,6 @@ if not CONFIG['JS_DISABLE_SHELL']:
     DIRS += ['shell']
 
 TEST_DIRS += ['jsapi-tests', 'tests', 'gdb']
-
-LOCAL_INCLUDES += ['../../mfbt/double-conversion']
-
-LIBRARY_NAME = CONFIG['JS_LIBRARY_NAME']
 
 CONFIGURE_SUBST_FILES += [
     'devtools/rootAnalysis/Makefile',
@@ -29,6 +25,9 @@ CONFIGURE_SUBST_FILES += [
 
 if CONFIG['JS_STANDALONE']:
     DEFINES['IMPL_MFBT'] = True
+    USE_LIBS += [
+        'mfbt',
+    ]
 else:
     CONFIGURE_SUBST_FILES += [
         '../../config/autoconf-js.mk',
@@ -64,12 +63,12 @@ EXPORTS += [
 # that we ensure we don't over-expose our internal integer typedefs.  Note that
 # LegacyIntTypes.h below is deliberately exempted from this requirement.
 EXPORTS.js += [
-    '../public/Anchor.h',
     '../public/CallArgs.h',
     '../public/CallNonGenericMethod.h',
     '../public/CharacterEncoding.h',
     '../public/Class.h',
     '../public/Date.h',
+    '../public/Debug.h',
     '../public/GCAPI.h',
     '../public/HashTable.h',
     '../public/HeapAPI.h',
@@ -78,6 +77,7 @@ EXPORTS.js += [
     '../public/MemoryMetrics.h',
     '../public/OldDebugAPI.h',
     '../public/Principals.h',
+    '../public/ProfilingFrameIterator.h',
     '../public/ProfilingStack.h',
     '../public/PropertyKey.h',
     '../public/RequiredDefines.h',
@@ -86,6 +86,8 @@ EXPORTS.js += [
     '../public/StructuredClone.h',
     '../public/TracingAPI.h',
     '../public/TypeDecls.h',
+    '../public/UbiNode.h',
+    '../public/UbiNodeTraverse.h',
     '../public/Utility.h',
     '../public/Value.h',
     '../public/Vector.h',
@@ -93,15 +95,21 @@ EXPORTS.js += [
 ]
 
 UNIFIED_SOURCES += [
-    'assembler/jit/ExecutableAllocator.cpp',
+    'asmjs/AsmJSFrameIterator.cpp',
+    'asmjs/AsmJSLink.cpp',
+    'asmjs/AsmJSModule.cpp',
+    'asmjs/AsmJSSignalHandlers.cpp',
+    'asmjs/AsmJSValidate.cpp',
     'builtin/Eval.cpp',
     'builtin/Intl.cpp',
     'builtin/MapObject.cpp',
     'builtin/Object.cpp',
     'builtin/Profilers.cpp',
     'builtin/SIMD.cpp',
+    'builtin/SymbolObject.cpp',
     'builtin/TestingFunctions.cpp',
     'builtin/TypedObject.cpp',
+    'builtin/WeakSetObject.cpp',
     'devtools/sharkctl.cpp',
     'ds/LifoAlloc.cpp',
     'frontend/BytecodeCompiler.cpp',
@@ -112,6 +120,8 @@ UNIFIED_SOURCES += [
     'frontend/ParseNode.cpp',
     'frontend/TokenStream.cpp',
     'gc/Barrier.cpp',
+    'gc/ForkJoinNursery.cpp',
+    'gc/GCTrace.cpp',
     'gc/Iteration.cpp',
     'gc/Marking.cpp',
     'gc/Memory.cpp',
@@ -122,6 +132,71 @@ UNIFIED_SOURCES += [
     'gc/Tracer.cpp',
     'gc/Verifier.cpp',
     'gc/Zone.cpp',
+    'irregexp/NativeRegExpMacroAssembler.cpp',
+    'irregexp/RegExpAST.cpp',
+    'irregexp/RegExpEngine.cpp',
+    'irregexp/RegExpInterpreter.cpp',
+    'irregexp/RegExpMacroAssembler.cpp',
+    'irregexp/RegExpParser.cpp',
+    'irregexp/RegExpStack.cpp',
+    'jit/AliasAnalysis.cpp',
+    'jit/BacktrackingAllocator.cpp',
+    'jit/Bailouts.cpp',
+    'jit/BaselineBailouts.cpp',
+    'jit/BaselineCompiler.cpp',
+    'jit/BaselineDebugModeOSR.cpp',
+    'jit/BaselineFrame.cpp',
+    'jit/BaselineFrameInfo.cpp',
+    'jit/BaselineIC.cpp',
+    'jit/BaselineInspector.cpp',
+    'jit/BaselineJIT.cpp',
+    'jit/BitSet.cpp',
+    'jit/BytecodeAnalysis.cpp',
+    'jit/C1Spewer.cpp',
+    'jit/CodeGenerator.cpp',
+    'jit/CompileWrappers.cpp',
+    'jit/EdgeCaseAnalysis.cpp',
+    'jit/EffectiveAddressAnalysis.cpp',
+    'jit/ExecutableAllocator.cpp',
+    'jit/Ion.cpp',
+    'jit/IonAnalysis.cpp',
+    'jit/IonBuilder.cpp',
+    'jit/IonCaches.cpp',
+    'jit/IonFrames.cpp',
+    'jit/IonMacroAssembler.cpp',
+    'jit/IonOptimizationLevels.cpp',
+    'jit/JitcodeMap.cpp',
+    'jit/JitOptions.cpp',
+    'jit/JitSpewer.cpp',
+    'jit/JSONSpewer.cpp',
+    'jit/LICM.cpp',
+    'jit/LinearScan.cpp',
+    'jit/LIR.cpp',
+    'jit/LiveRangeAllocator.cpp',
+    'jit/LoopUnroller.cpp',
+    'jit/Lowering.cpp',
+    'jit/MCallOptimize.cpp',
+    'jit/MIR.cpp',
+    'jit/MIRGraph.cpp',
+    'jit/MoveResolver.cpp',
+    'jit/ParallelFunctions.cpp',
+    'jit/ParallelSafetyAnalysis.cpp',
+    'jit/PerfSpewer.cpp',
+    'jit/RangeAnalysis.cpp',
+    'jit/Recover.cpp',
+    'jit/RegisterAllocator.cpp',
+    'jit/RematerializedFrame.cpp',
+    'jit/Safepoints.cpp',
+    'jit/ScalarReplacement.cpp',
+    'jit/shared/BaselineCompiler-shared.cpp',
+    'jit/shared/CodeGenerator-shared.cpp',
+    'jit/shared/Lowering-shared.cpp',
+    'jit/Snapshots.cpp',
+    'jit/StupidAllocator.cpp',
+    'jit/TypedObjectPrediction.cpp',
+    'jit/TypePolicy.cpp',
+    'jit/ValueNumbering.cpp',
+    'jit/VMFunctions.cpp',
     'jsalloc.cpp',
     'jsapi.cpp',
     'jsbool.cpp',
@@ -144,15 +219,22 @@ UNIFIED_SOURCES += [
     'jsopcode.cpp',
     'jsprf.cpp',
     'jspropertytree.cpp',
-    'jsproxy.cpp',
     'jsreflect.cpp',
     'jsscript.cpp',
     'jsstr.cpp',
     'jswatchpoint.cpp',
     'jsweakmap.cpp',
-    'jswrapper.cpp',
     'perf/jsperf.cpp',
     'prmjtime.cpp',
+    'proxy/BaseProxyHandler.cpp',
+    'proxy/CrossCompartmentWrapper.cpp',
+    'proxy/DeadObjectProxy.cpp',
+    'proxy/DirectProxyHandler.cpp',
+    'proxy/Proxy.cpp',
+    'proxy/ScriptedDirectProxyHandler.cpp',
+    'proxy/ScriptedIndirectProxyHandler.cpp',
+    'proxy/SecurityWrapper.cpp',
+    'proxy/Wrapper.cpp',
     'vm/ArgumentsObject.cpp',
     'vm/ArrayBufferObject.cpp',
     'vm/CallNonGenericMethod.cpp',
@@ -183,13 +265,16 @@ UNIFIED_SOURCES += [
     'vm/SelfHosting.cpp',
     'vm/Shape.cpp',
     'vm/SharedArrayObject.cpp',
+    'vm/SharedTypedArrayObject.cpp',
     'vm/SPSProfiler.cpp',
     'vm/Stack.cpp',
     'vm/String.cpp',
     'vm/StringBuffer.cpp',
     'vm/StructuredClone.cpp',
+    'vm/Symbol.cpp',
     'vm/ThreadPool.cpp',
     'vm/TypedArrayObject.cpp',
+    'vm/UbiNode.cpp',
     'vm/Unicode.cpp',
     'vm/Value.cpp',
     'vm/WeakMapPtr.cpp',
@@ -230,173 +315,87 @@ if CONFIG['ENABLE_TRACE_LOGGING']:
         'vm/TraceLogging.cpp',
     ]
 
-if CONFIG['ENABLE_YARR']:
+if not CONFIG['ENABLE_ION']:
     UNIFIED_SOURCES += [
-        'yarr/PageBlock.cpp',
-        'yarr/YarrCanonicalizeUCS2.cpp',
-        'yarr/YarrInterpreter.cpp',
-        'yarr/YarrPattern.cpp',
-        'yarr/YarrSyntaxChecker.cpp',
+        'jit/none/Trampoline-none.cpp'
     ]
-    if CONFIG['OS_ARCH'] == 'WINNT':
-        SOURCES += [
-            'yarr/OSAllocatorWin.cpp',
+elif CONFIG['JS_CODEGEN_X86'] or CONFIG['JS_CODEGEN_X64']:
+    UNIFIED_SOURCES += [
+        'jit/shared/Assembler-x86-shared.cpp',
+        'jit/shared/BaselineCompiler-x86-shared.cpp',
+        'jit/shared/BaselineIC-x86-shared.cpp',
+        'jit/shared/CodeGenerator-x86-shared.cpp',
+        'jit/shared/Lowering-x86-shared.cpp',
+        'jit/shared/MacroAssembler-x86-shared.cpp',
+        'jit/shared/MoveEmitter-x86-shared.cpp',
+    ]
+    if CONFIG['JS_CODEGEN_X64']:
+        UNIFIED_SOURCES += [
+            'jit/x64/Assembler-x64.cpp',
+            'jit/x64/Bailouts-x64.cpp',
+            'jit/x64/BaselineCompiler-x64.cpp',
+            'jit/x64/BaselineIC-x64.cpp',
+            'jit/x64/CodeGenerator-x64.cpp',
+            'jit/x64/Lowering-x64.cpp',
+            'jit/x64/MacroAssembler-x64.cpp',
+            'jit/x64/Trampoline-x64.cpp',
         ]
     else:
-        SOURCES += [
-            'yarr/OSAllocatorPosix.cpp',
+        UNIFIED_SOURCES += [
+            'jit/x86/Assembler-x86.cpp',
+            'jit/x86/Bailouts-x86.cpp',
+            'jit/x86/BaselineCompiler-x86.cpp',
+            'jit/x86/BaselineIC-x86.cpp',
+            'jit/x86/CodeGenerator-x86.cpp',
+            'jit/x86/Lowering-x86.cpp',
+            'jit/x86/MacroAssembler-x86.cpp',
+            'jit/x86/Trampoline-x86.cpp',
         ]
-    if CONFIG['ENABLE_ION']:
-        SOURCES += [
-            'yarr/YarrJIT.cpp'
-        ]
-else:
+elif CONFIG['JS_CODEGEN_ARM']:
     UNIFIED_SOURCES += [
-        'irregexp/RegExpAST.cpp',
-        'irregexp/RegExpEngine.cpp',
-        'irregexp/RegExpInterpreter.cpp',
-        'irregexp/RegExpMacroAssembler.cpp',
-        'irregexp/RegExpParser.cpp',
-        'irregexp/RegExpStack.cpp',
+        'jit/arm/Architecture-arm.cpp',
+        'jit/arm/Assembler-arm.cpp',
+        'jit/arm/Bailouts-arm.cpp',
+        'jit/arm/BaselineCompiler-arm.cpp',
+        'jit/arm/BaselineIC-arm.cpp',
+        'jit/arm/CodeGenerator-arm.cpp',
+        'jit/arm/Lowering-arm.cpp',
+        'jit/arm/MacroAssembler-arm.cpp',
+        'jit/arm/MoveEmitter-arm.cpp',
+        'jit/arm/Trampoline-arm.cpp',
     ]
-    if CONFIG['ENABLE_ION']:
+    if CONFIG['JS_ARM_SIMULATOR']:
         UNIFIED_SOURCES += [
-            'irregexp/NativeRegExpMacroAssembler.cpp',
+            'jit/arm/Simulator-arm.cpp'
         ]
-
-if CONFIG['ENABLE_ION']:
+elif CONFIG['JS_CODEGEN_MIPS']:
     UNIFIED_SOURCES += [
-        'jit/AliasAnalysis.cpp',
-        'jit/AsmJS.cpp',
-        'jit/AsmJSLink.cpp',
-        'jit/AsmJSModule.cpp',
-        'jit/AsmJSSignalHandlers.cpp',
-        'jit/BacktrackingAllocator.cpp',
-        'jit/Bailouts.cpp',
-        'jit/BaselineBailouts.cpp',
-        'jit/BaselineCompiler.cpp',
-        'jit/BaselineDebugModeOSR.cpp',
-        'jit/BaselineFrame.cpp',
-        'jit/BaselineFrameInfo.cpp',
-        'jit/BaselineIC.cpp',
-        'jit/BaselineInspector.cpp',
-        'jit/BaselineJIT.cpp',
-        'jit/BitSet.cpp',
-        'jit/BytecodeAnalysis.cpp',
-        'jit/C1Spewer.cpp',
-        'jit/CodeGenerator.cpp',
-        'jit/CompileWrappers.cpp',
-        'jit/EdgeCaseAnalysis.cpp',
-        'jit/EffectiveAddressAnalysis.cpp',
-        'jit/Ion.cpp',
-        'jit/IonAnalysis.cpp',
-        'jit/IonBuilder.cpp',
-        'jit/IonCaches.cpp',
-        'jit/IonFrames.cpp',
-        'jit/IonMacroAssembler.cpp',
-        'jit/IonOptimizationLevels.cpp',
-        'jit/IonSpewer.cpp',
-        'jit/JitOptions.cpp',
-        'jit/JSONSpewer.cpp',
-        'jit/LICM.cpp',
-        'jit/LinearScan.cpp',
-        'jit/LIR.cpp',
-        'jit/LiveRangeAllocator.cpp',
-        'jit/Lowering.cpp',
-        'jit/MCallOptimize.cpp',
-        'jit/MIR.cpp',
-        'jit/MIRGraph.cpp',
-        'jit/MoveResolver.cpp',
-        'jit/ParallelFunctions.cpp',
-        'jit/ParallelSafetyAnalysis.cpp',
-        'jit/PerfSpewer.cpp',
-        'jit/RangeAnalysis.cpp',
-        'jit/Recover.cpp',
-        'jit/RegisterAllocator.cpp',
-        'jit/RematerializedFrame.cpp',
-        'jit/Safepoints.cpp',
-        'jit/shared/BaselineCompiler-shared.cpp',
-        'jit/shared/CodeGenerator-shared.cpp',
-        'jit/shared/Lowering-shared.cpp',
-        'jit/Snapshots.cpp',
-        'jit/StupidAllocator.cpp',
-        'jit/TypeDescrSet.cpp',
-        'jit/TypePolicy.cpp',
-        'jit/UnreachableCodeElimination.cpp',
-        'jit/ValueNumbering.cpp',
-        'jit/VMFunctions.cpp',
+        'jit/mips/Architecture-mips.cpp',
+        'jit/mips/Assembler-mips.cpp',
+        'jit/mips/Bailouts-mips.cpp',
+        'jit/mips/BaselineCompiler-mips.cpp',
+        'jit/mips/BaselineIC-mips.cpp',
+        'jit/mips/CodeGenerator-mips.cpp',
+        'jit/mips/Lowering-mips.cpp',
+        'jit/mips/MacroAssembler-mips.cpp',
+        'jit/mips/MoveEmitter-mips.cpp',
+        'jit/mips/Trampoline-mips.cpp',
     ]
-    if CONFIG['JS_CODEGEN_X86'] or CONFIG['JS_CODEGEN_X64']:
+    if CONFIG['JS_MIPS_SIMULATOR']:
         UNIFIED_SOURCES += [
-            'jit/shared/Assembler-x86-shared.cpp',
-            'jit/shared/BaselineCompiler-x86-shared.cpp',
-            'jit/shared/BaselineIC-x86-shared.cpp',
-            'jit/shared/CodeGenerator-x86-shared.cpp',
-            'jit/shared/Lowering-x86-shared.cpp',
-            'jit/shared/MacroAssembler-x86-shared.cpp',
-            'jit/shared/MoveEmitter-x86-shared.cpp',
+            'jit/mips/Simulator-mips.cpp'
         ]
-        if CONFIG['JS_CODEGEN_X64']:
-            UNIFIED_SOURCES += [
-                'jit/x64/Assembler-x64.cpp',
-                'jit/x64/Bailouts-x64.cpp',
-                'jit/x64/BaselineCompiler-x64.cpp',
-                'jit/x64/BaselineIC-x64.cpp',
-                'jit/x64/CodeGenerator-x64.cpp',
-                'jit/x64/Lowering-x64.cpp',
-                'jit/x64/MacroAssembler-x64.cpp',
-                'jit/x64/Trampoline-x64.cpp',
-            ]
-        else:
-            UNIFIED_SOURCES += [
-                'jit/x86/Assembler-x86.cpp',
-                'jit/x86/Bailouts-x86.cpp',
-                'jit/x86/BaselineCompiler-x86.cpp',
-                'jit/x86/BaselineIC-x86.cpp',
-                'jit/x86/CodeGenerator-x86.cpp',
-                'jit/x86/Lowering-x86.cpp',
-                'jit/x86/MacroAssembler-x86.cpp',
-                'jit/x86/Trampoline-x86.cpp',
-            ]
-    elif CONFIG['JS_CODEGEN_ARM']:
-        UNIFIED_SOURCES += [
-            'jit/arm/Architecture-arm.cpp',
-            'jit/arm/Assembler-arm.cpp',
-            'jit/arm/Bailouts-arm.cpp',
-            'jit/arm/BaselineCompiler-arm.cpp',
-            'jit/arm/BaselineIC-arm.cpp',
-            'jit/arm/CodeGenerator-arm.cpp',
-            'jit/arm/Lowering-arm.cpp',
-            'jit/arm/MacroAssembler-arm.cpp',
-            'jit/arm/MoveEmitter-arm.cpp',
-            'jit/arm/Trampoline-arm.cpp',
-        ]
-        if CONFIG['JS_ARM_SIMULATOR']:
-            UNIFIED_SOURCES += [
-                'jit/arm/Simulator-arm.cpp'
-            ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
     SOURCES += [
-        'assembler/jit/ExecutableAllocatorWin.cpp',
+        'jit/ExecutableAllocatorWin.cpp',
     ]
     # _CRT_RAND_S must be #defined before #including stdlib.h to get rand_s()
     DEFINES['_CRT_RAND_S'] = True
 else:
     SOURCES += [
-        'assembler/jit/ExecutableAllocatorPosix.cpp',
+        'jit/ExecutableAllocatorPosix.cpp',
     ]
-
-if CONFIG['ENABLE_ION']:
-    if CONFIG['JS_CODEGEN_X86'] or CONFIG['JS_CODEGEN_X64']:
-        SOURCES += [
-            'assembler/assembler/MacroAssemblerX86Common.cpp',
-        ]
-    elif CONFIG['JS_CODEGEN_ARM']:
-        SOURCES += [
-            'assembler/assembler/ARMAssembler.cpp',
-            'assembler/assembler/MacroAssemblerARM.cpp',
-        ]
 
 if CONFIG['JS_HAS_CTYPES']:
     SOURCES += [
@@ -423,15 +422,14 @@ else:
         'perf/pm_stub.cpp'
     ]
 
-MSVC_ENABLE_PGO = True
+# Disable PGO for MSVC 2010 due to unpredictable performance, see
+# bug 1030706.
+if CONFIG['_MSC_VER'] != '1600':
+    MSVC_ENABLE_PGO = True
 
-HOST_SOURCES += [
-    'jskwgen.cpp',
-]
-
-HOST_SIMPLE_PROGRAMS += [
-    'host_%s' % f.replace('.cpp', '') for f in HOST_SOURCES
-]
+HostSimplePrograms([
+    'host_jskwgen',
+])
 
 # JavaScript must be built shared, even for static builds, as it is used by
 # other modules which are always built shared. Failure to do so results in
@@ -442,9 +440,29 @@ HOST_SIMPLE_PROGRAMS += [
 # JS shell would like to link to the static library.
 
 if CONFIG['JS_SHARED_LIBRARY']:
-    FORCE_SHARED_LIB = True
+    SharedLibrary('js')
+    SHARED_LIBRARY_NAME = CONFIG['JS_LIBRARY_NAME']
+    SDK_LIBRARY = True
+else:
+    Library('js')
 
 FORCE_STATIC_LIB = True
+STATIC_LIBRARY_NAME = 'js_static'
+
+if CONFIG['JS_HAS_CTYPES']:
+    USE_LIBS += [
+        'ffi',
+    ]
+
+if CONFIG['ENABLE_INTL_API']:
+    USE_LIBS += [
+        'icu',
+    ]
+
+USE_LIBS += [
+    'nspr',
+    'zlib',
+]
 
 if CONFIG['MOZ_ETW']:
     GENERATED_FILES = [
@@ -457,11 +475,10 @@ if CONFIG['NIGHTLY_BUILD']:
     DEFINES['ENABLE_PARALLEL_JS'] = True
     DEFINES['ENABLE_BINARYDATA'] = True
     DEFINES['ENABLE_SHARED_ARRAY_BUFFER'] = True
+    if CONFIG['ENABLE_ION'] and CONFIG['JSGC_GENERATIONAL_CONFIGURED']:
+        DEFINES['JSGC_FJGENERATIONAL'] = True
 
 DEFINES['EXPORT_JS_API'] = True
-
-if CONFIG['JS_THREADSAFE']:
-    DEFINES['JS_THREADSAFE'] = True
 
 if CONFIG['JS_HAS_CTYPES']:
     DEFINES['JS_HAS_CTYPES'] = True
@@ -476,9 +493,29 @@ if CONFIG['_MSC_VER']:
         SOURCES['builtin/RegExp.cpp'].no_pgo = True # Bug 772303
     elif CONFIG['CPU_ARCH'] == 'x86_64' and CONFIG['JS_HAS_CTYPES']:
         SOURCES['ctypes/CTypes.cpp'].no_pgo = True # Bug 810661
+    # Prevent floating point errors caused by VC++ optimizations
+    # XXX We should add this to CXXFLAGS, too?
+    CFLAGS += ['-fp:precise']
 
-# Needed to "configure" it correctly.  Unfortunately these
-# flags wind up being applied to all code in js/src, not just
-# the code in js/src/assembler.
-DEFINES['USE_SYSTEM_MALLOC'] = 1
-DEFINES['ENABLE_ASSEMBLER'] = 1
+if CONFIG['OS_ARCH'] not in ('WINNT', 'HP-UX'):
+    OS_LIBS += [
+        'm',
+    ]
+
+if CONFIG['OS_ARCH'] == 'FreeBSD':
+    OS_LIBS += [
+        '-pthread',
+    ]
+
+if CONFIG['OS_ARCH'] == 'Linux':
+    OS_LIBS += [
+        'dl',
+    ]
+
+if CONFIG['OS_ARCH'] == 'SunOS':
+    OS_LIBS += [
+        'posix4',
+        'dl',
+        'nsl',
+        'socket',
+    ]

@@ -17,9 +17,11 @@ class nsIFormControl;
  */
 class nsRadioVisitor : public nsIRadioVisitor
 {
+protected:
+  virtual ~nsRadioVisitor() { }
+
 public:
   nsRadioVisitor() { }
-  virtual ~nsRadioVisitor() { }
 
   NS_DECL_ISUPPORTS
 
@@ -37,7 +39,7 @@ public:
 class nsRadioSetCheckedChangedVisitor : public nsRadioVisitor
 {
 public:
-  nsRadioSetCheckedChangedVisitor(bool aCheckedChanged)
+  explicit nsRadioSetCheckedChangedVisitor(bool aCheckedChanged)
     : mCheckedChanged(aCheckedChanged)
     { }
 

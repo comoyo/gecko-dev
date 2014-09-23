@@ -7,7 +7,6 @@
 
 #include "base/file_path.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
 #include "base/waitable_event.h"
 #include "chrome/common/child_process_host.h"
 
@@ -19,6 +18,10 @@
 #include "nsCOMPtr.h"
 #include "nsXULAppAPI.h"        // for GeckoProcessType
 #include "nsString.h"
+
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+#include "sandboxBroker.h"
+#endif
 
 class nsIFile;
 
@@ -37,8 +40,8 @@ public:
 
   static ChildPrivileges DefaultChildPrivileges();
 
-  GeckoChildProcessHost(GeckoProcessType aProcessType,
-                        ChildPrivileges aPrivileges=base::PRIVILEGES_DEFAULT);
+  explicit GeckoChildProcessHost(GeckoProcessType aProcessType,
+                                 ChildPrivileges aPrivileges=base::PRIVILEGES_DEFAULT);
 
   ~GeckoChildProcessHost();
 
@@ -131,15 +134,8 @@ public:
   // For bug 943174: Skip the EnsureProcessTerminated call in the destructor.
   void SetAlreadyDead();
 
-  void SetSandboxEnabled(bool aSandboxEnabled) {
-    mSandboxEnabled = aSandboxEnabled;
-  }
-
-  static void CacheGreDir();
-
 protected:
   GeckoProcessType mProcessType;
-  bool mSandboxEnabled;
   ChildPrivileges mPrivileges;
   Monitor mMonitor;
   FilePath mProcessPath;
@@ -168,7 +164,17 @@ protected:
 #ifdef XP_WIN
   void InitWindowsGroupID();
   nsString mGroupId;
+
+#ifdef MOZ_SANDBOX
+  SandboxBroker mSandboxBroker;
+  std::vector<std::wstring> mAllowedFilesRead;
+
+#if defined(MOZ_CONTENT_SANDBOX)
+  bool mEnableContentSandbox;
+  bool mWarnOnlyContentSandbox;
 #endif
+#endif
+#endif // XP_WIN
 
 #if defined(OS_POSIX)
   base::file_handle_mapping_vector mFileMap;
@@ -203,9 +209,6 @@ private:
   //
   // FIXME/cjones: this strongly indicates bad design.  Shame on us.
   std::queue<IPC::Message> mQueue;
-
-  static StaticRefPtr<nsIFile> sGreDir;
-  static DebugOnly<bool> sGreDirCached;
 };
 
 #ifdef MOZ_NUWA_PROCESS

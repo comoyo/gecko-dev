@@ -27,7 +27,7 @@ class WrapperOwner : public virtual JavaScriptShared
                        mozilla::ipc::IProtocol>::ActorDestroyReason
            ActorDestroyReason;
 
-    WrapperOwner(JSRuntime *rt);
+    explicit WrapperOwner(JSRuntime *rt);
     bool init();
 
     // Fundamental proxy traps. These are required.
@@ -55,9 +55,13 @@ class WrapperOwner : public virtual JavaScriptShared
 
     // SpiderMonkey Extensions.
     bool isExtensible(JSContext *cx, JS::HandleObject proxy, bool *extensible);
-    bool call(JSContext *cx, JS::HandleObject proxy, const JS::CallArgs &args);
+    bool callOrConstruct(JSContext *cx, JS::HandleObject proxy, const JS::CallArgs &args,
+                         bool construct);
+    bool hasInstance(JSContext *cx, JS::HandleObject proxy, JS::MutableHandleValue v, bool *bp);
     bool objectClassIs(JSContext *cx, JS::HandleObject obj, js::ESClassValue classValue);
     const char* className(JSContext *cx, JS::HandleObject proxy);
+    bool isCallable(JSObject *obj);
+    // isConstructable is implemented here as isCallable.
 
     nsresult instanceOf(JSObject *obj, const nsID *id, bool *bp);
 
@@ -116,18 +120,20 @@ class WrapperOwner : public virtual JavaScriptShared
                          ReturnStatus *rs, bool *bp) = 0;
     virtual bool CallHasOwn(const ObjectId &objId, const nsString &id,
                             ReturnStatus *rs, bool *bp) = 0;
-    virtual bool CallGet(const ObjectId &objId, const ObjectId &receiverId,
+    virtual bool CallGet(const ObjectId &objId, const ObjectVariant &receiverVar,
                          const nsString &id,
                          ReturnStatus *rs, JSVariant *result) = 0;
-    virtual bool CallSet(const ObjectId &objId, const ObjectId &receiverId,
+    virtual bool CallSet(const ObjectId &objId, const ObjectVariant &receiverVar,
                          const nsString &id, const bool &strict,
                          const JSVariant &value, ReturnStatus *rs, JSVariant *result) = 0;
 
     virtual bool CallIsExtensible(const ObjectId &objId, ReturnStatus *rs,
                                   bool *result) = 0;
-    virtual bool CallCall(const ObjectId &objId, const nsTArray<JSParam> &argv,
-                          ReturnStatus *rs, JSVariant *result,
-                          nsTArray<JSParam> *outparams) = 0;
+    virtual bool CallCallOrConstruct(const ObjectId &objId, const nsTArray<JSParam> &argv,
+                                     const bool &construct, ReturnStatus *rs, JSVariant *result,
+                                     nsTArray<JSParam> *outparams) = 0;
+    virtual bool CallHasInstance(const ObjectId &objId, const JSVariant &v,
+                                 ReturnStatus *rs, bool *bp) = 0;
     virtual bool CallObjectClassIs(const ObjectId &objId, const uint32_t &classValue,
                                    bool *result) = 0;
     virtual bool CallClassName(const ObjectId &objId, nsString *result) = 0;
@@ -142,6 +148,9 @@ class WrapperOwner : public virtual JavaScriptShared
 
 bool
 IsCPOW(JSObject *obj);
+
+bool
+IsWrappedCPOW(JSObject *obj);
 
 nsresult
 InstanceOf(JSObject *obj, const nsID *id, bool *bp);

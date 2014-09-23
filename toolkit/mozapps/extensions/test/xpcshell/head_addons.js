@@ -42,8 +42,26 @@ let MockAsyncShutdown = {
       do_print("Mock profileBeforeChange blocker for '" + aName + "'");
       MockAsyncShutdown.hook = aBlocker;
     }
-  }
+  },
+  Barrier: function (name) {
+    this.name = name;
+    this.client.addBlocker = (name, blocker) => {
+      do_print("Mock Barrier blocker for '" + name + "' for barrier '" + this.name + "'");
+      this.blockers.push({name: name, blocker: blocker});
+    };
+  },
 };
+
+MockAsyncShutdown.Barrier.prototype = Object.freeze({
+  blockers: [],
+  client: {},
+  wait: Task.async(function* () {
+    for (let b of this.blockers) {
+      yield b.blocker();
+    }
+  }),
+});
+
 AMscope.AsyncShutdown = MockAsyncShutdown;
 
 var gInternalManager = null;
@@ -634,7 +652,7 @@ function createInstallRDF(aData) {
 /**
  * Writes an install.rdf manifest into a directory using the properties passed
  * in a JS object. The objects should contain a property for each property to
- * appear in the RDFThe object may contain an array of objects with id,
+ * appear in the RDF. The object may contain an array of objects with id,
  * minVersion and maxVersion in the targetApplications property to give target
  * application compatibility.
  *
@@ -642,14 +660,22 @@ function createInstallRDF(aData) {
  *          The object holding data about the add-on
  * @param   aDir
  *          The directory to add the install.rdf to
+ * @param   aId
+ *          An optional string to override the default installation aId
  * @param   aExtraFile
  *          An optional dummy file to create in the directory
+ * @return  An nsIFile for the directory in which the add-on is installed.
  */
-function writeInstallRDFToDir(aData, aDir, aExtraFile) {
+function writeInstallRDFToDir(aData, aDir, aId, aExtraFile) {
+  var id = aId ? aId : aData.id
+
+  var dir = aDir.clone();
+  dir.append(id);
+
   var rdf = createInstallRDF(aData);
-  if (!aDir.exists())
-    aDir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
-  var file = aDir.clone();
+  if (!dir.exists())
+    dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
+  var file = dir.clone();
   file.append("install.rdf");
   if (file.exists())
     file.remove(true);
@@ -662,17 +688,18 @@ function writeInstallRDFToDir(aData, aDir, aExtraFile) {
   fos.close();
 
   if (!aExtraFile)
-    return;
+    return dir;
 
-  file = aDir.clone();
+  file = dir.clone();
   file.append(aExtraFile);
   file.create(AM_Ci.nsIFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
+  return dir;
 }
 
 /**
  * Writes an install.rdf manifest into an extension using the properties passed
  * in a JS object. The objects should contain a property for each property to
- * appear in the RDFThe object may contain an array of objects with id,
+ * appear in the RDF. The object may contain an array of objects with id,
  * minVersion and maxVersion in the targetApplications property to give target
  * application compatibility.
  *
@@ -687,15 +714,33 @@ function writeInstallRDFToDir(aData, aDir, aExtraFile) {
  * @return  A file pointing to where the extension was installed
  */
 function writeInstallRDFForExtension(aData, aDir, aId, aExtraFile) {
+  if (TEST_UNPACKED) {
+    return writeInstallRDFToDir(aData, aDir, aId, aExtraFile);
+  }
+  return writeInstallRDFToXPI(aData, aDir, aId, aExtraFile);
+}
+
+/**
+ * Writes an install.rdf manifest into a packed extension using the properties passed
+ * in a JS object. The objects should contain a property for each property to
+ * appear in the RDF. The object may contain an array of objects with id,
+ * minVersion and maxVersion in the targetApplications property to give target
+ * application compatibility.
+ *
+ * @param   aData
+ *          The object holding data about the add-on
+ * @param   aDir
+ *          The install directory to add the extension to
+ * @param   aId
+ *          An optional string to override the default installation aId
+ * @param   aExtraFile
+ *          An optional dummy file to create in the extension
+ * @return  A file pointing to where the extension was installed
+ */
+function writeInstallRDFToXPI(aData, aDir, aId, aExtraFile) {
   var id = aId ? aId : aData.id
 
   var dir = aDir.clone();
-
-  if (TEST_UNPACKED) {
-    dir.append(id);
-    writeInstallRDFToDir(aData, dir, aExtraFile);
-    return dir;
-  }
 
   if (!dir.exists())
     dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
@@ -1338,6 +1383,16 @@ var data = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
 stream.write(data, data.length);
 stream.close();
 
+// Copies blocklistFile (an nsIFile) to gProfD/blocklist.xml.
+function copyBlocklistToProfile(blocklistFile) {
+  var dest = gProfD.clone();
+  dest.append("blocklist.xml");
+  if (dest.exists())
+    dest.remove(false);
+  blocklistFile.copyTo(gProfD, "blocklist.xml");
+  dest.lastModifiedTime = Date.now();
+}
+
 // Throw a failure and attempt to abandon the test if it looks like it is going
 // to timeout
 function timeout() {
@@ -1547,7 +1602,16 @@ function callback_soon(aFunction) {
  * its callback.
  */
 function promiseAddonsByIDs(list) {
-  let deferred = Promise.defer();
-  AddonManager.getAddonsByIDs(list, deferred.resolve);
-  return deferred.promise;
+  return new Promise((resolve, reject) => AddonManager.getAddonsByIDs(list, resolve));
+}
+
+/**
+ * A promise-based variant of AddonManager.getAddonByID.
+ *
+ * @param {string} aId The ID of the add-on.
+ * @return {promise}
+ * @resolve {AddonWrapper} The corresponding add-on, or null.
+ */
+function promiseAddonByID(aId) {
+  return new Promise((resolve, reject) => AddonManager.getAddonByID(aId, resolve));
 }

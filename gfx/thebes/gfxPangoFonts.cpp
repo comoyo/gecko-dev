@@ -20,8 +20,6 @@
 #include "gfxFT2Utils.h"
 #include "harfbuzz/hb.h"
 #include "harfbuzz/hb-ot.h"
-#include "gfxHarfBuzzShaper.h"
-#include "gfxGraphiteShaper.h"
 #include "nsUnicodeProperties.h"
 #include "nsUnicodeScriptCodes.h"
 #include "gfxFontconfigUtils.h"
@@ -126,7 +124,7 @@ public:
     }
 
 protected:
-    gfxFcFontEntry(const nsAString& aName)
+    explicit gfxFcFontEntry(const nsAString& aName)
         : gfxFontEntry(aName)
     {
     }
@@ -328,13 +326,15 @@ gfxSystemFcFontEntry::ReleaseGrFace(gr_face* aFace)
 
 class gfxUserFcFontEntry : public gfxFcFontEntry {
 protected:
-    gfxUserFcFontEntry(const gfxProxyFontEntry &aProxyEntry)
-        : gfxFcFontEntry(aProxyEntry.Name())
+    explicit gfxUserFcFontEntry(const nsAString& aFontName,
+                       uint16_t aWeight,
+                       int16_t aStretch,
+                       bool aItalic)
+        : gfxFcFontEntry(aFontName)
     {
-        mItalic = aProxyEntry.mItalic;
-        mWeight = aProxyEntry.mWeight;
-        mStretch = aProxyEntry.mStretch;
-        mIsUserFont = true;
+        mItalic = aItalic;
+        mWeight = aWeight;
+        mStretch = aStretch;
     }
 
     // Helper function to change a pattern so that it matches the CSS style
@@ -412,9 +412,12 @@ gfxUserFcFontEntry::AdjustPatternToCSS(FcPattern *aPattern)
 
 class gfxLocalFcFontEntry : public gfxUserFcFontEntry {
 public:
-    gfxLocalFcFontEntry(const gfxProxyFontEntry &aProxyEntry,
+    gfxLocalFcFontEntry(const nsAString& aFontName,
+                        uint16_t aWeight,
+                        int16_t aStretch,
+                        bool aItalic,
                         const nsTArray< nsCountedRef<FcPattern> >& aPatterns)
-        : gfxUserFcFontEntry(aProxyEntry)
+        : gfxUserFcFontEntry(aFontName, aWeight, aStretch, aItalic)
     {
         if (!mPatterns.SetCapacity(aPatterns.Length()))
             return; // OOM
@@ -445,11 +448,16 @@ public:
 class gfxDownloadedFcFontEntry : public gfxUserFcFontEntry {
 public:
     // This takes ownership of the face and its underlying data
-    gfxDownloadedFcFontEntry(const gfxProxyFontEntry &aProxyEntry,
+    gfxDownloadedFcFontEntry(const nsAString& aFontName,
+                             uint16_t aWeight,
+                             int16_t aStretch,
+                             bool aItalic,
                              const uint8_t *aData, FT_Face aFace)
-        : gfxUserFcFontEntry(aProxyEntry), mFontData(aData), mFace(aFace)
+        : gfxUserFcFontEntry(aFontName, aWeight, aStretch, aItalic),
+          mFontData(aData), mFace(aFace)
     {
         NS_PRECONDITION(aFace != nullptr, "aFace is NULL!");
+        mIsDataUserFont = true;
         InitPattern();
     }
 
@@ -660,16 +668,14 @@ public:
     virtual mozilla::TemporaryRef<mozilla::gfx::GlyphRenderingOptions> GetGlyphRenderingOptions();
 #endif
 
-protected:
-    virtual already_AddRefed<gfxFont> GetSmallCapsFont();
+    // return a cloned font resized and offset to simulate sub/superscript glyphs
+    virtual already_AddRefed<gfxFont>
+    GetSubSuperscriptFont(int32_t aAppUnitsPerDevPixel);
 
-    virtual bool ShapeText(gfxContext      *aContext,
-                           const char16_t *aText,
-                           uint32_t         aOffset,
-                           uint32_t         aLength,
-                           int32_t          aScript,
-                           gfxShapedText   *aShapedText,
-                           bool             aPreferPlatformShaping);
+protected:
+    virtual already_AddRefed<gfxFont> MakeScaledFont(gfxFontStyle *aFontStyle,
+                                                     gfxFloat aFontScale);
+    virtual already_AddRefed<gfxFont> GetSmallCapsFont();
 
 private:
     gfxFcFont(cairo_scaled_font_t *aCairoFont, gfxFcFontEntry *aFontEntry,
@@ -804,18 +810,29 @@ FindFontPatterns(gfxUserFontSet *mUserFontSet,
     style.stretch = aStretch;
 
     gfxUserFcFontEntry *fontEntry = nullptr;
-    gfxFontFamily *family = mUserFontSet->GetFamily(utf16Family);
+    gfxFontFamily *family = mUserFontSet->LookupFamily(utf16Family);
     if (family) {
-        fontEntry = static_cast<gfxUserFcFontEntry*>
-            (mUserFontSet->FindFontEntry(family, style, needsBold,
-                                         aWaitForUserFont));
+        gfxUserFontEntry* userFontEntry =
+            mUserFontSet->FindUserFontEntry(family, style, needsBold,
+                                            aWaitForUserFont);
+        if (userFontEntry) {
+            fontEntry = static_cast<gfxUserFcFontEntry*>
+                (userFontEntry->GetPlatformFontEntry());
+        }
 
         // Accept synthetic oblique for italic and oblique.
+        // xxx - this isn't really ideal behavior, for docs that only use a
+        //       single italic face it will also pull down the normal face
+        //       and probably never use it
         if (!fontEntry && aStyle != NS_FONT_STYLE_NORMAL) {
             style.style = NS_FONT_STYLE_NORMAL;
-            fontEntry = static_cast<gfxUserFcFontEntry*>
-                (mUserFontSet->FindFontEntry(family, style, needsBold,
-                                             aWaitForUserFont));
+            userFontEntry = mUserFontSet->FindUserFontEntry(family, style,
+                                                            needsBold,
+                                                            aWaitForUserFont);
+            if (userFontEntry) {
+                fontEntry = static_cast<gfxUserFcFontEntry*>
+                    (userFontEntry->GetPlatformFontEntry());
+            }
         }
     }
 
@@ -919,7 +936,7 @@ gfxFcFontSet::SortPreferredFonts(bool &aWaitForUserFont)
     double requestedSize = -1.0;
     FcPatternGetDouble(mSortPattern, FC_PIXEL_SIZE, 0, &requestedSize);
 
-    nsTHashtable<gfxFontconfigUtils::DepFcStrEntry> existingFamilies(50);
+    nsTHashtable<gfxFontconfigUtils::DepFcStrEntry> existingFamilies(32);
     FcChar8 *family;
     for (int v = 0;
          FcPatternGetString(mSortPattern,
@@ -1003,7 +1020,7 @@ gfxFcFontSet::SortPreferredFonts(bool &aWaitForUserFont)
             }
 
             // User fonts are already filtered by slant (but not size) in
-            // mUserFontSet->FindFontEntry().
+            // mUserFontSet->FindUserFontEntry().
             if (requestedSize != -1.0 && !SizeIsAcceptable(font, requestedSize))
                 continue;
 
@@ -1530,21 +1547,25 @@ gfxFcFont::~gfxFcFont()
 }
 
 already_AddRefed<gfxFont>
-gfxFcFont::GetSmallCapsFont()
+gfxFcFont::GetSubSuperscriptFont(int32_t aAppUnitsPerDevPixel)
 {
     gfxFontStyle style(*GetStyle());
-    style.size *= SMALL_CAPS_SCALE_FACTOR;
-    style.smallCaps = false;
+    style.AdjustForSubSuperscript(aAppUnitsPerDevPixel);
+    return MakeScaledFont(&style, style.size / GetStyle()->size);
+}
+
+already_AddRefed<gfxFont>
+gfxFcFont::MakeScaledFont(gfxFontStyle *aFontStyle, gfxFloat aScaleFactor)
+{
     gfxFcFontEntry* fe = static_cast<gfxFcFontEntry*>(GetFontEntry());
-    nsRefPtr<gfxFont> font = gfxFontCache::GetCache()->Lookup(fe, &style);
+    nsRefPtr<gfxFont> font = gfxFontCache::GetCache()->Lookup(fe, aFontStyle);
     if (font) {
         return font.forget();
     }
 
     cairo_matrix_t fontMatrix;
     cairo_scaled_font_get_font_matrix(mScaledFont, &fontMatrix);
-    cairo_matrix_scale(&fontMatrix,
-                       SMALL_CAPS_SCALE_FACTOR, SMALL_CAPS_SCALE_FACTOR);
+    cairo_matrix_scale(&fontMatrix, aScaleFactor, aScaleFactor);
 
     cairo_matrix_t ctm;
     cairo_scaled_font_get_ctm(mScaledFont, &ctm);
@@ -1552,52 +1573,25 @@ gfxFcFont::GetSmallCapsFont()
     cairo_font_options_t *options = cairo_font_options_create();
     cairo_scaled_font_get_font_options(mScaledFont, options);
 
-    cairo_scaled_font_t *smallFont =
+    cairo_scaled_font_t *newFont =
         cairo_scaled_font_create(cairo_scaled_font_get_font_face(mScaledFont),
                                  &fontMatrix, &ctm, options);
     cairo_font_options_destroy(options);
 
-    font = new gfxFcFont(smallFont, fe, &style);
+    font = new gfxFcFont(newFont, fe, aFontStyle);
     gfxFontCache::GetCache()->AddNew(font);
-    cairo_scaled_font_destroy(smallFont);
+    cairo_scaled_font_destroy(newFont);
 
     return font.forget();
 }
 
-bool
-gfxFcFont::ShapeText(gfxContext      *aContext,
-                     const char16_t *aText,
-                     uint32_t         aOffset,
-                     uint32_t         aLength,
-                     int32_t          aScript,
-                     gfxShapedText   *aShapedText,
-                     bool             aPreferPlatformShaping)
+already_AddRefed<gfxFont>
+gfxFcFont::GetSmallCapsFont()
 {
-    bool ok = false;
-
-    if (FontCanSupportGraphite()) {
-        if (gfxPlatform::GetPlatform()->UseGraphiteShaping()) {
-            if (!mGraphiteShaper) {
-                mGraphiteShaper = new gfxGraphiteShaper(this);
-            }
-            ok = mGraphiteShaper->ShapeText(aContext, aText, aOffset, aLength,
-                                            aScript, aShapedText);
-        }
-    }
-
-    if (!ok) {
-        if (!mHarfBuzzShaper) {
-            mHarfBuzzShaper = new gfxHarfBuzzShaper(this);
-        }
-        ok = mHarfBuzzShaper->ShapeText(aContext, aText, aOffset, aLength,
-                                        aScript, aShapedText);
-    }
-
-    NS_WARN_IF_FALSE(ok, "shaper failed, expect scrambled or missing text");
-
-    PostShapingFixup(aContext, aText, aOffset, aLength, aShapedText);
-
-    return ok;
+    gfxFontStyle style(*GetStyle());
+    style.size *= SMALL_CAPS_SCALE_FACTOR;
+    style.variantCaps = NS_FONT_VARIANT_CAPS_NORMAL;
+    return MakeScaledFont(&style, SMALL_CAPS_SCALE_FACTOR);
 }
 
 /* static */ void
@@ -1609,8 +1603,10 @@ gfxPangoFontGroup::Shutdown()
 }
 
 /* static */ gfxFontEntry *
-gfxPangoFontGroup::NewFontEntry(const gfxProxyFontEntry &aProxyEntry,
-                                const nsAString& aFullname)
+gfxPangoFontGroup::NewFontEntry(const nsAString& aFontName,
+                                uint16_t aWeight,
+                                int16_t aStretch,
+                                bool aItalic)
 {
     gfxFontconfigUtils *utils = gfxFontconfigUtils::GetFontconfigUtils();
     if (!utils)
@@ -1637,7 +1633,7 @@ gfxPangoFontGroup::NewFontEntry(const gfxProxyFontEntry &aProxyEntry,
     if (!pattern)
         return nullptr;
 
-    NS_ConvertUTF16toUTF8 fullname(aFullname);
+    NS_ConvertUTF16toUTF8 fullname(aFontName);
     FcPatternAddString(pattern, FC_FULLNAME,
                        gfxFontconfigUtils::ToFcChar8(fullname));
     FcConfigSubstitute(nullptr, pattern, FcMatchPattern);
@@ -1650,7 +1646,11 @@ gfxPangoFontGroup::NewFontEntry(const gfxProxyFontEntry &aProxyEntry,
             utils->GetFontsForFullname(name);
 
         if (fonts.Length() != 0)
-            return new gfxLocalFcFontEntry(aProxyEntry, fonts);
+            return new gfxLocalFcFontEntry(aFontName,
+                                           aWeight,
+                                           aStretch,
+                                           aItalic,
+                                           fonts);
     }
 
     return nullptr;
@@ -1688,8 +1688,12 @@ gfxPangoFontGroup::GetFTLibrary()
 }
 
 /* static */ gfxFontEntry *
-gfxPangoFontGroup::NewFontEntry(const gfxProxyFontEntry &aProxyEntry,
-                                const uint8_t *aFontData, uint32_t aLength)
+gfxPangoFontGroup::NewFontEntry(const nsAString& aFontName,
+                                uint16_t aWeight,
+                                int16_t aStretch,
+                                bool aItalic,
+                                const uint8_t* aFontData,
+                                uint32_t aLength)
 {
     // Ownership of aFontData is passed in here, and transferred to the
     // new fontEntry, which will release it when no longer needed.
@@ -1704,7 +1708,9 @@ gfxPangoFontGroup::NewFontEntry(const gfxProxyFontEntry &aProxyEntry,
         return nullptr;
     }
 
-    return new gfxDownloadedFcFontEntry(aProxyEntry, aFontData, face);
+    return new gfxDownloadedFcFontEntry(aFontName, aWeight,
+                                        aStretch, aItalic,
+                                        aFontData, face);
 }
 
 
@@ -1740,6 +1746,26 @@ gfxFcFont::GetOrMakeFont(FcPattern *aRequestedPattern, FcPattern *aFontPattern,
 {
     nsAutoRef<FcPattern> renderPattern
         (FcFontRenderPrepare(nullptr, aRequestedPattern, aFontPattern));
+
+    // If synthetic bold/italic is not allowed by the style, adjust the
+    // resulting pattern to match the actual properties of the font.
+    if (!aFontStyle->allowSyntheticWeight) {
+        int weight;
+        if (FcPatternGetInteger(aFontPattern, FC_WEIGHT, 0,
+                                &weight) == FcResultMatch) {
+            FcPatternDel(renderPattern, FC_WEIGHT);
+            FcPatternAddInteger(renderPattern, FC_WEIGHT, weight);
+        }
+    }
+    if (!aFontStyle->allowSyntheticStyle) {
+        int slant;
+        if (FcPatternGetInteger(aFontPattern, FC_SLANT, 0,
+                                &slant) == FcResultMatch) {
+            FcPatternDel(renderPattern, FC_SLANT);
+            FcPatternAddInteger(renderPattern, FC_SLANT, slant);
+        }
+    }
+
     cairo_font_face_t *face =
         cairo_ft_font_face_create_for_pattern(renderPattern);
 

@@ -27,8 +27,8 @@ using namespace mozilla::dom;
 class MOZ_STACK_CLASS nsSVGGradientFrame::AutoGradientReferencer
 {
 public:
-  AutoGradientReferencer(nsSVGGradientFrame *aFrame
-                         MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+  explicit AutoGradientReferencer(nsSVGGradientFrame *aFrame
+                                  MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
     : mFrame(aFrame)
   {
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
@@ -264,10 +264,16 @@ nsSVGGradientFrame::GetPaintServerPattern(nsIFrame *aSource,
 
   // revert the vector effect transform so that the gradient appears unchanged
   if (aFillOrStroke == &nsStyleSVG::mStroke) {
-    patternMatrix.Multiply(nsSVGUtils::GetStrokeTransform(aSource).Invert());
+    gfxMatrix nonScalingStrokeTM = nsSVGUtils::GetStrokeTransform(aSource);
+    if (!nonScalingStrokeTM.Invert()) {
+      return nullptr;
+    }
+    patternMatrix *= nonScalingStrokeTM;
   }
 
-  patternMatrix.Invert();
+  if (!patternMatrix.Invert()) {
+    return nullptr;
+  }
 
   nsRefPtr<gfxPattern> gradient = CreateGradient();
   if (!gradient || gradient->CairoStatus())

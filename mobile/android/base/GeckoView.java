@@ -12,6 +12,9 @@ import org.mozilla.gecko.util.Clipboard;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.ThreadUtils;
+import org.mozilla.gecko.util.EventCallback;
+import org.mozilla.gecko.util.NativeEventListener;
+import org.mozilla.gecko.util.NativeJSObject;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -24,18 +27,74 @@ import android.content.res.TypedArray;
 import android.os.Handler;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.view.View;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 public class GeckoView extends LayerView
-    implements GeckoEventListener, ContextGetter {
+    implements ContextGetter {
 
     private static final String DEFAULT_SHARED_PREFERENCES_FILE = "GeckoView";
     private static final String LOGTAG = "GeckoView";
 
     private ChromeDelegate mChromeDelegate;
     private ContentDelegate mContentDelegate;
+
+    private final GeckoEventListener mGeckoEventListener = new GeckoEventListener() {
+        @Override
+        public void handleMessage(final String event, final JSONObject message) {
+            ThreadUtils.postToUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (event.equals("Gecko:Ready")) {
+                            handleReady(message);
+                        } else if (event.equals("Content:StateChange")) {
+                            handleStateChange(message);
+                        } else if (event.equals("Content:LoadError")) {
+                            handleLoadError(message);
+                        } else if (event.equals("Content:PageShow")) {
+                            handlePageShow(message);
+                        } else if (event.equals("DOMTitleChanged")) {
+                            handleTitleChanged(message);
+                        } else if (event.equals("Link:Favicon")) {
+                            handleLinkFavicon(message);
+                        } else if (event.equals("Prompt:Show") || event.equals("Prompt:ShowTop")) {
+                            handlePrompt(message);
+                        } else if (event.equals("Accessibility:Event")) {
+                            int mode = getImportantForAccessibility();
+                            if (mode == View.IMPORTANT_FOR_ACCESSIBILITY_YES ||
+                                mode == View.IMPORTANT_FOR_ACCESSIBILITY_AUTO) {
+                                GeckoAccessibility.sendAccessibilityEvent(message);
+                            }
+                        }
+                    } catch (Exception e) {
+                        Log.e(LOGTAG, "handleMessage threw for " + event, e);
+                    }
+                }
+            });
+        }
+    };
+
+    private final NativeEventListener mNativeEventListener = new NativeEventListener() {
+        @Override
+        public void handleMessage(final String event, final NativeJSObject message, final EventCallback callback) {
+            ThreadUtils.postToUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if ("Accessibility:Ready".equals(event)) {
+                            GeckoAccessibility.updateAccessibilitySettings(getContext());
+                        }
+                    } catch (Exception e) {
+                        Log.w(LOGTAG, "handleMessage threw for " + event, e);
+                    }
+                }
+            });
+        }
+    };
 
     public GeckoView(Context context) {
         super(context);
@@ -78,7 +137,7 @@ public class GeckoView extends LayerView
 
             // If you want to use GeckoNetworkManager, start it.
 
-            GeckoLoader.loadMozGlue();
+            GeckoLoader.loadMozGlue(context);
             BrowserDB.setEnableContentProviders(false);
          }
 
@@ -93,8 +152,9 @@ public class GeckoView extends LayerView
             tabs.attachToContext(context);
         }
 
-        EventDispatcher.getInstance().registerGeckoThreadListener(this,
+        EventDispatcher.getInstance().registerGeckoThreadListener(mGeckoEventListener,
             "Gecko:Ready",
+            "Accessibility:Event",
             "Content:StateChange",
             "Content:LoadError",
             "Content:PageShow",
@@ -102,6 +162,9 @@ public class GeckoView extends LayerView
             "Link:Favicon",
             "Prompt:Show",
             "Prompt:ShowTop");
+
+        EventDispatcher.getInstance().registerGeckoThreadListener(mNativeEventListener,
+            "Accessibility:Ready");
 
         ThreadUtils.setUiThread(Thread.currentThread(), new Handler());
         initializeView(EventDispatcher.getInstance());
@@ -179,36 +242,6 @@ public class GeckoView extends LayerView
         return Collections.unmodifiableList(browsers);
     }
 
-    /**
-    * Not part of the public API. Ignore.
-    */
-    public void handleMessage(final String event, final JSONObject message) {
-        ThreadUtils.postToUiThread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    if (event.equals("Gecko:Ready")) {
-                        GeckoView.this.handleReady(message);
-                    } else if (event.equals("Content:StateChange")) {
-                        GeckoView.this.handleStateChange(message);
-                    } else if (event.equals("Content:LoadError")) {
-                        GeckoView.this.handleLoadError(message);
-                    } else if (event.equals("Content:PageShow")) {
-                        GeckoView.this.handlePageShow(message);
-                    } else if (event.equals("DOMTitleChanged")) {
-                        GeckoView.this.handleTitleChanged(message);
-                    } else if (event.equals("Link:Favicon")) {
-                        GeckoView.this.handleLinkFavicon(message);
-                    } else if (event.equals("Prompt:Show") || event.equals("Prompt:ShowTop")) {
-                        GeckoView.this.handlePrompt(message);
-                    }
-                } catch (Exception e) {
-                    Log.w(LOGTAG, "handleMessage threw for " + event, e);
-                }
-            }
-        });
-    }
-
     private void connectToGecko() {
         GeckoThread.setLaunchState(GeckoThread.LaunchState.GeckoRunning);
         Tab selectedTab = Tabs.getInstance().getSelectedTab();
@@ -277,16 +310,16 @@ public class GeckoView extends LayerView
             String hint = message.optString("hint");
             if ("alert".equals(hint)) {
                 String text = message.optString("text");
-                mChromeDelegate.onAlert(GeckoView.this, null, text, new PromptResult(message.optString("guid")));
+                mChromeDelegate.onAlert(GeckoView.this, null, text, new PromptResult(message));
             } else if ("confirm".equals(hint)) {
                 String text = message.optString("text");
-                mChromeDelegate.onConfirm(GeckoView.this, null, text, new PromptResult(message.optString("guid")));
+                mChromeDelegate.onConfirm(GeckoView.this, null, text, new PromptResult(message));
             } else if ("prompt".equals(hint)) {
                 String text = message.optString("text");
                 String defaultValue = message.optString("textbox0");
-                mChromeDelegate.onPrompt(GeckoView.this, null, text, defaultValue, new PromptResult(message.optString("guid")));
+                mChromeDelegate.onPrompt(GeckoView.this, null, text, defaultValue, new PromptResult(message));
             } else if ("remotedebug".equals(hint)) {
-                mChromeDelegate.onDebugRequest(GeckoView.this, new PromptResult(message.optString("guid")));
+                mChromeDelegate.onDebugRequest(GeckoView.this, new PromptResult(message));
             }
         }
     }
@@ -439,16 +472,15 @@ public class GeckoView extends LayerView
         private final int RESULT_OK = 0;
         private final int RESULT_CANCEL = 1;
 
-        private final String mGUID;
+        private final JSONObject mMessage;
 
-        public PromptResult(String guid) {
-            mGUID = guid;
+        public PromptResult(JSONObject message) {
+            mMessage = message;
         }
 
         private JSONObject makeResult(int resultCode) {
             JSONObject result = new JSONObject();
             try {
-                result.put("guid", mGUID);
                 result.put("button", resultCode);
             } catch(JSONException ex) { }
             return result;
@@ -459,7 +491,7 @@ public class GeckoView extends LayerView
         */
         public void confirm() {
             JSONObject result = makeResult(RESULT_OK);
-            GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Prompt:Reply", result.toString()));
+            EventDispatcher.sendResponse(mMessage, result);
         }
 
         /**
@@ -471,7 +503,7 @@ public class GeckoView extends LayerView
             try {
                 result.put("textbox0", value);
             } catch(JSONException ex) { }
-            GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Prompt:Reply", result.toString()));
+            EventDispatcher.sendResponse(mMessage, result);
         }
 
         /**
@@ -479,7 +511,7 @@ public class GeckoView extends LayerView
         */
         public void cancel() {
             JSONObject result = makeResult(RESULT_CANCEL);
-            GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Prompt:Reply", result.toString()));
+            EventDispatcher.sendResponse(mMessage, result);
         }
     }
 

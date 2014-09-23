@@ -18,7 +18,6 @@
 #include "mozilla/dom/ProgressEvent.h"
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
 #include "nsJSUtils.h"
 #include "nsThreadUtils.h"
 
@@ -293,7 +292,7 @@ class AsyncTeardownRunnable MOZ_FINAL : public nsRunnable
   nsRefPtr<Proxy> mProxy;
 
 public:
-  AsyncTeardownRunnable(Proxy* aProxy)
+  explicit AsyncTeardownRunnable(Proxy* aProxy)
   : mProxy(aProxy)
   {
     MOZ_ASSERT(aProxy);
@@ -447,8 +446,8 @@ public:
   private:
     virtual void trace(JSTracer* aTrc)
     {
-      JS_CallHeapValueTracer(aTrc, &mStateData->mResponse,
-                             "XMLHttpRequest::StateData::mResponse");
+      JS_CallValueTracer(aTrc, &mStateData->mResponse,
+                         "XMLHttpRequest::StateData::mResponse");
     }
   };
 
@@ -869,7 +868,7 @@ class AutoUnpinXHR
   XMLHttpRequest* mXMLHttpRequestPrivate;
 
 public:
-  AutoUnpinXHR(XMLHttpRequest* aXMLHttpRequestPrivate)
+  explicit AutoUnpinXHR(XMLHttpRequest* aXMLHttpRequestPrivate)
   : mXMLHttpRequestPrivate(aXMLHttpRequestPrivate)
   {
     MOZ_ASSERT(aXMLHttpRequestPrivate);
@@ -1192,12 +1191,16 @@ EventRunnable::PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
             mUseCachedArrayBufferResponse = true;
             doClone = false;
           } else {
+            MOZ_ASSERT(!JS_IsNeuteredArrayBufferObject(obj));
             JS::AutoValueArray<1> argv(aCx);
             argv[0].set(response);
             obj = JS_NewArrayObject(aCx, argv);
             if (obj) {
               transferable.setObject(*obj);
-              mProxy->mArrayBufferResponseWasTransferred = true;
+              // Only cache the response when the readyState is DONE.
+              if (xhr->ReadyState() == nsIXMLHttpRequest::DONE) {
+                mProxy->mArrayBufferResponseWasTransferred = true;
+              }
             } else {
               mResponseResult = NS_ERROR_OUT_OF_MEMORY;
               doClone = false;
@@ -1573,6 +1576,8 @@ XMLHttpRequest::XMLHttpRequest(WorkerPrivate* aWorkerPrivate)
   mWorkerPrivate->AssertIsOnWorkerThread();
 
   SetIsDOMBinding();
+
+  mozilla::HoldJSObjects(this);
 }
 
 XMLHttpRequest::~XMLHttpRequest()
@@ -1623,7 +1628,7 @@ XMLHttpRequest::Constructor(const GlobalObject& aGlobal,
                             const MozXMLHttpRequestParameters& aParams,
                             ErrorResult& aRv)
 {
-  JSContext* cx = aGlobal.GetContext();
+  JSContext* cx = aGlobal.Context();
   WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(cx);
   MOZ_ASSERT(workerPrivate);
 
@@ -1843,8 +1848,8 @@ XMLHttpRequest::SendInternal(const nsAString& aStringBody,
   nsCOMPtr<nsIEventTarget> syncLoopTarget;
   bool isSyncXHR = mProxy->mIsSyncXHR;
   if (isSyncXHR) {
-    autoSyncLoop.construct(mWorkerPrivate);
-    syncLoopTarget = autoSyncLoop.ref().EventTarget();
+    autoSyncLoop.emplace(mWorkerPrivate);
+    syncLoopTarget = autoSyncLoop->EventTarget();
   }
 
   mProxy->mOuterChannelId++;
@@ -1861,13 +1866,13 @@ XMLHttpRequest::SendInternal(const nsAString& aStringBody,
 
   if (!isSyncXHR)  {
     autoUnpin.Clear();
-    MOZ_ASSERT(autoSyncLoop.empty());
+    MOZ_ASSERT(!autoSyncLoop);
     return;
   }
 
   autoUnpin.Clear();
 
-  if (!autoSyncLoop.ref().Run()) {
+  if (!autoSyncLoop->Run()) {
     aRv.Throw(NS_ERROR_FAILURE);
   }
 }
@@ -2313,8 +2318,10 @@ XMLHttpRequest::SetResponseType(XMLHttpRequestResponseType aResponseType,
   mResponseType = ConvertStringToResponseType(acceptedResponseTypeString);
 }
 
-jsval
-XMLHttpRequest::GetResponse(JSContext* /* unused */, ErrorResult& aRv)
+void
+XMLHttpRequest::GetResponse(JSContext* /* unused */,
+                            JS::MutableHandle<JS::Value> aResponse,
+                            ErrorResult& aRv)
 {
   if (NS_SUCCEEDED(mStateData.mResponseTextResult) &&
       mStateData.mResponse.isUndefined()) {
@@ -2327,14 +2334,15 @@ XMLHttpRequest::GetResponse(JSContext* /* unused */, ErrorResult& aRv)
                           mStateData.mResponseText.Length());
     if (!str) {
       aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
-      return JSVAL_VOID;
+      return;
     }
 
     mStateData.mResponse = STRING_TO_JSVAL(str);
   }
 
+  JS::ExposeValueToActiveJS(mStateData.mResponse);
   aRv = mStateData.mResponseResult;
-  return mStateData.mResponse;
+  aResponse.set(mStateData.mResponse);
 }
 
 void
@@ -2357,8 +2365,5 @@ XMLHttpRequest::UpdateState(const StateData& aStateData,
   }
   else {
     mStateData = aStateData;
-  }
-  if (mStateData.mResponse.isGCThing()) {
-    mozilla::HoldJSObjects(this);
   }
 }

@@ -76,7 +76,7 @@ NS_QUERYFRAME_TAIL_INHERITING(nsLeafFrame)
 class AsyncFrameInit : public nsRunnable
 {
 public:
-  AsyncFrameInit(nsIFrame* aFrame) : mFrame(aFrame) {}
+  explicit AsyncFrameInit(nsIFrame* aFrame) : mFrame(aFrame) {}
   NS_IMETHOD Run()
   {
     if (mFrame.IsAlive()) {
@@ -408,7 +408,8 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
           nsRect(nsPoint(0,0), nsLayoutUtils::CalculateCompositionSizeForFrame(rootScrollFrame)) :
           dirty.Intersect(nsRect(nsPoint(0,0), subdocRootFrame->GetSize()));
       nsRect displayPort;
-      if (nsLayoutUtils::GetOrMaybeCreateDisplayPort(
+      if (!aBuilder->IsForEventDelivery() &&
+          nsLayoutUtils::GetOrMaybeCreateDisplayPort(
             *aBuilder, rootScrollFrame, displayportBase, &displayPort)) {
         haveDisplayPort = true;
         dirty = displayPort;
@@ -428,7 +429,9 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       }
     }
 
-    aBuilder->EnterPresShell(subdocRootFrame, dirty);
+    aBuilder->EnterPresShell(subdocRootFrame);
+  } else {
+    dirty = aDirtyRect;
   }
 
   DisplayListClipState::AutoSaveRestore clipState(aBuilder);
@@ -444,13 +447,6 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     haveDisplayPort ||
     presContext->IsRootContentDocument() || (sf && sf->IsScrollingActive());
 
-  // Don't let in fixed pos propagate down to child documents. This makes
-  // it a little less effective but doesn't regress an important case of a
-  // child document being in a fixed pos element where we would do no occlusion
-  // at all if we let it propagate down.
-  nsDisplayListBuilder::AutoInFixedPosSetter
-    buildingInFixedPos(aBuilder, false);
-
   nsDisplayList childItems;
 
   {
@@ -464,10 +460,11 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     }
 
     if (subdocRootFrame) {
+      nsIFrame* rootScrollFrame = presShell->GetRootScrollFrame();
       nsDisplayListBuilder::AutoCurrentScrollParentIdSetter idSetter(
           aBuilder,
-          ignoreViewportScrolling && subdocRootFrame->GetContent()
-              ? nsLayoutUtils::FindOrCreateIDFor(subdocRootFrame->GetContent())
+          ignoreViewportScrolling && rootScrollFrame && rootScrollFrame->GetContent()
+              ? nsLayoutUtils::FindOrCreateIDFor(rootScrollFrame->GetContent())
               : aBuilder->GetCurrentScrollParentId());
 
       aBuilder->SetAncestorHasTouchEventHandler(false);
@@ -494,14 +491,27 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
           *aBuilder, childItems, subdocRootFrame ? subdocRootFrame : this,
           bounds);
       } else {
+        // Invoke AutoBuildingDisplayList to ensure that the correct dirty rect
+        // is used to compute the visible rect if AddCanvasBackgroundColorItem
+        // creates a display item.
+        nsIFrame* frame = subdocRootFrame ? subdocRootFrame : this;
+        nsDisplayListBuilder::AutoBuildingDisplayList
+          building(aBuilder, frame, dirty, true);
         // Add the canvas background color to the bottom of the list. This
         // happens after we've built the list so that AddCanvasBackgroundColorItem
         // can monkey with the contents if necessary.
         uint32_t flags = nsIPresShell::FORCE_DRAW;
         presShell->AddCanvasBackgroundColorItem(
-          *aBuilder, childItems, subdocRootFrame ? subdocRootFrame : this,
-          bounds, NS_RGBA(0,0,0,0), flags);
+          *aBuilder, childItems, frame, bounds, NS_RGBA(0,0,0,0), flags);
       }
+    }
+  }
+
+  if (subdocRootFrame) {
+    aBuilder->LeavePresShell(subdocRootFrame);
+
+    if (ignoreViewportScrolling) {
+      aBuilder->SetIgnoreScrollFrame(savedIgnoreScrollFrame);
     }
   }
 
@@ -544,14 +554,6 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     childItems.AppendToTop(layerItem);
   }
 
-  if (subdocRootFrame) {
-    aBuilder->LeavePresShell(subdocRootFrame, dirty);
-
-    if (ignoreViewportScrolling) {
-      aBuilder->SetIgnoreScrollFrame(savedIgnoreScrollFrame);
-    }
-  }
-
   if (aBuilder->IsForImageVisibility()) {
     // We don't add the childItems to the return list as we're dealing with them here.
     presShell->RebuildImageVisibilityDisplayList(childItems);
@@ -562,7 +564,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 }
 
 nscoord
-nsSubDocumentFrame::GetIntrinsicWidth()
+nsSubDocumentFrame::GetIntrinsicISize()
 {
   if (!IsInline()) {
     return 0;  // HTML <frame> has no useful intrinsic width
@@ -581,7 +583,7 @@ nsSubDocumentFrame::GetIntrinsicWidth()
 }
 
 nscoord
-nsSubDocumentFrame::GetIntrinsicHeight()
+nsSubDocumentFrame::GetIntrinsicBSize()
 {
   // <frame> processing does not use this routine, only <iframe>
   NS_ASSERTION(IsInline(), "Shouldn't have been called");
@@ -629,32 +631,32 @@ nsSubDocumentFrame::GetType() const
 }
 
 /* virtual */ nscoord
-nsSubDocumentFrame::GetMinWidth(nsRenderingContext *aRenderingContext)
+nsSubDocumentFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 {
   nscoord result;
   DISPLAY_MIN_WIDTH(this, result);
 
   nsIFrame* subDocRoot = ObtainIntrinsicSizeFrame();
   if (subDocRoot) {
-    result = subDocRoot->GetMinWidth(aRenderingContext);
+    result = subDocRoot->GetMinISize(aRenderingContext);
   } else {
-    result = GetIntrinsicWidth();
+    result = GetIntrinsicISize();
   }
 
   return result;
 }
 
 /* virtual */ nscoord
-nsSubDocumentFrame::GetPrefWidth(nsRenderingContext *aRenderingContext)
+nsSubDocumentFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
 {
   nscoord result;
   DISPLAY_PREF_WIDTH(this, result);
 
   nsIFrame* subDocRoot = ObtainIntrinsicSizeFrame();
   if (subDocRoot) {
-    result = subDocRoot->GetPrefWidth(aRenderingContext);
+    result = subDocRoot->GetPrefISize(aRenderingContext);
   } else {
-    result = GetIntrinsicWidth();
+    result = GetIntrinsicISize();
   }
 
   return result;
@@ -680,39 +682,53 @@ nsSubDocumentFrame::GetIntrinsicRatio()
   return nsLeafFrame::GetIntrinsicRatio();
 }
 
-/* virtual */ nsSize
+/* virtual */
+LogicalSize
 nsSubDocumentFrame::ComputeAutoSize(nsRenderingContext *aRenderingContext,
-                                    nsSize aCBSize, nscoord aAvailableWidth,
-                                    nsSize aMargin, nsSize aBorder,
-                                    nsSize aPadding, bool aShrinkWrap)
+                                    WritingMode aWM,
+                                    const LogicalSize& aCBSize,
+                                    nscoord aAvailableISize,
+                                    const LogicalSize& aMargin,
+                                    const LogicalSize& aBorder,
+                                    const LogicalSize& aPadding,
+                                    bool aShrinkWrap)
 {
   if (!IsInline()) {
-    return nsFrame::ComputeAutoSize(aRenderingContext, aCBSize,
-                                    aAvailableWidth, aMargin, aBorder,
+    return nsFrame::ComputeAutoSize(aRenderingContext, aWM, aCBSize,
+                                    aAvailableISize, aMargin, aBorder,
                                     aPadding, aShrinkWrap);
   }
 
-  return nsLeafFrame::ComputeAutoSize(aRenderingContext, aCBSize,
-                                      aAvailableWidth, aMargin, aBorder,
+  return nsLeafFrame::ComputeAutoSize(aRenderingContext, aWM, aCBSize,
+                                      aAvailableISize, aMargin, aBorder,
                                       aPadding, aShrinkWrap);  
 }
 
 
-/* virtual */ nsSize
+/* virtual */
+LogicalSize
 nsSubDocumentFrame::ComputeSize(nsRenderingContext *aRenderingContext,
-                                nsSize aCBSize, nscoord aAvailableWidth,
-                                nsSize aMargin, nsSize aBorder, nsSize aPadding,
+                                WritingMode aWM,
+                                const LogicalSize& aCBSize,
+                                nscoord aAvailableISize,
+                                const LogicalSize& aMargin,
+                                const LogicalSize& aBorder,
+                                const LogicalSize& aPadding,
                                 uint32_t aFlags)
 {
   nsIFrame* subDocRoot = ObtainIntrinsicSizeFrame();
   if (subDocRoot) {
-    return nsLayoutUtils::ComputeSizeWithIntrinsicDimensions(
+    return nsLayoutUtils::ComputeSizeWithIntrinsicDimensions(aWM,
                             aRenderingContext, this,
                             subDocRoot->GetIntrinsicSize(),
                             subDocRoot->GetIntrinsicRatio(),
-                            aCBSize, aMargin, aBorder, aPadding);
+                            aCBSize,
+                            aMargin,
+                            aBorder,
+                            aPadding);
   }
-  return nsLeafFrame::ComputeSize(aRenderingContext, aCBSize, aAvailableWidth,
+  return nsLeafFrame::ComputeSize(aRenderingContext, aWM,
+                                  aCBSize, aAvailableISize,
                                   aMargin, aBorder, aPadding, aFlags);
 }
 
@@ -1004,7 +1020,7 @@ BeginSwapDocShellsForDocument(nsIDocument* aDocument, void*)
       ::DestroyDisplayItemDataForFrames(rootFrame);
     }
   }
-  aDocument->EnumerateFreezableElements(
+  aDocument->EnumerateActivityObservers(
     nsObjectFrame::BeginSwapDocShells, nullptr);
   aDocument->EnumerateSubDocuments(BeginSwapDocShellsForDocument, nullptr);
   return true;
@@ -1101,7 +1117,7 @@ EndSwapDocShellsForDocument(nsIDocument* aDocument, void*)
     }
   }
 
-  aDocument->EnumerateFreezableElements(
+  aDocument->EnumerateActivityObservers(
     nsObjectFrame::EndSwapDocShells, nullptr);
   aDocument->EnumerateSubDocuments(EndSwapDocShellsForDocument, nullptr);
   return true;

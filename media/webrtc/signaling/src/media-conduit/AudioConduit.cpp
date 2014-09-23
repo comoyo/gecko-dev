@@ -416,8 +416,7 @@ WebrtcAudioConduit::ConfigureSendMediaCodec(const AudioCodecConfig* codecConfig)
                                               codecConfig->mFreq,
                                               codecConfig->mPacSize,
                                               codecConfig->mChannels,
-                                              codecConfig->mRate,
-                                              codecConfig->mLoadManager);
+                                              codecConfig->mRate);
 
   mEngineTransmitting = true;
   return kMediaConduitNoError;
@@ -763,21 +762,15 @@ WebrtcAudioConduit::ReceivedRTCPPacket(const void *data, int len)
 {
   CSFLogDebug(logTag,  "%s : channel %d",__FUNCTION__, mChannel);
 
-  if(mEngineTransmitting)
+  if(mPtrVoENetwork->ReceivedRTCPPacket(mChannel, data, len) == -1)
   {
-    if(mPtrVoENetwork->ReceivedRTCPPacket(mChannel, data, len) == -1)
+    int error = mPtrVoEBase->LastError();
+    CSFLogError(logTag, "%s RTCP Processing Error %d", __FUNCTION__, error);
+    if(error == VE_RTP_RTCP_MODULE_ERROR)
     {
-      int error = mPtrVoEBase->LastError();
-      CSFLogError(logTag, "%s RTCP Processing Error %d", __FUNCTION__, error);
-      if(error == VE_RTP_RTCP_MODULE_ERROR)
-      {
-        return kMediaConduitRTPRTCPModuleError;
-      }
-      return kMediaConduitUnknownError;
+      return kMediaConduitRTPRTCPModuleError;
     }
-  } else {
-    CSFLogError(logTag, "Error: %s when not receiving", __FUNCTION__);
-    return kMediaConduitSessionNotInited;
+    return kMediaConduitUnknownError;
   }
   return kMediaConduitNoError;
 }
@@ -854,15 +847,15 @@ bool
 WebrtcAudioConduit::CodecConfigToWebRTCCodec(const AudioCodecConfig* codecInfo,
                                               webrtc::CodecInst& cinst)
  {
-  const unsigned int plNameLength = codecInfo->mName.length()+1;
+  const unsigned int plNameLength = codecInfo->mName.length();
   memset(&cinst, 0, sizeof(webrtc::CodecInst));
-  if(sizeof(cinst.plname) < plNameLength)
+  if(sizeof(cinst.plname) < plNameLength+1)
   {
     CSFLogError(logTag, "%s Payload name buffer capacity mismatch ",
                                                       __FUNCTION__);
     return false;
   }
-  memcpy(cinst.plname, codecInfo->mName.c_str(),codecInfo->mName.length());
+  memcpy(cinst.plname, codecInfo->mName.c_str(), plNameLength);
   cinst.plname[plNameLength]='\0';
   cinst.pltype   =  codecInfo->mType;
   cinst.rate     =  codecInfo->mRate;
@@ -910,8 +903,7 @@ WebrtcAudioConduit::CopyCodecToDB(const AudioCodecConfig* codecInfo)
                                                      codecInfo->mFreq,
                                                      codecInfo->mPacSize,
                                                      codecInfo->mChannels,
-                                                     codecInfo->mRate,
-                                                     codecInfo->mLoadManager);
+                                                     codecInfo->mRate);
   mRecvCodecList.push_back(cdcConfig);
   return true;
 }

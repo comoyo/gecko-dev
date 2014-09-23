@@ -11,13 +11,25 @@
 
 namespace mozilla {
 
-class CameraPreviewFrameCallback {
+class FakeMediaStreamGraph : public MediaStreamGraph
+{
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(FakeMediaStreamGraph)
 public:
-  virtual void OnNewFrame(const gfxIntSize& aIntrinsicSize, layers::Image* aImage) = 0;
+  FakeMediaStreamGraph()
+    : MediaStreamGraph()
+  {
+  }
+
+  virtual void
+  DispatchToMainThreadAfterStreamStateUpdate(already_AddRefed<nsIRunnable> aRunnable) MOZ_OVERRIDE;
+
+protected:
+  ~FakeMediaStreamGraph()
+  {}
 };
 
 /**
- * This is a stream for camere preview.
+ * This is a stream for camera preview.
  *
  * XXX It is a temporary fix of SourceMediaStream.
  * A camera preview requests no delay and no buffering stream.
@@ -28,7 +40,7 @@ class CameraPreviewMediaStream : public MediaStream
   typedef mozilla::layers::Image Image;
 
 public:
-  CameraPreviewMediaStream(DOMMediaStream* aWrapper);
+  explicit CameraPreviewMediaStream(DOMMediaStream* aWrapper);
 
   virtual void AddAudioOutput(void* aKey) MOZ_OVERRIDE;
   virtual void SetAudioOutputVolume(void* aKey, float aVolume) MOZ_OVERRIDE;
@@ -40,20 +52,22 @@ public:
   virtual void RemoveListener(MediaStreamListener* aListener) MOZ_OVERRIDE;
   virtual void Destroy();
 
+  void Invalidate();
+
   // Call these on any thread.
   void SetCurrentFrame(const gfxIntSize& aIntrinsicSize, Image* aImage);
   void ClearCurrentFrame();
-
-  void SetFrameCallback(CameraPreviewFrameCallback* aCallback) {
-    mFrameCallback = aCallback;
-  }
+  void RateLimit(bool aLimit);
 
 protected:
   // mMutex protects all the class' fields.
   // This class is not registered to MediaStreamGraph.
   // It needs to protect all the fields.
   Mutex mMutex;
-  CameraPreviewFrameCallback* mFrameCallback;
+  int32_t mInvalidatePending;
+  uint32_t mDiscardedFrames;
+  bool mRateLimit;
+  nsRefPtr<FakeMediaStreamGraph> mFakeMediaStreamGraph;
 };
 
 }

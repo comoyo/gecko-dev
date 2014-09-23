@@ -123,8 +123,15 @@ PlacesViewBase.prototype = {
 
   get selectedNode() {
     if (this._contextMenuShown) {
-      let popup = document.popupNode;
-      return popup._placesNode || popup.parentNode._placesNode || null;
+      let anchor = this._contextMenuShown.triggerNode;
+      if (!anchor)
+        return null;
+
+      if (anchor._placesNode)
+        return this._rootElt == anchor ? null : anchor._placesNode;
+
+      anchor = anchor.parentNode;
+      return this._rootElt == anchor ? null : (anchor._placesNode || null);
     }
     return null;
   },
@@ -162,7 +169,7 @@ PlacesViewBase.prototype = {
     let index = PlacesUtils.bookmarks.DEFAULT_INDEX;
     let container = this._resultNode;
     let orientation = Ci.nsITreeView.DROP_BEFORE;
-    let isTag = false;
+    let tagName = null;
 
     let selectedNode = this.selectedNode;
     if (selectedNode) {
@@ -178,7 +185,8 @@ PlacesViewBase.prototype = {
         // In all other cases the insertion point is before that node.
         container = selectedNode.parent;
         index = container.getChildIndex(selectedNode);
-        isTag = PlacesUtils.nodeIsTagQuery(container);
+        if (PlacesUtils.nodeIsTagQuery(container))
+          tagName = container.title;
       }
     }
 
@@ -186,17 +194,17 @@ PlacesViewBase.prototype = {
       return null;
 
     return new InsertionPoint(PlacesUtils.getConcreteItemId(container),
-                              index, orientation, isTag);
+                              index, orientation, tagName);
   },
 
   buildContextMenu: function PVB_buildContextMenu(aPopup) {
-    this._contextMenuShown = true;
+    this._contextMenuShown = aPopup;
     window.updateCommands("places");
     return this.controller.buildContextMenu(aPopup);
   },
 
   destroyContextMenu: function PVB_destroyContextMenu(aPopup) {
-    this._contextMenuShown = false;
+    this._contextMenuShown = null;
   },
 
   _cleanPopup: function PVB_cleanPopup(aPopup, aDelay) {
@@ -355,7 +363,8 @@ PlacesViewBase.prototype = {
 
       let icon = aPlacesNode.icon;
       if (icon)
-        element.setAttribute("image", icon);
+        element.setAttribute("image",
+                             PlacesUtils.getImageURLForResolution(window, icon));
     }
 
     element._placesNode = aPlacesNode;
@@ -493,7 +502,8 @@ PlacesViewBase.prototype = {
     if (!icon)
       elt.removeAttribute("image");
     else if (icon != elt.getAttribute("image"))
-      elt.setAttribute("image", icon);
+      elt.setAttribute("image",
+                       PlacesUtils.getImageURLForResolution(window, icon));
   },
 
   nodeAnnotationChanged:
@@ -1009,7 +1019,8 @@ PlacesToolbar.prototype = {
       button.setAttribute("label", aChild.title);
       let icon = aChild.icon;
       if (icon)
-        button.setAttribute("image", icon);
+        button.setAttribute("image",
+                            PlacesUtils.getImageURLForResolution(window, icon));
 
       if (PlacesUtils.containerTypes.indexOf(type) != -1) {
         button.setAttribute("type", "menu");
@@ -1382,10 +1393,12 @@ PlacesToolbar.prototype = {
         else if (this.isRTL ? (aEvent.clientX > eltRect.left + threshold)
                             : (aEvent.clientX < eltRect.right - threshold)) {
           // Drop inside this folder.
+          let tagName = PlacesUtils.nodeIsTagQuery(elt._placesNode) ?
+                        elt._placesNode.title : null;
           dropPoint.ip =
             new InsertionPoint(PlacesUtils.getConcreteItemId(elt._placesNode),
                                -1, Ci.nsITreeView.DROP_ON,
-                               PlacesUtils.nodeIsTagQuery(elt._placesNode));
+                               tagName);
           dropPoint.beforeIndex = eltIndex;
           dropPoint.folderElt = elt;
         }
@@ -1627,6 +1640,7 @@ PlacesToolbar.prototype = {
     let dropPoint = this._getDropPoint(aEvent);
     if (dropPoint && dropPoint.ip) {
       PlacesControllerDragHelper.onDrop(dropPoint.ip, aEvent.dataTransfer)
+                                .then(null, Components.utils.reportError);
       aEvent.preventDefault();
     }
 
@@ -1833,7 +1847,8 @@ PlacesPanelMenuView.prototype = {
       button.setAttribute("label", aChild.title);
       let icon = aChild.icon;
       if (icon)
-        button.setAttribute("image", icon);
+        button.setAttribute("image",
+                            PlacesUtils.getImageURLForResolution(window, icon));
 
       if (PlacesUtils.containerTypes.indexOf(type) != -1) {
         button.setAttribute("container", "true");

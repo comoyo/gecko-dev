@@ -14,6 +14,7 @@
 #include "mozilla/Types.h"
 #include "nsTArray.h"
 #include "prlog.h"
+#include "mozilla/dom/MozPowerManagerBinding.h"
 #include "mozilla/dom/battery/Types.h"
 #include "mozilla/dom/network/Types.h"
 #include "mozilla/dom/power/Types.h"
@@ -48,6 +49,7 @@ class WindowIdentifier;
 
 extern PRLogModuleInfo *GetHalLog();
 #define HAL_LOG(msg) PR_LOG(mozilla::hal::GetHalLog(), PR_LOG_DEBUG, msg)
+#define HAL_ERR(msg) PR_LOG(mozilla::hal::GetHalLog(), PR_LOG_ERROR, msg)
 
 typedef Observer<int64_t> SystemClockChangeObserver;
 typedef Observer<SystemTimezoneChangeInformation> SystemTimezoneChangeObserver;
@@ -167,24 +169,6 @@ bool GetCpuSleepAllowed();
  * the screen is disabled.
  */
 void SetCpuSleepAllowed(bool aAllowed);
-
-/**
- * Set the value of a light to a particular color, with a specific flash pattern.
- * light specifices which light.  See Hal.idl for the list of constants
- * mode specifies user set or based on ambient light sensor
- * flash specifies whether or how to flash the light
- * flashOnMS and flashOffMS specify the pattern for XXX flash mode
- * color specifies the color.  If the light doesn't support color, the given color is
- * transformed into a brightness, or just an on/off if that is all the light is capable of.
- * returns true if successful and false if failed.
- */
-bool SetLight(hal::LightType light, const hal::LightConfiguration& aConfig);
-/**
- * GET the value of a light returning a particular color, with a specific flash pattern.
- * returns true if successful and false if failed.
- */
-bool GetLight(hal::LightType light, hal::LightConfiguration* aConfig);
-
 
 /**
  * Register an observer for the sensor of given type.
@@ -543,6 +527,8 @@ void DisableFMRadio();
 /**
  * Seek to an available FM radio station.
  *
+ * This can be called off main thread, but all calls must be completed
+ * before calling DisableFMRadio.
  */
 void FMRadioSeek(const hal::FMRadioSeekDirection& aDirection);
 
@@ -553,6 +539,9 @@ void GetFMRadioSettings(hal::FMRadioSettings* aInfo);
 
 /**
  * Set the FM radio's frequency.
+ *
+ * This can be called off main thread, but all calls must be completed
+ * before calling DisableFMRadio.
  */
 void SetFMRadioFrequency(const uint32_t frequency);
 
@@ -593,7 +582,7 @@ void StartForceQuitWatchdog(hal::ShutdownMode aMode, int32_t aTimeoutSecs);
 /**
  * Perform Factory Reset to wipe out all user data.
  */
-void FactoryReset();
+void FactoryReset(mozilla::dom::FactoryResetReason& aReason);
 
 /**
  * Start monitoring the status of gamepads attached to the system.
@@ -633,6 +622,11 @@ uint32_t GetTotalSystemMemory();
  * Returns 0 if we are unable to determine this information from /proc/meminfo.
  */
 uint32_t GetTotalSystemMemoryLevel();
+
+/**
+ * Determine whether the headphone switch event is from input device
+ */
+bool IsHeadphoneEventFromInputDev();
 
 } // namespace MOZ_HAL_NAMESPACE
 } // namespace mozilla

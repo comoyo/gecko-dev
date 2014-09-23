@@ -8,6 +8,7 @@
 
 #include "nsCSSValue.h"
 
+#include "mozilla/CSSStyleSheet.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/css/ImageLoader.h"
@@ -18,7 +19,6 @@
 #include "nsIDocument.h"
 #include "nsIPrincipal.h"
 #include "nsCSSProps.h"
-#include "nsCSSStyleSheet.h"
 #include "nsNetUtil.h"
 #include "nsPresContext.h"
 #include "nsStyleUtil.h"
@@ -111,7 +111,7 @@ nsCSSValue::nsCSSValue(mozilla::css::GridTemplateAreasValue* aValue)
   mValue.mGridTemplateAreas->AddRef();
 }
 
-nsCSSValue::nsCSSValue(FontFamilyList* aValue)
+nsCSSValue::nsCSSValue(css::FontFamilyListRefCnt* aValue)
   : mUnit(eCSSUnit_FontFamilyList)
 {
   mValue.mFontFamilyList = aValue;
@@ -491,7 +491,7 @@ void nsCSSValue::SetGridTemplateAreas(mozilla::css::GridTemplateAreasValue* aVal
   mValue.mGridTemplateAreas->AddRef();
 }
 
-void nsCSSValue::SetFontFamilyListValue(FontFamilyList* aValue)
+void nsCSSValue::SetFontFamilyListValue(css::FontFamilyListRefCnt* aValue)
 {
   Reset();
   mUnit = eCSSUnit_FontFamilyList;
@@ -1666,6 +1666,8 @@ nsCSSValueList::Clone() const
     dest = dest->mNext;
     src = src->mNext;
   }
+
+  MOZ_ASSERT(result, "shouldn't return null; supposed to be infallible");
   return result;
 }
 
@@ -2001,6 +2003,8 @@ nsCSSValuePairList::Clone() const
     dest = dest->mNext;
     src = src->mNext;
   }
+
+  MOZ_ASSERT(result, "shouldn't return null; supposed to be infallible");
   return result;
 }
 

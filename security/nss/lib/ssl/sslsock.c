@@ -80,7 +80,9 @@ static sslOptions ssl_defaults = {
     PR_TRUE,    /* cbcRandomIV        */
     PR_FALSE,   /* enableOCSPStapling */
     PR_TRUE,    /* enableNPN          */
-    PR_FALSE    /* enableALPN         */
+    PR_FALSE,   /* enableALPN         */
+    PR_TRUE,    /* reuseServerECDHEKey */
+    PR_FALSE    /* enableFallbackSCSV */
 };
 
 /*
@@ -784,6 +786,14 @@ SSL_OptionSet(PRFileDesc *fd, PRInt32 which, PRBool on)
         ss->opt.enableALPN = on;
         break;
 
+      case SSL_REUSE_SERVER_ECDHE_KEY:
+        ss->opt.reuseServerECDHEKey = on;
+        break;
+
+      case SSL_ENABLE_FALLBACK_SCSV:
+        ss->opt.enableFallbackSCSV = on;
+        break;
+
       default:
         PORT_SetError(SEC_ERROR_INVALID_ARGS);
         rv = SECFailure;
@@ -856,6 +866,9 @@ SSL_OptionGet(PRFileDesc *fd, PRInt32 which, PRBool *pOn)
     case SSL_ENABLE_OCSP_STAPLING: on = ss->opt.enableOCSPStapling; break;
     case SSL_ENABLE_NPN:          on = ss->opt.enableNPN;          break;
     case SSL_ENABLE_ALPN:         on = ss->opt.enableALPN;         break;
+    case SSL_REUSE_SERVER_ECDHE_KEY:
+                                  on = ss->opt.reuseServerECDHEKey; break;
+    case SSL_ENABLE_FALLBACK_SCSV: on = ss->opt.enableFallbackSCSV; break;
 
     default:
         PORT_SetError(SEC_ERROR_INVALID_ARGS);
@@ -919,6 +932,12 @@ SSL_OptionGetDefault(PRInt32 which, PRBool *pOn)
        break;
     case SSL_ENABLE_NPN:          on = ssl_defaults.enableNPN;          break;
     case SSL_ENABLE_ALPN:         on = ssl_defaults.enableALPN;         break;
+    case SSL_REUSE_SERVER_ECDHE_KEY:
+       on = ssl_defaults.reuseServerECDHEKey;
+       break;
+    case SSL_ENABLE_FALLBACK_SCSV:
+       on = ssl_defaults.enableFallbackSCSV;
+       break;
 
     default:
         PORT_SetError(SEC_ERROR_INVALID_ARGS);
@@ -1092,6 +1111,14 @@ SSL_OptionSetDefault(PRInt32 which, PRBool on)
 
       case SSL_ENABLE_ALPN:
         ssl_defaults.enableALPN = on;
+        break;
+
+      case SSL_REUSE_SERVER_ECDHE_KEY:
+        ssl_defaults.reuseServerECDHEKey = on;
+        break;
+
+      case SSL_ENABLE_FALLBACK_SCSV:
+        ssl_defaults.enableFallbackSCSV = on;
         break;
 
       default:
@@ -1370,6 +1397,11 @@ DTLS_ImportFD(PRFileDesc *model, PRFileDesc *fd)
     return ssl_ImportFD(model, fd, ssl_variant_datagram);
 }
 
+/* SSL_SetNextProtoCallback is used to select an application protocol
+ * for ALPN and NPN.  For ALPN, this runs on the server; for NPN it
+ * runs on the client. */
+/* Note: The ALPN version doesn't allow for the use of a default, setting a
+ * status of SSL_NEXT_PROTO_NO_OVERLAP is treated as a failure. */
 SECStatus
 SSL_SetNextProtoCallback(PRFileDesc *fd, SSLNextProtoCallback callback,
                          void *arg)
@@ -1390,7 +1422,7 @@ SSL_SetNextProtoCallback(PRFileDesc *fd, SSLNextProtoCallback callback,
     return SECSuccess;
 }
 
-/* ssl_NextProtoNegoCallback is set as an NPN callback for the case when
+/* ssl_NextProtoNegoCallback is set as an ALPN/NPN callback when
  * SSL_SetNextProtoNego is used.
  */
 static SECStatus
@@ -1409,12 +1441,6 @@ ssl_NextProtoNegoCallback(void *arg, PRFileDesc *fd,
         return SECFailure;
     }
 
-    if (protos_len == 0) {
-        /* The server supports the extension, but doesn't have any protocols
-         * configured. In this case we request our favoured protocol. */
-        goto pick_first;
-    }
-
     /* For each protocol in server preference, see if we support it. */
     for (i = 0; i < protos_len; ) {
         for (j = 0; j < ss->opt.nextProtoNego.len; ) {
@@ -1431,7 +1457,10 @@ ssl_NextProtoNegoCallback(void *arg, PRFileDesc *fd,
         i += 1 + (unsigned int)protos[i];
     }
 
-pick_first:
+    /* The other side supports the extension, and either doesn't have any
+     * protocols configured, or none of its options match ours. In this case we
+     * request our favoured protocol. */
+    /* This will be treated as a failure for ALPN. */
     ss->ssl3.nextProtoState = SSL_NEXT_PROTO_NO_OVERLAP;
     result = ss->opt.nextProtoNego.data;
 

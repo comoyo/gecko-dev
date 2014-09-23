@@ -81,7 +81,7 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIDOMEVENTLISTENER
 
-  StartRecordingHelper(nsDOMCameraControl* aDOMCameraControl)
+  explicit StartRecordingHelper(nsDOMCameraControl* aDOMCameraControl)
     : mDOMCameraControl(aDOMCameraControl)
   {
     MOZ_COUNT_CTOR(StartRecordingHelper);
@@ -168,23 +168,33 @@ nsDOMCameraControl::nsDOMCameraControl(uint32_t aCameraId,
 
   // Create and initialize the underlying camera.
   ICameraControl::Configuration config;
+  bool haveInitialConfig = false;
+  nsresult rv;
 
   switch (aInitialConfig.mMode) {
     case CameraMode::Picture:
       config.mMode = ICameraControl::kPictureMode;
+      haveInitialConfig = true;
       break;
 
     case CameraMode::Video:
       config.mMode = ICameraControl::kVideoMode;
+      haveInitialConfig = true;
+      break;
+
+    case CameraMode::Unspecified:
       break;
 
     default:
       MOZ_ASSERT_UNREACHABLE("Unanticipated camera mode!");
+      break;
   }
 
-  config.mPreviewSize.width = aInitialConfig.mPreviewSize.mWidth;
-  config.mPreviewSize.height = aInitialConfig.mPreviewSize.mHeight;
-  config.mRecorderProfile = aInitialConfig.mRecorderProfile;
+  if (haveInitialConfig) {
+    config.mPreviewSize.width = aInitialConfig.mPreviewSize.mWidth;
+    config.mPreviewSize.height = aInitialConfig.mPreviewSize.mHeight;
+    config.mRecorderProfile = aInitialConfig.mRecorderProfile;
+  }
 
   mCameraControl = ICameraControl::Create(aCameraId);
   mCurrentConfiguration = initialConfig.forget();
@@ -201,7 +211,11 @@ nsDOMCameraControl::nsDOMCameraControl(uint32_t aCameraId,
   mCameraControl->AddListener(mListener);
 
   // Start the camera...
-  nsresult rv = mCameraControl->Start(&config);
+  if (haveInitialConfig) {
+    rv = mCameraControl->Start(&config);
+  } else {
+    rv = mCameraControl->Start();
+  }
   if (NS_FAILED(rv)) {
     mListener->OnUserError(DOMCameraControlListener::kInStartCamera, rv);
   }
@@ -384,11 +398,27 @@ nsDOMCameraControl::SetIsoMode(const nsAString& aIsoMode, ErrorResult& aRv)
 }
 
 double
+nsDOMCameraControl::GetPictureQuality(ErrorResult& aRv)
+{
+  MOZ_ASSERT(mCameraControl);
+
+  double quality;
+  aRv = mCameraControl->Get(CAMERA_PARAM_PICTURE_QUALITY, quality);
+  return quality;
+}
+void
+nsDOMCameraControl::SetPictureQuality(double aQuality, ErrorResult& aRv)
+{
+  MOZ_ASSERT(mCameraControl);
+  aRv = mCameraControl->Set(CAMERA_PARAM_PICTURE_QUALITY, aQuality);
+}
+
+double
 nsDOMCameraControl::GetZoom(ErrorResult& aRv)
 {
   MOZ_ASSERT(mCameraControl);
 
-  double zoom;
+  double zoom = 1.0;
   aRv = mCameraControl->Get(CAMERA_PARAM_ZOOM, zoom);
   return zoom;
 }
@@ -505,17 +535,10 @@ nsDOMCameraControl::GetFocusDistanceFar(ErrorResult& aRv)
 }
 
 void
-nsDOMCameraControl::SetExposureCompensation(const Optional<double>& aCompensation, ErrorResult& aRv)
+nsDOMCameraControl::SetExposureCompensation(double aCompensation, ErrorResult& aRv)
 {
   MOZ_ASSERT(mCameraControl);
-
-  if (!aCompensation.WasPassed()) {
-    // use NaN to switch the camera back into auto mode
-    aRv = mCameraControl->Set(CAMERA_PARAM_EXPOSURECOMPENSATION, NAN);
-    return;
-  }
-
-  aRv = mCameraControl->Set(CAMERA_PARAM_EXPOSURECOMPENSATION, aCompensation.Value());
+  aRv = mCameraControl->Set(CAMERA_PARAM_EXPOSURECOMPENSATION, aCompensation);
 }
 
 double
@@ -624,6 +647,28 @@ nsDOMCameraControl::Capabilities()
   return caps.forget();
 }
 
+class ImmediateErrorCallback : public nsRunnable
+{
+public:
+  ImmediateErrorCallback(CameraErrorCallback* aCallback, const nsAString& aMessage)
+    : mCallback(aCallback)
+    , mMessage(aMessage)
+  { }
+
+  NS_IMETHODIMP
+  Run()
+  {
+    MOZ_ASSERT(NS_IsMainThread());
+    ErrorResult ignored;
+    mCallback->Call(mMessage, ignored);
+    return NS_OK;
+  }
+
+protected:
+  nsRefPtr<CameraErrorCallback> mCallback;
+  nsString mMessage;
+};
+
 // Methods.
 void
 nsDOMCameraControl::StartRecording(const CameraStartRecordingOptions& aOptions,
@@ -634,6 +679,20 @@ nsDOMCameraControl::StartRecording(const CameraStartRecordingOptions& aOptions,
                                    ErrorResult& aRv)
 {
   MOZ_ASSERT(mCameraControl);
+
+  nsRefPtr<CameraStartRecordingCallback> cb = mStartRecordingOnSuccessCb;
+  if (cb) {
+    if (aOnError.WasPassed()) {
+      DOM_CAMERA_LOGT("%s:onError WasPassed\n", __func__);
+      NS_DispatchToMainThread(new ImmediateErrorCallback(&aOnError.Value(),
+                              NS_LITERAL_STRING("StartRecordingInProgress")));
+    } else {
+      DOM_CAMERA_LOGT("%s:onError NS_ERROR_FAILURE\n", __func__);
+      // Only throw if no error callback was passed in.
+      aRv = NS_ERROR_FAILURE;
+    }
+    return;
+  }
 
   NotifyRecordingStatusChange(NS_LITERAL_STRING("starting"));
 
@@ -722,28 +781,6 @@ nsDOMCameraControl::ResumePreview(ErrorResult& aRv)
   aRv = mCameraControl->StartPreview();
 }
 
-class ImmediateErrorCallback : public nsRunnable
-{
-public:
-  ImmediateErrorCallback(CameraErrorCallback* aCallback, const nsAString& aMessage)
-    : mCallback(aCallback)
-    , mMessage(aMessage)
-  { }
-  
-  NS_IMETHODIMP
-  Run()
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-    ErrorResult ignored;
-    mCallback->Call(mMessage, ignored);
-    return NS_OK;
-  }
-
-protected:
-  nsRefPtr<CameraErrorCallback> mCallback;
-  nsString mMessage;
-};
-
 void
 nsDOMCameraControl::SetConfiguration(const CameraConfiguration& aConfiguration,
                                      const Optional<OwningNonNull<CameraSetConfigurationCallback> >& aOnSuccess,
@@ -795,18 +832,12 @@ nsDOMCameraControl::AutoFocus(CameraAutoFocusCallback& aOnSuccess,
 {
   MOZ_ASSERT(mCameraControl);
 
-  nsRefPtr<CameraAutoFocusCallback> cb = mAutoFocusOnSuccessCb;
-  if (cb) {
-    if (aOnError.WasPassed()) {
-      // There is already a call to AutoFocus() in progress, abort this new one
-      // and invoke the error callback (if one was passed in).
-      NS_DispatchToMainThread(new ImmediateErrorCallback(&aOnError.Value(),
-                              NS_LITERAL_STRING("AutoFocusAlreadyInProgress")));
-    } else {
-      // Only throw if no error callback was passed in.
-      aRv = NS_ERROR_FAILURE;
-    }
-    return;
+  nsRefPtr<CameraErrorCallback> ecb = mAutoFocusOnErrorCb.forget();
+  if (ecb) {
+    // There is already a call to AutoFocus() in progress, cancel it and
+    // invoke the error callback (if one was passed in).
+    NS_DispatchToMainThread(new ImmediateErrorCallback(ecb,
+                            NS_LITERAL_STRING("AutoFocusInterrupted")));
   }
 
   mAutoFocusOnSuccessCb = &aOnSuccess;

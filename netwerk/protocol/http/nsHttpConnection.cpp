@@ -68,6 +68,7 @@ nsHttpConnection::nsHttpConnection()
     , mProxyConnectInProgress(false)
     , mExperienced(false)
     , mInSpdyTunnel(false)
+    , mForcePlainText(false)
     , mHttp1xTransactionCount(0)
     , mRemainingConnectionUses(0xffffffff)
     , mClassification(nsAHttpTransaction::CLASS_GENERAL)
@@ -178,10 +179,10 @@ nsHttpConnection::StartSpdy(uint8_t spdyVersion)
 
     if (rv == NS_ERROR_ALREADY_OPENED) {
         // Has the interface for TakeSubTransactions() changed?
-        LOG(("TakeSubTranscations somehow called after "
+        LOG(("TakeSubTransactions somehow called after "
              "nsAHttpTransaction began processing\n"));
         MOZ_ASSERT(false,
-                   "TakeSubTranscations somehow called after "
+                   "TakeSubTransactions somehow called after "
                    "nsAHttpTransaction began processing");
         mTransaction->Close(NS_ERROR_ABORT);
         return;
@@ -309,21 +310,19 @@ nsHttpConnection::EnsureNPNComplete()
         return false;
     }
 
-    if (NS_FAILED(rv)) {
-        goto npnComplete;
-    }
-    LOG(("nsHttpConnection::EnsureNPNComplete %p [%s] negotiated to '%s'%s\n",
-         this, mConnInfo->HashKey().get(), negotiatedNPN.get(),
-         mTLSFilter ? " [Double Tunnel]" : ""));
-
-    uint8_t spdyVersion;
-    rv = gHttpHandler->SpdyInfo()->GetNPNVersionIndex(negotiatedNPN,
-                                                      &spdyVersion);
     if (NS_SUCCEEDED(rv)) {
-        StartSpdy(spdyVersion);
-    }
+        LOG(("nsHttpConnection::EnsureNPNComplete %p [%s] negotiated to '%s'%s\n",
+             this, mConnInfo->HashKey().get(), negotiatedNPN.get(),
+             mTLSFilter ? " [Double Tunnel]" : ""));
 
-    Telemetry::Accumulate(Telemetry::SPDY_NPN_CONNECT, UsingSpdy());
+        uint32_t infoIndex;
+        const SpdyInformation *info = gHttpHandler->SpdyInfo();
+        if (NS_SUCCEEDED(info->GetNPNIndex(negotiatedNPN, &infoIndex))) {
+            StartSpdy(info->Version[infoIndex]);
+        }
+
+        Telemetry::Accumulate(Telemetry::SPDY_NPN_CONNECT, UsingSpdy());
+    }
 
 npnComplete:
     LOG(("nsHttpConnection::EnsureNPNComplete setting complete to true"));
@@ -417,7 +416,8 @@ nsHttpConnection::Activate(nsAHttpTransaction *trans, uint32_t caps, int32_t pri
     // The overflow state is not needed between activations
     mInputOverflow = nullptr;
 
-    mResponseTimeoutEnabled = mTransaction->ResponseTimeout() > 0 &&
+    mResponseTimeoutEnabled = gHttpHandler->ResponseTimeoutEnabled() &&
+                              mTransaction->ResponseTimeout() > 0 &&
                               mTransaction->ResponseTimeoutEnabled();
 
     rv = StartShortLivedTCPKeepalives();
@@ -459,7 +459,7 @@ nsHttpConnection::SetupSSL()
     // of this function
     mNPNComplete = true;
 
-    if (!mConnInfo->FirstHopSSL()) {
+    if (!mConnInfo->FirstHopSSL() || mForcePlainText) {
         return;
     }
 
@@ -473,6 +473,10 @@ nsHttpConnection::SetupSSL()
     }
 }
 
+// The naming of NPN is historical - this function creates the basic
+// offer list for both NPN and ALPN. ALPN validation callbacks are made
+// now before the handshake is complete, and NPN validation callbacks
+// are made during the handshake.
 nsresult
 nsHttpConnection::SetupNPNList(nsISSLSocketControl *ssl, uint32_t caps)
 {
@@ -480,17 +484,22 @@ nsHttpConnection::SetupNPNList(nsISSLSocketControl *ssl, uint32_t caps)
 
     // The first protocol is used as the fallback if none of the
     // protocols supported overlap with the server's list.
-    // In the case of overlap, matching priority is driven by
-    // the order of the server's advertisement.
+    // When using ALPN the advertised preferences are protocolArray indicies
+    // {1, .., N, 0} in decreasing order.
+    // For NPN, In the case of overlap, matching priority is driven by
+    // the order of the server's advertisement - with index 0 used when
+    // there is no match.
     protocolArray.AppendElement(NS_LITERAL_CSTRING("http/1.1"));
 
     if (gHttpHandler->IsSpdyEnabled() &&
         !(caps & NS_HTTP_DISALLOW_SPDY)) {
         LOG(("nsHttpConnection::SetupSSL Allow SPDY NPN selection"));
-        for (uint32_t index = 0; index < SpdyInformation::kCount; ++index) {
-            if (gHttpHandler->SpdyInfo()->ProtocolEnabled(index))
-                protocolArray.AppendElement(
-                    gHttpHandler->SpdyInfo()->VersionString[index]);
+        const SpdyInformation *info = gHttpHandler->SpdyInfo();
+        for (uint32_t index = SpdyInformation::kCount; index > 0; --index) {
+            if (info->ProtocolEnabled(index - 1) &&
+                info->ALPNCallbacks[index - 1](ssl)) {
+                protocolArray.AppendElement(info->VersionString[index - 1]);
+            }
         }
     }
 
@@ -974,12 +983,15 @@ nsHttpConnection::OnHeadersAvailable(nsAHttpTransaction *trans,
         MOZ_ASSERT(!mUsingSpdyVersion,
                    "SPDY NPN Complete while using proxy connect stream");
         mProxyConnectStream = nullptr;
+        bool isHttps =
+            mTransaction ? mTransaction->ConnectionInfo()->EndToEndSSL() :
+            mConnInfo->EndToEndSSL();
+
         if (responseStatus == 200) {
-            LOG(("proxy CONNECT succeeded! endtoendssl=%s\n",
-                 mConnInfo->EndToEndSSL() ? "true" :"false"));
+            LOG(("proxy CONNECT succeeded! endtoendssl=%d\n", isHttps));
             *reset = true;
             nsresult rv;
-            if (mConnInfo->EndToEndSSL()) {
+            if (isHttps) {
                 if (mConnInfo->UsingHttpsProxy()) {
                     LOG(("%p new TLSFilterTransaction %s %d\n",
                          this, mConnInfo->Host(), mConnInfo->Port()));
@@ -996,8 +1008,7 @@ nsHttpConnection::OnHeadersAvailable(nsAHttpTransaction *trans,
             MOZ_ASSERT(NS_SUCCEEDED(rv), "mSocketOut->AsyncWait failed");
         }
         else {
-            LOG(("proxy CONNECT failed! endtoendssl=%s\n",
-                 mConnInfo->EndToEndSSL() ? "true" :"false"));
+            LOG(("proxy CONNECT failed! endtoendssl=%d\n", isHttps));
             mTransaction->SetProxyConnectFailed();
         }
     }
@@ -1080,15 +1091,25 @@ nsHttpConnection::TakeTransport(nsISocketTransport  **aTransport,
         }
     }
 
-    NS_IF_ADDREF(*aTransport = mSocketTransport);
-    NS_IF_ADDREF(*aInputStream = mSocketIn);
-    NS_IF_ADDREF(*aOutputStream = mSocketOut);
-
     mSocketTransport->SetSecurityCallbacks(nullptr);
     mSocketTransport->SetEventSink(nullptr, nullptr);
-    mSocketTransport = nullptr;
-    mSocketIn = nullptr;
-    mSocketOut = nullptr;
+
+    // The nsHttpConnection will go away soon, so if there is a TLS Filter
+    // being used (e.g. for wss CONNECT tunnel from a proxy connected to
+    // via https) that filter needs to take direct control of the
+    // streams
+    if (mTLSFilter) {
+        nsCOMPtr<nsISupports> ref1(mSocketIn);
+        nsCOMPtr<nsISupports> ref2(mSocketOut);
+        mTLSFilter->newIODriver(mSocketIn, mSocketOut,
+                                getter_AddRefs(mSocketIn),
+                                getter_AddRefs(mSocketOut));
+        mTLSFilter = nullptr;
+    }
+
+    mSocketTransport.forget(aTransport);
+    mSocketIn.forget(aInputStream);
+    mSocketOut.forget(aOutputStream);
 
     return NS_OK;
 }
@@ -1110,6 +1131,9 @@ nsHttpConnection::ReadTimeoutTick(PRIntervalTime now)
     uint32_t nextTickAfter = UINT32_MAX;
     // Timeout if the response is taking too long to arrive.
     if (mResponseTimeoutEnabled) {
+        NS_WARN_IF_FALSE(gHttpHandler->ResponseTimeoutEnabled(),
+                         "Timing out a response, but response timeout is disabled!");
+
         PRIntervalTime initialResponseDelta = now - mLastWriteTime;
 
         if (initialResponseDelta > mTransaction->ResponseTimeout()) {

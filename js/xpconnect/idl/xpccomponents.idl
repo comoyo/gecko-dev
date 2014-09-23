@@ -10,6 +10,7 @@
 %}
 
 interface xpcIJSWeakReference;
+interface nsIAddonInterposition;
 interface nsIClassInfo;
 interface nsIComponentManager;
 interface nsIJSCID;
@@ -121,7 +122,7 @@ interface ScheduledGCCallback : nsISupports
 /**
 * interface of Components.utils
 */
-[scriptable, uuid(a485ba50-e208-11e3-8b68-0800200c9a66)]
+[scriptable, uuid(faa33210-536b-42e5-b9b0-8ea239899ba4)]
 interface nsIXPCComponents_Utils : nsISupports
 {
 
@@ -156,6 +157,19 @@ interface nsIXPCComponents_Utils : nsISupports
                         [optional] in jsval version,
                         [optional] in AUTF8String filename,
                         [optional] in long lineNo);
+
+    /*
+     * getSandboxAddonId is designed to be called from JavaScript only.
+     *
+     * getSandboxAddonId retrieves the add-on ID associated with
+     * a sandbox object. It will return undefined if there
+     * is no add-on ID attached to the sandbox.
+     *
+     * var s = C.u.Sandbox(..., { addonId: "123" });
+     * var id = C.u.getSandboxAddonId(s);
+     */
+    [implicit_jscontext]
+    jsval getSandboxAddonId(in jsval sandbox);
 
     /*
      * getSandboxMetadata is designed to be called from JavaScript only.
@@ -291,6 +305,22 @@ interface nsIXPCComponents_Utils : nsISupports
     /*
      * To be called from JS only.
      *
+     * Return the longest cycle collector slice time since the last
+     * time clearMaxCCTime() was called.
+     */
+    long getMaxCCSliceTimeSinceClear();
+
+    /*
+     * To be called from JS only.
+     *
+     * Reset the internal max slice time value used for
+     * getMaxCCSliceTimeSinceClear().
+     */
+    void clearMaxCCTime();
+
+    /*
+     * To be called from JS only.
+     *
      * Force an immediate shrinking garbage collection cycle.
      */
     void forceShrinkingGC();
@@ -350,16 +380,6 @@ interface nsIXPCComponents_Utils : nsISupports
      */
     [implicit_jscontext]
     boolean isProxy(in jsval vobject);
-
-    /*
-     * Similar to evalInSandbox except this one is used to eval a script in the
-     * scope of a window. Also note, that the return value and the possible exceptions
-     * in the script are structured cloned, unless they are natives (then they are just
-     * wrapped).
-     * Principal of the caller must subsume the target's.
-     */
-    [implicit_jscontext]
-    jsval evalInWindow(in AString source, in jsval window);
 
     /*
      * To be called from JS only.
@@ -435,6 +455,14 @@ interface nsIXPCComponents_Utils : nsISupports
      */
     [implicit_jscontext]
     void setWantXrays(in jsval vscope);
+
+    /*
+     * For gecko internal automation use only. Calling this in production code
+     * would result in security vulnerabilities, so it will crash if used outside
+     * of automation.
+     */
+    [implicit_jscontext]
+    void forcePermissiveCOWs();
 
     /*
      * Forces the usage of a privileged |Components| object for a potentially-
@@ -581,7 +609,10 @@ interface nsIXPCComponents_Utils : nsISupports
      * The 3rd argument is an optional options object:
      * - cloneFunctions: boolean. If true, functions in the value are
      *   wrapped in a function forwarder that appears to be a native function in
-     *   the content scope.
+     *   the content scope. Defaults to false.
+     * - wrapReflectors: boolean. If true, DOM objects are passed through the
+     *   clone directly with cross-compartment wrappers. Otherwise, the clone
+     *   fails when such an object is encountered. Defaults to false.
      */
     [implicit_jscontext]
     jsval cloneInto(in jsval value, in jsval scope, [optional] in jsval options);
@@ -608,6 +639,27 @@ interface nsIXPCComponents_Utils : nsISupports
      */
     [implicit_jscontext]
     nsIPrincipal getObjectPrincipal(in jsval obj);
+
+    /*
+     * Gets the URI or identifier string associated with an object's
+     * compartment (the same one used by the memory reporter machinery).
+     *
+     * Unwraps cross-compartment wrappers first.
+     *
+     * The string formats and values may change at any time. Do not depend on
+     * this from addon code.
+     */
+    [implicit_jscontext]
+    ACString getCompartmentLocation(in jsval obj);
+
+    [implicit_jscontext]
+    void setAddonInterposition(in ACString addonId, in nsIAddonInterposition interposition);
+
+    /*
+     * Return a fractional number of milliseconds from process
+     * startup, measured with a monotonic clock.
+     */
+    double now();
 };
 
 /**

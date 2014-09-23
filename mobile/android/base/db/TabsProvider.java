@@ -8,6 +8,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.db.BrowserContract.Clients;
 import org.mozilla.gecko.db.BrowserContract.Tabs;
 
@@ -26,7 +27,7 @@ import android.text.TextUtils;
 public class TabsProvider extends PerProfileDatabaseProvider<TabsProvider.TabsDatabaseHelper> {
     static final String DATABASE_NAME = "tabs.db";
 
-    static final int DATABASE_VERSION = 2;
+    static final int DATABASE_VERSION = 3;
 
     static final String TABLE_TABS = "tabs";
     static final String TABLE_CLIENTS = "clients";
@@ -67,12 +68,14 @@ public class TabsProvider extends PerProfileDatabaseProvider<TabsProvider.TabsDa
         map.put(Clients.GUID, Clients.GUID);
         map.put(Clients.NAME, Clients.NAME);
         map.put(Clients.LAST_MODIFIED, Clients.LAST_MODIFIED);
+        map.put(Clients.DEVICE_TYPE, Clients.DEVICE_TYPE);
         TABS_PROJECTION_MAP = Collections.unmodifiableMap(map);
 
         map = new HashMap<String, String>();
         map.put(Clients.GUID, Clients.GUID);
         map.put(Clients.NAME, Clients.NAME);
         map.put(Clients.LAST_MODIFIED, Clients.LAST_MODIFIED);
+        map.put(Clients.DEVICE_TYPE, Clients.DEVICE_TYPE);
         CLIENTS_PROJECTION_MAP = Collections.unmodifiableMap(map);
     }
 
@@ -114,7 +117,8 @@ public class TabsProvider extends PerProfileDatabaseProvider<TabsProvider.TabsDa
             db.execSQL("CREATE TABLE " + TABLE_CLIENTS + "(" +
                        Clients.GUID + " TEXT PRIMARY KEY," +
                        Clients.NAME + " TEXT," +
-                       Clients.LAST_MODIFIED + " INTEGER" +
+                       Clients.LAST_MODIFIED + " INTEGER," +
+                       Clients.DEVICE_TYPE + " TEXT" +
                        ");");
 
             // Index on GUID.
@@ -133,6 +137,14 @@ public class TabsProvider extends PerProfileDatabaseProvider<TabsProvider.TabsDa
             db.insertOrThrow(TABLE_CLIENTS, null, values);
         }
 
+        protected void upgradeDatabaseFrom2to3(SQLiteDatabase db) {
+            debug("Setting remote client device types to 'mobile' in " + TABLE_CLIENTS + " table");
+
+            // Add type to client, defaulting to mobile. This is correct for our
+            // local client; all remote clients will be updated by Sync.
+            db.execSQL("ALTER TABLE " + TABLE_CLIENTS + " ADD COLUMN " + BrowserContract.Clients.DEVICE_TYPE + " TEXT DEFAULT 'mobile'");
+        }
+
         @Override
         public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
             debug("Upgrading tabs.db: " + db.getPath() + " from " +
@@ -145,6 +157,10 @@ public class TabsProvider extends PerProfileDatabaseProvider<TabsProvider.TabsDa
                     case 2:
                         createLocalClient(db);
                         break;
+
+                    case 3:
+                        upgradeDatabaseFrom2to3(db);
+                        break;
                  }
              }
         }
@@ -156,7 +172,7 @@ public class TabsProvider extends PerProfileDatabaseProvider<TabsProvider.TabsDa
 
             if (shouldUseTransactions()) {
                 // Modern Android allows WAL to be enabled through a mode flag.
-                if (Build.VERSION.SDK_INT < 16) {
+                if (Versions.preJB) {
                     db.enableWriteAheadLogging();
                 }
                 db.setLockingEnabled(false);

@@ -75,8 +75,7 @@ class CodeGeneratorMIPS : public CodeGeneratorShared
               return bailoutCmp32(c, lhs.toReg(), rhs, snapshot);
         if (lhs.getTag() == Operand::MEM)
               return bailoutCmp32(c, lhs.toAddress(), rhs, snapshot);
-        MOZ_ASSUME_UNREACHABLE("Invalid operand tag.");
-        return false;
+        MOZ_CRASH("Invalid operand tag.");
     }
     template<typename T>
     bool bailoutTest32(Assembler::Condition c, Register lhs, T rhs, LSnapshot *snapshot) {
@@ -93,13 +92,17 @@ class CodeGeneratorMIPS : public CodeGeneratorShared
         masm.branchTestPtr(c, lhs, rhs, &bail);
         return bailoutFrom(&bail, snapshot);
     }
+    bool bailoutIfFalseBool(Register reg, LSnapshot *snapshot) {
+        Label bail;
+        masm.branchTest32(Assembler::Zero, reg, Imm32(0xFF), &bail);
+        return bailoutFrom(&bail, snapshot);
+    }
 
     bool bailoutFrom(Label *label, LSnapshot *snapshot);
     bool bailout(LSnapshot *snapshot);
 
   protected:
     bool generatePrologue();
-    bool generateAsmJSPrologue(Label *stackOverflowLabel);
     bool generateEpilogue();
     bool generateOutOfLineCode();
 
@@ -117,7 +120,7 @@ class CodeGeneratorMIPS : public CodeGeneratorShared
             Label skip;
 
             masm.ma_b(lhs, rhs, &skip, Assembler::InvertCondition(cond), ShortJump);
-            backedge = masm.jumpWithPatch(&rejoin);
+            backedge = masm.backedgeJump(&rejoin);
             masm.bind(&rejoin);
             masm.bind(&skip);
 
@@ -178,6 +181,8 @@ class CodeGeneratorMIPS : public CodeGeneratorShared
     virtual bool visitPowHalfD(LPowHalfD *ins);
     virtual bool visitShiftI(LShiftI *ins);
     virtual bool visitUrshD(LUrshD *ins);
+
+    virtual bool visitClzI(LClzI *ins);
 
     virtual bool visitTestIAndBranch(LTestIAndBranch *test);
     virtual bool visitCompare(LCompare *comp);
@@ -242,6 +247,7 @@ class CodeGeneratorMIPS : public CodeGeneratorShared
     bool visitNegF(LNegF *lir);
     bool visitLoadTypedArrayElementStatic(LLoadTypedArrayElementStatic *ins);
     bool visitStoreTypedArrayElementStatic(LStoreTypedArrayElementStatic *ins);
+    bool visitAsmJSCall(LAsmJSCall *ins);
     bool visitAsmJSLoadHeap(LAsmJSLoadHeap *ins);
     bool visitAsmJSStoreHeap(LAsmJSStoreHeap *ins);
     bool visitAsmJSLoadGlobalVar(LAsmJSLoadGlobalVar *ins);
@@ -254,12 +260,25 @@ class CodeGeneratorMIPS : public CodeGeneratorShared
     bool visitForkJoinGetSlice(LForkJoinGetSlice *ins);
 
     bool generateInvalidateEpilogue();
-  protected:
-    void postAsmJSCall(LAsmJSCall *lir) {}
 
+  protected:
     bool visitEffectiveAddress(LEffectiveAddress *ins);
     bool visitUDiv(LUDiv *ins);
     bool visitUMod(LUMod *ins);
+
+  public:
+    // Unimplemented SIMD instructions
+    bool visitSimdSplatX4(LSimdSplatX4 *lir) { MOZ_CRASH("NYI"); }
+    bool visitInt32x4(LInt32x4 *ins) { MOZ_CRASH("NYI"); }
+    bool visitFloat32x4(LFloat32x4 *ins) { MOZ_CRASH("NYI"); }
+    bool visitSimdExtractElementI(LSimdExtractElementI *ins) { MOZ_CRASH("NYI"); }
+    bool visitSimdExtractElementF(LSimdExtractElementF *ins) { MOZ_CRASH("NYI"); }
+    bool visitSimdSignMaskX4(LSimdSignMaskX4 *ins) { MOZ_CRASH("NYI"); }
+    bool visitSimdBinaryCompIx4(LSimdBinaryCompIx4 *lir) { MOZ_CRASH("NYI"); }
+    bool visitSimdBinaryCompFx4(LSimdBinaryCompFx4 *lir) { MOZ_CRASH("NYI"); }
+    bool visitSimdBinaryArithIx4(LSimdBinaryArithIx4 *lir) { MOZ_CRASH("NYI"); }
+    bool visitSimdBinaryArithFx4(LSimdBinaryArithFx4 *lir) { MOZ_CRASH("NYI"); }
+    bool visitSimdBinaryBitwiseX4(LSimdBinaryBitwiseX4 *lir) { MOZ_CRASH("NYI"); }
 };
 
 typedef CodeGeneratorMIPS CodeGeneratorSpecific;

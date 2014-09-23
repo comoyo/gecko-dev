@@ -46,7 +46,7 @@
     callFunction(std_Object_hasOwnProperty, obj, prop)
 
 function TypedObjectTypeDescr(typedObj) {
-  return TYPROTO_DESCR(typedObj.__proto__);
+  return TYPROTO_DESCR(std_Object_getPrototypeOf(typedObj));
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -74,8 +74,8 @@ function TypedObjectGet(descr, typedObj, offset) {
   case JS_TYPEREPR_REFERENCE_KIND:
     return TypedObjectGetReference(descr, typedObj, offset);
 
-  case JS_TYPEREPR_X4_KIND:
-    return TypedObjectGetX4(descr, typedObj, offset);
+  case JS_TYPEREPR_SIMD_KIND:
+    return TypedObjectGetSimd(descr, typedObj, offset);
 
   case JS_TYPEREPR_SIZED_ARRAY_KIND:
   case JS_TYPEREPR_STRUCT_KIND:
@@ -161,17 +161,17 @@ function TypedObjectGetReference(descr, typedObj, offset) {
   return undefined;
 }
 
-function TypedObjectGetX4(descr, typedObj, offset) {
+function TypedObjectGetSimd(descr, typedObj, offset) {
   var type = DESCR_TYPE(descr);
   switch (type) {
-  case JS_X4TYPEREPR_FLOAT32:
+  case JS_SIMDTYPEREPR_FLOAT32:
     var x = Load_float32(typedObj, offset + 0);
     var y = Load_float32(typedObj, offset + 4);
     var z = Load_float32(typedObj, offset + 8);
     var w = Load_float32(typedObj, offset + 12);
     return GetFloat32x4TypeDescr()(x, y, z, w);
 
-  case JS_X4TYPEREPR_INT32:
+  case JS_SIMDTYPEREPR_INT32:
     var x = Load_int32(typedObj, offset + 0);
     var y = Load_int32(typedObj, offset + 4);
     var z = Load_int32(typedObj, offset + 8);
@@ -179,7 +179,7 @@ function TypedObjectGetX4(descr, typedObj, offset) {
     return GetInt32x4TypeDescr()(x, y, z, w);
   }
 
-  assert(false, "Unhandled x4 type: " + type);
+  assert(false, "Unhandled SIMD type: " + type);
   return undefined;
 }
 
@@ -195,20 +195,6 @@ function TypedObjectSet(descr, typedObj, offset, fromValue) {
   if (!TypedObjectIsAttached(typedObj))
     ThrowError(JSMSG_TYPEDOBJECT_HANDLE_UNATTACHED);
 
-  // Fast path: `fromValue` is a typed object with same type
-  // representation as the destination. In that case, we can just do a
-  // memcpy.
-  if (IsObject(fromValue) && ObjectIsTypedObject(fromValue)) {
-    if (!descr.variable && DescrsEquiv(descr, TypedObjectTypeDescr(fromValue))) {
-      if (!TypedObjectIsAttached(fromValue))
-        ThrowError(JSMSG_TYPEDOBJECT_HANDLE_UNATTACHED);
-
-      var size = DESCR_SIZE(descr);
-      Memcpy(typedObj, offset, fromValue, 0, size);
-      return;
-    }
-  }
-
   switch (DESCR_KIND(descr)) {
   case JS_TYPEREPR_SCALAR_KIND:
     TypedObjectSetScalar(descr, typedObj, offset, fromValue);
@@ -218,8 +204,8 @@ function TypedObjectSet(descr, typedObj, offset, fromValue) {
     TypedObjectSetReference(descr, typedObj, offset, fromValue);
     return;
 
-  case JS_TYPEREPR_X4_KIND:
-    TypedObjectSetX4(descr, typedObj, offset, fromValue);
+  case JS_TYPEREPR_SIMD_KIND:
+    TypedObjectSetSimd(descr, typedObj, offset, fromValue);
     return;
 
   case JS_TYPEREPR_SIZED_ARRAY_KIND:
@@ -342,14 +328,34 @@ function TypedObjectSetReference(descr, typedObj, offset, fromValue) {
 }
 
 // Sets `fromValue` to `this` assuming that `this` is a scalar type.
-function TypedObjectSetX4(descr, typedObj, offset, fromValue) {
-  // It is only permitted to set a float32x4/int32x4 value from another
-  // float32x4/int32x4; in that case, the "fast path" that uses memcopy will
-  // have already matched. So if we get to this point, we're supposed
-  // to "adapt" fromValue, but there are no legal adaptions.
-  ThrowError(JSMSG_CANT_CONVERT_TO,
-             typeof(fromValue),
-             DESCR_STRING_REPR(descr));
+function TypedObjectSetSimd(descr, typedObj, offset, fromValue) {
+  if (!IsObject(fromValue) || !ObjectIsTypedObject(fromValue))
+    ThrowError(JSMSG_CANT_CONVERT_TO,
+               typeof(fromValue),
+               DESCR_STRING_REPR(descr));
+
+  if (!DescrsEquiv(descr, TypedObjectTypeDescr(fromValue)))
+    ThrowError(JSMSG_CANT_CONVERT_TO,
+               typeof(fromValue),
+               DESCR_STRING_REPR(descr));
+
+  var type = DESCR_TYPE(descr);
+  switch (type) {
+    case JS_SIMDTYPEREPR_FLOAT32:
+      Store_float32(typedObj, offset + 0, Load_float32(fromValue, 0));
+      Store_float32(typedObj, offset + 4, Load_float32(fromValue, 4));
+      Store_float32(typedObj, offset + 8, Load_float32(fromValue, 8));
+      Store_float32(typedObj, offset + 12, Load_float32(fromValue, 12));
+      break;
+    case JS_SIMDTYPEREPR_INT32:
+      Store_int32(typedObj, offset + 0, Load_int32(fromValue, 0));
+      Store_int32(typedObj, offset + 4, Load_int32(fromValue, 4));
+      Store_int32(typedObj, offset + 8, Load_int32(fromValue, 8));
+      Store_int32(typedObj, offset + 12, Load_int32(fromValue, 12));
+      break;
+    default:
+      assert(false, "Unhandled Simd type: " + type);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -476,13 +482,13 @@ function TypedArrayRedimension(newArrayType) {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-// X4
+// SIMD
 
-function X4ProtoString(type) {
+function SimdProtoString(type) {
   switch (type) {
-  case JS_X4TYPEREPR_INT32:
+  case JS_SIMDTYPEREPR_INT32:
     return "int32x4";
-  case JS_X4TYPEREPR_FLOAT32:
+  case JS_SIMDTYPEREPR_FLOAT32:
     return "float32x4";
   }
 
@@ -490,17 +496,17 @@ function X4ProtoString(type) {
   return undefined;
 }
 
-function X4ToSource() {
+function SimdToSource() {
   if (!IsObject(this) || !ObjectIsTypedObject(this))
-    ThrowError(JSMSG_INCOMPATIBLE_PROTO, "X4", "toSource", typeof this);
+    ThrowError(JSMSG_INCOMPATIBLE_PROTO, "SIMD", "toSource", typeof this);
 
   var descr = TypedObjectTypeDescr(this);
 
-  if (DESCR_KIND(descr) != JS_TYPEREPR_X4_KIND)
-    ThrowError(JSMSG_INCOMPATIBLE_PROTO, "X4", "toSource", typeof this);
+  if (DESCR_KIND(descr) != JS_TYPEREPR_SIMD_KIND)
+    ThrowError(JSMSG_INCOMPATIBLE_PROTO, "SIMD", "toSource", typeof this);
 
   var type = DESCR_TYPE(descr);
-  return X4ProtoString(type)+"("+this.x+", "+this.y+", "+this.z+", "+this.w+")";
+  return SimdProtoString(type)+"("+this.x+", "+this.y+", "+this.z+", "+this.w+")";
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -571,7 +577,6 @@ function StorageOfTypedObject(obj) {
   }
 
   ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
-  return null; // pacify silly "always returns a value" lint
 }
 
 // This is the `objectType()` function defined in the spec.
@@ -617,9 +622,9 @@ function TypedObjectArrayTypeBuild(a,b,c) {
     else if (typeof a === "number" && typeof b === "function")
       return BuildTypedSeqImpl(this, this.length, a, b);
     else if (typeof a === "number")
-      return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+      ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
     else
-      return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+      ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
   case JS_TYPEREPR_UNSIZED_ARRAY_KIND:
     var len = a;
     if (typeof b === "function")
@@ -627,11 +632,11 @@ function TypedObjectArrayTypeBuild(a,b,c) {
     else if (typeof b === "number" && typeof c === "function")
       return BuildTypedSeqImpl(this, len, b, c);
     else if (typeof b === "number")
-      return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+      ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
     else
-      return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+      ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
   default:
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
   }
 }
 
@@ -656,7 +661,7 @@ function TypedObjectArrayTypeFrom(a, b, c) {
     else if (IsCallable(b))
       return MapUntypedSeqImpl(a, this, b);
     else
-      return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+      ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
   } else {
     var explicitDepth = (typeof b === "number");
     if (explicitDepth && IsCallable(c))
@@ -664,26 +669,26 @@ function TypedObjectArrayTypeFrom(a, b, c) {
     else if (IsCallable(b))
       return MapTypedSeqImpl(a, 1, this, b);
     else if (explicitDepth)
-      return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+      ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
     else
-      return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+      ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
   }
 }
 
 // Warning: user exposed!
 function TypedArrayMap(a, b) {
   if (!IsObject(this) || !ObjectIsTypedObject(this))
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
   var thisType = TypedObjectTypeDescr(this);
   if (!TypeDescrIsArrayType(thisType))
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
 
   // Arguments: [depth], func
   if (typeof a === "number" && typeof b === "function")
     return MapTypedSeqImpl(this, a, thisType, b);
   else if (typeof a === "function")
     return MapTypedSeqImpl(this, 1, thisType, a);
-  return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+  ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
 }
 
 // Warning: user exposed!
@@ -709,13 +714,13 @@ function TypedArrayMapPar(a, b) {
 function TypedArrayReduce(a, b) {
   // Arguments: func, [initial]
   if (!IsObject(this) || !ObjectIsTypedObject(this))
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
   var thisType = TypedObjectTypeDescr(this);
   if (!TypeDescrIsArrayType(thisType))
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
 
   if (a !== undefined && typeof a !== "function")
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
 
   var outputType = thisType.elementType;
   return ReduceTypedSeqImpl(this, outputType, a, b);
@@ -725,16 +730,16 @@ function TypedArrayReduce(a, b) {
 function TypedArrayScatter(a, b, c, d) {
   // Arguments: outputArrayType, indices, defaultValue, conflictFunction
   if (!IsObject(this) || !ObjectIsTypedObject(this))
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
   var thisType = TypedObjectTypeDescr(this);
   if (!TypeDescrIsArrayType(thisType))
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
 
   if (!IsObject(a) || !ObjectIsTypeDescr(a) || !TypeDescrIsSizedArrayType(a))
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
 
   if (d !== undefined && typeof d !== "function")
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
 
   return ScatterTypedSeqImpl(this, a, b, c, d);
 }
@@ -743,13 +748,13 @@ function TypedArrayScatter(a, b, c, d) {
 function TypedArrayFilter(func) {
   // Arguments: predicate
   if (!IsObject(this) || !ObjectIsTypedObject(this))
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
   var thisType = TypedObjectTypeDescr(this);
   if (!TypeDescrIsArrayType(thisType))
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
 
   if (typeof func !== "function")
-    return ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
+    ThrowError(JSMSG_TYPEDOBJECT_BAD_ARGS);
 
   return FilterTypedSeqImpl(this, func);
 }
@@ -1182,7 +1187,7 @@ function MapTypedParImplDepth1(inArray, inArrayType, outArrayType, func) {
   // relative to its owner (which is often but not always 0).
   const inBaseOffset = TYPEDOBJ_BYTEOFFSET(inArray);
 
-  ForkJoin(mapThread, 0, slicesInfo.count, ForkJoinMode(mode));
+  ForkJoin(mapThread, 0, slicesInfo.count, ForkJoinMode(mode), outArray);
   return outArray;
 
   function mapThread(workerId, sliceStart, sliceEnd) {
@@ -1238,11 +1243,17 @@ function MapTypedParImplDepth1(inArray, inArrayType, outArrayType, func) {
         inOffset += inGrainTypeSize;
         outOffset += outGrainTypeSize;
 
+#ifndef JSGC_FJGENERATIONAL
         // A transparent result type cannot contain references, and
         // hence there is no way for a pointer to a thread-local object
         // to escape.
+        //
+        // This has been disabled for the PJS generational collector
+        // as it probably has little effect in that setting and adds
+        // per-iteration cost.
         if (outGrainTypeIsTransparent)
           ClearThreadLocalArenas();
+#endif
       }
     }
 

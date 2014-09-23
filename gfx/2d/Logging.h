@@ -38,6 +38,7 @@ namespace gfx {
 
 const int LOG_DEBUG = 1;
 const int LOG_WARNING = 2;
+const int LOG_CRITICAL = 3;
 
 #if defined(DEBUG) || defined(PR_LOGGING)
 
@@ -55,21 +56,36 @@ inline PRLogModuleLevel PRLogLevelForLevel(int aLevel) {
 
 extern GFX2D_API int sGfxLogLevel;
 
-static inline void OutputMessage(const std::string &aString, int aLevel) {
+struct BasicLogger
+{
+  static void OutputMessage(const std::string &aString, int aLevel) {
 #if defined(WIN32) && !defined(PR_LOGGING)
-  if (aLevel >= sGfxLogLevel) {
-    ::OutputDebugStringA(aString.c_str());
-  }
+    if (aLevel >= sGfxLogLevel) {
+      ::OutputDebugStringA(aString.c_str());
+    }
 #elif defined(PR_LOGGING) && !(defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID))
-  if (PR_LOG_TEST(GetGFX2DLog(), PRLogLevelForLevel(aLevel))) {
-    PR_LogPrint(aString.c_str());
-  }
+    if (PR_LOG_TEST(GetGFX2DLog(), PRLogLevelForLevel(aLevel))) {
+      PR_LogPrint(aString.c_str());
+    }
 #else
-  if (aLevel >= sGfxLogLevel) {
-    printf_stderr("%s", aString.c_str());
-  }
+    if (aLevel >= sGfxLogLevel) {
+      printf_stderr("%s", aString.c_str());
+    }
 #endif
-}
+  }
+};
+
+struct CriticalLogger {
+  static void OutputMessage(const std::string &aString, int aLevel);
+};
+
+// Implement this interface and init the Factory with an instance to
+// forward critical logs.
+class LogForwarder {
+public:
+  virtual ~LogForwarder() {}
+  virtual void Log(const std::string &aString) = 0;
+};
 
 class NoLog
 {
@@ -85,11 +101,11 @@ MOZ_BEGIN_ENUM_CLASS(LogOptions, int)
   NoNewline = 0x01
 MOZ_END_ENUM_CLASS(LogOptions)
 
-template<int L>
+template<int L, typename Logger = BasicLogger>
 class Log
 {
 public:
-  Log(LogOptions aOptions = LogOptions(0)) : mOptions(aOptions) {}
+  explicit Log(LogOptions aOptions = LogOptions(0)) : mOptions(aOptions) {}
   ~Log() {
     Flush();
   }
@@ -120,13 +136,13 @@ public:
   Log &operator <<(double aDouble) { mMessage << aDouble; return *this; }
   template <typename T, typename Sub>
   Log &operator <<(const BasePoint<T, Sub>& aPoint)
-    { mMessage << "Point(" << aPoint.x << "," << aPoint.y << ")"; return *this; }
+    { mMessage << "Point" << aPoint; return *this; }
   template <typename T, typename Sub>
   Log &operator <<(const BaseSize<T, Sub>& aSize)
     { mMessage << "Size(" << aSize.width << "," << aSize.height << ")"; return *this; }
   template <typename T, typename Sub, typename Point, typename SizeT, typename Margin>
   Log &operator <<(const BaseRect<T, Sub, Point, SizeT, Margin>& aRect)
-    { mMessage << "Rect(" << aRect.x << "," << aRect.y << "," << aRect.width << "," << aRect.height << ")"; return *this; }
+    { mMessage << "Rect" << aRect; return *this; }
   Log &operator<<(const Matrix& aMatrix)
     { mMessage << "Matrix(" << aMatrix._11 << " " << aMatrix._12 << " ; " << aMatrix._21 << " " << aMatrix._22 << " ; " << aMatrix._31 << " " << aMatrix._32 << ")"; return *this; }
 
@@ -134,7 +150,7 @@ public:
 private:
 
   void WriteLog(const std::string &aString) {
-    OutputMessage(aString, L);
+    Logger::OutputMessage(aString, L);
   }
 
   std::stringstream mMessage;
@@ -143,6 +159,7 @@ private:
 
 typedef Log<LOG_DEBUG> DebugLog;
 typedef Log<LOG_WARNING> WarningLog;
+typedef Log<LOG_CRITICAL, CriticalLogger> CriticalLog;
 
 #ifdef GFX_LOG_DEBUG
 #define gfxDebug DebugLog
@@ -155,22 +172,44 @@ typedef Log<LOG_WARNING> WarningLog;
 #define gfxWarning if (1) ; else NoLog
 #endif
 
+// This log goes into crash reports, use with care.
+#define gfxCriticalError CriticalLog
+
+// See nsDebug.h and the NS_WARN_IF macro
+
+#ifdef __cplusplus
+#ifdef DEBUG
+inline bool MOZ2D_warn_if_impl(bool aCondition, const char* aExpr,
+                               const char* aFile, int32_t aLine)
+{
+  if (MOZ_UNLIKELY(aCondition)) {
+    gfxWarning() << aExpr << " at " << aFile << ":" << aLine;
+  }
+  return aCondition;
+}
+#define MOZ2D_WARN_IF(condition) \
+  MOZ2D_warn_if_impl(condition, #condition, __FILE__, __LINE__)
+#else
+#define MOZ2D_WARN_IF(condition) (bool)(condition)
+#endif
+#endif
+
 const int INDENT_PER_LEVEL = 2;
 
 class TreeLog
 {
 public:
-  TreeLog(const std::string& aPrefix = "")
+  explicit TreeLog(const std::string& aPrefix = "")
         : mLog(LogOptions::NoNewline),
           mPrefix(aPrefix),
           mDepth(0),
           mStartOfLine(true),
           mConditionedOnPref(false),
-          mPref(nullptr) {}
+          mPrefFunction(nullptr) {}
 
   template <typename T>
   TreeLog& operator<<(const T& aObject) {
-    if (mConditionedOnPref && !*mPref) {
+    if (mConditionedOnPref && !mPrefFunction()) {
       return *this;
     }
     if (mStartOfLine) {
@@ -190,9 +229,9 @@ public:
   void IncreaseIndent() { ++mDepth; }
   void DecreaseIndent() { --mDepth; }
 
-  void ConditionOnPref(bool* aPref) {
+  void ConditionOnPrefFunction(bool(*aPrefFunction)()) {
     mConditionedOnPref = true;
-    mPref = aPref;
+    mPrefFunction = aPrefFunction;
   }
 private:
   Log<LOG_DEBUG> mLog;
@@ -200,7 +239,7 @@ private:
   uint32_t mDepth;
   bool mStartOfLine;
   bool mConditionedOnPref;
-  bool* mPref;
+  bool (*mPrefFunction)();
 
   template <typename T>
   static bool EndsInNewline(const T& aObject) {
@@ -223,7 +262,7 @@ private:
 class TreeAutoIndent
 {
 public:
-  TreeAutoIndent(TreeLog& aTreeLog) : mTreeLog(aTreeLog) {
+  explicit TreeAutoIndent(TreeLog& aTreeLog) : mTreeLog(aTreeLog) {
     mTreeLog.IncreaseIndent();
   }
   ~TreeAutoIndent() {

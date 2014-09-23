@@ -8,6 +8,9 @@
 #includesubst @BRANDPATH@
 #includesubst @STRINGSPATH@
 #includesubst @SYNCSTRINGSPATH@
+#ifdef MOZ_ANDROID_SEARCH_ACTIVITY
+#includesubst @SEARCHSTRINGSPATH@
+#endif
 
 <!-- C-style format strings. -->
 <!ENTITY formatI "&#037;I">
@@ -29,13 +32,25 @@
   <string name="moz_android_shared_account_type">@MOZ_ANDROID_SHARED_ACCOUNT_TYPE@</string>
   <string name="moz_android_shared_fxaccount_type">@MOZ_ANDROID_SHARED_FXACCOUNT_TYPE@</string>
   <string name="android_package_name_for_ui">@ANDROID_PACKAGE_NAME@</string>
+
+#ifdef MOZ_ANDROID_SEARCH_ACTIVITY
+#include ../search/strings/search_strings.xml.in
+#endif
+
 #include ../services/strings.xml.in
   <string name="no_space_to_start_error">&no_space_to_start_error;</string>
   <string name="error_loading_file">&error_loading_file;</string>
 
+  <string name="onboard_start_message">&onboard_start_message;</string>
+  <string name="onboard_start_subtext">&onboard_start_subtext;</string>
+  <string name="onboard_start_button_account">&onboard_start_button_account;</string>
+  <string name="onboard_start_button_browser">&onboard_start_button_browser;</string>
+  <string name="onboard_empty_contentDescription"></string>
+
   <string name="bookmarks_title">&bookmarks_title;</string>
   <string name="history_title">&history_title;</string>
   <string name="reading_list_title">&reading_list_title;</string>
+  <string name="recent_tabs_title">&recent_tabs_title;</string>
 
   <string name="switch_to_tab">&switch_to_tab;</string>
 
@@ -58,7 +73,7 @@
 
   <string name="choose_file">&choose_file;</string>
 
-  <string name="url_bar_default_text">&url_bar_default_text;</string>
+  <string name="url_bar_default_text">&url_bar_default_text2;</string>
 
   <!-- https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/ -->
   <string name="help_link">https://support.mozilla.org/1/mobile/&formatS1;/&formatS2;/&formatS3;/</string>
@@ -73,8 +88,8 @@
 
   <string name="history_today_section">&history_today_section;</string>
   <string name="history_yesterday_section">&history_yesterday_section;</string>
-  <string name="history_week_section">&history_week_section;</string>
-  <string name="history_older_section">&history_older_section;</string>
+  <string name="history_week_section">&history_week_section2;</string>
+  <string name="history_older_section">&history_older_section2;</string>
 
   <string name="share">&share;</string>
   <string name="share_title">&share_title;</string>
@@ -90,10 +105,21 @@
   <string name="find_next">&find_next;</string>
   <string name="find_close">&find_close;</string>
 
-  <string name="media_casting_to">&media_casting_to;</string>
+  <string name="media_sending_to">&media_sending_to;</string>
   <string name="media_play">&media_play;</string>
   <string name="media_pause">&media_pause;</string>
   <string name="media_stop">&media_stop;</string>
+
+  <string name="overlay_share_send_other">&overlay_share_send_other;</string>
+  <string name="overlay_share_label">&overlay_share_label;</string>
+  <string name="overlay_share_bookmark_btn_label">&overlay_share_bookmark_btn_label;</string>
+  <string name="overlay_share_reading_list_btn_label">&overlay_share_reading_list_btn_label;</string>
+  <string name="overlay_share_bookmark_btn_label_already">&overlay_share_bookmark_btn_label_already;</string>
+  <string name="overlay_share_reading_list_btn_label_already">&overlay_share_reading_list_btn_label_already;</string>
+  <string name="overlay_share_send_tab_btn_label">&overlay_share_send_tab_btn_label;</string>
+  <string name="overlay_share_no_url">&overlay_share_no_url;</string>
+  <string name="overlay_share_retry">&overlay_share_retry;</string>
+  <string name="overlay_share_select_device">&overlay_share_select_device;</string>
 
   <string name="settings">&settings;</string>
   <string name="settings_title">&settings_title;</string>
@@ -117,6 +143,7 @@
   <string name="locale_system_default">&locale_system_default;</string>
 
   <string name="pref_category_devtools">&pref_category_devtools;</string>
+  <string name="pref_developer_paint_flashing">&pref_developer_paint_flashing;</string>
   <string name="pref_developer_remotedebugging">&pref_developer_remotedebugging;</string>
 
   <string name="pref_category_home">&pref_category_home;</string>
@@ -156,7 +183,11 @@
   <string name="pref_char_encoding">&pref_char_encoding;</string>
   <string name="pref_char_encoding_on">&pref_char_encoding_on;</string>
   <string name="pref_char_encoding_off">&pref_char_encoding_off;</string>
-  <string name="pref_clear_private_data">&pref_clear_private_data;</string>
+  <string name="pref_clear_private_data">&pref_clear_private_data2;</string>
+  <string name="pref_clear_private_data_category">&pref_clear_private_data_category;</string>
+  <string name="pref_clear_on_exit_title">&pref_clear_on_exit_title;</string>
+  <string name="pref_clear_on_exit_summary2">&pref_clear_on_exit_summary2;</string>
+  <string name="pref_clear_on_exit_dialog_title">&pref_clear_on_exit_dialog_title;</string>
   <string name="pref_plugins">&pref_plugins;</string>
   <string name="pref_plugins_enabled">&pref_plugins_enabled;</string>
   <string name="pref_plugins_tap_to_play">&pref_plugins_tap_to_play;</string>
@@ -174,7 +205,6 @@
   <string name="pref_restore">&pref_restore;</string>
   <string name="pref_restore_always">&pref_restore_always;</string>
   <string name="pref_restore_quit">&pref_restore_quit;</string>
-  <string name="pref_show_product_announcements">&pref_show_product_announcements;</string>
   <string name="pref_sync">&pref_sync;</string>
   <string name="pref_search_suggestions">&pref_search_suggestions;</string>
   <string name="pref_private_data_history2">&pref_private_data_history2;</string>
@@ -246,6 +276,7 @@
   <string name="new_tab">&new_tab;</string>
   <string name="new_private_tab">&new_private_tab;</string>
   <string name="close_all_tabs">&close_all_tabs;</string>
+  <string name="close_private_tabs">&close_private_tabs;</string>
   <string name="tabs_normal">&tabs_normal;</string>
   <string name="tabs_private">&tabs_private;</string>
   <string name="tabs_synced">&tabs_synced;</string>
@@ -264,7 +295,6 @@
 
   <string name="contextmenu_open_new_tab">&contextmenu_open_new_tab;</string>
   <string name="contextmenu_open_private_tab">&contextmenu_open_private_tab;</string>
-  <string name="contextmenu_open_in_reader">&contextmenu_open_in_reader;</string>
   <string name="contextmenu_remove">&contextmenu_remove;</string>
   <string name="contextmenu_add_to_launcher">&contextmenu_add_to_launcher;</string>
   <string name="contextmenu_share">&contextmenu_share;</string>
@@ -283,7 +313,8 @@
   <string name="pref_titlebar_mode_title">&pref_titlebar_mode_title;</string>
   <string name="pref_titlebar_mode_url">&pref_titlebar_mode_url;</string>
 
-  <string name="pref_scroll_title_bar">&pref_scroll_title_bar;</string>
+  <string name="pref_scroll_title_bar2">&pref_scroll_title_bar2;</string>
+  <string name="pref_scroll_title_bar_summary">&pref_scroll_title_bar_summary;</string>
 
   <string name="page_removed">&page_removed;</string>
 
@@ -312,16 +343,31 @@
   <string name="home_clear_history_button">&home_clear_history_button;</string>
   <string name="home_clear_history_confirm">&home_clear_history_confirm;</string>
   <string name="home_bookmarks_empty">&home_bookmarks_empty;</string>
+  <string name="home_closed_tabs_title">&home_closed_tabs_title;</string>
   <string name="home_last_tabs_title">&home_last_tabs_title;</string>
-  <string name="home_last_tabs_open">&home_last_tabs_open;</string>
   <string name="home_last_tabs_empty">&home_last_tabs_empty;</string>
-  <string name="home_most_recent_title">&home_most_recent_title;</string>
+  <string name="home_open_all">&home_open_all;</string>
   <string name="home_most_recent_empty">&home_most_recent_empty;</string>
   <string name="home_reading_list_empty">&home_reading_list_empty;</string>
   <string name="home_reading_list_hint">&home_reading_list_hint2;</string>
   <string name="home_reading_list_hint_accessible">&home_reading_list_hint_accessible;</string>
   <string name="home_default_empty">&home_default_empty;</string>
   <string name="home_move_up_to_filter">&home_move_up_to_filter;</string>
+  <string name="home_remote_tabs_title">&home_remote_tabs_title;</string>
+  <string name="home_remote_tabs_empty">&home_remote_tabs_empty;</string>
+  <string name="home_remote_tabs_unable_to_connect">&home_remote_tabs_unable_to_connect;</string>
+  <string name="home_remote_tabs_need_to_sign_in">&home_remote_tabs_need_to_sign_in;</string>
+  <string name="home_remote_tabs_trouble_verifying">&home_remote_tabs_trouble_verifying;</string>
+  <string name="home_remote_tabs_need_to_verify">&home_remote_tabs_need_to_verify;</string>
+  <string name="home_remote_tabs_one_hidden_device">&home_remote_tabs_one_hidden_device;</string>
+  <string name="home_remote_tabs_many_hidden_devices">&home_remote_tabs_many_hidden_devices;</string>
+  <string name="home_remote_tabs_hidden_devices_title">&home_remote_tabs_hidden_devices_title;</string>
+  <string name="home_remote_tabs_unhide_selected_devices">&home_remote_tabs_unhide_selected_devices;</string>
+  <string name="private_browsing_title">&private_browsing_title;</string>
+  <string name="private_tabs_panel_empty_desc">&private_tabs_panel_empty_desc;</string>
+  <string name="private_tabs_panel_learn_more">&private_tabs_panel_learn_more;</string>
+  <!-- https://support.mozilla.org/%LOCALE%/kb/mobile-private-browsing-browse-web-without-saving-syncing-info -->
+  <string name="private_tabs_panel_learn_more_link">https://support.mozilla.org/&formatS1;/kb/mobile-private-browsing-browse-web-without-saving-syncing-info</string>
   <string name="pin_site_dialog_hint">&pin_site_dialog_hint;</string>
 
   <string name="filepicker_title">&filepicker_title;</string>
@@ -337,11 +383,11 @@
 
   <!-- Icon is automatically generated from R.drawable.bookmarkdefaults_favicon_addons -->
   <string name="bookmarkdefaults_title_addons">@bookmarks_addons@</string>
-  <string name="bookmarkdefaults_url_addons">https://addons.mozilla.org/@AB_CD@/android/</string>
+  <string name="bookmarkdefaults_url_addons">https://addons.mozilla.org/android/</string>
 
+  <!-- Icon is automatically generated from R.drawable.bookmarkdefaults_favicon_support -->
   <string name="bookmarkdefaults_title_support">@bookmarks_support@</string>
-  <string name="bookmarkdefaults_url_support">http://support.mozilla.org/@AB_CD@/products/mobile</string>
-  <string name="bookmarkdefaults_favicon_abouthome">chrome/chrome/content/branding/favicon64.png</string>
+  <string name="bookmarkdefaults_url_support">https://support.mozilla.org/products/mobile</string>
 
   <!-- Icon is automatically generated from R.drawable.bookmarkdefaults_favicon_marketplace -->
   <string name="bookmarkdefaults_title_marketplace">@bookmarks_marketplace@</string>
@@ -387,6 +433,10 @@
   <string name="updater_apply_title">&updater_apply_title2;</string>
   <string name="updater_apply_select">&updater_apply_select2;</string>
 
+  <!-- New tablet UI -->
+  <string name="new_tablet_restart">&new_tablet_restart;</string>
+  <string name="new_tablet_pref">&new_tablet_pref;</string>
+
   <!-- Search suggestions opt-in -->
   <string name="suggestions_prompt">&suggestions_prompt3;</string>
 
@@ -394,10 +444,11 @@
 
   <!-- Set Image Notifications -->
   <string name="set_image_fail">&set_image_fail;</string>
+  <string name="set_image_path_fail">&set_image_path_fail;</string>
   <string name="set_image_chooser_title">&set_image_chooser_title;</string>
 
   <!-- Contacts API -->
-  <string name="contacts_account_chooser_dialog_title">Share contacts from...</string>
+  <string name="contacts_account_chooser_dialog_title2">Share contacts from…</string>
 
 
   <!-- Guest mode -->
@@ -407,6 +458,8 @@
   <string name="guest_session_dialog_cancel">&guest_session_dialog_cancel;</string>
   <string name="new_guest_session_title">&new_guest_session_title;</string>
   <string name="new_guest_session_text">&new_guest_session_text;</string>
+  <string name="guest_browsing_notification_title">&guest_browsing_notification_title;</string>
+  <string name="guest_browsing_notification_text">&guest_browsing_notification_text;</string>
 
   <string name="exit_guest_session_title">&exit_guest_session_title;</string>
   <string name="exit_guest_session_text">&exit_guest_session_text;</string>
@@ -416,6 +469,8 @@
 
   <!-- Miscellaneous -->
   <string name="ellipsis">&ellipsis;</string>
+
+  <string name="colon">&colon;</string>
 
   <string name="remote_tabs_last_synced">&remote_tabs_last_synced;</string>
 </resources>

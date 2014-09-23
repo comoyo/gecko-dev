@@ -15,6 +15,7 @@
 #include "nsGlobalWindow.h"
 #include "nsJSUtils.h"
 #include "nsPerformance.h"
+#include "ScriptSettings.h"
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
 #include "xpcprivate.h"
@@ -106,7 +107,7 @@ ConsoleStructuredCloneCallbacksWrite(JSContext* aCx,
     return false;
   }
 
-  nsDependentJSString string;
+  nsAutoJSString string;
   if (!string.init(aCx, jsString)) {
     return false;
   }
@@ -190,7 +191,7 @@ public:
 class ClearException
 {
 public:
-  ClearException(JSContext* aCx)
+  explicit ClearException(JSContext* aCx)
     : mCx(aCx)
   {
   }
@@ -277,7 +278,7 @@ private:
 class ConsoleCallDataRunnable MOZ_FINAL : public ConsoleRunnable
 {
 public:
-  ConsoleCallDataRunnable(ConsoleCallData* aCallData)
+  explicit ConsoleCallDataRunnable(ConsoleCallData* aCallData)
     : mCallData(aCallData)
   {
   }
@@ -323,14 +324,18 @@ private:
       wp = wp->GetParent();
     }
 
-    AutoPushJSContext cx(wp->ParentJSContext());
-    ClearException ce(cx);
-
     nsPIDOMWindow* window = wp->GetWindow();
     NS_ENSURE_TRUE_VOID(window);
 
     nsRefPtr<nsGlobalWindow> win = static_cast<nsGlobalWindow*>(window);
     NS_ENSURE_TRUE_VOID(win);
+
+    AutoJSAPI jsapi;
+    if (NS_WARN_IF(!jsapi.Init(win))) {
+      return;
+    }
+    JSContext* cx = jsapi.cx();
+    ClearException ce(cx);
 
     ErrorResult error;
     nsRefPtr<Console> console = win->GetConsole(error);
@@ -432,18 +437,18 @@ private:
       wp = wp->GetParent();
     }
 
-    AutoPushJSContext cx(wp->ParentJSContext());
-    ClearException ce(cx);
-
-    JS::Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
-    NS_ENSURE_TRUE_VOID(global);
-    JSAutoCompartment ac(cx, global);
-
     nsPIDOMWindow* window = wp->GetWindow();
     NS_ENSURE_TRUE_VOID(window);
 
     nsRefPtr<nsGlobalWindow> win = static_cast<nsGlobalWindow*>(window);
     NS_ENSURE_TRUE_VOID(win);
+
+    AutoJSAPI jsapi;
+    if (NS_WARN_IF(!jsapi.Init(win))) {
+      return;
+    }
+    JSContext* cx = jsapi.cx();
+    ClearException ce(cx);
 
     ErrorResult error;
     nsRefPtr<Console> console = win->GetConsole(error);
@@ -619,6 +624,7 @@ METHOD(Warn, "warn")
 METHOD(Error, "error")
 METHOD(Exception, "exception")
 METHOD(Debug, "debug")
+METHOD(Table, "table")
 
 void
 Console::Trace(JSContext* aCx)
@@ -697,7 +703,7 @@ Console::ProfileMethod(JSContext* aCx, const nsAString& aAction,
   }
 
   JS::Rooted<JS::Value> eventValue(aCx);
-  if (!event.ToObject(aCx, &eventValue)) {
+  if (!ToJSValue(aCx, event, &eventValue)) {
     return;
   }
 
@@ -758,6 +764,12 @@ StackFrameToStackEntry(nsIStackFrame* aStackFrame,
 
   aStackEntry.mLineNumber = lineNumber;
 
+  int32_t columnNumber;
+  rv = aStackFrame->GetColumnNumber(&columnNumber);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  aStackEntry.mColumnNumber = columnNumber;
+
   rv = aStackFrame->GetName(aStackEntry.mFunctionName);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -803,7 +815,7 @@ Console::Method(JSContext* aCx, MethodName aMethodName,
   // goes wrong.
   class RAII {
   public:
-    RAII(LinkedList<ConsoleCallData>& aList)
+    explicit RAII(LinkedList<ConsoleCallData>& aList)
       : mList(aList)
       , mUnfinished(true)
     {
@@ -867,9 +879,9 @@ Console::Method(JSContext* aCx, MethodName aMethodName,
 
     if (language == nsIProgrammingLanguage::JAVASCRIPT ||
         language == nsIProgrammingLanguage::JAVASCRIPT2) {
-      callData->mTopStackFrame.construct();
+      callData->mTopStackFrame.emplace();
       nsresult rv = StackFrameToStackEntry(stack,
-                                           callData->mTopStackFrame.ref(),
+                                           *callData->mTopStackFrame,
                                            language);
       if (NS_FAILED(rv)) {
         return;
@@ -892,8 +904,8 @@ Console::Method(JSContext* aCx, MethodName aMethodName,
   } else {
     // nsIStackFrame is not threadsafe, so we need to snapshot it now,
     // before we post our runnable to the main thread.
-    callData->mReifiedStack.construct();
-    nsresult rv = ReifyStack(stack, callData->mReifiedStack.ref());
+    callData->mReifiedStack.emplace();
+    nsresult rv = ReifyStack(stack, *callData->mReifiedStack);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return;
     }
@@ -905,9 +917,8 @@ Console::Method(JSContext* aCx, MethodName aMethodName,
       nsGlobalWindow *win = static_cast<nsGlobalWindow*>(mWindow.get());
       MOZ_ASSERT(win);
 
-      ErrorResult rv;
-      nsRefPtr<nsPerformance> performance = win->GetPerformance(rv);
-      if (rv.Failed()) {
+      nsRefPtr<nsPerformance> performance = win->GetPerformance();
+      if (!performance) {
         return;
       }
 
@@ -1033,8 +1044,8 @@ Console::ProcessCallData(ConsoleCallData* aData)
   MOZ_ASSERT(NS_IsMainThread());
 
   ConsoleStackEntry frame;
-  if (!aData->mTopStackFrame.empty()) {
-    frame = aData->mTopStackFrame.ref();
+  if (aData->mTopStackFrame) {
+    frame = *aData->mTopStackFrame;
   }
 
   AutoSafeJSContext cx;
@@ -1057,6 +1068,7 @@ Console::ProcessCallData(ConsoleCallData* aData)
   event.mLevel = aData->mMethodString;
   event.mFilename = frame.mFilename;
   event.mLineNumber = frame.mLineNumber;
+  event.mColumnNumber = frame.mColumnNumber;
   event.mFunctionName = frame.mFunctionName;
   event.mTimeStamp = aData->mTimeStamp;
   event.mPrivate = aData->mPrivate;
@@ -1108,10 +1120,10 @@ Console::ProcessCallData(ConsoleCallData* aData)
   // mStorage, but that's a bit fragile.  Instead, we just use the junk scope,
   // with explicit permission from the XPConnect module owner.  If you're
   // tempted to do that anywhere else, talk to said module owner first.
-  JSAutoCompartment ac2(cx, xpc::GetJunkScope());
+  JSAutoCompartment ac2(cx, xpc::PrivilegedJunkScope());
 
   JS::Rooted<JS::Value> eventValue(cx);
-  if (!event.ToObject(cx, &eventValue)) {
+  if (!ToJSValue(cx, event, &eventValue)) {
     return;
   }
 
@@ -1126,9 +1138,9 @@ Console::ProcessCallData(ConsoleCallData* aData)
     // Now define the "stacktrace" property on eventObj.  There are two cases
     // here.  Either we came from a worker and have a reified stack, or we want
     // to define a getter that will lazily reify the stack.
-    if (!aData->mReifiedStack.empty()) {
+    if (aData->mReifiedStack) {
       JS::Rooted<JS::Value> stacktrace(cx);
-      if (!ToJSValue(cx, aData->mReifiedStack.ref(), &stacktrace) ||
+      if (!ToJSValue(cx, *aData->mReifiedStack, &stacktrace) ||
           !JS_DefineProperty(cx, eventObj, "stacktrace", stacktrace,
                              JSPROP_ENUMERATE)) {
         return;
@@ -1222,7 +1234,7 @@ Console::ProcessArguments(JSContext* aCx,
     return;
   }
 
-  nsDependentJSString string;
+  nsAutoJSString string;
   if (!string.init(aCx, jsString)) {
     return;
   }
@@ -1373,7 +1385,7 @@ Console::ProcessArguments(JSContext* aCx,
             return;
           }
 
-          nsDependentJSString v;
+          nsAutoJSString v;
           if (!v.init(aCx, jsString)) {
             return;
           }
@@ -1468,7 +1480,7 @@ Console::ComposeGroupName(JSContext* aCx,
       return;
     }
 
-    nsDependentJSString string;
+    nsAutoJSString string;
     if (!string.init(aCx, jsString)) {
       return;
     }
@@ -1485,7 +1497,7 @@ Console::StartTimer(JSContext* aCx, const JS::Value& aName,
     RootedDictionary<ConsoleTimerError> error(aCx);
 
     JS::Rooted<JS::Value> value(aCx);
-    if (!error.ToObject(aCx, &value)) {
+    if (!ToJSValue(aCx, error, &value)) {
       return JS::UndefinedValue();
     }
 
@@ -1500,7 +1512,7 @@ Console::StartTimer(JSContext* aCx, const JS::Value& aName,
     return JS::UndefinedValue();
   }
 
-  nsDependentJSString key;
+  nsAutoJSString key;
   if (!key.init(aCx, jsString)) {
     return JS::UndefinedValue();
   }
@@ -1517,7 +1529,7 @@ Console::StartTimer(JSContext* aCx, const JS::Value& aName,
   timer.mStarted = aTimestamp;
 
   JS::Rooted<JS::Value> value(aCx);
-  if (!timer.ToObject(aCx, &value)) {
+  if (!ToJSValue(aCx, timer, &value)) {
     return JS::UndefinedValue();
   }
 
@@ -1534,7 +1546,7 @@ Console::StopTimer(JSContext* aCx, const JS::Value& aName,
     return JS::UndefinedValue();
   }
 
-  nsDependentJSString key;
+  nsAutoJSString key;
   if (!key.init(aCx, jsString)) {
     return JS::UndefinedValue();
   }
@@ -1551,7 +1563,7 @@ Console::StopTimer(JSContext* aCx, const JS::Value& aName,
   timer.mDuration = aTimestamp - entry;
 
   JS::Rooted<JS::Value> value(aCx);
-  if (!timer.ToObject(aCx, &value)) {
+  if (!ToJSValue(aCx, timer, &value)) {
     return JS::UndefinedValue();
   }
 
@@ -1580,7 +1592,7 @@ Console::IncreaseCounter(JSContext* aCx, const ConsoleStackEntry& aFrame,
     JS::Rooted<JS::Value> labelValue(aCx, aArguments[0]);
     JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, labelValue));
 
-    nsDependentJSString string;
+    nsAutoJSString string;
     if (jsString && string.init(aCx, jsString)) {
       label = string;
       key = string;
@@ -1599,7 +1611,7 @@ Console::IncreaseCounter(JSContext* aCx, const ConsoleStackEntry& aFrame,
       RootedDictionary<ConsoleCounterError> error(aCx);
 
       JS::Rooted<JS::Value> value(aCx);
-      if (!error.ToObject(aCx, &value)) {
+      if (!ToJSValue(aCx, error, &value)) {
         return JS::UndefinedValue();
       }
 
@@ -1615,7 +1627,7 @@ Console::IncreaseCounter(JSContext* aCx, const ConsoleStackEntry& aFrame,
   data.mCount = count;
 
   JS::Rooted<JS::Value> value(aCx);
-  if (!data.ToObject(aCx, &value)) {
+  if (!ToJSValue(aCx, data, &value)) {
     return JS::UndefinedValue();
   }
 

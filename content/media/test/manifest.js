@@ -187,6 +187,7 @@ var gPlayTests = [
   { name:"detodos.opus", type:"audio/ogg; codecs=opus", duration:2.9135 },
   // Opus data in a webm container
   { name:"detodos.webm", type:"audio/webm; codecs=opus", duration:2.9135 },
+  { name:"bug1066943.webm", type:"audio/webm; codecs=opus", duration:1.383 },
 
   // Multichannel Opus in an ogg container
   { name:"test-1-mono.opus", type:"audio/ogg; codecs=opus", duration:1.044 },
@@ -249,6 +250,70 @@ var gInvalidTests = [
   { name:"invalid-cmap-s1c2.opus", type:"audio/ogg; codecs=opus"},
   { name:"invalid-preskip.webm", type:"audio/webm; codecs=opus"},
 ];
+
+// Files to check different cases of ogg skeleton information.
+// sample-fisbone-skeleton4.ogv
+// - Skeleton v4, w/ Content-Type,Role,Name,Language,Title for both theora/vorbis
+// sample-fisbone-wrong-header.ogv
+// - Skeleton v4, wrong message field sequence for vorbis
+// multiple-bos-more-header-fields.ogg
+// - Skeleton v3, w/ Content-Type,Role,Name,Language,Title for both theora/vorbis
+// seek.ogv
+// - No skeleton, but theora
+// audio-overhang.ogg
+// - No skeleton, but vorbis
+var gMultitrackInfoOggPlayList = [
+  { name:"sample-fisbone-skeleton4.ogv", type:"video/ogg", duration:5.049 },
+  { name:"sample-fisbone-wrong-header.ogv", type:"video/ogg", duration:5.049 },
+  { name:"multiple-bos-more-header-fileds.ogg", type:"video/ogg", duration:0.431 },
+  { name:"seek.ogv", type:"video/ogg", duration:3.996 },
+  { name:"audio-gaps.ogg", type:"audio/ogg", duration:2.208 }
+];
+// Pre-parsed results of gMultitrackInfoOggPlayList.
+var gOggTrackInfoResults = {
+  "sample-fisbone-skeleton4.ogv" : {
+    "audio_id":" audio_1",
+    "audio_kind":"main",
+    "audio_language":" en-US",
+    "audio_label":" Audio track for test",
+    "video_id":" video_1",
+    "video_kind":"main",
+    "video_language":" fr",
+    "video_label":" Video track for test"
+  },
+  "sample-fisbone-wrong-header.ogv" : {
+    "audio_id":"1",
+    "audio_kind":"main",
+    "audio_language":"",
+    "audio_label":"",
+    "video_id":" video_1",
+    "video_kind":"main",
+    "video_language":" fr",
+    "video_label":" Video track for test"
+  },
+  "multiple-bos-more-header-fileds.ogg" : {
+    "audio_id":"1",
+    "audio_kind":"main",
+    "audio_language":"",
+    "audio_label":"",
+    "video_id":"2",
+    "video_kind":"main",
+    "video_language":"",
+    "video_label":""
+  },
+  "seek.ogv" : {
+    "video_id":"2",
+    "video_kind":"main",
+    "video_language":"",
+    "video_label":""
+  },
+  "audio-gaps.ogg" : {
+    "audio_id":"1",
+    "audio_kind":"main",
+    "audio_language":"",
+    "audio_label":""
+  }
+};
 
 // Converts a path/filename to a file:// URI which we can load from disk.
 // Optionally checks whether the file actually exists on disk at the location
@@ -388,14 +453,6 @@ var gUnseekableTests = [
   { name:"no-cues.webm", type:"video/webm" },
   { name:"bogus.duh", type:"bogus/duh"}
 ];
-// Unfortunately big-buck-bunny-unseekable.mp4 is doesn't play on Windows 7, so
-// only include it in the unseekable tests if we're on later versions of Windows. 
-// This test actually only passes on win8 at the moment.
-if (navigator.userAgent.indexOf("Windows") != -1 && IsWindows8OrLater()) {
-  gUnseekableTests = gUnseekableTests.concat([
-    { name:"big-buck-bunny-unseekable.mp4", type:"video/mp4" }
-  ]);
-}
 // Android supports fragmented MP4 playback from 4.3.
 var androidVersion = SpecialPowers.Cc['@mozilla.org/system-info;1']
                                   .getService(SpecialPowers.Ci.nsIPropertyBag2)
@@ -612,9 +669,11 @@ function getMajorMimeType(mimetype) {
   }
 }
 
+// Force releasing decoder to avoid timeout in waiting for decoding resource.
 function removeNodeAndSource(n) {
   n.remove();
-  // force release of underlying decoder
+  // reset |mozSrcObject| first since it takes precedence over |src|.
+  n.mozSrcObject = null;
   n.src = "";
   while (n.firstChild) {
     n.removeChild(n.firstChild);
@@ -677,6 +736,14 @@ function MediaTestManager() {
     is(this.numTestsRunning, this.tokens.length, "[started " + token + "] Length of array should match number of running tests");
   }
 
+  this.watchdog = null;
+
+  this.watchdogFn = function() {
+    if (this.tokens.length > 0) {
+      info("Watchdog remaining tests= " + this.tokens);
+    }
+  }
+
   // Registers that the test corresponding to 'token' has finished. Call when
   // you've finished your test. If all tests are complete this will finish the
   // run, otherwise it may start up the next run. It's ok to call multiple times
@@ -687,54 +754,57 @@ function MediaTestManager() {
       // Remove the element from the list of running tests.
       this.tokens.splice(i, 1);
     }
+
+    if (this.watchdog) {
+      clearTimeout(this.watchdog);
+      this.watchdog = null;
+    }
+
+    info("[finished " + token + "] remaining= " + this.tokens);
     this.numTestsRunning--;
     is(this.numTestsRunning, this.tokens.length, "[finished " + token + "] Length of array should match number of running tests");
     if (this.tokens.length < PARALLEL_TESTS) {
       this.nextTest();
+      this.watchdog = setTimeout(this.watchdogFn.bind(this), 10000);
     }
   }
 
   // Starts the next batch of tests, or finishes if they're all done.
   // Don't call this directly, call finished(token) when you're done.
   this.nextTest = function() {
-    // Force an exact  GC after every completed testcase. This ensures that any
-    // decoders with live threads waiting for the GC are killed promptly, to free
-    // up the thread stacks' address space, and destroy decoder resources.
-    SpecialPowers.exactGC(window, function(){
-      while (this.testNum < this.tests.length && this.tokens.length < PARALLEL_TESTS) {
-        var test = this.tests[this.testNum];
-        var token = (test.name ? (test.name + "-"): "") + this.testNum;
-        this.testNum++;
+    while (this.testNum < this.tests.length && this.tokens.length < PARALLEL_TESTS) {
+      var test = this.tests[this.testNum];
+      var token = (test.name ? (test.name + "-"): "") + this.testNum;
+      this.testNum++;
 
-        if (DEBUG_TEST_LOOP_FOREVER && this.testNum == this.tests.length) {
-          this.testNum = 0;
-        }
-
-        // Ensure we can play the resource type.
-        if (test.type && !document.createElement('video').canPlayType(test.type))
-          continue;
-
-        // Do the init. This should start the test.
-        this.startTest(test, token);
+      if (DEBUG_TEST_LOOP_FOREVER && this.testNum == this.tests.length) {
+        this.testNum = 0;
       }
 
-      if (this.testNum == this.tests.length &&
-          !DEBUG_TEST_LOOP_FOREVER &&
-          this.tokens.length == 0 &&
-          !this.isShutdown)
-      {
-        this.isShutdown = true;
-        if (this.onFinished) {
-          this.onFinished();
-        }
-        mediaTestCleanup();
-        var end = new Date();
-        SimpleTest.info("Finished at " + end + " (" + (end.getTime() / 1000) + "s)");
-        SimpleTest.info("Running time: " + (end.getTime() - this.startTime.getTime())/1000 + "s");
-        SimpleTest.finish();
-        return;
+      // Ensure we can play the resource type.
+      if (test.type && !document.createElement('video').canPlayType(test.type))
+        continue;
+
+      // Do the init. This should start the test.
+      this.startTest(test, token);
+    }
+
+    if (this.testNum == this.tests.length &&
+        !DEBUG_TEST_LOOP_FOREVER &&
+        this.tokens.length == 0 &&
+        !this.isShutdown)
+    {
+      this.isShutdown = true;
+      if (this.onFinished) {
+        this.onFinished();
       }
-    }.bind(this));
+      mediaTestCleanup();
+      var end = new Date();
+      SimpleTest.info("Finished at " + end + " (" + (end.getTime() / 1000) + "s)");
+      SimpleTest.info("Running time: " + (end.getTime() - this.startTime.getTime())/1000 + "s");
+      SimpleTest.finish();
+      return;
+    }
   }
 }
 

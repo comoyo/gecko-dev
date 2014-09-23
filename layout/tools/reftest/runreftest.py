@@ -23,10 +23,10 @@ sys.path.insert(0, SCRIPT_DIRECTORY)
 from automation import Automation
 from automationutils import (
         addCommonOptions,
-        getDebuggerInfo,
         isURL,
         processLeakLog
 )
+import mozdebug
 import mozprofile
 
 def categoriesToRegex(categoryList):
@@ -174,6 +174,14 @@ class RefTest(object):
     # And for snippets.
     prefs['browser.snippets.enabled'] = False
     prefs['browser.snippets.syncPromo.enabled'] = False
+    prefs['browser.snippets.firstrunHomepage.enabled'] = False
+    # And for useragent updates.
+    prefs['general.useragent.updates.enabled'] = False
+    # And for webapp updates.  Yes, it is supposed to be an integer.
+    prefs['browser.webapps.checkForUpdates'] = 0
+    # And for about:newtab content fetch and pings.
+    prefs['browser.newtabpage.directory.source'] = 'data:application/json,{"reftest":1}'
+    prefs['browser.newtabpage.directory.ping'] = ''
 
     if options.e10s:
       prefs['browser.tabs.remote.autostart'] = True
@@ -193,6 +201,8 @@ class RefTest(object):
     # release engineering and landing on multiple branches at once.
     if special_powers and (manifest.endswith('crashtests.list') or manifest.endswith('jstests.list')):
       addons.append(os.path.join(SCRIPT_DIRECTORY, 'specialpowers'))
+      # SpecialPowers requires insecure automation-only features that we put behind a pref.
+      prefs['security.turn_off_all_security_so_that_viruses_can_take_over_this_computer'] = True
 
     # Install distributed extensions, if application has any.
     distExtDir = os.path.join(options.app[ : options.app.rfind(os.sep)], "distribution", "extensions")
@@ -310,7 +320,7 @@ class RefTest(object):
     return int(any(t.retcode != 0 for t in threads))
 
   def runSerialTests(self, testPath, options, cmdlineArgs = None):
-    debuggerInfo = getDebuggerInfo(self.oldcwd, options.debugger, options.debuggerArgs,
+    debuggerInfo = mozdebug.get_debugger_info(options.debugger, options.debuggerArgs,
         options.debuggerInteractive);
 
     profileDir = None

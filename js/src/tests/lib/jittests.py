@@ -52,6 +52,30 @@ def _relpath(path, start=None):
         return os.curdir
     return os.path.join(*rel_list)
 
+# Mapping of Python chars to their javascript string representation.
+QUOTE_MAP = {
+    '\\': '\\\\',
+    '\b': '\\b',
+    '\f': '\\f',
+    '\n': '\\n',
+    '\r': '\\r',
+    '\t': '\\t',
+    '\v': '\\v'
+}
+
+# Quote the string S, javascript style.
+def js_quote(quote, s):
+    result = quote
+    for c in s:
+        if c == quote:
+            result += '\\' + quote
+        elif c in QUOTE_MAP:
+            result += QUOTE_MAP[c]
+        else:
+            result += c
+    result += quote
+    return result
+
 os.path.relpath = _relpath
 
 class Test:
@@ -84,6 +108,7 @@ class Test:
         self.jitflags = []     # jit flags to enable
         self.slow = False      # True means the test is slow-running
         self.allow_oom = False # True means that OOM is not considered a failure
+        self.allow_unhandlable_oom = False # True means CrashAtUnhandlableOOM is not considered a failure
         self.allow_overrecursed = False # True means that hitting recursion the
                                         # limits is not considered a failure.
         self.valgrind = False  # True means run under valgrind
@@ -96,6 +121,7 @@ class Test:
         t.jitflags = self.jitflags[:]
         t.slow = self.slow
         t.allow_oom = self.allow_oom
+        t.allow_unhandlable_oom = self.allow_unhandlable_oom
         t.allow_overrecursed = self.allow_overrecursed
         t.valgrind = self.valgrind
         t.tz_pacific = self.tz_pacific
@@ -135,20 +161,20 @@ class Test:
                         except ValueError:
                             print("warning: couldn't parse thread-count %s" % value)
                     else:
-                        print('warning: unrecognized |jit-test| attribute %s' % part)
+                        print('%s: warning: unrecognized |jit-test| attribute %s' % (path, part))
                 else:
                     if name == 'slow':
                         test.slow = True
                     elif name == 'allow-oom':
                         test.allow_oom = True
+                    elif name == 'allow-unhandlable-oom':
+                        test.allow_unhandlable_oom = True
                     elif name == 'allow-overrecursed':
                         test.allow_overrecursed = True
                     elif name == 'valgrind':
                         test.valgrind = options.valgrind
                     elif name == 'tz-pacific':
                         test.tz_pacific = True
-                    elif name == 'debug':
-                        test.jitflags.append('--debugjit')
                     elif name == 'ion-eager':
                         test.jitflags.append('--ion-eager')
                     elif name == 'no-ion':
@@ -156,7 +182,7 @@ class Test:
                     elif name == 'dump-bytecode':
                         test.jitflags.append('--dump-bytecode')
                     else:
-                        print('warning: unrecognized |jit-test| attribute %s' % part)
+                        print('%s: warning: unrecognized |jit-test| attribute %s' % (path, part))
 
         if options.valgrind_all:
             test.valgrind = True
@@ -176,12 +202,14 @@ class Test:
         # whether we use double or single quotes. On windows and when using
         # a remote device, however, we have to be careful to use the quote
         # style that is the opposite of what the exec wrapper uses.
-        # This uses %r to get single quotes on windows and special cases
-        # the remote device.
-        fmt = 'const platform=%r; const libdir=%r; const scriptdir=%r'
         if remote_prefix:
-            fmt = 'const platform="%s"; const libdir="%s"; const scriptdir="%s"'
-        expr = fmt % (sys.platform, libdir, scriptdir_var)
+            quotechar = '"'
+        else:
+            quotechar = "'"
+        expr = ("const platform=%s; const libdir=%s; const scriptdir=%s"
+                % (js_quote(quotechar, sys.platform),
+                   js_quote(quotechar, libdir),
+                   js_quote(quotechar, scriptdir_var)))
 
         # We may have specified '-a' or '-d' twice: once via --jitflags, once
         # via the "|jit-test|" line.  Remove dups because they are toggles.
@@ -388,6 +416,11 @@ def check_output(out, err, rc, timed_out, test):
         # Allow a non-zero exit code if we want to allow OOM, but only if we
         # actually got OOM.
         if test.allow_oom and 'out of memory' in err and 'Assertion failure' not in err:
+            return True
+
+        # Allow a non-zero exit code if we want to allow unhandlable OOM, but
+        # only if we actually got unhandlable OOM.
+        if test.allow_unhandlable_oom and 'Assertion failure: [unhandlable oom]' in err:
             return True
 
         # Allow a non-zero exit code if we want to all too-much-recursion and
@@ -665,7 +698,7 @@ def get_remote_results(tests, device, prefix, options):
 def push_libs(options, device):
     # This saves considerable time in pushing unnecessary libraries
     # to the device but needs to be updated if the dependencies change.
-    required_libs = ['libnss3.so', 'libmozglue.so']
+    required_libs = ['libnss3.so', 'libmozglue.so', 'libnspr4.so', 'libplc4.so', 'libplds4.so']
 
     for file in os.listdir(options.local_lib):
         if file in required_libs:

@@ -63,11 +63,14 @@ function checkProviderPrefsEmpty(isError) {
 }
 
 function defaultFinishChecks() {
+  PopupNotifications.transitionsEnabled = true;
   checkProviderPrefsEmpty(true);
   finish();
 }
 
 function runSocialTestWithProvider(manifest, callback, finishcallback) {
+  PopupNotifications.transitionsEnabled = false;
+
   let SocialService = Cu.import("resource://gre/modules/SocialService.jsm", {}).SocialService;
 
   let manifests = Array.isArray(manifest) ? manifest : [manifest];
@@ -78,7 +81,7 @@ function runSocialTestWithProvider(manifest, callback, finishcallback) {
     SessionStore.setWindowValue(window, "socialSidebar", "");
     for (let i = 0; i < manifests.length; i++) {
       let m = manifests[i];
-      for (let what of ['sidebarURL', 'workerURL', 'iconURL']) {
+      for (let what of ['sidebarURL', 'workerURL', 'iconURL', 'shareURL', 'markURL']) {
         if (m[what]) {
           yield promiseSocialUrlNotRemembered(m[what]);
         }
@@ -103,14 +106,14 @@ function runSocialTestWithProvider(manifest, callback, finishcallback) {
       // If we're "cleaning up", don't call finish when done.
       let callback = cleanup ? function () {} : finishIfDone;
       // Similarly, if we're cleaning up, catch exceptions from removeProvider
-      let removeProvider = SocialService.removeProvider.bind(SocialService);
+      let removeProvider = SocialService.disableProvider.bind(SocialService);
       if (cleanup) {
         removeProvider = function (origin, cb) {
           try {
-            SocialService.removeProvider(origin, cb);
+            SocialService.disableProvider(origin, cb);
           } catch (ex) {
             // Ignore "provider doesn't exist" errors.
-            if (ex.message.indexOf("SocialService.removeProvider: no provider with origin") == 0)
+            if (ex.message.indexOf("SocialService.disableProvider: no provider with origin") == 0)
               return;
             info("Failed to clean up provider " + origin + ": " + ex);
           }
@@ -157,6 +160,8 @@ function runSocialTests(tests, cbPreTest, cbPostTest, cbFinish) {
   let testIter = Iterator(tests);
   let providersAtStart = Social.providers.length;
   info("runSocialTests: start test run with " + providersAtStart + " providers");
+
+  PopupNotifications.transitionsEnabled = false;
 
   if (cbPreTest === undefined) {
     cbPreTest = function(cb) {cb()};

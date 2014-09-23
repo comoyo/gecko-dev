@@ -184,9 +184,7 @@ compartment.
     This method's return value is ignored.
 
 `onNewGlobalObject(global)`
-:   A new global object, <i>global</i>, has been created. The application
-    embedding the JavaScript implementation may provide details about what
-    kind of global it is via <code><i>global</i>.hostAnnotations</code>.
+:   A new global object, <i>global</i>, has been created.
 
     This handler method should return a [resumption value][rv] specifying how
     the debuggee's execution should proceed. However, note that a <code>{ return:
@@ -252,12 +250,39 @@ other kinds of objects.
     [`Debugger.Object`][object] instance this method returns does hold a strong
     reference to the added global.)
 
+    If this debugger is [tracking allocation sites][tracking-allocs] and cannot
+    track allocation sites for <i>global</i>, this method throws an `Error`.
+
+`addAllGlobalsAsDebuggees()`
+:   This method is like [`addDebuggee`][add], but adds all the global
+    objects from all compartments to this `Debugger` instance's set of
+    debuggees. Note that it skips this debugger's compartment.
+
+    If this debugger is [tracking allocation sites][tracking-allocs] and cannot
+    track allocation sites for some global, this method throws an `Error`.
+    Otherwise this method returns `undefined`.
+
+    This method is only available to debuggers running in privileged
+    code ("chrome", in Firefox). Most functions provided by this `Debugger`
+    API observe activity in only those globals that are reachable by the
+    API's user, thus imposing capability-based restrictions on a
+    `Debugger`'s reach. However, the `addAllGlobalsAsDebuggees` method
+    allows the API user to monitor all global object creation that
+    occurs anywhere within the JavaScript system (the "JSRuntime", in
+    SpiderMonkey terms), thereby escaping the capability-based
+    limits. For this reason, `addAllGlobalsAsDebuggees` is only
+    available to privileged code.
+
 <code>removeDebuggee(<i>global</i>)</code>
 :   Remove the global object designated by <i>global</i> from this
     `Debugger` instance's set of debuggees. Return `undefined`.
 
     This method interprets <i>global</i> using the same rules that
     [`addDebuggee`][add] does.
+
+`removeAllDebuggees()`
+:   Remove all the global objects from this `Debugger` instance's set
+    of debuggees.  Return `undefined`.
 
 <code>hasDebuggee(<i>global</i>)</code>
 :   Return `true` if the global object designated by <i>global</i> is a
@@ -364,9 +389,7 @@ other kinds of objects.
 
 `findAllGlobals()`
 :   Return an array of [`Debugger.Object`][object] instances referring to all the
-    global objects present in this JavaScript instance. The application may
-    provide details about what kind of globals they are via the
-    [`Debugger.Object`][object] instances' `hostAnnotations` accessors.
+    global objects present in this JavaScript instance.
 
     The results of this call can be affected in non-deterministic ways by
     the details of the JavaScript implementation. The array may include

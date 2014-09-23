@@ -15,7 +15,8 @@ class nsIRequestObserver;
 
 //-----------------------------------------------------------------------------
 
-class nsAsyncStreamCopier : public nsIAsyncStreamCopier, nsIAsyncStreamCopier2
+class nsAsyncStreamCopier MOZ_FINAL : public nsIAsyncStreamCopier,
+                                      nsIAsyncStreamCopier2
 {
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
@@ -33,7 +34,6 @@ public:
                     bool aCloseSink);
 
     nsAsyncStreamCopier();
-    virtual ~nsAsyncStreamCopier();
 
     //-------------------------------------------------------------------------
     // these methods may be called on any thread
@@ -42,6 +42,8 @@ public:
     void   Complete(nsresult status);
 
 private:
+    virtual ~nsAsyncStreamCopier();
+
     nsresult InitInternal(nsIInputStream *source,
                           nsIOutputStream *sink,
                           nsIEventTarget *target,

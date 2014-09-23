@@ -38,8 +38,10 @@ class nsRange MOZ_FINAL : public nsIDOMRange,
   typedef mozilla::dom::DOMRect DOMRect;
   typedef mozilla::dom::DOMRectList DOMRectList;
 
+  virtual ~nsRange();
+
 public:
-  nsRange(nsINode* aNode)
+  explicit nsRange(nsINode* aNode)
     : mRoot(nullptr)
     , mStartOffset(0)
     , mEndOffset(0)
@@ -59,7 +61,6 @@ public:
     MOZ_ASSERT(aNode, "range isn't in a document!");
     mOwner = aNode->OwnerDoc();
   }
-  virtual ~nsRange();
 
   static nsresult CreateRange(nsIDOMNode* aStartParent, int32_t aStartOffset,
                               nsIDOMNode* aEndParent, int32_t aEndOffset,
@@ -216,8 +217,10 @@ public:
   void SetStartAfter(nsINode& aNode, ErrorResult& aErr);
   void SetStartBefore(nsINode& aNode, ErrorResult& aErr);
   void SurroundContents(nsINode& aNode, ErrorResult& aErr);
-  already_AddRefed<DOMRect> GetBoundingClientRect();
-  already_AddRefed<DOMRectList> GetClientRects();
+  already_AddRefed<DOMRect> GetBoundingClientRect(bool aClampToEdge = true,
+                                                  bool aFlushLayout = true);
+  already_AddRefed<DOMRectList> GetClientRects(bool aClampToEdge = true,
+                                               bool aFlushLayout = true);
 
   nsINode* GetParentObject() const { return mOwner; }
   virtual JSObject* WrapObject(JSContext* cx) MOZ_OVERRIDE MOZ_FINAL;
@@ -258,7 +261,21 @@ public:
   static void CollectClientRects(nsLayoutUtils::RectCallback* aCollector,
                                  nsRange* aRange,
                                  nsINode* aStartParent, int32_t aStartOffset,
-                                 nsINode* aEndParent, int32_t aEndOffset);
+                                 nsINode* aEndParent, int32_t aEndOffset,
+                                 bool aClampToEdge, bool aFlushLayout);
+
+  /**
+   * Scan this range for -moz-user-select:none nodes and split it up into
+   * multiple ranges to exclude those nodes.  The resulting ranges are put
+   * in aOutRanges.  If no -moz-user-select:none node is found in the range
+   * then |this| is unmodified and is the only range in aOutRanges.
+   * Otherwise, |this| will be modified so that it ends before the first
+   * -moz-user-select:none node and additional ranges may also be created.
+   * If all nodes in the range are -moz-user-select:none then aOutRanges
+   * will be empty.
+   * @param aOutRanges the resulting set of ranges
+   */
+  void ExcludeNonSelectableNodes(nsTArray<nsRefPtr<nsRange>>* aOutRanges);
 
   typedef nsTHashtable<nsPtrHashKey<nsRange> > RangeHashTable;
 protected:
@@ -286,7 +303,7 @@ protected:
 
   struct MOZ_STACK_CLASS AutoInvalidateSelection
   {
-    AutoInvalidateSelection(nsRange* aRange) : mRange(aRange)
+    explicit AutoInvalidateSelection(nsRange* aRange) : mRange(aRange)
     {
 #ifdef DEBUG
       mWasInSelection = mRange->IsInSelection();

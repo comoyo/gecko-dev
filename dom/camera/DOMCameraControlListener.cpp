@@ -31,16 +31,19 @@ DOMCameraControlListener::~DOMCameraControlListener()
 class DOMCameraControlListener::DOMCallback : public nsRunnable
 {
 public:
-  DOMCallback(nsMainThreadPtrHandle<nsDOMCameraControl> aDOMCameraControl)
+  explicit DOMCallback(nsMainThreadPtrHandle<nsDOMCameraControl> aDOMCameraControl)
     : mDOMCameraControl(aDOMCameraControl)
   {
     MOZ_COUNT_CTOR(DOMCameraControlListener::DOMCallback);
   }
+
+protected:
   virtual ~DOMCallback()
   {
     MOZ_COUNT_DTOR(DOMCameraControlListener::DOMCallback);
   }
 
+public:
   virtual void RunCallback(nsDOMCameraControl* aDOMCameraControl) = 0;
 
   NS_IMETHOD
@@ -273,7 +276,7 @@ DOMCameraControlListener::OnShutter()
   class Callback : public DOMCallback
   {
   public:
-    Callback(nsMainThreadPtrHandle<nsDOMCameraControl> aDOMCameraControl)
+    explicit Callback(nsMainThreadPtrHandle<nsDOMCameraControl> aDOMCameraControl)
       : DOMCallback(aDOMCameraControl)
     { }
 
@@ -285,6 +288,12 @@ DOMCameraControlListener::OnShutter()
   };
 
   NS_DispatchToMainThread(new Callback(mDOMCameraControl));
+}
+
+void
+DOMCameraControlListener::OnRateLimitPreview(bool aLimit)
+{
+  mStream->RateLimit(aLimit);
 }
 
 bool
@@ -338,9 +347,10 @@ DOMCameraControlListener::OnTakePictureComplete(uint8_t* aData, uint32_t aLength
     void
     RunCallback(nsDOMCameraControl* aDOMCameraControl) MOZ_OVERRIDE
     {
-      nsCOMPtr<nsIDOMBlob> picture = new nsDOMMemoryFile(static_cast<void*>(mData),
-                                                         static_cast<uint64_t>(mLength),
-                                                         mMimeType);
+      nsCOMPtr<nsIDOMBlob> picture =
+        DOMFile::CreateMemoryFile(static_cast<void*>(mData),
+                                  static_cast<uint64_t>(mLength),
+                                  mMimeType);
       aDOMCameraControl->OnTakePictureComplete(picture);
     }
 

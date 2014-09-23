@@ -16,6 +16,9 @@ const nsPKIParamBlock    = "@mozilla.org/security/pkiparamblock;1";
 const nsINSSCertCache = Components.interfaces.nsINSSCertCache;
 const nsNSSCertCache = "@mozilla.org/security/nsscertcache;1";
 
+let { NetUtil } = Components.utils.import("resource://gre/modules/NetUtil.jsm", {});
+let { Services } = Components.utils.import("resource://gre/modules/Services.jsm", {});
+
 var key;
 
 var selected_certs = [];
@@ -29,11 +32,22 @@ var emailTreeView;
 var userTreeView;
 var orphanTreeView;
 
+var smartCardObserver = {
+  observe: function() {
+    onSmartCardChange();
+  }
+};
+
+function DeregisterSmartCardObservers()
+{
+  Services.obs.removeObserver(smartCardObserver, "smartcard-insert");
+  Services.obs.removeObserver(smartCardObserver, "smartcard-remove");
+}
+
 function LoadCerts()
 {
-  window.crypto.enableSmartCardEvents = true;
-  document.addEventListener("smartcard-insert", onSmartCardChange, false);
-  document.addEventListener("smartcard-remove", onSmartCardChange, false);
+  Services.obs.addObserver(smartCardObserver, "smartcard-insert", false);
+  Services.obs.addObserver(smartCardObserver, "smartcard-remove", false);
 
   certdb = Components.classes[nsX509CertDB].getService(nsIX509CertDB);
   var certcache = Components.classes[nsNSSCertCache].createInstance(nsINSSCertCache);
@@ -368,9 +382,34 @@ function restoreCerts()
           nsIFilePicker.modeOpen);
   fp.appendFilter(bundle.getString("file_browse_PKCS12_spec"),
                   "*.p12; *.pfx");
+  fp.appendFilter(bundle.getString("file_browse_Certificate_spec"),
+                  "*.crt; *.cert; *.cer; *.pem; *.der");
   fp.appendFilters(nsIFilePicker.filterAll);
   if (fp.show() == nsIFilePicker.returnOK) {
-    certdb.importPKCS12File(null, fp.file);
+    // If this is an X509 user certificate, import it as one.
+    if (fp.file.path.endsWith(".crt") || fp.file.path.endsWith(".cert") ||
+        fp.file.path.endsWith(".cer") || fp.file.path.endsWith(".pem") ||
+        fp.file.path.endsWith(".der")) {
+      let fstream = Components.classes["@mozilla.org/network/file-input-stream;1"]
+                      .createInstance(Components.interfaces.nsIFileInputStream);
+      fstream.init(fp.file, -1, 0, 0);
+      let dataString = NetUtil.readInputStreamToString(fstream, fstream.available());
+      let dataArray = [];
+      for (let i = 0; i < dataString.length; i++) {
+        dataArray.push(dataString.charCodeAt(i));
+      }
+      fstream.close();
+      let prompter = Services.ww.getNewPrompter(window);
+      let interfaceRequestor = {
+        getInterface: function() {
+          return prompter;
+        }
+      };
+      certdb.importUserCertificate(dataArray, dataArray.length, interfaceRequestor);
+    } else {
+      // Otherwise, assume it's a PKCS12 file and import it that way.
+      certdb.importPKCS12File(null, fp.file);
+    }
 
     var certcache = Components.classes[nsNSSCertCache].createInstance(nsINSSCertCache);
     certcache.cacheAllCerts();
@@ -585,4 +624,3 @@ function addException()
   orphanTreeView.loadCertsFromCache(certcache, nsIX509Cert.UNKNOWN_CERT);
   orphanTreeView.selection.clearSelection();
 }
-

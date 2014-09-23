@@ -21,7 +21,8 @@ nsContextMenu.prototype = {
       return;
 
     this.hasPageMenu = false;
-    if (!aIsShift) {
+    // FIXME (bug 1047751) - The page menu is disabled in e10s.
+    if (!aIsShift && !this.isRemote) {
       this.hasPageMenu = PageMenu.maybeBuildAndAttachMenu(this.target,
                                                           aXulMenu);
     }
@@ -38,6 +39,9 @@ nsContextMenu.prototype = {
 
     // Initialize (disable/remove) menu items.
     this.initItems();
+
+    // Register this opening of the menu with telemetry:
+    this._checkTelemetryForMenu(aXulMenu);
   },
 
   hiding: function CM_hiding() {
@@ -45,6 +49,11 @@ nsContextMenu.prototype = {
     InlineSpellCheckerUI.clearSuggestionsFromMenu();
     InlineSpellCheckerUI.clearDictionaryListFromMenu();
     InlineSpellCheckerUI.uninit();
+
+    // This handler self-deletes, only run it if it is still there:
+    if (this._onPopupHiding) {
+      this._onPopupHiding();
+    }
   },
 
   initItems: function CM_initItems() {
@@ -344,7 +353,9 @@ nsContextMenu.prototype = {
   },
 
   initSpellingItems: function() {
-    var canSpell = InlineSpellCheckerUI.canSpellCheck && this.canSpellCheck;
+    var canSpell = InlineSpellCheckerUI.canSpellCheck &&
+                   !InlineSpellCheckerUI.initialSpellCheckPending &&
+                   this.canSpellCheck;
     var onMisspelling = InlineSpellCheckerUI.overMisspelling;
     var showUndo = canSpell && InlineSpellCheckerUI.canUndo();
     this.showItem("spell-check-enabled", canSpell);
@@ -502,6 +513,8 @@ nsContextMenu.prototype = {
     if (gContextMenuContentData) {
       this.isRemote = true;
       aNode = gContextMenuContentData.event.target;
+      aRangeParent = gContextMenuContentData.event.rangeParent;
+      aRangeOffset = gContextMenuContentData.event.rangeOffset;
     } else {
       this.isRemote = false;
     }
@@ -646,7 +659,7 @@ nsContextMenu.prototype = {
       else if ((this.target instanceof HTMLEmbedElement ||
                 this.target instanceof HTMLObjectElement ||
                 this.target instanceof HTMLAppletElement) &&
-               this.target.mozMatchesSelector(":-moz-handler-clicktoplay")) {
+               this.target.matches(":-moz-handler-clicktoplay")) {
         this.onCTPPlugin = true;
       }
 
@@ -727,7 +740,7 @@ nsContextMenu.prototype = {
 
     // if the document is editable, show context menu like in text inputs
     if (!this.onEditableArea) {
-      var win = this.target.ownerDocument.defaultView;
+      win = this.target.ownerDocument.defaultView;
       if (win) {
         var isEditable = false;
         try {
@@ -855,14 +868,14 @@ nsContextMenu.prototype = {
     // if the mixedContentChannel is present and the referring URI passes
     // a same origin check with the target URI, we can preserve the users
     // decision of disabling MCB on a page for it's child tabs.
-    var persistDisableMCBInChildTab = false;
+    var persistAllowMixedContentInChildTab = false;
 
     if (this.browser.docShell && this.browser.docShell.mixedContentChannel) {
       const sm = Services.scriptSecurityManager;
       try {
         var targetURI = this.linkURI;
         sm.checkSameOriginURI(referrerURI, targetURI, false);
-        persistDisableMCBInChildTab = true;
+        persistAllowMixedContentInChildTab = true;
       }
       catch (e) { }
     }
@@ -870,7 +883,7 @@ nsContextMenu.prototype = {
     openLinkIn(this.linkURL, "tab",
                { charset: doc.characterSet,
                  referrerURI: referrerURI,
-                 disableMCB:  persistDisableMCBInChildTab});
+                 allowMixedContent: persistAllowMixedContentInChildTab });
   },
 
   // open URL in current tab
@@ -913,7 +926,7 @@ nsContextMenu.prototype = {
     var frameURL = doc.location.href;
 
     urlSecurityCheck(frameURL,
-                     this._unremotePrincipal(this.browser.contentPrincipal),
+                     this.browser.contentPrincipal,
                      Ci.nsIScriptSecurityManager.DISALLOW_SCRIPT);
     var referrer = doc.referrer;
     openUILinkIn(frameURL, "current", { disallowInheritPrincipal: true,
@@ -974,7 +987,7 @@ nsContextMenu.prototype = {
   viewImageDesc: function(e) {
     var doc = this.target.ownerDocument;
     urlSecurityCheck(this.imageDescURL,
-                     this._unremotePrincipal(this.browser.contentPrincipal),
+                     this.browser.contentPrincipal,
                      Ci.nsIScriptSecurityManager.DISALLOW_SCRIPT);
     openUILink(this.imageDescURL, e, { disallowInheritPrincipal: true,
                              referrerURI: doc.documentURIObject });
@@ -986,7 +999,7 @@ nsContextMenu.prototype = {
 
   reloadImage: function(e) {
     urlSecurityCheck(this.mediaURL,
-                     this._unremotePrincipal(this.browser.contentPrincipal),
+                     this.browser.contentPrincipal,
                      Ci.nsIScriptSecurityManager.DISALLOW_SCRIPT);
 
     if (this.target instanceof Ci.nsIImageLoadingContent)
@@ -1002,7 +1015,7 @@ nsContextMenu.prototype = {
     else {
       viewURL = this.mediaURL;
       urlSecurityCheck(viewURL,
-                       this._unremotePrincipal(this.browser.contentPrincipal),
+                       this.browser.contentPrincipal,
                        Ci.nsIScriptSecurityManager.DISALLOW_SCRIPT);
     }
 
@@ -1045,7 +1058,7 @@ nsContextMenu.prototype = {
   // Change current window to the URL of the background image.
   viewBGImage: function(e) {
     urlSecurityCheck(this.bgImageURL,
-                     this._unremotePrincipal(this.browser.contentPrincipal),
+                     this.browser.contentPrincipal,
                      Ci.nsIScriptSecurityManager.DISALLOW_SCRIPT);
     var doc = this.target.ownerDocument;
     openUILink(this.bgImageURL, e, { disallowInheritPrincipal: true,
@@ -1156,13 +1169,13 @@ nsContextMenu.prototype = {
           return;
         }
 
-        var extHelperAppSvc = 
+        let extHelperAppSvc = 
           Cc["@mozilla.org/uriloader/external-helper-app-service;1"].
           getService(Ci.nsIExternalHelperAppService);
-        var channel = aRequest.QueryInterface(Ci.nsIChannel);
-        this.extListener = 
+        let channel = aRequest.QueryInterface(Ci.nsIChannel);
+        this.extListener =
           extHelperAppSvc.doContent(channel.contentType, aRequest, 
-                                    doc.defaultView, true);
+                                    doc.defaultView, true, window);
         this.extListener.onStartRequest(aRequest, aContext);
       }, 
 
@@ -1302,11 +1315,11 @@ nsContextMenu.prototype = {
   },
 
   playPlugin: function() {
-    gPluginHandler._showClickToPlayNotification(this.browser, this.target, true);
+    gPluginHandler.contextMenuCommand(this.browser, this.target, "play");
   },
 
   hidePlugin: function() {
-    gPluginHandler.hideClickToPlayOverlay(this.target);
+    gPluginHandler.contextMenuCommand(this.browser, this.target, "hide");
   },
 
   // Generate email address and put it on clipboard.
@@ -1589,22 +1602,22 @@ nsContextMenu.prototype = {
   },
   markLink: function CM_markLink(origin) {
     // send link to social, if it is the page url linkURI will be null
-    SocialMarks.markLink(origin, this.linkURI ? this.linkURI.spec : null);
+    SocialMarks.markLink(origin, this.linkURI ? this.linkURI.spec : null, this.target);
   },
   shareLink: function CM_shareLink() {
-    SocialShare.sharePage(null, { url: this.linkURI.spec });
+    SocialShare.sharePage(null, { url: this.linkURI.spec }, this.target);
   },
 
   shareImage: function CM_shareImage() {
-    SocialShare.sharePage(null, { url: this.imageURL, previews: [ this.mediaURL ] });
+    SocialShare.sharePage(null, { url: this.imageURL, previews: [ this.mediaURL ] }, this.target);
   },
 
   shareVideo: function CM_shareVideo() {
-    SocialShare.sharePage(null, { url: this.mediaURL, source: this.mediaURL });
+    SocialShare.sharePage(null, { url: this.mediaURL, source: this.mediaURL }, this.target);
   },
 
   shareSelect: function CM_shareSelect(selection) {
-    SocialShare.sharePage(null, { url: this.browser.currentURI.spec, text: selection });
+    SocialShare.sharePage(null, { url: this.browser.currentURI.spec, text: selection }, this.target);
   },
 
   savePageAs: function CM_savePageAs() {
@@ -1673,8 +1686,15 @@ nsContextMenu.prototype = {
     // Store searchTerms in context menu item so we know what to search onclick
     menuItem.searchTerms = selectedText;
 
-    if (selectedText.length > 15)
-      selectedText = selectedText.substr(0,15) + this.ellipsis;
+    // If the JS character after our truncation point is a trail surrogate,
+    // include it in the truncated string to avoid splitting a surrogate pair.
+    if (selectedText.length > 15) {
+      let truncLength = 15;
+      let truncChar = selectedText[15].charCodeAt(0);
+      if (truncChar >= 0xDC00 && truncChar <= 0xDFFF)
+        truncLength++;
+      selectedText = selectedText.substr(0,truncLength) + this.ellipsis;
+    }
 
     // Use the current engine if the search bar is visible, the default
     // engine otherwise.
@@ -1692,5 +1712,76 @@ nsContextMenu.prototype = {
                                                          selectedText]);
     menuItem.label = menuLabel;
     menuItem.accessKey = gNavigatorBundle.getString("contextMenuSearch.accesskey");
-  }
+  },
+
+  _getTelemetryClickInfo: function(aXulMenu) {
+    this._onPopupHiding = () => {
+      aXulMenu.ownerDocument.removeEventListener("command", activationHandler, true);
+      aXulMenu.removeEventListener("popuphiding", this._onPopupHiding, true);
+      delete this._onPopupHiding;
+
+      let eventKey = [
+          this._telemetryPageContext,
+          this._telemetryHadCustomItems ? "withcustom" : "withoutcustom"
+      ];
+      let target = this._telemetryClickID || "close-without-interaction";
+      BrowserUITelemetry.registerContextMenuInteraction(eventKey, target);
+    };
+    let activationHandler = (e) => {
+      // Deal with command events being routed to command elements; figure out
+      // what triggered the event (which will have the right e.target)
+      if (e.sourceEvent) {
+        e = e.sourceEvent;
+      }
+      // Target should be in the menu (this catches using shortcuts for items
+      // not in the menu while the menu is up)
+      if (!aXulMenu.contains(e.target)) {
+        return;
+      }
+
+      // Check if this is a page menu item:
+      if (e.target.hasAttribute(PageMenu.GENERATEDITEMID_ATTR)) {
+        this._telemetryClickID = "custom-page-item";
+      } else {
+        this._telemetryClickID = (e.target.id || "unknown").replace(/^context-/i, "");
+      }
+    };
+    aXulMenu.ownerDocument.addEventListener("command", activationHandler, true);
+    aXulMenu.addEventListener("popuphiding", this._onPopupHiding, true);
+  },
+
+  _getTelemetryPageContextInfo: function() {
+    if (this.isContentSelected) {
+      return "selection";
+    }
+    if (this.onLink) {
+      if (this.onImage || this.onCanvas) {
+        return "image-link";
+      }
+      return "link";
+    }
+    if (this.onImage) {
+      return "image"
+    }
+    if (this.onCanvas) {
+      return "canvas";
+    }
+    if (this.onVideo || this.onAudio) {
+      return "media";
+    }
+    if (this.onTextInput) {
+      return "input";
+    }
+    if (this.onSocial) {
+      return "social";
+    }
+    return "other";
+  },
+
+  _checkTelemetryForMenu: function(aXulMenu) {
+    this._telemetryClickID = null;
+    this._telemetryPageContext = this._getTelemetryPageContextInfo();
+    this._telemetryHadCustomItems = this.hasPageMenu;
+    this._getTelemetryClickInfo(aXulMenu);
+  },
 };

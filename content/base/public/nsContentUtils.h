@@ -27,6 +27,8 @@
 #include "nsMathUtils.h"
 #include "nsTArrayForwardDeclare.h"
 #include "Units.h"
+#include "mozilla/dom/AutocompleteInfoBinding.h"
+#include "mozilla/dom/ScriptSettings.h"
 
 #if defined(XP_WIN)
 // Undefine LoadImage to prevent naming conflict with Windows.
@@ -69,7 +71,6 @@ class nsIIOService;
 class nsIJSRuntimeService;
 class nsILineBreaker;
 class nsNameSpaceManager;
-class nsINodeInfo;
 class nsIObserver;
 class nsIParser;
 class nsIParserService;
@@ -114,22 +115,13 @@ namespace dom {
 class DocumentFragment;
 class Element;
 class EventTarget;
+class NodeInfo;
 class Selection;
 } // namespace dom
 
 namespace layers {
 class LayerManager;
 } // namespace layers
-
-// Called back from DeferredFinalize.  Should add 'thing' to the array of smart
-// pointers in 'pointers', creating the array if 'pointers' is null, and return
-// the array.
-typedef void* (*DeferredFinalizeAppendFunction)(void* pointers, void* thing);
-
-// Called to finalize a number of objects. Slice is the number of objects
-// to finalize, or if it's UINT32_MAX, all objects should be finalized.
-// Return value indicates whether it finalized all objects in the buffer.
-typedef bool (*DeferredFinalizeFunction)(uint32_t slice, void* data);
 
 } // namespace mozilla
 
@@ -160,7 +152,7 @@ struct EventNameMapping
   nsIAtom* mAtom;
   uint32_t mId;
   int32_t  mType;
-  uint32_t mStructType;
+  mozilla::EventClassID mEventClassID;
 };
 
 struct nsShortcutCandidate {
@@ -180,11 +172,6 @@ class nsContentUtils
 
 public:
   static nsresult Init();
-
-  /**
-   * Get a JSContext from the document's scope object.
-   */
-  static JSContext* GetContextFromDocument(nsIDocument *aDocument);
 
   static bool     IsCallerChrome();
   static bool     ThreadsafeIsCallerChrome();
@@ -227,7 +214,8 @@ public:
     const nsINode* aPossibleDescendant, const nsINode* aPossibleAncestor);
 
   /**
-   * Similar to ContentIsDescendantOf except it crosses document boundaries.
+   * Similar to ContentIsDescendantOf except it crosses document boundaries,
+   * also crosses ShadowRoot boundaries from ShadowRoot to its host.
    */
   static bool ContentIsCrossDocDescendantOf(nsINode* aPossibleDescendant,
                                               nsINode* aPossibleAncestor);
@@ -367,6 +355,19 @@ public:
    */
   static bool IsHTMLVoid(nsIAtom* aLocalName);
 
+  enum ParseHTMLIntegerResultFlags {
+    eParseHTMLInteger_NoFlags               = 0,
+    eParseHTMLInteger_IsPercent             = 1 << 0,
+    eParseHTMLInteger_NonStandard           = 1 << 1,
+    eParseHTMLInteger_DidNotConsumeAllInput = 1 << 2,
+    // Set if one or more error flags were set.
+    eParseHTMLInteger_Error                 = 1 << 3,
+    eParseHTMLInteger_ErrorNoValue          = 1 << 4,
+    eParseHTMLInteger_ErrorOverflow         = 1 << 5
+  };
+  static int32_t ParseHTMLInteger(const nsAString& aValue,
+                                  ParseHTMLIntegerResultFlags *aResult);
+
   /**
    * Parse a margin string of format 'top, right, bottom, left' into
    * an nsIntMargin.
@@ -405,15 +406,6 @@ public:
   static bool CanCallerAccess(nsPIDOMWindow* aWindow);
 
   /**
-   * Get the window through the JS context that's currently on the stack.
-   * If there's no JS context currently on the stack, returns null.
-   */
-  static nsPIDOMWindow *GetWindowFromCaller();
-
-  /**
-   * The two GetDocumentFrom* functions below allow a caller to get at a
-   * document that is relevant to the currently executing script.
-   *
    * GetDocumentFromCaller gets its document by looking at the last called
    * function and finding the document that the function itself relates to.
    * For example, consider two windows A and B in the same origin. B has a
@@ -421,27 +413,9 @@ public:
    * If a script in window A were to call B's function, GetDocumentFromCaller
    * would find that function (in B) and return B's document.
    *
-   * GetDocumentFromContext gets its document by looking at the currently
-   * executing context's global object and returning its document. Thus,
-   * given the example above, GetDocumentFromCaller would see that the
-   * currently executing script was in window A, and return A's document.
-   */
-  /**
-   * Get the document from the currently executing function. This will return
-   * the document that the currently executing function is in/from.
-   *
    * @return The document or null if no JS Context.
    */
   static nsIDocument* GetDocumentFromCaller();
-
-  /**
-   * Get the document through the JS context that's currently on the stack.
-   * If there's no JS context currently on the stack it will return null.
-   * This will return the document of the calling script.
-   *
-   * @return The document or null if no JS context
-   */
-  static nsIDocument* GetDocumentFromContext();
 
   // Check if a node is in the document prolog, i.e. before the document
   // element.
@@ -473,8 +447,7 @@ public:
   /**
    * Get the ContentSecurityPolicy for a JS context.
    **/
-  static bool GetContentSecurityPolicy(JSContext* aCx,
-                                       nsIContentSecurityPolicy** aCSP);
+  static bool GetContentSecurityPolicy(nsIContentSecurityPolicy** aCSP);
 
   // Returns the subject principal. Guaranteed to return non-null. May only
   // be called when nsContentUtils is initialized.
@@ -538,7 +511,7 @@ public:
                                        const nsAString& aQualifiedName,
                                        nsNodeInfoManager* aNodeInfoManager,
                                        uint16_t aNodeType,
-                                       nsINodeInfo** aNodeInfo);
+                                       mozilla::dom::NodeInfo** aNodeInfo);
 
   static void SplitExpatName(const char16_t *aExpatName, nsIAtom **aPrefix,
                              nsIAtom **aTagName, int32_t *aNameSpaceID);
@@ -704,8 +677,8 @@ public:
    * Convenience method to create a new nodeinfo that differs only by name
    * from aNodeInfo.
    */
-  static nsresult NameChanged(nsINodeInfo* aNodeInfo, nsIAtom* aName,
-                              nsINodeInfo** aResult);
+  static nsresult NameChanged(mozilla::dom::NodeInfo* aNodeInfo, nsIAtom* aName,
+                              mozilla::dom::NodeInfo** aResult);
 
   /**
    * Returns the appropriate event argument names for the specified
@@ -1030,13 +1003,13 @@ public:
   static uint32_t GetEventId(nsIAtom* aName);
 
   /**
-   * Return the category for the event with the given name. The name is the
-   * event name *without* the 'on' prefix. Returns NS_EVENT if the event
-   * is not known to be in any particular category.
+   * Return the EventClassID for the event with the given name. The name is the
+   * event name *without* the 'on' prefix. Returns eBasicEventClass if the event
+   * is not known to be of any particular event class.
    *
    * @param aName the event name to look up
    */
-  static uint32_t GetEventCategory(const nsAString& aName);
+  static mozilla::EventClassID GetEventClassID(const nsAString& aName);
 
   /**
    * Return the event id and atom for the event with the given name.
@@ -1045,10 +1018,10 @@ public:
    * event doesn't match a known event name in the category.
    *
    * @param aName the event name to look up
-   * @param aEventStruct only return event id in aEventStruct category
+   * @param aEventClassID only return event id for aEventClassID
    */
   static nsIAtom* GetEventIdAndAtom(const nsAString& aName,
-                                    uint32_t aEventStruct,
+                                    mozilla::EventClassID aEventClassID,
                                     uint32_t* aEventID);
 
   /**
@@ -1266,11 +1239,6 @@ public:
    */
   static void DestroyAnonymousContent(nsCOMPtr<nsIContent>* aContent);
   static void DestroyAnonymousContent(nsCOMPtr<Element>* aElement);
-
-  static void DeferredFinalize(nsISupports* aSupports);
-  static void DeferredFinalize(mozilla::DeferredFinalizeAppendFunction aAppendFunc,
-                               mozilla::DeferredFinalizeFunction aFunc,
-                               void* aThing);
 
   /*
    * Notify when the first XUL menu is opened and when the all XUL menus are
@@ -1523,6 +1491,13 @@ public:
   }
 
   /**
+   * Call this function if !IsSafeToRunScript() and we fail to run the script
+   * (rather than using AddScriptRunner as we usually do). |aDocument| is
+   * optional as it is only used for showing the URL in the console.
+   */
+  static void WarnScriptWasIgnored(nsIDocument* aDocument);
+
+  /**
    * Retrieve information about the viewport as a data structure.
    * This will return information in the viewport META data section
    * of the document. This can be used in lieu of ProcessViewportInfo(),
@@ -1578,16 +1553,16 @@ public:
    * @return NS_OK on success, or NS_ERROR_OUT_OF_MEMORY if making the string
    * writable needs to allocate memory and that allocation fails.
    */
-  static nsresult ASCIIToLower(nsAString& aStr);
-  static nsresult ASCIIToLower(const nsAString& aSource, nsAString& aDest);
+  static void ASCIIToLower(nsAString& aStr);
+  static void ASCIIToLower(const nsAString& aSource, nsAString& aDest);
 
   /**
    * Convert ASCII a-z to A-Z.
    * @return NS_OK on success, or NS_ERROR_OUT_OF_MEMORY if making the string
    * writable needs to allocate memory and that allocation fails.
    */
-  static nsresult ASCIIToUpper(nsAString& aStr);
-  static nsresult ASCIIToUpper(const nsAString& aSource, nsAString& aDest);
+  static void ASCIIToUpper(nsAString& aStr);
+  static void ASCIIToUpper(const nsAString& aSource, nsAString& aDest);
 
   /**
    * Return whether aStr contains an ASCII uppercase character.
@@ -1597,10 +1572,6 @@ public:
   // Returns NS_OK for same origin, error (NS_ERROR_DOM_BAD_URI) if not.
   static nsresult CheckSameOrigin(nsIChannel *aOldChannel, nsIChannel *aNewChannel);
   static nsIInterfaceRequestor* GetSameOriginChecker();
-
-  // Trace the safe JS context.
-  static void TraceSafeJSContext(JSTracer* aTrc);
-
 
   /**
    * Get the Origin of the passed in nsIPrincipal or nsIURI. If the passed in
@@ -1621,7 +1592,6 @@ public:
   static nsresult GetUTFOrigin(nsIPrincipal* aPrincipal,
                                nsString& aOrigin);
   static nsresult GetUTFOrigin(nsIURI* aURI, nsString& aOrigin);
-  static void GetUTFNonNullOrigin(nsIURI* aURI, nsString& aOrigin);
 
   /**
    * This method creates and dispatches "command" event, which implements
@@ -1995,20 +1965,22 @@ public:
   static nsresult URIInheritsSecurityContext(nsIURI *aURI, bool *aResult);
 
   /**
-   * Set the given principal as the owner of the given channel, if
-   * needed.  aURI must be the URI of aChannel.  aPrincipal may be
-   * null.  If aSetUpForAboutBlank is true, then about:blank will get
-   * the principal set up on it. If aForceOwner is true, the owner
-   * will be set on the channel, even if the principal can be determined
-   * from the channel.
-   * The return value is whether the principal was set up as the owner
-   * of the channel.
-   */
-  static bool SetUpChannelOwner(nsIPrincipal* aLoadingPrincipal,
-                                nsIChannel* aChannel,
-                                nsIURI* aURI,
-                                bool aSetUpForAboutBlank,
-                                bool aForceOwner = false);
+    * Called before a channel is created to query whether the new
+    * channel should inherit the principal.
+    *
+    * The argument aLoadingPrincipal must not be null. The argument
+    * aURI must be the URI of the new channel. If aInheritForAboutBlank
+    * is true, then about:blank will be told to inherit the principal.
+    * If aForceInherit is true, the new channel will be told to inherit
+    * the principal no matter what.
+    *
+    * The return value is whether the new channel should inherit
+    * the principal.
+    */
+  static bool ChannelShouldInheritPrincipal(nsIPrincipal* aLoadingPrincipal,
+                                            nsIURI* aURI,
+                                            bool aInheritForAboutBlank,
+                                            bool aForceInherit);
 
   static nsresult Btoa(const nsAString& aBinaryData,
                        nsAString& aAsciiBase64String);
@@ -2040,8 +2012,22 @@ public:
    *
    * @return whether aAttr was valid and can be cached.
    */
-  static AutocompleteAttrState SerializeAutocompleteAttribute(const nsAttrValue* aAttr,
-                                                          nsAString& aResult);
+  static AutocompleteAttrState
+  SerializeAutocompleteAttribute(const nsAttrValue* aAttr,
+                                 nsAString& aResult,
+                                 AutocompleteAttrState aCachedState =
+                                   eAutocompleteAttrState_Unknown);
+
+  /* Variation that is used to retrieve a dictionary of the parts of the
+   * autocomplete attribute.
+   *
+   * @return whether aAttr was valid and can be cached.
+   */
+  static AutocompleteAttrState
+  SerializeAutocompleteAttribute(const nsAttrValue* aAttr,
+                                 mozilla::dom::AutocompleteInfo& aInfo,
+                                 AutocompleteAttrState aCachedState =
+                                   eAutocompleteAttrState_Unknown);
 
   /**
    * This will parse aSource, to extract the value of the pseudo attribute
@@ -2151,6 +2137,37 @@ public:
    */
   static bool IsContentInsertionPoint(const nsIContent* aContent);
 
+
+  /**
+   * Returns whether the children of the provided content are
+   * nodes that are distributed to Shadow DOM insertion points.
+   */
+  static bool HasDistributedChildren(nsIContent* aContent);
+
+  /**
+   * Returns whether a given header is forbidden for an XHR or fetch
+   * request.
+   */
+  static bool IsForbiddenRequestHeader(const nsACString& aHeader);
+
+  /**
+   * Returns whether a given header is forbidden for a system XHR
+   * request.
+   */
+  static bool IsForbiddenSystemRequestHeader(const nsACString& aHeader);
+
+  /**
+   * Returns whether a given Content-Type header value is allowed
+   * for a non-CORS XHR or fetch request.
+   */
+  static bool IsAllowedNonCorsContentType(const nsACString& aHeaderValue);
+
+  /**
+   * Returns whether a given header is forbidden for an XHR or fetch
+   * response.
+   */
+  static bool IsForbiddenResponseHeader(const nsACString& aHeader);
+
 private:
   static bool InitializeEventTable();
 
@@ -2182,8 +2199,9 @@ private:
   static void* AllocClassMatchingInfo(nsINode* aRootNode,
                                       const nsString* aClasses);
 
+  // Fills in aInfo with the tokens from the supplied autocomplete attribute.
   static AutocompleteAttrState InternalSerializeAutocompleteAttribute(const nsAttrValue* aAttrVal,
-                                                                  nsAString& aResult);
+                                                                      mozilla::dom::AutocompleteInfo& aInfo);
 
   static nsIXPConnect *sXPConnect;
 
@@ -2225,9 +2243,7 @@ private:
 
   static bool sInitialized;
   static uint32_t sScriptBlockerCount;
-#ifdef DEBUG
   static uint32_t sDOMNodeRemovedSuppressCount;
-#endif
   static uint32_t sMicroTaskLevel;
   // Not an nsCOMArray because removing elements from those is slower
   static nsTArray< nsCOMPtr<nsIRunnable> >* sBlockedScriptRunners;
@@ -2269,7 +2285,7 @@ private:
 
 class MOZ_STACK_CLASS nsAutoScriptBlocker {
 public:
-  nsAutoScriptBlocker(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM) {
+  explicit nsAutoScriptBlocker(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM) {
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     nsContentUtils::AddScriptBlocker();
   }
@@ -2284,14 +2300,10 @@ class MOZ_STACK_CLASS nsAutoScriptBlockerSuppressNodeRemoved :
                           public nsAutoScriptBlocker {
 public:
   nsAutoScriptBlockerSuppressNodeRemoved() {
-#ifdef DEBUG
     ++nsContentUtils::sDOMNodeRemovedSuppressCount;
-#endif
   }
   ~nsAutoScriptBlockerSuppressNodeRemoved() {
-#ifdef DEBUG
     --nsContentUtils::sDOMNodeRemovedSuppressCount;
-#endif
   }
 };
 

@@ -31,7 +31,6 @@
 #include "nsHTMLStyleSheet.h"
 #include "nsILayoutDebugger.h"
 #include "nsNameSpaceManager.h"
-#include "nsINodeInfo.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
 #include "nsIScriptNameSpaceManager.h"
@@ -71,7 +70,6 @@
 #include "nsDOMBlobBuilder.h"
 #include "nsDOMFileReader.h"
 
-#include "gfxPlatform.h"
 #include "nsFormData.h"
 #include "nsHostObjectProtocolHandler.h"
 #include "nsHostObjectURI.h"
@@ -88,7 +86,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/DOMRequest.h"
-#include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
 #include "mozilla/dom/network/TCPSocketChild.h"
 #include "mozilla/dom/network/TCPSocketParent.h"
 #include "mozilla/dom/network/TCPServerSocketChild.h"
@@ -219,10 +216,9 @@ static void Shutdown();
 #include "nsCSPContext.h"
 #include "nsISmsService.h"
 #include "nsIMmsService.h"
+#include "nsIMobileConnectionService.h"
 #include "nsIMobileMessageService.h"
 #include "nsIMobileMessageDatabaseService.h"
-#include "mozilla/dom/mobilemessage/MobileMessageService.h"
-#include "mozilla/dom/mobilemessage/SmsServicesFactory.h"
 #include "nsIPowerManagerService.h"
 #include "nsIAlarmHalService.h"
 #include "nsIMediaManager.h"
@@ -237,7 +233,6 @@ static void Shutdown();
 #include "mozilla/dom/time/TimeService.h"
 #include "StreamingProtocolService.h"
 
-#include "mozilla/dom/telephony/TelephonyFactory.h"
 #include "nsITelephonyService.h"
 
 #ifdef MOZ_WIDGET_GONK
@@ -249,10 +244,7 @@ static void Shutdown();
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using namespace mozilla::dom::mobilemessage;
-using namespace mozilla::dom::telephony;
 using mozilla::dom::alarm::AlarmHalService;
-using mozilla::dom::indexedDB::IndexedDatabaseManager;
 using mozilla::dom::power::PowerManagerService;
 using mozilla::dom::quota::QuotaManager;
 using mozilla::dom::workers::ServiceWorkerManager;
@@ -290,8 +282,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(Exception)
 NS_GENERIC_FACTORY_CONSTRUCTOR(DOMSessionStorageManager)
 NS_GENERIC_FACTORY_CONSTRUCTOR(DOMLocalStorageManager)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsChannelPolicy)
-NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(IndexedDatabaseManager,
-                                         IndexedDatabaseManager::FactoryCreate)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(DOMRequestService,
                                          DOMRequestService::FactoryCreate)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(QuotaManager,
@@ -327,14 +317,12 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsHapticFeedback)
 #endif
 #endif
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(ThirdPartyUtil, Init)
-NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsISmsService,
-                                         SmsServicesFactory::CreateSmsService)
-NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIMmsService,
-                                         SmsServicesFactory::CreateMmsService)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsISmsService, NS_CreateSmsService)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIMmsService, NS_CreateMmsService)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIMobileMessageService,
-                                         MobileMessageService::GetInstance)
+                                         NS_CreateMobileMessageService)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIMobileMessageDatabaseService,
-                                         SmsServicesFactory::CreateMobileMessageDatabaseService)
+                                         NS_CreateMobileMessageDatabaseService)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIPowerManagerService,
                                          PowerManagerService::GetInstance)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIAlarmHalService,
@@ -360,8 +348,10 @@ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsVolumeService,
 #endif
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIMediaManagerService,
                                          MediaManager::GetInstance)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIMobileConnectionService,
+                                         NS_CreateMobileConnectionService)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsITelephonyService,
-                                         TelephonyFactory::CreateTelephonyService)
+                                         NS_CreateTelephonyService)
 
 //-----------------------------------------------------------------------------
 
@@ -516,8 +506,8 @@ MAKE_CTOR(CreateHTMLDocument,             nsIDocument,                 NS_NewHTM
 MAKE_CTOR(CreateXMLDocument,              nsIDocument,                 NS_NewXMLDocument)
 MAKE_CTOR(CreateSVGDocument,              nsIDocument,                 NS_NewSVGDocument)
 MAKE_CTOR(CreateImageDocument,            nsIDocument,                 NS_NewImageDocument)
-MAKE_CTOR(CreateDOMBlob,                  nsISupports,                 nsDOMMultipartFile::NewBlob)
-MAKE_CTOR(CreateDOMFile,                  nsISupports,                 nsDOMMultipartFile::NewFile)
+MAKE_CTOR(CreateDOMBlob,                  nsISupports,                 DOMMultipartFileImpl::NewBlob)
+MAKE_CTOR(CreateDOMFile,                  nsISupports,                 DOMMultipartFileImpl::NewFile)
 MAKE_CTOR(CreateDOMSelection,             nsISelection,                NS_NewDomSelection)
 MAKE_CTOR2(CreateContentIterator,         nsIContentIterator,          NS_NewContentIterator)
 MAKE_CTOR2(CreatePreContentIterator,      nsIContentIterator,          NS_NewPreContentIterator)
@@ -596,7 +586,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(Geolocation, Init)
 
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsGeolocationService, nsGeolocationService::GetGeolocationService)
 
-NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(AudioChannelService, AudioChannelService::GetAudioChannelService)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(AudioChannelService, AudioChannelService::GetOrCreateAudioChannelService)
 
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(DataStoreService, DataStoreService::GetOrCreate)
 
@@ -723,7 +713,6 @@ NS_DEFINE_NAMED_CID(NS_DOMSESSIONSTORAGEMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_DOMLOCALSTORAGEMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_DOMJSON_CID);
 NS_DEFINE_NAMED_CID(NS_TEXTEDITOR_CID);
-NS_DEFINE_NAMED_CID(INDEXEDDB_MANAGER_CID);
 NS_DEFINE_NAMED_CID(DOMREQUEST_SERVICE_CID);
 NS_DEFINE_NAMED_CID(QUOTA_MANAGER_CID);
 NS_DEFINE_NAMED_CID(SERVICEWORKERMANAGER_CID);
@@ -803,6 +792,8 @@ NS_DEFINE_NAMED_CID(NS_ACCESSIBILITY_SERVICE_CID);
 NS_DEFINE_NAMED_CID(TELEPHONY_SERVICE_CID);
 
 NS_DEFINE_NAMED_CID(GECKO_MEDIA_PLUGIN_SERVICE_CID);
+
+NS_DEFINE_NAMED_CID(NS_MOBILE_CONNECTION_SERVICE_CID);
 
 static nsresult
 CreateWindowCommandTableConstructor(nsISupports *aOuter,
@@ -932,7 +923,6 @@ nsEditingCommandTableConstructor(nsISupports *aOuter, REFNSIID aIID,
   return commandTable->QueryInterface(aIID, aResult);
 }
 
-
 static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   XPCONNECT_CIDENTRIES
 #ifdef DEBUG
@@ -1014,7 +1004,6 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_DOMLOCALSTORAGEMANAGER_CID, false, nullptr, DOMLocalStorageManagerConstructor },
   { &kNS_DOMJSON_CID, false, nullptr, NS_NewJSON },
   { &kNS_TEXTEDITOR_CID, false, nullptr, nsPlaintextEditorConstructor },
-  { &kINDEXEDDB_MANAGER_CID, false, nullptr, IndexedDatabaseManagerConstructor },
   { &kDOMREQUEST_SERVICE_CID, false, nullptr, DOMRequestServiceConstructor },
   { &kQUOTA_MANAGER_CID, false, nullptr, QuotaManagerConstructor },
   { &kSERVICEWORKERMANAGER_CID, false, nullptr, ServiceWorkerManagerConstructor },
@@ -1089,6 +1078,7 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_ACCESSIBILITY_SERVICE_CID, false, nullptr, CreateA11yService },
 #endif
   { &kTELEPHONY_SERVICE_CID, false, nullptr, nsITelephonyServiceConstructor },
+  { &kNS_MOBILE_CONNECTION_SERVICE_CID, false, NULL, nsIMobileConnectionServiceConstructor },
   { nullptr }
 };
 
@@ -1172,7 +1162,6 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { "@mozilla.org/dom/sessionStorage-manager;1", &kNS_DOMSESSIONSTORAGEMANAGER_CID },
   { "@mozilla.org/dom/json;1", &kNS_DOMJSON_CID },
   { "@mozilla.org/editor/texteditor;1", &kNS_TEXTEDITOR_CID },
-  { INDEXEDDB_MANAGER_CONTRACTID, &kINDEXEDDB_MANAGER_CID },
   { DOMREQUEST_SERVICE_CONTRACTID, &kDOMREQUEST_SERVICE_CID },
   { QUOTA_MANAGER_CONTRACTID, &kQUOTA_MANAGER_CID },
   { SERVICEWORKERMANAGER_CONTRACTID, &kSERVICEWORKERMANAGER_CID },
@@ -1247,6 +1236,7 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
 #endif
   { TELEPHONY_SERVICE_CONTRACTID, &kTELEPHONY_SERVICE_CID },
   { "@mozilla.org/gecko-media-plugin-service;1",  &kGECKO_MEDIA_PLUGIN_SERVICE_CID },
+  { NS_MOBILE_CONNECTION_SERVICE_CONTRACTID, &kNS_MOBILE_CONNECTION_SERVICE_CID },
   { nullptr }
 };
 
@@ -1269,6 +1259,7 @@ static const mozilla::Module::CategoryEntry kLayoutCategories[] = {
 #ifdef MOZ_B2G_BT
   { "profile-after-change", "Bluetooth Service", BLUETOOTHSERVICE_CONTRACTID },
 #endif
+  { "profile-after-change", "MobileConnection Service", NS_MOBILE_CONNECTION_SERVICE_CONTRACTID },
   { nullptr }
 };
 

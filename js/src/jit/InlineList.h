@@ -23,6 +23,8 @@ class InlineForwardListNode
     explicit InlineForwardListNode(InlineForwardListNode<T> *n) : next(n)
     { }
 
+    InlineForwardListNode(const InlineForwardListNode<T> &) MOZ_DELETE;
+
   protected:
     friend class InlineForwardList<T>;
     friend class InlineForwardListIterator<T>;
@@ -86,11 +88,11 @@ class InlineForwardList : protected InlineForwardListNode<T>
         insertAfter(this, t);
     }
     void pushBack(Node *t) {
+        JS_ASSERT(t->next == nullptr);
 #ifdef DEBUG
         modifyCount_++;
 #endif
         tail_->next = t;
-        t->next = nullptr;
         tail_ = t;
     }
     T *popFront() {
@@ -104,6 +106,7 @@ class InlineForwardList : protected InlineForwardListNode<T>
         return static_cast<T *>(tail_);
     }
     void insertAfter(Node *at, Node *item) {
+        JS_ASSERT(item->next == nullptr);
 #ifdef DEBUG
         modifyCount_++;
 #endif
@@ -120,6 +123,7 @@ class InlineForwardList : protected InlineForwardListNode<T>
             tail_ = at;
         JS_ASSERT(at->next == item);
         at->next = item->next;
+        item->next = nullptr;
     }
     void splitAfter(Node *at, InlineForwardList<T> *to) {
         JS_ASSERT(to->empty());
@@ -216,6 +220,8 @@ class InlineListNode : public InlineForwardListNode<T>
         prev(p)
     { }
 
+    InlineListNode(const InlineListNode<T> &) MOZ_DELETE;
+
   protected:
     friend class InlineList<T>;
     friend class InlineListIterator<T>;
@@ -273,8 +279,14 @@ class InlineList : protected InlineListNode<T>
     void pushFront(Node *t) {
         insertAfter(this, t);
     }
+    void pushFrontUnchecked(Node *t) {
+        insertAfterUnchecked(this, t);
+    }
     void pushBack(Node *t) {
         insertBefore(this, t);
+    }
+    void pushBackUnchecked(Node *t) {
+        insertBeforeUnchecked(this, t);
     }
     T *popFront() {
         JS_ASSERT(!empty());
@@ -294,27 +306,51 @@ class InlineList : protected InlineListNode<T>
         return *iter;
     }
     void insertBefore(Node *at, Node *item) {
+        JS_ASSERT(item->prev == nullptr);
+        JS_ASSERT(item->next == nullptr);
+        insertBeforeUnchecked(at, item);
+    }
+    void insertBeforeUnchecked(Node *at, Node *item) {
+        Node *atPrev = at->prev;
         item->next = at;
-        item->prev = at->prev;
-        at->prev->next = item;
+        item->prev = atPrev;
+        atPrev->next = item;
         at->prev = item;
     }
     void insertAfter(Node *at, Node *item) {
-        item->next = at->next;
+        JS_ASSERT(item->prev == nullptr);
+        JS_ASSERT(item->next == nullptr);
+        insertAfterUnchecked(at, item);
+    }
+    void insertAfterUnchecked(Node *at, Node *item) {
+        Node *atNext = static_cast<Node *>(at->next);
+        item->next = atNext;
         item->prev = at;
-        static_cast<Node *>(at->next)->prev = item;
+        atNext->prev = item;
         at->next = item;
     }
     void remove(Node *t) {
-        t->prev->next = t->next;
-        static_cast<Node *>(t->next)->prev = t->prev;
-        t->next = t->prev = nullptr;
+        Node *tNext = static_cast<Node *>(t->next);
+        Node *tPrev = t->prev;
+        tPrev->next = tNext;
+        tNext->prev = tPrev;
+        t->next = nullptr;
+        t->prev = nullptr;
     }
     void clear() {
         this->next = this->prev = this;
     }
     bool empty() const {
         return begin() == end();
+    }
+    void takeElements(InlineList &l) {
+        MOZ_ASSERT(&l != this, "cannot takeElements from this");
+        Node *lprev = l.prev;
+        static_cast<Node *>(l.next)->prev = this;
+        lprev->next = this->next;
+        static_cast<Node *>(this->next)->prev = l.prev;
+        this->next = l.next;
+        l.clear();
     }
 };
 

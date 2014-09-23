@@ -20,16 +20,18 @@ public:
     friend class nsTemporaryFileInputStream;
   public:
     NS_INLINE_DECL_THREADSAFE_REFCOUNTING(FileDescOwner)
-    FileDescOwner(PRFileDesc* aFD)
+    explicit FileDescOwner(PRFileDesc* aFD)
       : mFD(aFD),
         mMutex("FileDescOwner::mMutex")
     {
       MOZ_ASSERT(aFD);
     }
+  private:
     ~FileDescOwner()
     {
       PR_Close(mFD);
     }
+  public:
     mozilla::Mutex& FileMutex() { return mMutex; }
 
   private:
@@ -39,12 +41,12 @@ public:
 
   nsTemporaryFileInputStream(FileDescOwner* aFileDescOwner, uint64_t aStartPos, uint64_t aEndPos);
 
-  virtual ~nsTemporaryFileInputStream() { }
-
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIINPUTSTREAM
 
 private:
+  virtual ~nsTemporaryFileInputStream() { }
+
   nsRefPtr<FileDescOwner> mFileDescOwner;
   uint64_t mStartPos;
   uint64_t mEndPos;

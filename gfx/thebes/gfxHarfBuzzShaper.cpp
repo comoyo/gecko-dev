@@ -5,8 +5,10 @@
 
 #include "nsString.h"
 #include "gfxContext.h"
+#include "gfxFontConstants.h"
 #include "gfxHarfBuzzShaper.h"
 #include "gfxFontUtils.h"
+#include "gfxTextRun.h"
 #include "nsUnicodeProperties.h"
 #include "nsUnicodeScriptCodes.h"
 #include "nsUnicodeNormalizer.h"
@@ -106,6 +108,10 @@ gfxHarfBuzzShaper::GetGlyph(hb_codepoint_t unicode,
                                                                       compat);
                         }
                         break;
+                    case 10:
+                        gid = gfxFontUtils::MapCharToGlyphFormat10(data + mSubtableOffset,
+                                                                   compat);
+                        break;
                     case 12:
                         gid = gfxFontUtils::MapCharToGlyphFormat12(data + mSubtableOffset,
                                                                    compat);
@@ -123,6 +129,10 @@ gfxHarfBuzzShaper::GetGlyph(hb_codepoint_t unicode,
             gid = unicode < UNICODE_BMP_LIMIT ?
                 gfxFontUtils::MapCharToGlyphFormat4(data + mSubtableOffset,
                                                     unicode) : 0;
+            break;
+        case 10:
+            gid = gfxFontUtils::MapCharToGlyphFormat10(data + mSubtableOffset,
+                                                       unicode);
             break;
         case 12:
             gid = gfxFontUtils::MapCharToGlyphFormat12(data + mSubtableOffset,
@@ -317,7 +327,7 @@ struct KernHeaderVersion1Fmt2 {
 struct KernClassTableHdr {
     AutoSwap_PRUint16 firstGlyph;
     AutoSwap_PRUint16 nGlyphs;
-    AutoSwap_PRUint16 offsets[1]; // actually an array of nGlyphs entries	
+    AutoSwap_PRUint16 offsets[1]; // actually an array of nGlyphs entries
 };
 
 static int16_t
@@ -967,11 +977,27 @@ gfxHarfBuzzShaper::ShapeText(gfxContext      *aContext,
     nsAutoTArray<hb_feature_t,20> features;
     nsDataHashtable<nsUint32HashKey,uint32_t> mergedFeatures;
 
+    // determine whether petite-caps falls back to small-caps
+    bool addSmallCaps = false;
+    if (style->variantCaps != NS_FONT_VARIANT_CAPS_NORMAL) {
+        switch (style->variantCaps) {
+            case NS_FONT_VARIANT_CAPS_ALLPETITE:
+            case NS_FONT_VARIANT_CAPS_PETITECAPS:
+                bool synLower, synUpper;
+                mFont->SupportsVariantCaps(aScript, style->variantCaps,
+                                           addSmallCaps, synLower, synUpper);
+                break;
+            default:
+                break;
+        }
+    }
+
     gfxFontEntry *entry = mFont->GetFontEntry();
     if (MergeFontFeatures(style,
                           entry->mFeatureSettings,
                           aShapedText->DisableLigatures(),
                           entry->FamilyName(),
+                          addSmallCaps,
                           mergedFeatures))
     {
         // enumerate result and insert into hb_feature array
@@ -984,15 +1010,10 @@ gfxHarfBuzzShaper::ShapeText(gfxContext      *aContext,
     hb_buffer_set_direction(buffer, isRightToLeft ? HB_DIRECTION_RTL :
                                                     HB_DIRECTION_LTR);
     hb_script_t scriptTag;
-    if (aShapedText->Flags() & gfxTextRunFactory::TEXT_USE_MATH_SCRIPT) {
+    if (aShapedText->GetFlags() & gfxTextRunFactory::TEXT_USE_MATH_SCRIPT) {
         scriptTag = sMathScript;
-    } else if (aScript <= MOZ_SCRIPT_INHERITED) {
-        // For unresolved "common" or "inherited" runs, default to Latin for
-        // now.  (Should we somehow use the language or locale to try and infer
-        // a better default?)
-        scriptTag = HB_SCRIPT_LATIN;
     } else {
-        scriptTag = hb_script_t(GetScriptTagForCode(aScript));
+        scriptTag = GetHBScriptUsedForShaping(aScript);
     }
     hb_buffer_set_script(buffer, scriptTag);
 

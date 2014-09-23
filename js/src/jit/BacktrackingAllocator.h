@@ -82,14 +82,14 @@ class BacktrackingVirtualRegister : public VirtualRegister
         canonicalSpill_ = alloc;
     }
     const LAllocation *canonicalSpill() const {
-        return canonicalSpill_.isUse() ? nullptr : &canonicalSpill_;
+        return canonicalSpill_.isBogus() ? nullptr : &canonicalSpill_;
     }
 
     void setCanonicalSpillExclude(CodePosition pos) {
         canonicalSpillExclude_ = pos;
     }
     bool hasCanonicalSpillExclude() const {
-        return canonicalSpillExclude_.pos() != 0;
+        return canonicalSpillExclude_.bits() != 0;
     }
     CodePosition canonicalSpillExclude() const {
         JS_ASSERT(hasCanonicalSpillExclude());
@@ -151,9 +151,9 @@ class BacktrackingAllocator
 
         static int compare(const AllocatedRange &v0, const AllocatedRange &v1) {
             // LiveInterval::Range includes 'from' but excludes 'to'.
-            if (v0.range->to.pos() <= v1.range->from.pos())
+            if (v0.range->to <= v1.range->from)
                 return -1;
-            if (v0.range->from.pos() >= v1.range->to.pos())
+            if (v0.range->from >= v1.range->to)
                 return 1;
             return 0;
         }
@@ -219,7 +219,7 @@ class BacktrackingAllocator
     bool populateSafepoints();
 
     void dumpRegisterGroups();
-    void dumpLiveness();
+    void dumpFixedRanges();
     void dumpAllocations();
 
     struct PrintLiveIntervalRange;
@@ -242,6 +242,7 @@ class BacktrackingAllocator
                  const SplitPositionVector &splitPositions);
     bool trySplitAcrossHotcode(LiveInterval *interval, bool *success);
     bool trySplitAfterLastRegisterUse(LiveInterval *interval, LiveInterval *conflict, bool *success);
+    bool trySplitBeforeFirstRegisterUse(LiveInterval *interval, LiveInterval *conflict, bool *success);
     bool splitAtAllRegisterUses(LiveInterval *interval);
     bool splitAcrossCalls(LiveInterval *interval);
 };

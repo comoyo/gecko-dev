@@ -27,8 +27,7 @@ class SpeechSynthesis MOZ_FINAL : public nsISupports,
                                   public nsWrapperCache
 {
 public:
-  SpeechSynthesis(nsPIDOMWindow* aParent);
-  virtual ~SpeechSynthesis();
+  explicit SpeechSynthesis(nsPIDOMWindow* aParent);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(SpeechSynthesis)
@@ -56,6 +55,7 @@ public:
   void GetVoices(nsTArray< nsRefPtr<SpeechSynthesisVoice> >& aResult);
 
 private:
+  virtual ~SpeechSynthesis();
 
   void AdvanceQueue();
 

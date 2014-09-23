@@ -9,17 +9,36 @@
 
 #include "jsapi.h"
 
-namespace JS { class Value; }
+namespace JS {
+class CallArgs;
+class Value;
+}
 
 namespace js {
 
 extern const JSFunctionSpec object_methods[];
 extern const JSPropertySpec object_properties[];
 extern const JSFunctionSpec object_static_methods[];
+extern const JSFunctionSpec object_static_selfhosted_methods[];
 
 // Object constructor native. Exposed only so the JIT can know its address.
 bool
 obj_construct(JSContext *cx, unsigned argc, JS::Value *vp);
+
+bool
+obj_valueOf(JSContext *cx, unsigned argc, JS::Value *vp);
+
+// Exposed so SelfHosting.cpp can use it in the OwnPropertyKeys intrinsic
+bool
+GetOwnPropertyKeys(JSContext *cx, const JS::CallArgs &args, unsigned flags);
+
+/*
+ * Like IdToValue, but convert int jsids to strings. This is used when
+ * exposing a jsid to script for Object.getOwnProperty{Names,Symbols}
+ * or scriptable proxy traps.
+ */
+bool
+IdToStringOrSymbol(JSContext *cx, JS::HandleId id, JS::MutableHandleValue result);
 
 #if JS_HAS_TOSOURCE
 // Object.prototype.toSource. Function.prototype.toSource and uneval use this.

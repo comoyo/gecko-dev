@@ -144,8 +144,10 @@ nsSVGForeignObjectFrame::Reflow(nsPresContext*           aPresContext,
 
   DoReflow();
 
-  aDesiredSize.Width() = aReflowState.ComputedWidth();
-  aDesiredSize.Height() = aReflowState.ComputedHeight();
+  WritingMode wm = aReflowState.GetWritingMode();
+  LogicalSize finalSize(wm, aReflowState.ComputedISize(),
+                        aReflowState.ComputedBSize());
+  aDesiredSize.SetSize(wm, finalSize);
   aDesiredSize.SetOverflowAreasToDesiredBounds();
   aStatus = NS_FRAME_COMPLETE;
 }
@@ -191,8 +193,8 @@ nsSVGForeignObjectFrame::IsSVGTransformed(Matrix *aOwnTransform,
 
 nsresult
 nsSVGForeignObjectFrame::PaintSVG(nsRenderingContext *aContext,
-                                  const nsIntRect *aDirtyRect,
-                                  nsIFrame* aTransformRoot)
+                                  const gfxMatrix& aTransform,
+                                  const nsIntRect* aDirtyRect)
 {
   NS_ASSERTION(!NS_SVGDisplayListPaintingEnabled() ||
                (mState & NS_FRAME_IS_NONDISPLAY),
@@ -206,9 +208,7 @@ nsSVGForeignObjectFrame::PaintSVG(nsRenderingContext *aContext,
   if (!kid)
     return NS_OK;
 
-  gfxMatrix canvasTM = GetCanvasTM(FOR_PAINTING, aTransformRoot);
-
-  if (canvasTM.IsSingular()) {
+  if (aTransform.IsSingular()) {
     NS_WARNING("Can't render foreignObject element!");
     return NS_ERROR_FAILURE;
   }
@@ -221,10 +221,9 @@ nsSVGForeignObjectFrame::PaintSVG(nsRenderingContext *aContext,
                  (mState & NS_FRAME_IS_NONDISPLAY),
                  "Display lists handle dirty rect intersection test");
     // Transform the dirty rect into app units in our userspace.
-    gfxMatrix invmatrix = canvasTM;
-    invmatrix.Invert();
-    NS_ASSERTION(!invmatrix.IsSingular(),
-                 "inverse of non-singular matrix should be non-singular");
+    gfxMatrix invmatrix = aTransform;
+    DebugOnly<bool> ok = invmatrix.Invert();
+    NS_ASSERTION(ok, "inverse of non-singular matrix should be non-singular");
 
     gfxRect transDirtyRect = gfxRect(aDirtyRect->x, aDirtyRect->y,
                                      aDirtyRect->width, aDirtyRect->height);
@@ -253,15 +252,15 @@ nsSVGForeignObjectFrame::PaintSVG(nsRenderingContext *aContext,
 
     gfxRect clipRect =
       nsSVGUtils::GetClipRectForFrame(this, 0.0f, 0.0f, width, height);
-    nsSVGUtils::SetClipRect(gfx, canvasTM, clipRect);
+    nsSVGUtils::SetClipRect(gfx, aTransform, clipRect);
   }
 
   // SVG paints in CSS px, but normally frames paint in dev pixels. Here we
-  // multiply a CSS-px-to-dev-pixel factor onto canvasTM so our children paint
-  // correctly.
+  // multiply a CSS-px-to-dev-pixel factor onto aTransform so our children
+  // paint correctly.
   float cssPxPerDevPx = PresContext()->
     AppUnitsToFloatCSSPixels(PresContext()->AppUnitsPerDevPixel());
-  gfxMatrix canvasTMForChildren = canvasTM;
+  gfxMatrix canvasTMForChildren = aTransform;
   canvasTMForChildren.Scale(cssPxPerDevPx, cssPxPerDevPx);
 
   gfx->Multiply(canvasTMForChildren);
@@ -279,7 +278,7 @@ nsSVGForeignObjectFrame::PaintSVG(nsRenderingContext *aContext,
 }
 
 nsIFrame*
-nsSVGForeignObjectFrame::GetFrameForPoint(const nsPoint &aPoint)
+nsSVGForeignObjectFrame::GetFrameForPoint(const gfxPoint& aPoint)
 {
   NS_ASSERTION(!NS_SVGDisplayListHitTestingEnabled() ||
                (mState & NS_FRAME_IS_NONDISPLAY),
@@ -297,28 +296,18 @@ nsSVGForeignObjectFrame::GetFrameForPoint(const nsPoint &aPoint)
   static_cast<nsSVGElement*>(mContent)->
     GetAnimatedLengthValues(&x, &y, &width, &height, nullptr);
 
-  gfxMatrix tm = GetCanvasTM(FOR_HIT_TESTING).Invert();
-  if (tm.IsSingular())
+  if (!gfxRect(x, y, width, height).Contains(aPoint) ||
+      !nsSVGUtils::HitTestClip(this, aPoint)) {
     return nullptr;
-  
-  // Convert aPoint from app units in canvas space to user space:
+  }
 
-  gfxPoint pt = gfxPoint(aPoint.x, aPoint.y) / PresContext()->AppUnitsPerDevPixel();
-  pt = tm.Transform(pt);
+  // Convert the point to app units relative to the top-left corner of the
+  // viewport that's established by the foreignObject element:
 
-  if (!gfxRect(0.0f, 0.0f, width, height).Contains(pt))
-    return nullptr;
-
-  // Convert pt to app units in *local* space:
-
-  pt = pt * nsPresContext::AppUnitsPerCSSPixel();
+  gfxPoint pt = (aPoint + gfxPoint(x, y)) * nsPresContext::AppUnitsPerCSSPixel();
   nsPoint point = nsPoint(NSToIntRound(pt.x), NSToIntRound(pt.y));
 
-  nsIFrame *frame = nsLayoutUtils::GetFrameForPoint(kid, point);
-  if (frame && nsSVGUtils::HitTestClip(this, aPoint))
-    return frame;
-
-  return nullptr;
+  return nsLayoutUtils::GetFrameForPoint(kid, point);
 }
 
 nsRect
@@ -331,7 +320,7 @@ nsSVGForeignObjectFrame::GetCoveredRegion()
   if (h < 0.0f) h = 0.0f;
   // GetCanvasTM includes the x,y translation
   return nsSVGUtils::ToCanvasBounds(gfxRect(0.0, 0.0, w, h),
-                                    GetCanvasTM(FOR_OUTERSVG_TM),
+                                    GetCanvasTM(),
                                     PresContext());
 }
 
@@ -490,14 +479,8 @@ nsSVGForeignObjectFrame::GetBBoxContribution(const Matrix &aToBBoxUserspace,
 //----------------------------------------------------------------------
 
 gfxMatrix
-nsSVGForeignObjectFrame::GetCanvasTM(uint32_t aFor, nsIFrame* aTransformRoot)
+nsSVGForeignObjectFrame::GetCanvasTM()
 {
-  if (!(GetStateBits() & NS_FRAME_IS_NONDISPLAY) && !aTransformRoot) {
-    if ((aFor == FOR_PAINTING && NS_SVGDisplayListPaintingEnabled()) ||
-        (aFor == FOR_HIT_TESTING && NS_SVGDisplayListHitTestingEnabled())) {
-      return nsSVGIntegrationUtils::GetCSSPxToDevPxMatrix(this);
-    }
-  }
   if (!mCanvasTM) {
     NS_ASSERTION(GetParent(), "null parent");
 
@@ -505,9 +488,7 @@ nsSVGForeignObjectFrame::GetCanvasTM(uint32_t aFor, nsIFrame* aTransformRoot)
     SVGForeignObjectElement *content =
       static_cast<SVGForeignObjectElement*>(mContent);
 
-    gfxMatrix tm = content->PrependLocalTransformsTo(
-        this == aTransformRoot ? gfxMatrix() :
-                                 parent->GetCanvasTM(aFor, aTransformRoot));
+    gfxMatrix tm = content->PrependLocalTransformsTo(parent->GetCanvasTM());
 
     mCanvasTM = new gfxMatrix(tm);
   }
@@ -549,9 +530,11 @@ nsSVGForeignObjectFrame::DoReflow()
 
   mInReflow = true;
 
+  WritingMode wm = kid->GetWritingMode();
   nsHTMLReflowState reflowState(presContext, kid,
                                 renderingContext,
-                                nsSize(mRect.width, NS_UNCONSTRAINEDSIZE));
+                                LogicalSize(wm, GetLogicalSize(wm).ISize(wm),
+                                            NS_UNCONSTRAINEDSIZE));
   nsHTMLReflowMetrics desiredSize(reflowState);
   nsReflowStatus status;
 
@@ -578,11 +561,14 @@ nsSVGForeignObjectFrame::DoReflow()
 nsRect
 nsSVGForeignObjectFrame::GetInvalidRegion()
 {
+  MOZ_ASSERT(!NS_SVGDisplayListPaintingEnabled(),
+             "Only called by nsDisplayOuterSVG code");
+
   nsIFrame* kid = GetFirstPrincipalChild();
   if (kid->HasInvalidFrameInSubtree()) {
     gfxRect r(mRect.x, mRect.y, mRect.width, mRect.height);
     r.Scale(1.0 / nsPresContext::AppUnitsPerCSSPixel());
-    nsRect rect = nsSVGUtils::ToCanvasBounds(r, GetCanvasTM(FOR_PAINTING), PresContext());
+    nsRect rect = nsSVGUtils::ToCanvasBounds(r, GetCanvasTM(), PresContext());
     rect = nsSVGUtils::GetPostFilterVisualOverflowRect(this, rect);
     return rect;
   }

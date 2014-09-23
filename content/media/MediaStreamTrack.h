@@ -29,7 +29,6 @@ public:
    * MediaStream owned by aStream.
    */
   MediaStreamTrack(DOMMediaStream* aStream, TrackID aTrackID);
-  virtual ~MediaStreamTrack();
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(MediaStreamTrack,
@@ -49,11 +48,14 @@ public:
   void GetLabel(nsAString& aLabel) { aLabel.Truncate(); }
   bool Enabled() { return mEnabled; }
   void SetEnabled(bool aEnabled);
+  void Stop();
 
   // Notifications from the MediaStreamGraph
   void NotifyEnded() { mEnded = true; }
 
 protected:
+  virtual ~MediaStreamTrack();
+
   nsRefPtr<DOMMediaStream> mStream;
   TrackID mTrackID;
   nsID mID;

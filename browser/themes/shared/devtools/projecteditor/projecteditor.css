@@ -7,6 +7,10 @@
   color: #18191a;
 }
 
+.view-project-detail {
+  overflow: auto;
+}
+
 .plugin-hidden {
   display: none;
 }
@@ -26,8 +30,6 @@
 }
 
 #projecteditor-menubar {
-  /* XXX: Hide menu bar until we have option to add menu items
-     to an existing one. */
   display: none;
 }
 
@@ -37,6 +39,10 @@
   min-height: 22px;
   height: 22px;
   background: rgb(237, 237, 237);
+}
+
+#sources {
+  overflow: auto;
 }
 
 .sources-tree {

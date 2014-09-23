@@ -33,20 +33,10 @@ const Heritage = require("sdk/core/heritage");
 const {setTimeout, clearTimeout} = require("sdk/timers");
 const EventEmitter = require("devtools/toolkit/event-emitter");
 
-exports.register = function(handle) {
-  handle.addGlobalActor(ReflowActor, "reflowActor");
-  handle.addTabActor(ReflowActor, "reflowActor");
-};
-
-exports.unregister = function(handle) {
-  handle.removeGlobalActor(ReflowActor);
-  handle.removeTabActor(ReflowActor);
-};
-
 /**
  * The reflow actor tracks reflows and emits events about them.
  */
-let ReflowActor = protocol.ActorClass({
+let ReflowActor = exports.ReflowActor = protocol.ActorClass({
   typeName: "reflow",
 
   events: {
@@ -133,7 +123,6 @@ let ReflowActor = protocol.ActorClass({
 exports.ReflowFront = protocol.FrontClass(ReflowActor, {
   initialize: function(client, {reflowActor}) {
     protocol.Front.prototype.initialize.call(this, client, {actor: reflowActor});
-    client.addActorPool(this);
     this.manage(this);
   },
 
@@ -277,6 +266,12 @@ LayoutChangesObserver.prototype = Heritage.extend(Observable.prototype, {
    * Calls itself in a loop.
    */
   _startEventLoop: function() {
+    // Avoid emitting events if the tabActor has been detached (may happen
+    // during shutdown)
+    if (!this.tabActor.attached) {
+      return;
+    }
+
     // Send any reflows we have
     if (this.reflows && this.reflows.length) {
       this.emit("reflows", this.reflows);

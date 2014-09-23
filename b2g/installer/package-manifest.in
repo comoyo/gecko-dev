@@ -69,15 +69,9 @@
 @BINPATH@/@MOZ_CHILD_PROCESS_NAME@
 #endif
 #ifdef XP_WIN32
-#if MOZ_MSVC_REDIST == 1600
-@BINPATH@/msvcp100.dll
-@BINPATH@/msvcr100.dll
-#elif MOZ_MSVC_REDIST == 1700
-@BINPATH@/msvcp110.dll
-@BINPATH@/msvcr110.dll
-#elif MOZ_MSVC_REDIST == 1800
-@BINPATH@/msvcp120.dll
-@BINPATH@/msvcr120.dll
+#if MOZ_PACKAGE_MSVC_DLLS
+@BINPATH@/@MSVC_C_RUNTIME_DLL@
+@BINPATH@/@MSVC_CXX_RUNTIME_DLL@
 #endif
 #endif
 #ifdef MOZ_SHARED_MOZGLUE
@@ -150,6 +144,7 @@
 @BINPATH@/components/content_html.xpt
 @BINPATH@/components/content_xslt.xpt
 @BINPATH@/components/cookie.xpt
+@BINPATH@/components/devtools_security.xpt
 @BINPATH@/components/directory.xpt
 @BINPATH@/components/diskspacewatcher.xpt
 @BINPATH@/components/docshell.xpt
@@ -188,7 +183,6 @@
 #endif
 @BINPATH@/components/dom_notification.xpt
 @BINPATH@/components/dom_html.xpt
-@BINPATH@/components/dom_indexeddb.xpt
 @BINPATH@/components/dom_offline.xpt
 @BINPATH@/components/dom_payment.xpt
 @BINPATH@/components/dom_json.xpt
@@ -238,7 +232,6 @@
 @BINPATH@/components/jar.xpt
 @BINPATH@/components/jsdebugger.xpt
 @BINPATH@/components/jsdownloads.xpt
-@BINPATH@/components/jsdservice.xpt
 @BINPATH@/components/jsinspector.xpt
 @BINPATH@/components/layout_base.xpt
 #ifdef NS_PRINTING
@@ -300,8 +293,12 @@
 @BINPATH@/components/spellchecker.xpt
 @BINPATH@/components/storage.xpt
 @BINPATH@/components/telemetry.xpt
+@BINPATH@/components/toolkit_asyncshutdown.xpt
+@BINPATH@/components/toolkit_filewatcher.xpt
 @BINPATH@/components/toolkit_finalizationwitness.xpt
+@BINPATH@/components/toolkit_formautofill.xpt
 @BINPATH@/components/toolkit_osfile.xpt
+@BINPATH@/components/toolkit_xulstore.xpt
 @BINPATH@/components/toolkitprofile.xpt
 #ifdef MOZ_ENABLE_XREMOTE
 @BINPATH@/components/toolkitremote.xpt
@@ -400,6 +397,8 @@
 @BINPATH@/components/DownloadLegacy.js
 @BINPATH@/components/nsSidebar.manifest
 @BINPATH@/components/nsSidebar.js
+@BINPATH@/components/nsAsyncShutdown.manifest
+@BINPATH@/components/nsAsyncShutdown.js
 
 ; WiFi, NetworkManager, NetworkStats
 #ifdef MOZ_WIDGET_GONK
@@ -421,10 +420,26 @@
 @BINPATH@/components/WifiWorker.manifest
 #endif // MOZ_WIDGET_GONK
 
+; Tethering
+#ifdef MOZ_WIDGET_GONK
+@BINPATH@/components/TetheringManager.js
+@BINPATH@/components/TetheringManager.manifest
+#endif
+
+; ResourceStats
+#ifdef MOZ_WIDGET_GONK
+@BINPATH@/components/ResourceStats.js
+@BINPATH@/components/ResourceStats.manifest
+@BINPATH@/components/ResourceStatsManager.js
+@BINPATH@/components/ResourceStatsManager.manifest
+#endif // MOZ_WIDGET_GONK
+
 ; RIL
 #if defined(MOZ_WIDGET_GONK) && defined(MOZ_B2G_RIL)
 @BINPATH@/components/MmsService.js
 @BINPATH@/components/MmsService.manifest
+@BINPATH@/components/MobileConnectionService.js
+@BINPATH@/components/MobileConnectionService.manifest
 @BINPATH@/components/MobileMessageDatabaseService.js
 @BINPATH@/components/MobileMessageDatabaseService.manifest
 @BINPATH@/components/RadioInterfaceLayer.js
@@ -442,6 +457,7 @@
 @BINPATH@/components/amWebInstallListener.js
 @BINPATH@/components/nsBlocklistService.js
 @BINPATH@/components/OopCommandLine.js
+@BINPATH@/components/CommandLine.js
 #endif
 
 #ifdef MOZ_UPDATER
@@ -487,9 +503,8 @@
 @BINPATH@/components/FormHistoryStartup.js
 @BINPATH@/components/nsInputListAutoComplete.js
 @BINPATH@/components/formautofill.manifest
-@BINPATH@/components/AutofillController.js
-@BINPATH@/components/contentSecurityPolicy.manifest
-@BINPATH@/components/contentSecurityPolicy.js
+@BINPATH@/components/FormAutofillContentService.js
+@BINPATH@/components/FormAutofillStartup.js
 @BINPATH@/components/contentAreaDropListener.manifest
 @BINPATH@/components/contentAreaDropListener.js
 @BINPATH@/components/messageWakeupService.js
@@ -533,6 +548,8 @@
 #endif
 @BINPATH@/components/TelemetryStartup.js
 @BINPATH@/components/TelemetryStartup.manifest
+@BINPATH@/components/XULStore.js
+@BINPATH@/components/XULStore.manifest
 @BINPATH@/components/Webapps.js
 @BINPATH@/components/Webapps.manifest
 @BINPATH@/components/AppsService.js
@@ -553,6 +570,8 @@
 @BINPATH@/components/SystemMessageInternal.js
 @BINPATH@/components/SystemMessageManager.js
 @BINPATH@/components/SystemMessageManager.manifest
+@BINPATH@/components/HCIEventTransactionSystemMessage.manifest
+@BINPATH@/components/HCIEventTransactionSystemMessageConfigurator.js
 
 @BINPATH@/components/Activities.manifest
 @BINPATH@/components/ActivityProxy.js
@@ -598,7 +617,7 @@
 
 ; ANGLE on Win32
 #ifdef XP_WIN32
-#ifndef HAVE_64BIT_OS
+#ifndef HAVE_64BIT_BUILD
 @BINPATH@/libEGL.dll
 @BINPATH@/libGLESv2.dll
 #endif
@@ -632,7 +651,7 @@
 ; [Default Preferences]
 ; All the pref files must be part of base to prevent migration bugs
 #ifdef MOZ_MULET
-@BINPATH@/defaults/pref/b2g.js
+@BINPATH@/browser/@PREF_DIR@/b2g.js
 #else
 @BINPATH@/@PREF_DIR@/b2g.js
 #endif
@@ -685,9 +704,6 @@
 @BINPATH@/res/text_caret_tilt_right@1.5x.png
 @BINPATH@/res/text_caret_tilt_right@2.25x.png
 @BINPATH@/res/text_caret_tilt_right@2x.png
-@BINPATH@/res/text_selection_handle.png
-@BINPATH@/res/text_selection_handle@1.5.png
-@BINPATH@/res/text_selection_handle@2.png
 @BINPATH@/res/grabber.gif
 #ifdef XP_MACOSX
 @BINPATH@/res/cursors/*
@@ -733,6 +749,15 @@
 #endif
 @BINPATH@/chrome/pippki@JAREXT@
 @BINPATH@/chrome/pippki.manifest
+
+; For process sandboxing
+#if defined(MOZ_SANDBOX)
+#if defined(XP_WIN)
+@BINPATH@/@DLL_PREFIX@sandboxbroker@DLL_SUFFIX@
+#elif defined(XP_LINUX)
+@BINPATH@/@DLL_PREFIX@mozsandbox@DLL_SUFFIX@
+#endif
+#endif
 
 ; for Solaris SPARC
 #ifdef SOLARIS
@@ -780,8 +805,10 @@ bin/components/@DLL_PREFIX@nkgnomevfs@DLL_SUFFIX@
 #ifndef MOZ_WIDGET_GONK
 #ifdef XP_WIN32
 @BINPATH@/xpcshell.exe
+@BINPATH@/ssltunnel.exe
 #else
 @BINPATH@/xpcshell
+@BINPATH@/ssltunnel
 #endif
 #endif
 @BINPATH@/chrome/icons/
@@ -804,7 +831,7 @@ bin/components/@DLL_PREFIX@nkgnomevfs@DLL_SUFFIX@
 @BINPATH@/components/DirectoryProvider.js
 @BINPATH@/components/ActivitiesGlue.js
 @BINPATH@/components/ProcessGlobal.js
-@BINPATH@/components/ContentHandler.js
+@BINPATH@/components/OMAContentHandler.js
 @BINPATH@/components/PaymentGlue.js
 @BINPATH@/components/YoutubeProtocolHandler.js
 @BINPATH@/components/RecoveryService.js
@@ -817,15 +844,14 @@ bin/components/@DLL_PREFIX@nkgnomevfs@DLL_SUFFIX@
 @BINPATH@/components/DownloadsUI.js
 @BINPATH@/components/InterAppCommUIGlue.js
 @BINPATH@/components/SystemMessageGlue.js
+@BINPATH@/components/B2GAppMigrator.js
 
 #ifndef MOZ_WIDGET_GONK
 @BINPATH@/components/SimulatorScreen.js
 #endif
 
-#ifdef MOZ_SERVICES_FXACCOUNTS
 @BINPATH@/components/FxAccountsUIGlue.js
 @BINPATH@/components/services_fxaccounts.xpt
-#endif
 
 @BINPATH@/components/DataStore.manifest
 @BINPATH@/components/DataStoreImpl.js

@@ -52,7 +52,7 @@ this.UNREGISTER       = "/unregister";
 
 // Server consts.
 this.SERVER_URL = Services.prefs.getCharPref("services.mobileid.server.uri");
-this.CREDENTIALS_DERIVATION_INFO = "identity.mozilla.com/picl/v1/sessionToken";
+this.CREDENTIALS_DERIVATION_INFO = "sessionToken";
 this.CREDENTIALS_DERIVATION_SIZE = 2 * 32;
 
 this.SILENT_SMS_RECEIVED_TOPIC = "silent-sms-received";
@@ -91,6 +91,7 @@ this.ERROR_INVALID_VERIFICATION_CODE              = "INVALID_VERIFICATION_CODE";
 this.ERROR_MISSING_CONTENT_LENGTH_HEADER          = "MISSING_CONTENT_LENGTH_HEADER";
 this.ERROR_NO_RETRIES_LEFT                        = "NO_RETRIES_LEFT";
 this.ERROR_OFFLINE                                = "OFFLINE";
+this.ERROR_PERMISSION_DENIED                      = "PERMISSION_DENIED";
 this.ERROR_REQUEST_BODY_TOO_LARGE                 = "REQUEST_BODY_TOO_LARGE";
 this.ERROR_SERVICE_TEMPORARILY_UNAVAILABLE        = "SERVICE_TEMPORARILY_UNAVAILABLE";
 this.ERROR_TOO_MANY_REQUESTS_MSISDN               = "TOO_MANY_REQUESTS_MSISDN";

@@ -236,7 +236,7 @@ ImageFactory::CreateRasterImage(nsIRequest* aRequest,
 
   nsAutoCString ref;
   aURI->GetRef(ref);
-  mozilla::net::nsMediaFragmentURIParser parser(ref);
+  net::nsMediaFragmentURIParser parser(ref);
   if (parser.HasResolution()) {
     newImage->SetRequestedResolution(parser.GetResolution());
   }
@@ -246,8 +246,8 @@ ImageFactory::CreateRasterImage(nsIRequest* aRequest,
       nsCOMPtr<nsIChannel> chan(do_QueryInterface(aRequest));
       nsCOMPtr<nsIPrincipal> principal;
       if (chan) {
-        nsContentUtils::GetSecurityManager()->GetChannelPrincipal(chan,
-                                                                  getter_AddRefs(principal));
+        nsContentUtils::GetSecurityManager()->GetChannelResultPrincipal(chan,
+                                                                        getter_AddRefs(principal));
       }
 
       if ((principal &&

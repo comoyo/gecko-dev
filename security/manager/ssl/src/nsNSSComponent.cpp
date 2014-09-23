@@ -23,19 +23,8 @@
 #include "mozilla/PublicSSL.h"
 #include "mozilla/StaticPtr.h"
 
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
-#include "nsIDOMNode.h"
-#include "nsIDOMEvent.h"
-#include "nsIDOMDocument.h"
-#include "nsIDOMWindow.h"
-#include "nsIDOMWindowCollection.h"
-#include "nsIDocument.h"
-#include "nsIDOMSmartCardEvent.h"
+#ifndef MOZ_NO_SMART_CARDS
 #include "nsSmartCardMonitor.h"
-#include "nsIDOMCryptoLegacy.h"
-#include "nsIPrincipal.h"
-#else
-#include "nsIDOMCrypto.h"
 #endif
 
 #include "nsCRT.h"
@@ -44,21 +33,19 @@
 #include "nsIProperties.h"
 #include "nsIWindowWatcher.h"
 #include "nsIPrompt.h"
-#include "nsCertificatePrincipal.h"
 #include "nsIBufEntropyCollector.h"
 #include "nsITokenPasswordDialogs.h"
+#include "nsISiteSecurityService.h"
 #include "nsServiceManagerUtils.h"
 #include "nsNSSShutDown.h"
-#include "GeneratedEvents.h"
 #include "SharedSSLState.h"
 #include "NSSErrorsService.h"
 
 #include "nss.h"
+#include "pkix/pkixnss.h"
 #include "ssl.h"
 #include "sslproto.h"
 #include "secmod.h"
-#include "secmime.h"
-#include "ocsp.h"
 #include "secerr.h"
 #include "sslerr.h"
 
@@ -71,7 +58,6 @@
 #include "p12plcy.h"
 
 using namespace mozilla;
-using namespace mozilla::dom;
 using namespace mozilla::psm;
 
 #ifdef PR_LOGGING
@@ -79,52 +65,6 @@ PRLogModuleInfo* gPIPNSSLog = nullptr;
 #endif
 
 int nsNSSComponent::mInstanceCount = 0;
-
-// XXX tmp callback for slot password
-extern char* pk11PasswordPrompt(PK11SlotInfo* slot, PRBool retry, void* arg);
-
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
-//This class is used to run the callback code
-//passed to the event handlers for smart card notification
-class nsTokenEventRunnable : public nsIRunnable {
-public:
-  nsTokenEventRunnable(const nsAString& aType, const nsAString& aTokenName);
-  virtual ~nsTokenEventRunnable();
-
-  NS_IMETHOD Run ();
-  NS_DECL_THREADSAFE_ISUPPORTS
-private:
-  nsString mType;
-  nsString mTokenName;
-};
-
-// ISuuports implementation for nsTokenEventRunnable
-NS_IMPL_ISUPPORTS(nsTokenEventRunnable, nsIRunnable)
-
-nsTokenEventRunnable::nsTokenEventRunnable(const nsAString& aType,
-                                           const nsAString& aTokenName)
-  : mType(aType)
-  , mTokenName(aTokenName)
-{
-}
-
-nsTokenEventRunnable::~nsTokenEventRunnable() { }
-
-//Implementation that runs the callback passed to
-//crypto.generateCRMFRequest as an event.
-NS_IMETHODIMP
-nsTokenEventRunnable::Run()
-{
-  static NS_DEFINE_CID(kNSSComponentCID, NS_NSSCOMPONENT_CID);
-
-  nsresult rv;
-  nsCOMPtr<nsINSSComponent> nssComponent(do_GetService(kNSSComponentCID, &rv));
-  if (NS_FAILED(rv))
-    return rv;
-
-  return nssComponent->DispatchEvent(mType, mTokenName);
-}
-#endif // MOZ_DISABLE_CRYPTOLEGACY
 
 bool nsPSMInitPanic::isPanic = false;
 
@@ -243,10 +183,10 @@ bool EnsureNSSInitialized(EnsureNSSOperator op)
 }
 
 static void
-SetClassicOCSPBehaviorFromPrefs(/*out*/ CertVerifier::ocsp_download_config* odc,
-                                /*out*/ CertVerifier::ocsp_strict_config* osc,
-                                /*out*/ CertVerifier::ocsp_get_config* ogc,
-                                const MutexAutoLock& /*proofOfLock*/)
+GetOCSPBehaviorFromPrefs(/*out*/ CertVerifier::ocsp_download_config* odc,
+                         /*out*/ CertVerifier::ocsp_strict_config* osc,
+                         /*out*/ CertVerifier::ocsp_get_config* ogc,
+                         const MutexAutoLock& /*proofOfLock*/)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(odc);
@@ -267,15 +207,13 @@ SetClassicOCSPBehaviorFromPrefs(/*out*/ CertVerifier::ocsp_download_config* odc,
        ? CertVerifier::ocsp_get_enabled
        : CertVerifier::ocsp_get_disabled;
 
-  SetClassicOCSPBehavior(*odc, *osc, *ogc);
-
   SSL_ClearSessionCache();
 }
 
 nsNSSComponent::nsNSSComponent()
   :mutex("nsNSSComponent.mutex"),
    mNSSInitialized(false),
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
+#ifndef MOZ_NO_SMART_CARDS
    mThreadList(nullptr),
 #endif
    mCertVerificationThread(nullptr)
@@ -340,127 +278,6 @@ nsNSSComponent::~nsNSSComponent()
 
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("nsNSSComponent::dtor finished\n"));
 }
-
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
-NS_IMETHODIMP
-nsNSSComponent::PostEvent(const nsAString& eventType,
-                          const nsAString& tokenName)
-{
-  nsCOMPtr<nsIRunnable> runnable =
-                               new nsTokenEventRunnable(eventType, tokenName);
-
-  return NS_DispatchToMainThread(runnable);
-}
-
-
-NS_IMETHODIMP
-nsNSSComponent::DispatchEvent(const nsAString& eventType,
-                              const nsAString& tokenName)
-{
-  // 'Dispatch' the event to all the windows. 'DispatchEventToWindow()' will
-  // first check to see if a given window has requested crypto events.
-  nsresult rv;
-  nsCOMPtr<nsIWindowWatcher> windowWatcher =
-                            do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv);
-
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  nsCOMPtr<nsISimpleEnumerator> enumerator;
-  rv = windowWatcher->GetWindowEnumerator(getter_AddRefs(enumerator));
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  bool hasMoreWindows;
-
-  while (NS_SUCCEEDED(enumerator->HasMoreElements(&hasMoreWindows))
-         && hasMoreWindows) {
-    nsCOMPtr<nsISupports> supports;
-    enumerator->GetNext(getter_AddRefs(supports));
-    nsCOMPtr<nsIDOMWindow> domWin(do_QueryInterface(supports));
-    if (domWin) {
-      nsresult rv2 = DispatchEventToWindow(domWin, eventType, tokenName);
-      if (NS_FAILED(rv2)) {
-        // return the last failure, don't let a single failure prevent
-        // continued delivery of events.
-        rv = rv2;
-      }
-    }
-  }
-  return rv;
-}
-
-nsresult
-nsNSSComponent::DispatchEventToWindow(nsIDOMWindow* domWin,
-                                      const nsAString& eventType,
-                                      const nsAString& tokenName)
-{
-  if (!domWin) {
-    return NS_OK;
-  }
-
-  // first walk the children and dispatch their events
-  nsresult rv;
-  nsCOMPtr<nsIDOMWindowCollection> frames;
-  rv = domWin->GetFrames(getter_AddRefs(frames));
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  uint32_t length;
-  frames->GetLength(&length);
-  uint32_t i;
-  for (i = 0; i < length; i++) {
-    nsCOMPtr<nsIDOMWindow> childWin;
-    frames->Item(i, getter_AddRefs(childWin));
-    DispatchEventToWindow(childWin, eventType, tokenName);
-  }
-
-  // check if we've enabled smart card events on this window
-  // NOTE: it's not an error to say that we aren't going to dispatch
-  // the event.
-  nsCOMPtr<nsIDOMCrypto> crypto;
-  domWin->GetCrypto(getter_AddRefs(crypto));
-  if (!crypto) {
-    return NS_OK; // nope, it doesn't have a crypto property
-  }
-
-  bool boolrv;
-  crypto->GetEnableSmartCardEvents(&boolrv);
-  if (!boolrv) {
-    return NS_OK; // nope, it's not enabled.
-  }
-
-  // dispatch the event ...
-
-  // find the document
-  nsCOMPtr<nsIDOMDocument> doc;
-  rv = domWin->GetDocument(getter_AddRefs(doc));
-  if (!doc) {
-    return NS_FAILED(rv) ? rv : NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsIDocument> d = do_QueryInterface(doc);
-
-  // create the event
-  nsCOMPtr<nsIDOMEvent> event;
-  NS_NewDOMSmartCardEvent(getter_AddRefs(event), d, nullptr, nullptr);
-  nsCOMPtr<nsIDOMSmartCardEvent> smartCardEvent = do_QueryInterface(event);
-  rv = smartCardEvent->InitSmartCardEvent(eventType, false, true, tokenName);
-  NS_ENSURE_SUCCESS(rv, rv);
-  smartCardEvent->SetTrusted(true);
-
-  // Send it
-  nsCOMPtr<nsIDOMEventTarget> target = do_QueryInterface(doc, &rv);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  return target->DispatchEvent(smartCardEvent, &boolrv);
-}
-#endif // MOZ_DISABLE_CRYPTOLEGACY
 
 NS_IMETHODIMP
 nsNSSComponent::PIPBundleFormatStringFromName(const char* name,
@@ -540,7 +357,7 @@ nsNSSComponent::GetNSSBundleString(const char* name, nsAString& outString)
   return rv;
 }
 
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
+#ifndef MOZ_NO_SMART_CARDS
 void
 nsNSSComponent::LaunchSmartCardThreads()
 {
@@ -596,7 +413,7 @@ nsNSSComponent::ShutdownSmartCardThreads()
   delete mThreadList;
   mThreadList = nullptr;
 }
-#endif // MOZ_DISABLE_CRYPTOLEGACY
+#endif // MOZ_NO_SMART_CARDS
 
 void
 nsNSSComponent::LoadLoadableRoots()
@@ -831,25 +648,27 @@ static const CipherPref sCipherPrefs[] = {
    TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA, true },
 
  { "security.ssl3.ecdhe_rsa_des_ede3_sha",
-   TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, true }, // deprecated (3DES)
+   TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, false }, // deprecated (3DES)
 
  { "security.ssl3.dhe_rsa_aes_128_sha",
    TLS_DHE_RSA_WITH_AES_128_CBC_SHA, true },
+
  { "security.ssl3.dhe_rsa_camellia_128_sha",
-   TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA, true },
+   TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA, false }, // deprecated (Camellia)
 
  { "security.ssl3.dhe_rsa_aes_256_sha",
    TLS_DHE_RSA_WITH_AES_256_CBC_SHA, true },
+
  { "security.ssl3.dhe_rsa_camellia_256_sha",
-   TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA, true },
+   TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA, false }, // deprecated (Camellia)
 
  { "security.ssl3.dhe_rsa_des_ede3_sha",
-   TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA, true }, // deprecated (3DES)
+   TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA, false }, // deprecated (3DES)
 
  { "security.ssl3.dhe_dss_aes_128_sha",
    TLS_DHE_DSS_WITH_AES_128_CBC_SHA, true }, // deprecated (DSS)
  { "security.ssl3.dhe_dss_aes_256_sha",
-   TLS_DHE_DSS_WITH_AES_256_CBC_SHA, true }, // deprecated (DSS)
+   TLS_DHE_DSS_WITH_AES_256_CBC_SHA, false }, // deprecated (DSS)
 
  { "security.ssl3.ecdhe_rsa_rc4_128_sha",
    TLS_ECDHE_RSA_WITH_RC4_128_SHA, true }, // deprecated (RC4)
@@ -859,11 +678,11 @@ static const CipherPref sCipherPrefs[] = {
  { "security.ssl3.rsa_aes_128_sha",
    TLS_RSA_WITH_AES_128_CBC_SHA, true }, // deprecated (RSA key exchange)
  { "security.ssl3.rsa_camellia_128_sha",
-   TLS_RSA_WITH_CAMELLIA_128_CBC_SHA, true }, // deprecated (RSA key exchange)
+   TLS_RSA_WITH_CAMELLIA_128_CBC_SHA, false }, // deprecated (RSA, Camellia)
  { "security.ssl3.rsa_aes_256_sha",
    TLS_RSA_WITH_AES_256_CBC_SHA, true }, // deprecated (RSA key exchange)
  { "security.ssl3.rsa_camellia_256_sha",
-   TLS_RSA_WITH_CAMELLIA_256_CBC_SHA, true }, // deprecated (RSA key exchange)
+   TLS_RSA_WITH_CAMELLIA_256_CBC_SHA, false }, // deprecated (RSA, Camellia)
  { "security.ssl3.rsa_des_ede3_sha",
    TLS_RSA_WITH_3DES_EDE_CBC_SHA, true }, // deprecated (RSA key exchange, 3DES)
 
@@ -873,15 +692,6 @@ static const CipherPref sCipherPrefs[] = {
    TLS_RSA_WITH_RC4_128_MD5, true }, // deprecated (RSA key exchange, RC4, HMAC-MD5)
 
  // All the rest are disabled by default
-
- { "security.ssl3.rsa_fips_des_ede3_sha",
-   SSL_RSA_FIPS_WITH_3DES_EDE_CBC_SHA, false },
- { "security.ssl3.dhe_dss_camellia_256_sha",
-   TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA, false },
- { "security.ssl3.dhe_dss_camellia_128_sha",
-   TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA, false },
- { "security.ssl3.rsa_seed_sha",
-   TLS_RSA_WITH_SEED_CBC_SHA, false },
 
  { nullptr, 0 } // end marker
 };
@@ -893,6 +703,15 @@ static const bool FALSE_START_ENABLED_DEFAULT = true;
 static const bool NPN_ENABLED_DEFAULT = true;
 static const bool ALPN_ENABLED_DEFAULT = false;
 
+static void
+ConfigureTLSSessionIdentifiers()
+{
+  bool disableSessionIdentifiers =
+    Preferences::GetBool("security.ssl.disable_session_identifiers", false);
+  SSL_OptionSetDefault(SSL_ENABLE_SESSION_TICKETS, !disableSessionIdentifiers);
+  SSL_OptionSetDefault(SSL_NO_CACHE, disableSessionIdentifiers);
+}
+
 namespace {
 
 class CipherSuiteChangeObserver : public nsIObserver
@@ -901,9 +720,11 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
 
-  virtual ~CipherSuiteChangeObserver() {}
   static nsresult StartObserve();
   static nsresult StopObserve();
+
+protected:
+  virtual ~CipherSuiteChangeObserver() {}
 
 private:
   static StaticRefPtr<CipherSuiteChangeObserver> sObserver;
@@ -991,43 +812,10 @@ void nsNSSComponent::setValidationOptions(bool isInitialSetting,
     Telemetry::Accumulate(Telemetry::CERT_OCSP_REQUIRED, ocspRequired);
   }
 
-#ifndef NSS_NO_LIBPKIX
-  bool crlDownloading = Preferences::GetBool("security.CRL_download.enabled",
-                                             false);
-  bool aiaDownloadEnabled =
-    Preferences::GetBool("security.missing_cert_download.enabled", false);
-
-#endif
   bool ocspStaplingEnabled = Preferences::GetBool("security.ssl.enable_ocsp_stapling",
                                                   true);
   PublicSSLState()->SetOCSPStaplingEnabled(ocspStaplingEnabled);
   PrivateSSLState()->SetOCSPStaplingEnabled(ocspStaplingEnabled);
-
-  CertVerifier::implementation_config certVerifierImplementation
-    = CertVerifier::classic;
-
-  // The mozilla::pkix pref overrides the libpkix pref
-  if (Preferences::GetBool("security.use_mozillapkix_verification", true)) {
-    certVerifierImplementation = CertVerifier::mozillapkix;
-  } else {
-#ifndef NSS_NO_LIBPKIX
-  if (Preferences::GetBool("security.use_libpkix_verification", false)) {
-    certVerifierImplementation = CertVerifier::libpkix;
-  }
-#endif
-  }
-
-  if (isInitialSetting) {
-    if (certVerifierImplementation == CertVerifier::classic) {
-      Telemetry::Accumulate(Telemetry::CERT_VALIDATION_LIBRARY, 1);
-#ifndef NSS_NO_LIBPKIX
-    } else if (certVerifierImplementation == CertVerifier::libpkix) {
-      Telemetry::Accumulate(Telemetry::CERT_VALIDATION_LIBRARY, 2);
-#endif
-    } else if (certVerifierImplementation == CertVerifier::mozillapkix) {
-      Telemetry::Accumulate(Telemetry::CERT_VALIDATION_LIBRARY, 3);
-    }
-  }
 
   // Default pinning enforcement level is disabled.
   CertVerifier::pinning_enforcement_config
@@ -1043,30 +831,9 @@ void nsNSSComponent::setValidationOptions(bool isInitialSetting,
   CertVerifier::ocsp_strict_config osc;
   CertVerifier::ocsp_get_config ogc;
 
-  SetClassicOCSPBehaviorFromPrefs(&odc, &osc, &ogc, lock);
-  mDefaultCertVerifier = new SharedCertVerifier(
-      certVerifierImplementation,
-#ifndef NSS_NO_LIBPKIX
-      aiaDownloadEnabled ?
-        CertVerifier::missing_cert_download_on : CertVerifier::missing_cert_download_off,
-      crlDownloading ?
-        CertVerifier::crl_download_allowed : CertVerifier::crl_local_only,
-#endif
-      odc, osc, ogc, pinningEnforcementLevel);
-
-  // mozilla::pkix has its own OCSP cache, so disable the NSS cache
-  // if appropriate.
-  if (certVerifierImplementation == CertVerifier::mozillapkix) {
-    // Using -1 disables the cache. The other arguments are the default
-    // values and aren't exposed by the API.
-    CERT_OCSPCacheSettings(-1, 1*60*60L, 24*60*60L);
-  } else {
-    // Using 1000 enables the cache with the default size of 1000. Again,
-    // these values are not exposed by the API.
-    CERT_OCSPCacheSettings(1000, 1*60*60L, 24*60*60L);
-  }
-
-  CERT_ClearOCSPCache();
+  GetOCSPBehaviorFromPrefs(&odc, &osc, &ogc, lock);
+  mDefaultCertVerifier = new SharedCertVerifier(odc, osc, ogc,
+                                                pinningEnforcementLevel);
 }
 
 // Enable the TLS versions given in the prefs, defaulting to SSL 3.0 (min
@@ -1236,7 +1003,7 @@ nsNSSComponent::InitializeNSS()
   InitCertVerifierLog();
   LoadLoadableRoots();
 
-  SSL_OptionSetDefault(SSL_ENABLE_SESSION_TICKETS, true);
+  ConfigureTLSSessionIdentifiers();
 
   bool requireSafeNegotiation =
     Preferences::GetBool("security.ssl.require_safe_negotiation",
@@ -1275,13 +1042,21 @@ nsNSSComponent::InitializeNSS()
   setValidationOptions(true, lock);
 
   mHttpForNSS.initTable();
-  mHttpForNSS.registerHttpClient();
 
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
+#ifndef MOZ_NO_SMART_CARDS
   LaunchSmartCardThreads();
 #endif
 
-  RegisterPSMErrorTable();
+  mozilla::pkix::RegisterErrorTable();
+
+  // Initialize the site security service
+  nsCOMPtr<nsISiteSecurityService> sssService =
+    do_GetService(NS_SSSERVICE_CONTRACTID);
+  if (!sssService) {
+    PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("Cannot initialize site security service\n"));
+    return NS_ERROR_FAILURE;
+  }
+
 
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("NSS Initialization done\n"));
   return NS_OK;
@@ -1301,14 +1076,13 @@ nsNSSComponent::ShutdownNSS()
     mNSSInitialized = false;
 
     PK11_SetPasswordFunc((PK11PasswordFunc)nullptr);
-    mHttpForNSS.unregisterHttpClient();
 
     Preferences::RemoveObserver(this, "security.");
     if (NS_FAILED(CipherSuiteChangeObserver::StopObserve())) {
       PR_LOG(gPIPNSSLog, PR_LOG_ERROR, ("nsNSSComponent::ShutdownNSS cannot stop observing cipher suite change\n"));
     }
 
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
+#ifndef MOZ_NO_SMART_CARDS
     ShutdownSmartCardThreads();
 #endif
     SSL_ClearSessionCache();
@@ -1413,140 +1187,10 @@ nsNSSComponent::Init()
 
 // nsISupports Implementation for the class
 NS_IMPL_ISUPPORTS(nsNSSComponent,
-                  nsISignatureVerifier,
                   nsIEntropyCollector,
                   nsINSSComponent,
                   nsIObserver,
                   nsISupportsWeakReference)
-
-
-// Callback functions for decoder. For now, use empty/default functions.
-static void
-ContentCallback(void* arg, const char* buf, unsigned long len)
-{
-}
-
-static PK11SymKey*
-GetDecryptKeyCallback(void* arg, SECAlgorithmID* algid)
-{
-  return nullptr;
-}
-
-static PRBool
-DecryptionAllowedCallback(SECAlgorithmID* algid, PK11SymKey* bulkkey)
-{
-  return SECMIME_DecryptionAllowed(algid, bulkkey);
-}
-
-static void*
-GetPasswordKeyCallback(void* arg, void* handle)
-{
-  return nullptr;
-}
-
-NS_IMETHODIMP
-nsNSSComponent::VerifySignature(const char* aRSABuf, uint32_t aRSABufLen,
-                                const char* aPlaintext, uint32_t aPlaintextLen,
-                                int32_t* aErrorCode,
-                                nsICertificatePrincipal** aPrincipal)
-{
-  if (!aPrincipal || !aErrorCode) {
-    return NS_ERROR_NULL_POINTER;
-  }
-
-  *aErrorCode = 0;
-  *aPrincipal = nullptr;
-
-  nsNSSShutDownPreventionLock locker;
-  ScopedSEC_PKCS7ContentInfo p7_info;
-  unsigned char hash[SHA1_LENGTH];
-
-  SECItem item;
-  item.type = siEncodedCertBuffer;
-  item.data = (unsigned char*)aRSABuf;
-  item.len = aRSABufLen;
-  p7_info = SEC_PKCS7DecodeItem(&item,
-                                ContentCallback, nullptr,
-                                GetPasswordKeyCallback, nullptr,
-                                GetDecryptKeyCallback, nullptr,
-                                DecryptionAllowedCallback);
-
-  if (!p7_info) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // Make sure we call SEC_PKCS7DestroyContentInfo after this point;
-  // otherwise we leak data in p7_info
-
-  //-- If a plaintext was provided, hash it.
-  SECItem digest;
-  digest.data = nullptr;
-  digest.len = 0;
-
-  if (aPlaintext) {
-    HASHContext* hash_ctxt;
-    uint32_t hashLen = 0;
-
-    hash_ctxt = HASH_Create(HASH_AlgSHA1);
-    HASH_Begin(hash_ctxt);
-    HASH_Update(hash_ctxt,(const unsigned char*)aPlaintext, aPlaintextLen);
-    HASH_End(hash_ctxt, hash, &hashLen, SHA1_LENGTH);
-    HASH_Destroy(hash_ctxt);
-
-    digest.data = hash;
-    digest.len = SHA1_LENGTH;
-  }
-
-  //-- Verify signature
-  bool rv = SEC_PKCS7VerifyDetachedSignature(p7_info, certUsageObjectSigner,
-                                               &digest, HASH_AlgSHA1, false);
-  if (!rv) {
-    *aErrorCode = PR_GetError();
-  }
-
-  // Get the signing cert //
-  CERTCertificate* cert = p7_info->content.signedData->signerInfos[0]->cert;
-  nsresult rv2 = NS_OK;
-  if (cert) {
-    // Use |do { } while (0);| as a "more C++-ish" thing than goto;
-    // this way we don't have to worry about goto across variable
-    // declarations.  We have no loops in this code, so it's OK.
-    do {
-      nsCOMPtr<nsIX509Cert> pCert = nsNSSCertificate::Create(cert);
-      if (!pCert) {
-        rv2 = NS_ERROR_OUT_OF_MEMORY;
-        break;
-      }
-
-      //-- Create a certificate principal with id and organization data
-      nsAutoString fingerprint;
-      rv2 = pCert->GetSha1Fingerprint(fingerprint);
-      if (NS_FAILED(rv2)) {
-        break;
-      }
-      nsAutoString orgName;
-      rv2 = pCert->GetOrganization(orgName);
-      if (NS_FAILED(rv2)) {
-        break;
-      }
-      nsAutoString subjectName;
-      rv2 = pCert->GetSubjectName(subjectName);
-      if (NS_FAILED(rv2)) {
-        break;
-      }
-
-      nsCOMPtr<nsICertificatePrincipal> certPrincipal =
-        new nsCertificatePrincipal(NS_ConvertUTF16toUTF8(fingerprint),
-                                   NS_ConvertUTF16toUTF8(subjectName),
-                                   NS_ConvertUTF16toUTF8(orgName),
-                                   pCert);
-
-      certPrincipal.swap(*aPrincipal);
-    } while (0);
-  }
-
-  return rv2;
-}
 
 NS_IMETHODIMP
 nsNSSComponent::RandomUpdate(void* entropy, int32_t bufLen)
@@ -1669,15 +1313,12 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
       SSL_OptionSetDefault(SSL_ENABLE_ALPN,
                            Preferences::GetBool("security.ssl.enable_alpn",
                                                 ALPN_ENABLED_DEFAULT));
+    } else if (prefName.Equals("security.ssl.disable_session_identifiers")) {
+      ConfigureTLSSessionIdentifiers();
     } else if (prefName.EqualsLiteral("security.OCSP.enabled") ||
-               prefName.EqualsLiteral("security.CRL_download.enabled") ||
-               prefName.EqualsLiteral("security.fresh_revocation_info.require") ||
-               prefName.EqualsLiteral("security.missing_cert_download.enabled") ||
                prefName.EqualsLiteral("security.OCSP.require") ||
                prefName.EqualsLiteral("security.OCSP.GET.enabled") ||
                prefName.EqualsLiteral("security.ssl.enable_ocsp_stapling") ||
-               prefName.EqualsLiteral("security.use_mozillapkix_verification") ||
-               prefName.EqualsLiteral("security.use_libpkix_verification") ||
                prefName.EqualsLiteral("security.cert_pinning.enforcement_level")) {
       MutexAutoLock lock(mutex);
       setValidationOptions(false, lock);

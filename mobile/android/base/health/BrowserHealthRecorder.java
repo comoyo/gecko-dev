@@ -88,17 +88,17 @@ public class BrowserHealthRecorder implements HealthRecorder, GeckoEventListener
     private final AtomicBoolean orphanChecked = new AtomicBoolean(false);
     private volatile int env = -1;
 
+    final EventDispatcher dispatcher;
+    final ProfileInformationCache profileCache;
     private ContentProviderClient client;
     private volatile HealthReportDatabaseStorage storage;
-    private final ProfileInformationCache profileCache;
     private final ConfigurationProvider configProvider;
-    private final EventDispatcher dispatcher;
     private final SharedPreferences prefs;
 
     // We track previousSession to avoid order-of-initialization confusion. We
     // accept it in the constructor, and process it after init.
     private final SessionInformation previousSession;
-    private volatile SessionInformation session = null;
+    private volatile SessionInformation session;
 
     public void setCurrentSession(SessionInformation session) {
         this.session = session;
@@ -334,15 +334,9 @@ public class BrowserHealthRecorder implements HealthRecorder, GeckoEventListener
     }
 
     /**
-     * Only works on API 9 and up.
-     *
      * @return the package install time, or -1 if an error occurred.
      */
     protected static long getPackageInstallTime(final Context context) {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.GINGERBREAD) {
-            return -1;
-        }
-
         try {
             return context.getPackageManager().getPackageInfo(AppConstants.ANDROID_PACKAGE_NAME, 0).firstInstallTime;
         } catch (android.content.pm.PackageManager.NameNotFoundException e) {
@@ -655,7 +649,7 @@ public class BrowserHealthRecorder implements HealthRecorder, GeckoEventListener
         "bartext",
     })));
 
-    private void initializeSearchProvider() {
+    void initializeSearchProvider() {
         this.storage.ensureMeasurementInitialized(
             MEASUREMENT_NAME_SEARCH_COUNTS,
             MEASUREMENT_VERSION_SEARCH_COUNTS,
@@ -790,7 +784,7 @@ public class BrowserHealthRecorder implements HealthRecorder, GeckoEventListener
     public static final String MEASUREMENT_NAME_SESSIONS = "org.mozilla.appSessions";
     public static final int MEASUREMENT_VERSION_SESSIONS = 4;
 
-    private void initializeSessionsProvider() {
+    void initializeSessionsProvider() {
         this.storage.ensureMeasurementInitialized(
             MEASUREMENT_NAME_SESSIONS,
             MEASUREMENT_VERSION_SESSIONS,

@@ -19,13 +19,19 @@
 #include "nsISupportsImpl.h"            // for Layer::AddRef, etc
 #include "nsRect.h"                     // for nsIntRect
 #include "nsXULAppAPI.h"                // for XRE_GetProcessType, etc
+#include "gfxPrefs.h"                   // for WebGLForceLayersReadback
+
+#ifdef XP_WIN
+#include "SharedSurfaceANGLE.h"         // for SurfaceFactory_ANGLEShareHandle
+#endif
+
 #ifdef MOZ_WIDGET_GONK
 #include "SharedSurfaceGralloc.h"
 #endif
+
 #ifdef XP_MACOSX
 #include "SharedSurfaceIO.h"
 #endif
-#include "gfxPrefs.h"                   // for WebGLForceLayersReadback
 
 using namespace mozilla::gfx;
 using namespace mozilla::gl;
@@ -41,7 +47,7 @@ ClientCanvasLayer::~ClientCanvasLayer()
     mCanvasClient = nullptr;
   }
   if (mTextureSurface) {
-    delete mTextureSurface;
+    mTextureSurface = nullptr;
   }
 }
 
@@ -60,65 +66,80 @@ ClientCanvasLayer::Initialize(const Data& aData)
       // The screen caps are irrelevant if we're using a separate stream
       caps = aData.mHasAlpha ? SurfaceCaps::ForRGBA() : SurfaceCaps::ForRGB();
     } else {
-      caps = screen->Caps();
+      caps = screen->mCaps;
     }
     MOZ_ASSERT(caps.alpha == aData.mHasAlpha);
 
     SurfaceStreamType streamType =
         SurfaceStream::ChooseGLStreamType(SurfaceStream::OffMainThread,
                                           screen->PreserveBuffer());
-    SurfaceFactory_GL* factory = nullptr;
-    if (!gfxPrefs::WebGLForceLayersReadback()) {
-      if (ClientManager()->AsShadowForwarder()->GetCompositorBackendType() == mozilla::layers::LayersBackend::LAYERS_OPENGL) {
-        if (mGLContext->GetContextType() == GLContextType::EGL) {
-          bool isCrossProcess = !(XRE_GetProcessType() == GeckoProcessType_Default);
+    UniquePtr<SurfaceFactory> factory;
 
-          if (!isCrossProcess) {
-            // [Basic/OGL Layers, OMTC] WebGL layer init.
-            factory = SurfaceFactory_EGLImage::Create(mGLContext, caps);
-          } else {
-            // [Basic/OGL Layers, OOPC] WebGL layer init. (Out Of Process Compositing)
+    if (!gfxPrefs::WebGLForceLayersReadback()) {
+      switch (ClientManager()->AsShadowForwarder()->GetCompositorBackendType()) {
+        case mozilla::layers::LayersBackend::LAYERS_OPENGL: {
+          if (mGLContext->GetContextType() == GLContextType::EGL) {
 #ifdef MOZ_WIDGET_GONK
-            factory = new SurfaceFactory_Gralloc(mGLContext, caps, ClientManager()->AsShadowForwarder());
+            factory = MakeUnique<SurfaceFactory_Gralloc>(mGLContext,
+                                                         caps,
+                                                         ClientManager()->AsShadowForwarder());
 #else
-            // we could do readback here maybe
-            NS_NOTREACHED("isCrossProcess but not on native B2G!");
+            bool isCrossProcess = !(XRE_GetProcessType() == GeckoProcessType_Default);
+            if (!isCrossProcess) {
+              // [Basic/OGL Layers, OMTC] WebGL layer init.
+              factory = SurfaceFactory_EGLImage::Create(mGLContext, caps);
+            } else {
+              // we could do readback here maybe
+              NS_NOTREACHED("isCrossProcess but not on native B2G!");
+            }
+#endif
+          } else {
+            // [Basic Layers, OMTC] WebGL layer init.
+            // Well, this *should* work...
+#ifdef XP_MACOSX
+            factory = SurfaceFactory_IOSurface::Create(mGLContext, caps);
+#else
+            GLContext* nullConsGL = nullptr; // Bug 1050044.
+            factory = MakeUnique<SurfaceFactory_GLTexture>(mGLContext, nullConsGL, caps);
 #endif
           }
-        } else {
-          // [Basic Layers, OMTC] WebGL layer init.
-          // Well, this *should* work...
-#ifdef XP_MACOSX
-          factory = new SurfaceFactory_IOSurface(mGLContext, caps);
-#else
-          factory = new SurfaceFactory_GLTexture(mGLContext, nullptr, caps);
-#endif
+          break;
         }
+        case mozilla::layers::LayersBackend::LAYERS_D3D10:
+        case mozilla::layers::LayersBackend::LAYERS_D3D11: {
+#ifdef XP_WIN
+          if (mGLContext->IsANGLE()) {
+            factory = SurfaceFactory_ANGLEShareHandle::Create(mGLContext, caps);
+          }
+#endif
+          break;
+        }
+        default:
+          break;
       }
     }
 
     if (mStream) {
       // We're using a stream other than the one in the default screen
-      mFactory = factory;
+      mFactory = Move(factory);
       if (!mFactory) {
         // Absolutely must have a factory here, so create a basic one
-        mFactory = new SurfaceFactory_Basic(mGLContext, caps);
+        mFactory = MakeUnique<SurfaceFactory_Basic>(mGLContext, caps);
       }
 
       gfx::IntSize size = gfx::IntSize(aData.mSize.width, aData.mSize.height);
       mTextureSurface = SharedSurface_GLTexture::Create(mGLContext, mGLContext,
                                                         mGLContext->GetGLFormats(),
                                                         size, caps.alpha, aData.mTexID);
-      SharedSurface* producer = mStream->SwapProducer(mFactory, size);
+      SharedSurface* producer = mStream->SwapProducer(mFactory.get(), size);
       if (!producer) {
         // Fallback to basic factory
-        delete mFactory;
-        mFactory = new SurfaceFactory_Basic(mGLContext, caps);
-        producer = mStream->SwapProducer(mFactory, size);
+        mFactory = MakeUnique<SurfaceFactory_Basic>(mGLContext, caps);
+        producer = mStream->SwapProducer(mFactory.get(), size);
         MOZ_ASSERT(producer, "Failed to create initial canvas surface with basic factory");
       }
     } else if (factory) {
-      screen->Morph(factory, streamType);
+      screen->Morph(Move(factory), streamType);
     }
   }
 }
@@ -129,14 +150,14 @@ ClientCanvasLayer::RenderLayer()
   PROFILER_LABEL("ClientCanvasLayer", "RenderLayer",
     js::ProfileEntry::Category::GRAPHICS);
 
+  if (GetMaskLayer()) {
+    ToClientLayer(GetMaskLayer())->RenderLayer();
+  }
+
   if (!IsDirty()) {
     return;
   }
 
-  if (GetMaskLayer()) {
-    ToClientLayer(GetMaskLayer())->RenderLayer();
-  }
-  
   if (!mCanvasClient) {
     TextureFlags flags = TextureFlags::IMMEDIATE_UPLOAD;
     if (mNeedsYFlip) {
@@ -151,8 +172,14 @@ ClientCanvasLayer::RenderLayer()
       // and doesn't require layers to do any deallocation.
       flags |= TextureFlags::DEALLOCATE_CLIENT;
     }
+
+    if (!mIsAlphaPremultiplied) {
+      flags |= TextureFlags::NON_PREMULTIPLIED;
+    }
+
     mCanvasClient = CanvasClient::CreateCanvasClient(GetCanvasClientType(),
-                                                     ClientManager()->AsShadowForwarder(), flags);
+                                                     ClientManager()->AsShadowForwarder(),
+                                                     flags);
     if (!mCanvasClient) {
       return;
     }
@@ -161,7 +188,7 @@ ClientCanvasLayer::RenderLayer()
       ClientManager()->AsShadowForwarder()->Attach(mCanvasClient, this);
     }
   }
-  
+
   FirePreTransactionCallback();
   mCanvasClient->Update(gfx::IntSize(mBounds.width, mBounds.height), this);
 

@@ -9,6 +9,7 @@
 #include "nsObjectFrame.h"
 
 #include "gfx2DGlue.h"
+#include "gfxMatrix.h"
 #include "mozilla/BasicEvents.h"
 #ifdef XP_WIN
 // This is needed for DoublePassRenderingEvent.
@@ -410,7 +411,7 @@ nsObjectFrame::PrepForDrawing(nsIWidget *aWidget)
 #define EMBED_DEF_HEIGHT 200
 
 /* virtual */ nscoord
-nsObjectFrame::GetMinWidth(nsRenderingContext *aRenderingContext)
+nsObjectFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 {
   nscoord result = 0;
 
@@ -426,9 +427,9 @@ nsObjectFrame::GetMinWidth(nsRenderingContext *aRenderingContext)
 }
 
 /* virtual */ nscoord
-nsObjectFrame::GetPrefWidth(nsRenderingContext *aRenderingContext)
+nsObjectFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
 {
-  return nsObjectFrame::GetMinWidth(aRenderingContext);
+  return nsObjectFrame::GetMinISize(aRenderingContext);
 }
 
 void
@@ -437,13 +438,12 @@ nsObjectFrame::GetDesiredSize(nsPresContext* aPresContext,
                               nsHTMLReflowMetrics& aMetrics)
 {
   // By default, we have no area
-  aMetrics.Width() = 0;
-  aMetrics.Height() = 0;
+  aMetrics.ClearSize();
 
   if (IsHidden(false)) {
     return;
   }
-  
+
   aMetrics.Width() = aReflowState.ComputedWidth();
   aMetrics.Height() = aReflowState.ComputedHeight();
 
@@ -833,12 +833,27 @@ nsObjectFrame::DidReflow(nsPresContext*            aPresContext,
 nsObjectFrame::PaintPrintPlugin(nsIFrame* aFrame, nsRenderingContext* aCtx,
                                 const nsRect& aDirtyRect, nsPoint aPt)
 {
+  gfxContext* ctx = aCtx->ThebesContext();
+
+  // Translate the context:
   nsPoint pt = aPt + aFrame->GetContentRectRelativeToSelf().TopLeft();
-  nsRenderingContext::AutoPushTranslation translate(aCtx, pt);
+  gfxPoint devPixelPt =
+    nsLayoutUtils::PointToGfxPoint(pt, aFrame->PresContext()->AppUnitsPerDevPixel());
+
+  gfxContextMatrixAutoSaveRestore autoSR(ctx);
+  ctx->SetMatrix(ctx->CurrentMatrix().Translate(devPixelPt));
+
   // FIXME - Bug 385435: Doesn't aDirtyRect need translating too?
+
   static_cast<nsObjectFrame*>(aFrame)->PrintPlugin(*aCtx, aDirtyRect);
 }
 
+/**
+ * nsDisplayPluginReadback creates an active ReadbackLayer. The ReadbackLayer
+ * obtains from the compositor the contents of the window underneath
+ * the ReadbackLayer, which we then use as an opaque buffer for plugins to
+ * asynchronously draw onto.
+ */
 class nsDisplayPluginReadback : public nsDisplayItem {
 public:
   nsDisplayPluginReadback(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
@@ -854,9 +869,6 @@ public:
 
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
                            bool* aSnap) MOZ_OVERRIDE;
-  virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
-                                   nsRegion* aVisibleRegion,
-                                   const nsRect& aAllowVisibleRegionExpansion) MOZ_OVERRIDE;
 
   NS_DISPLAY_DECL_NAME("PluginReadback", TYPE_PLUGIN_READBACK)
 
@@ -889,25 +901,6 @@ nsDisplayPluginReadback::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
   return GetDisplayItemBounds(aBuilder, this, mFrame);
 }
 
-bool
-nsDisplayPluginReadback::ComputeVisibility(nsDisplayListBuilder* aBuilder,
-                                           nsRegion* aVisibleRegion,
-                                           const nsRect& aAllowVisibleRegionExpansion)
-{
-  if (!nsDisplayItem::ComputeVisibility(aBuilder, aVisibleRegion,
-                                        aAllowVisibleRegionExpansion))
-    return false;
-
-  nsRect expand;
-  bool snap;
-  expand.IntersectRect(aAllowVisibleRegionExpansion, GetBounds(aBuilder, &snap));
-  // *Add* our bounds to the visible region so that stuff underneath us is
-  // likely to be made visible, so we can use it for a background! This is
-  // a bit crazy since we normally only subtract from the visible region.
-  aVisibleRegion->Or(*aVisibleRegion, expand);
-  return true;
-}
-
 #ifdef MOZ_WIDGET_ANDROID
 
 class nsDisplayPluginVideo : public nsDisplayItem {
@@ -925,9 +918,6 @@ public:
 
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
                            bool* aSnap) MOZ_OVERRIDE;
-  virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
-                                   nsRegion* aVisibleRegion,
-                                   const nsRect& aAllowVisibleRegionExpansion) MOZ_OVERRIDE;
 
   NS_DISPLAY_DECL_NAME("PluginVideo", TYPE_PLUGIN_VIDEO)
 
@@ -958,15 +948,6 @@ nsDisplayPluginVideo::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
   return GetDisplayItemBounds(aBuilder, this, mFrame);
 }
 
-bool
-nsDisplayPluginVideo::ComputeVisibility(nsDisplayListBuilder* aBuilder,
-                                           nsRegion* aVisibleRegion,
-                                           const nsRect& aAllowVisibleRegionExpansion)
-{
-  return nsDisplayItem::ComputeVisibility(aBuilder, aVisibleRegion,
-                                          aAllowVisibleRegionExpansion);
-}
-
 #endif
 
 nsRect
@@ -987,8 +968,7 @@ nsDisplayPlugin::Paint(nsDisplayListBuilder* aBuilder,
 
 bool
 nsDisplayPlugin::ComputeVisibility(nsDisplayListBuilder* aBuilder,
-                                   nsRegion* aVisibleRegion,
-                                   const nsRect& aAllowVisibleRegionExpansion)
+                                   nsRegion* aVisibleRegion)
 {
   if (aBuilder->IsForPluginGeometry()) {
     nsObjectFrame* f = static_cast<nsObjectFrame*>(mFrame);
@@ -1027,8 +1007,7 @@ nsDisplayPlugin::ComputeVisibility(nsDisplayListBuilder* aBuilder,
     }
   }
 
-  return nsDisplayItem::ComputeVisibility(aBuilder, aVisibleRegion,
-                                          aAllowVisibleRegionExpansion);
+  return nsDisplayItem::ComputeVisibility(aBuilder, aVisibleRegion);
 }
 
 nsRegion
@@ -1607,12 +1586,10 @@ nsObjectFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   }
 
   // Set a transform on the layer to draw the plugin in the right place
-  Matrix transform;
   gfxPoint p = r.TopLeft() + aContainerParameters.mOffset;
-  transform.Translate(p.x, p.y);
+  Matrix transform = Matrix::Translation(p.x, p.y);
 
   layer->SetBaseTransform(Matrix4x4::From2D(transform));
-  layer->SetVisibleRegion(ThebesIntRect(IntRect(IntPoint(0, 0), size)));
   return layer.forget();
 }
 
@@ -1664,7 +1641,8 @@ nsObjectFrame::PaintPlugin(nsDisplayListBuilder* aBuilder,
       ctx->Rectangle(nativeClipRect);
       ctx->Clip();
       gfxPoint offset(contentPixels.x, contentPixels.y);
-      ctx->Translate(offset);
+      ctx->SetMatrix(
+        ctx->CurrentMatrix().Translate(offset));
 
       gfxQuartzNativeDrawing nativeDrawing(ctx, nativeClipRect - offset);
 
@@ -1709,9 +1687,17 @@ nsObjectFrame::PaintPlugin(nsDisplayListBuilder* aBuilder,
 
       nativeDrawing.EndNativeDrawing();
     } else {
+      gfxContext* ctx = aRenderingContext.ThebesContext();
+
+      // Translate the context:
+      gfxPoint devPixelPt =
+        nsLayoutUtils::PointToGfxPoint(aPluginRect.TopLeft(),
+                                       PresContext()->AppUnitsPerDevPixel());
+
+      gfxContextMatrixAutoSaveRestore autoSR(ctx);
+      ctx->SetMatrix(ctx->CurrentMatrix().Translate(devPixelPt));
+
       // FIXME - Bug 385435: Doesn't aDirtyRect need translating too?
-      nsRenderingContext::AutoPushTranslation
-        translate(&aRenderingContext, aPluginRect.TopLeft());
 
       // this rect is used only in the CoreGraphics drawing model
       gfxRect tmpRect(0, 0, 0, 0);
@@ -1745,7 +1731,7 @@ nsObjectFrame::PaintPlugin(nsDisplayListBuilder* aBuilder,
 
     if (ctx->UserToDevicePixelSnapped(frameGfxRect, false)) {
       dirtyGfxRect = ctx->UserToDevice(dirtyGfxRect);
-      ctx->IdentityMatrix();
+      ctx->SetMatrix(gfxMatrix());
     }
     dirtyGfxRect.RoundOut();
 
@@ -1989,13 +1975,17 @@ nsObjectFrame::GetNextObjectFrame(nsPresContext* aPresContext, nsIFrame* aRoot)
 }
 
 /*static*/ void
-nsObjectFrame::BeginSwapDocShells(nsIContent* aContent, void*)
+nsObjectFrame::BeginSwapDocShells(nsISupports* aSupports, void*)
 {
-  NS_PRECONDITION(aContent, "");
+  NS_PRECONDITION(aSupports, "");
+  nsCOMPtr<nsIContent> content(do_QueryInterface(aSupports));
+  if (!content) {
+    return;
+  }
 
   // This function is called from a document content enumerator so we need
   // to filter out the nsObjectFrames and ignore the rest.
-  nsIObjectFrame* obj = do_QueryFrame(aContent->GetPrimaryFrame());
+  nsIObjectFrame* obj = do_QueryFrame(content->GetPrimaryFrame());
   if (!obj)
     return;
 
@@ -2006,13 +1996,17 @@ nsObjectFrame::BeginSwapDocShells(nsIContent* aContent, void*)
 }
 
 /*static*/ void
-nsObjectFrame::EndSwapDocShells(nsIContent* aContent, void*)
+nsObjectFrame::EndSwapDocShells(nsISupports* aSupports, void*)
 {
-  NS_PRECONDITION(aContent, "");
+  NS_PRECONDITION(aSupports, "");
+  nsCOMPtr<nsIContent> content(do_QueryInterface(aSupports));
+  if (!content) {
+    return;
+  }
 
   // This function is called from a document content enumerator so we need
   // to filter out the nsObjectFrames and ignore the rest.
-  nsIObjectFrame* obj = do_QueryFrame(aContent->GetPrimaryFrame());
+  nsIObjectFrame* obj = do_QueryFrame(content->GetPrimaryFrame());
   if (!obj)
     return;
 

@@ -23,6 +23,7 @@
 #include "runnable_utils.h"
 #include "PeerConnectionCtx.h"
 #include "PeerConnectionImpl.h"
+#include "webrtc/system_wrappers/interface/trace.h"
 
 using sipcc::PeerConnectionImpl;
 using sipcc::PeerConnectionCtx;
@@ -233,6 +234,7 @@ WebrtcGlobalInformation::GetLogging(
 }
 
 static int32_t sLastSetLevel = 0;
+static bool sLastAECDebug = false;
 
 void
 WebrtcGlobalInformation::SetDebugLevel(const GlobalObject& aGlobal, int32_t aLevel)
@@ -246,6 +248,21 @@ WebrtcGlobalInformation::DebugLevel(const GlobalObject& aGlobal)
 {
   return sLastSetLevel;
 }
+
+void
+WebrtcGlobalInformation::SetAecDebug(const GlobalObject& aGlobal, bool aEnable)
+{
+  StartWebRtcLog(sLastSetLevel); // to make it read the aec path
+  webrtc::Trace::set_aec_debug(aEnable);
+  sLastAECDebug = aEnable;
+}
+
+bool
+WebrtcGlobalInformation::AecDebug(const GlobalObject& aGlobal)
+{
+  return sLastAECDebug;
+}
+
 
 struct StreamResult {
   StreamResult() : candidateTypeBitpattern(0), streamSucceeded(false) {}
@@ -389,7 +406,7 @@ static void StoreLongTermICEStatisticsImpl_m(
         Accumulate(WEBRTC_VIDEO_ENCODER_FRAMERATE_10X_STD_DEV_PER_CALL,
                    uint32_t(s.mFramerateStdDev.Value() * 10));
       }
-      if (s.mDroppedFrames.WasPassed()) {
+      if (s.mDroppedFrames.WasPassed() && !query->iceStartTime.IsNull()) {
         double mins = (TimeStamp::Now() - query->iceStartTime).ToSeconds() / 60;
         if (mins > 0) {
           Accumulate(WEBRTC_VIDEO_ENCODER_DROPPED_FRAMES_PER_CALL_FPM,
@@ -423,7 +440,7 @@ static void StoreLongTermICEStatisticsImpl_m(
         Accumulate(WEBRTC_VIDEO_DECODER_FRAMERATE_10X_STD_DEV_PER_CALL,
                    uint32_t(s.mFramerateStdDev.Value() * 10));
       }
-      if (s.mDiscardedPackets.WasPassed()) {
+      if (s.mDiscardedPackets.WasPassed() && !query->iceStartTime.IsNull()) {
         double mins = (TimeStamp::Now() - query->iceStartTime).ToSeconds() / 60;
         if (mins > 0) {
           Accumulate(WEBRTC_VIDEO_DECODER_DISCARDED_PACKETS_PER_CALL_PPM,
@@ -452,10 +469,12 @@ static void GetStatsForLongTermStorage_s(
   // this call. (These calls must be made on STS)
   unsigned char rate_limit_bit_pattern = 0;
   if (!mozilla::nr_socket_short_term_violation_time().IsNull() &&
+      !query->iceStartTime.IsNull() &&
       mozilla::nr_socket_short_term_violation_time() >= query->iceStartTime) {
     rate_limit_bit_pattern |= 1;
   }
   if (!mozilla::nr_socket_long_term_violation_time().IsNull() &&
+      !query->iceStartTime.IsNull() &&
       mozilla::nr_socket_long_term_violation_time() >= query->iceStartTime) {
     rate_limit_bit_pattern |= 2;
   }

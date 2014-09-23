@@ -18,6 +18,7 @@
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/MediaKeySessionBinding.h"
 #include "mozilla/dom/MediaKeysBinding.h"
+#include "mozilla/dom/UnionTypes.h"
 
 struct JSContext;
 
@@ -39,11 +40,10 @@ public:
   MediaKeySession(nsPIDOMWindow* aParent,
                   MediaKeys* aKeys,
                   const nsAString& aKeySystem,
-                  SessionType aSessionType);
+                  SessionType aSessionType,
+                  ErrorResult& aRv);
 
   void Init(const nsAString& aSessionId);
-
-  ~MediaKeySession();
 
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 
@@ -54,6 +54,8 @@ public:
 
   void GetSessionId(nsString& aRetval) const;
 
+  const nsString& GetSessionId() const;
+
   // Number of ms since epoch at which expiration occurs, or NaN if unknown.
   // TODO: The type of this attribute is still under contention.
   // https://www.w3.org/Bugs/Public/show_bug.cgi?id=25902
@@ -61,14 +63,17 @@ public:
 
   Promise* Closed() const;
 
-  already_AddRefed<Promise> Update(const Uint8Array& response);
+  already_AddRefed<Promise> Update(const ArrayBufferViewOrArrayBuffer& response,
+                                   ErrorResult& aRv);
 
-  already_AddRefed<Promise> Close();
+  already_AddRefed<Promise> Close(ErrorResult& aRv);
 
-  already_AddRefed<Promise> Remove();
+  already_AddRefed<Promise> Remove(ErrorResult& aRv);
+
+  already_AddRefed<Promise> GetUsableKeyIds(ErrorResult& aRv);
 
   void DispatchKeyMessage(const nsTArray<uint8_t>& aMessage,
-                          const nsString& aURL);
+                          const nsAString& aURL);
 
   void DispatchKeyError(uint32_t system_code);
 
@@ -77,6 +82,8 @@ public:
   bool IsClosed() const;
 
 private:
+  ~MediaKeySession();
+
   nsRefPtr<Promise> mClosed;
 
   nsRefPtr<MediaKeyError> mMediaKeyError;

@@ -38,9 +38,11 @@ namespace android {
 RTSPSource::RTSPSource(
         nsIStreamingProtocolListener *aListener,
         const char *url,
+        const char *userAgent,
         bool uidValid,
         uid_t uid)
     : mURL(url),
+      mUserAgent(userAgent),
       mUIDValid(uidValid),
       mUID(uid),
       mState(DISCONNECTED),
@@ -80,7 +82,8 @@ void RTSPSource::start()
 
     sp<AMessage> notify = new AMessage(kWhatNotify, mReflector->id());
 
-    mHandler = new RtspConnectionHandler(mURL.c_str(), notify, mUIDValid, mUID);
+    mHandler = new RtspConnectionHandler(mURL.c_str(), mUserAgent.c_str(),
+                                         notify, mUIDValid, mUID);
     mLooper->registerHandler(mHandler);
 
     CHECK_EQ(mState, (int)DISCONNECTED);
@@ -130,6 +133,13 @@ void RTSPSource::seek(uint64_t timeUs)
 {
     LOGI("RTSPSource::seek() %llu", timeUs);
     seekTo(timeUs);
+}
+
+void RTSPSource::playbackEnded()
+{
+    LOGI("RTSPSource::playbackEnded()");
+    sp<AMessage> msg = new AMessage(kWhatPerformPlaybackEnded, mReflector->id());
+    msg->post();
 }
 
 status_t RTSPSource::feedMoreTSData() {
@@ -246,6 +256,15 @@ void RTSPSource::performSuspend() {
 // TODO, Bug 895753.
 }
 
+void RTSPSource::performPlaybackEnded() {
+    // Transition from PLAYING to CONNECTED state so that we are ready to
+    // perform an another play operation.
+    if (mState != PLAYING) {
+        return;
+    }
+    mState = CONNECTED;
+}
+
 void RTSPSource::performSeek(int64_t seekTimeUs) {
     if (mState != CONNECTED && mState != PLAYING && mState != PAUSING) {
         return;
@@ -309,6 +328,9 @@ void RTSPSource::onMessageReceived(const sp<AMessage> &msg) {
         return;
     } else if (msg->what() == kWhatPerformSuspend) {
         performSuspend();
+        return;
+    } else if (msg->what() == kWhatPerformPlaybackEnded) {
+        performPlaybackEnded();
         return;
     }
 
@@ -675,7 +697,6 @@ void RTSPSource::onTrackDataAvailable(size_t trackIndex)
 
 void RTSPSource::onTrackEndOfStream(size_t trackIndex)
 {
-    mState = CONNECTED;
     if (!mListener) {
         return;
     }

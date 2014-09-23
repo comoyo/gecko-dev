@@ -40,17 +40,17 @@ protected:
   MessageLoopForIO::FileDescriptorWatcher mReadWatcher;
   int mFd;
 
+  virtual ~FdWatcher()
+  {
+    // StopWatching should have run.
+    MOZ_ASSERT(mFd == -1);
+  }
+
 public:
   FdWatcher()
     : mFd(-1)
   {
     MOZ_ASSERT(NS_IsMainThread());
-  }
-
-  virtual ~FdWatcher()
-  {
-    // StopWatching should have run.
-    MOZ_ASSERT(mFd == -1);
   }
 
   /**
@@ -130,7 +130,7 @@ private:
 
   static mozilla::StaticRefPtr<FifoWatcher> sSingleton;
 
-  FifoWatcher(nsCString aPath)
+  explicit FifoWatcher(nsCString aPath)
     : mDirPath(aPath)
     , mFifoInfoLock("FifoWatcher.mFifoInfoLock")
   {

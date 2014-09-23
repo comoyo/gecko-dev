@@ -16,11 +16,39 @@
 
 #include "GonkCameraParameters.h"
 #include "camera/CameraParameters.h"
+#include "CameraPreferences.h"
 #include "ICameraControl.h"
 #include "CameraCommon.h"
+#include "mozilla/Hal.h"
 
 using namespace mozilla;
 using namespace android;
+
+/* static */ bool
+GonkCameraParameters::IsLowMemoryPlatform()
+{
+  bool testIsLowMem = false;
+  CameraPreferences::GetPref("camera.control.test.is_low_memory", testIsLowMem);
+  if (testIsLowMem) {
+    NS_WARNING("Forcing low-memory platform camera preferences");
+    return true;
+  }
+
+  uint32_t lowMemoryThresholdBytes = 0;
+  CameraPreferences::GetPref("camera.control.low_memory_thresholdMB",
+                             lowMemoryThresholdBytes);
+  lowMemoryThresholdBytes *= 1024 * 1024;
+  if (lowMemoryThresholdBytes) {
+    uint32_t totalMemoryBytes = hal::GetTotalSystemMemory();
+    if (totalMemoryBytes < lowMemoryThresholdBytes) {
+      DOM_CAMERA_LOGI("Low-memory platform with %d bytes of RAM (threshold: <%d bytes)\n",
+        totalMemoryBytes, lowMemoryThresholdBytes);
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /* static */ const char*
 GonkCameraParameters::Parameters::GetTextKey(uint32_t aKey)
@@ -87,6 +115,8 @@ GonkCameraParameters::Parameters::GetTextKey(uint32_t aKey)
       return "hdr-need-1x";
     case CAMERA_PARAM_RECORDINGHINT:
       return KEY_RECORDING_HINT;
+    case CAMERA_PARAM_PICTURE_QUALITY:
+      return KEY_JPEG_QUALITY;
 
     case CAMERA_PARAM_SUPPORTED_PREVIEWSIZES:
       return KEY_SUPPORTED_PREVIEW_SIZES;
@@ -149,6 +179,7 @@ GonkCameraParameters::GonkCameraParameters()
 GonkCameraParameters::~GonkCameraParameters()
 {
   MOZ_COUNT_DTOR(GonkCameraParameters);
+  mIsoModeMap.Clear();
   MOZ_ASSERT(mLock, "mLock missing in ~GonkCameraParameters()");
   if (mLock) {
     PR_DestroyRWLock(mLock);
@@ -159,20 +190,19 @@ GonkCameraParameters::~GonkCameraParameters()
 nsresult
 GonkCameraParameters::MapIsoToGonk(const nsAString& aIso, nsACString& aIsoOut)
 {
-  if (aIso.EqualsASCII("hjr")) {
-    aIsoOut = "ISO_HJR";
-  } else if (aIso.EqualsASCII("auto")) {
-    aIsoOut = "auto";
-  } else {
-    nsAutoCString v = NS_LossyConvertUTF16toASCII(aIso);
-    unsigned int iso;
-    if (sscanf(v.get(), "%u", &iso) != 1) {
-      return NS_ERROR_INVALID_ARG;
+  nsCString* s;
+  if (mIsoModeMap.Get(aIso, &s)) {
+    if (!s) {
+      DOM_CAMERA_LOGE("ISO mode '%s' maps to null Gonk ISO value\n",
+        NS_LossyConvertUTF16toASCII(aIso).get());
+      return NS_ERROR_FAILURE;
     }
-    aIsoOut = nsPrintfCString("ISO%u", iso);
+
+    aIsoOut = *s;
+    return NS_OK;
   }
 
-  return NS_OK;
+  return NS_ERROR_INVALID_ARG;
 }
 
 nsresult
@@ -184,9 +214,13 @@ GonkCameraParameters::MapIsoFromGonk(const char* aIso, nsAString& aIsoOut)
     aIsoOut.AssignASCII("auto");
   } else {
     unsigned int iso;
-    if (sscanf(aIso, "ISO%u", &iso) != 1) {
+    char ignored;
+    // Some camera libraries return ISO modes as "ISO100", others as "100".
+    if (sscanf(aIso, "ISO%u%c", &iso, &ignored) != 1 &&
+        sscanf(aIso, "%u%c", &iso, &ignored) != 1) {
       return NS_ERROR_INVALID_ARG;
     }
+    aIsoOut.Truncate(0);
     aIsoOut.AppendInt(iso);
   }
 
@@ -239,13 +273,27 @@ GonkCameraParameters::Initialize()
   // The return code from GetListAsArray() doesn't matter. If it fails,
   // the isoModes array will be empty, and the subsequent loop won't
   // execute.
+  nsString s;
   nsTArray<nsCString> isoModes;
   GetListAsArray(CAMERA_PARAM_SUPPORTED_ISOMODES, isoModes);
-  for (uint32_t i = 0; i < isoModes.Length(); ++i) {
-    nsString v;
-    rv = MapIsoFromGonk(isoModes[i].get(), v);
-    if (NS_SUCCEEDED(rv)) {
-      *mIsoModes.AppendElement() = v;
+  for (nsTArray<nsCString>::size_type i = 0; i < isoModes.Length(); ++i) {
+    rv = MapIsoFromGonk(isoModes[i].get(), s);
+    if (NS_FAILED(rv)) {
+      DOM_CAMERA_LOGW("Unrecognized ISO mode value '%s'\n", isoModes[i].get());
+      continue;
+    }
+    *mIsoModes.AppendElement() = s;
+    mIsoModeMap.Put(s, new nsCString(isoModes[i]));
+  }
+
+  GetListAsArray(CAMERA_PARAM_SUPPORTED_SCENEMODES, mSceneModes);
+  if (IsLowMemoryPlatform()) {
+    bool hdrRemoved = false;
+    while (mSceneModes.RemoveElement(NS_LITERAL_STRING("hdr"))) {
+      hdrRemoved = true;
+    }
+    if (hdrRemoved) {
+      DOM_CAMERA_LOGI("Disabling HDR support due to low memory\n");
     }
   }
 
@@ -257,16 +305,26 @@ GonkCameraParameters::Initialize()
 nsresult
 GonkCameraParameters::SetTranslated(uint32_t aKey, const nsAString& aValue)
 {
-  if (aKey == CAMERA_PARAM_ISOMODE) {
-    nsAutoCString v;
-    nsresult rv = MapIsoToGonk(aValue, v);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    return SetImpl(aKey, v.get());
-  }
+  switch (aKey) {
+    case CAMERA_PARAM_ISOMODE:
+      {
+        nsAutoCString v;
+        nsresult rv = MapIsoToGonk(aValue, v);
+        if (NS_FAILED(rv)) {
+          return rv;
+        }
+        return SetImpl(aKey, v.get());
+      }
 
-  return SetImpl(aKey, NS_ConvertUTF16toUTF8(aValue).get());
+    case CAMERA_PARAM_SCENEMODE:
+      if (mSceneModes.IndexOf(aValue) == nsTArray<nsString>::NoIndex) {
+        return NS_ERROR_INVALID_ARG;
+      }
+      // fallthrough
+
+    default:
+      return SetImpl(aKey, NS_ConvertUTF16toUTF8(aValue).get());
+  }
 }
 
 nsresult
@@ -453,18 +511,26 @@ GonkCameraParameters::SetTranslated(uint32_t aKey, const ICameraControl::Positio
   if (!isnan(aPosition.latitude)) {
     DOM_CAMERA_LOGI("setting picture latitude to %lf\n", aPosition.latitude);
     SetImpl(Parameters::KEY_GPS_LATITUDE, nsPrintfCString("%lf", aPosition.latitude).get());
+  } else {
+    ClearImpl(Parameters::KEY_GPS_LATITUDE);
   }
   if (!isnan(aPosition.longitude)) {
     DOM_CAMERA_LOGI("setting picture longitude to %lf\n", aPosition.longitude);
     SetImpl(Parameters::KEY_GPS_LONGITUDE, nsPrintfCString("%lf", aPosition.longitude).get());
+  } else {
+    ClearImpl(Parameters::KEY_GPS_LONGITUDE);
   }
   if (!isnan(aPosition.altitude)) {
     DOM_CAMERA_LOGI("setting picture altitude to %lf\n", aPosition.altitude);
     SetImpl(Parameters::KEY_GPS_ALTITUDE, nsPrintfCString("%lf", aPosition.altitude).get());
+  } else {
+    ClearImpl(Parameters::KEY_GPS_ALTITUDE);
   }
   if (!isnan(aPosition.timestamp)) {
     DOM_CAMERA_LOGI("setting picture timestamp to %lf\n", aPosition.timestamp);
     SetImpl(Parameters::KEY_GPS_TIMESTAMP, nsPrintfCString("%lf", aPosition.timestamp).get());
+  } else {
+    ClearImpl(Parameters::KEY_GPS_TIMESTAMP);
   }
 
   return NS_OK;
@@ -605,6 +671,19 @@ GonkCameraParameters::SetTranslated(uint32_t aKey, const double& aValue)
         DOM_CAMERA_LOGI("Zoom = %fx --> index = %d\n", aValue, index);
       }
       return SetImpl(CAMERA_PARAM_ZOOM, index);
+
+    case CAMERA_PARAM_PICTURE_QUALITY:
+      {
+        // Convert aValue [0.0..1.0] to nearest index in the range [1..100].
+        index = (aValue + 0.005) * 99.0 + 1.0;
+        if (aValue < 0.0) {
+          index = 1;
+        } else if (aValue > 1.0) {
+          index = 100;
+        }
+        DOM_CAMERA_LOGI("Picture quality = %f --> index = %d\n", aValue, index);
+      }
+      return SetImpl(CAMERA_PARAM_PICTURE_QUALITY, index);
   }
 
   return SetImpl(aKey, aValue);
@@ -613,7 +692,7 @@ GonkCameraParameters::SetTranslated(uint32_t aKey, const double& aValue)
 nsresult
 GonkCameraParameters::GetTranslated(uint32_t aKey, double& aValue)
 {
-  double val;
+  double val = 0.0; // initialize to keep the compiler happy [-Wmaybe-uninitialized]
   int index = 0;
   double focusDistance[3];
   const char* s;
@@ -667,6 +746,19 @@ GonkCameraParameters::GetTranslated(uint32_t aKey, double& aValue)
         val = index * mExposureCompensationStep;
         DOM_CAMERA_LOGI("exposure compensation (aKey=%d): index=%d --> EV=%f\n", aKey, index, val);
       }
+      break;
+
+    case CAMERA_PARAM_PICTURE_QUALITY:
+      // Convert index [1..100] to a quality value [0.0..1.0].
+      rv = GetImpl(aKey, index);
+      if (index < 2) {
+        val = 0.0;
+      } else if (index > 99) {
+        val = 1.0;
+      } else {
+        val = static_cast<double>(index - 1) / 99.0;
+      }
+      DOM_CAMERA_LOGI("index = %d --> picture quality = %f\n", index, val);
       break;
 
     default:
@@ -833,12 +925,18 @@ GonkCameraParameters::GetListAsArray(uint32_t aKey, nsTArray<T>& aArray)
 nsresult
 GonkCameraParameters::GetTranslated(uint32_t aKey, nsTArray<nsString>& aValues)
 {
-  if (aKey == CAMERA_PARAM_SUPPORTED_ISOMODES) {
-    aValues = mIsoModes;
-    return NS_OK;
-  }
+  switch (aKey) {
+    case CAMERA_PARAM_SUPPORTED_ISOMODES:
+      aValues = mIsoModes;
+      return NS_OK;
 
-  return GetListAsArray(aKey, aValues);
+    case CAMERA_PARAM_SUPPORTED_SCENEMODES:
+      aValues = mSceneModes;
+      return NS_OK;
+
+    default:
+      return GetListAsArray(aKey, aValues);
+  }
 }
 
 nsresult

@@ -5,12 +5,13 @@
 
 #include "FrozenImage.h"
 
-using namespace mozilla::gfx;
-
 namespace mozilla {
+
+using namespace gfx;
+
 namespace image {
 
-NS_IMPL_ISUPPORTS(FrozenImage, imgIContainer)
+NS_IMPL_ISUPPORTS_INHERITED0(FrozenImage, ImageWrapper)
 
 nsIntRect
 FrozenImage::FrameRect(uint32_t /* aWhichFrame - ignored */)
@@ -71,22 +72,19 @@ FrozenImage::GetImageContainer(layers::LayerManager* aManager,
 
 NS_IMETHODIMP
 FrozenImage::Draw(gfxContext* aContext,
-                  GraphicsFilter aFilter,
-                  const gfxMatrix& aUserSpaceToImageSpace,
-                  const gfxRect& aFill,
-                  const nsIntRect& aSubimage,
-                  const nsIntSize& aViewportSize,
-                  const SVGImageContext* aSVGContext,
+                  const nsIntSize& aSize,
+                  const ImageRegion& aRegion,
                   uint32_t /* aWhichFrame - ignored */,
+                  GraphicsFilter aFilter,
+                  const Maybe<SVGImageContext>& aSVGContext,
                   uint32_t aFlags)
 {
-  return InnerImage()->Draw(aContext, aFilter, aUserSpaceToImageSpace,
-                            aFill, aSubimage, aViewportSize, aSVGContext,
-                            FRAME_FIRST, aFlags);
+  return InnerImage()->Draw(aContext, aSize, aRegion, FRAME_FIRST,
+                            aFilter, aSVGContext, aFlags);
 }
 
 NS_IMETHODIMP_(void)
-FrozenImage::RequestRefresh(const mozilla::TimeStamp& aTime)
+FrozenImage::RequestRefresh(const TimeStamp& aTime)
 {
   // Do nothing.
 }

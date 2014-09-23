@@ -64,7 +64,7 @@ class Matrix;
 
 }
 
-struct gfxMatrix;
+class gfxMatrix;
 struct nsSVGEnumMapping;
 
 typedef nsStyledElementNotElementCSSInlineStyle nsSVGElementBase;
@@ -73,15 +73,15 @@ class nsSVGElement : public nsSVGElementBase    // nsIContent
                    , public nsIDOMSVGElement
 {
 protected:
-  nsSVGElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
+  explicit nsSVGElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
   friend nsresult NS_NewSVGElement(mozilla::dom::Element **aResult,
-                                   already_AddRefed<nsINodeInfo>&& aNodeInfo);
+                                   already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
   nsresult Init();
   virtual ~nsSVGElement(){}
 
 public:
 
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const MOZ_MUST_OVERRIDE MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_MUST_OVERRIDE MOZ_OVERRIDE;
 
   typedef mozilla::SVGNumberList SVGNumberList;
   typedef mozilla::SVGAnimatedNumberList SVGAnimatedNumberList;
@@ -113,6 +113,7 @@ public:
   virtual bool IsNodeOfType(uint32_t aFlags) const MOZ_OVERRIDE;
 
   NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) MOZ_OVERRIDE;
+  void WalkAnimatedContentStyleRules(nsRuleWalker* aRuleWalker);
 
   NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const MOZ_OVERRIDE;
 
@@ -639,7 +640,7 @@ private:
 #define NS_IMPL_NS_NEW_SVG_ELEMENT(_elementName)                             \
 nsresult                                                                     \
 NS_NewSVG##_elementName##Element(nsIContent **aResult,                       \
-                                 already_AddRefed<nsINodeInfo>&& aNodeInfo)  \
+                                 already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo)  \
 {                                                                            \
   nsRefPtr<nsSVG##_elementName##Element> it =                                \
     new nsSVG##_elementName##Element(aNodeInfo);                             \
@@ -658,7 +659,7 @@ NS_NewSVG##_elementName##Element(nsIContent **aResult,                       \
 #define NS_IMPL_NS_NEW_NAMESPACED_SVG_ELEMENT(_elementName)                  \
 nsresult                                                                     \
 NS_NewSVG##_elementName##Element(nsIContent **aResult,                       \
-                                 already_AddRefed<nsINodeInfo>&& aNodeInfo)  \
+                                 already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo)  \
 {                                                                            \
   nsRefPtr<mozilla::dom::SVG##_elementName##Element> it =                    \
     new mozilla::dom::SVG##_elementName##Element(aNodeInfo);                 \
@@ -677,7 +678,7 @@ NS_NewSVG##_elementName##Element(nsIContent **aResult,                       \
 #define NS_IMPL_NS_NEW_NAMESPACED_SVG_ELEMENT_CHECK_PARSER(_elementName)     \
 nsresult                                                                     \
 NS_NewSVG##_elementName##Element(nsIContent **aResult,                       \
-                                 already_AddRefed<nsINodeInfo>&& aNodeInfo,  \
+                                 already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,  \
                                  mozilla::dom::FromParser aFromParser)       \
 {                                                                            \
   nsRefPtr<mozilla::dom::SVG##_elementName##Element> it =                    \

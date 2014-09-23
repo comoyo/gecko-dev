@@ -22,6 +22,7 @@
 #include "nsScriptLoader.h"
 #include "nsIStreamListener.h"
 #include "nsICSSLoaderObserver.h"
+#include "nsIXULStore.h"
 
 #include "mozilla/Attributes.h"
 
@@ -48,11 +49,11 @@ struct PRLogModuleInfo;
 class nsRefMapEntry : public nsStringHashKey
 {
 public:
-  nsRefMapEntry(const nsAString& aKey) :
+  explicit nsRefMapEntry(const nsAString& aKey) :
     nsStringHashKey(&aKey)
   {
   }
-  nsRefMapEntry(const nsAString *aKey) :
+  explicit nsRefMapEntry(const nsAString* aKey) :
     nsStringHashKey(aKey)
   {
   }
@@ -94,7 +95,6 @@ class XULDocument MOZ_FINAL : public XMLDocument,
 {
 public:
     XULDocument();
-    virtual ~XULDocument();
 
     // nsISupports interface
     NS_DECL_ISUPPORTS_INHERITED
@@ -138,7 +138,7 @@ public:
     bool OnDocumentParserError() MOZ_OVERRIDE;
 
     // nsINode interface overrides
-    virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+    virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
 
     // nsIDOMNode interface
     NS_FORWARD_NSIDOMNODE_TO_NSINODE
@@ -163,7 +163,7 @@ public:
     NS_DECL_NSIDOMXULDOCUMENT
 
     // nsICSSLoaderObserver
-    NS_IMETHOD StyleSheetLoaded(nsCSSStyleSheet* aSheet,
+    NS_IMETHOD StyleSheetLoaded(CSSStyleSheet* aSheet,
                                 bool aWasAlternate,
                                 nsresult aStatus) MOZ_OVERRIDE;
 
@@ -226,6 +226,8 @@ public:
     }
 
 protected:
+    virtual ~XULDocument();
+
     // Implementation methods
     friend nsresult
     (::NS_NewXULDocument(nsIXULDocument** aResult));
@@ -258,7 +260,7 @@ protected:
 
     nsresult ApplyPersistentAttributes();
     nsresult ApplyPersistentAttributesInternal();
-    nsresult ApplyPersistentAttributesToElements(nsIRDFResource* aResource,
+    nsresult ApplyPersistentAttributesToElements(const nsAString &aID,
                                                  nsCOMArray<nsIContent>& aElements);
 
     nsresult
@@ -313,10 +315,10 @@ protected:
     // Tracks elements with a 'ref' attribute, or an 'id' attribute where
     // the element's namespace has no registered ID attribute name.
     nsTHashtable<nsRefMapEntry> mRefMap;
-    nsCOMPtr<nsIRDFDataSource> mLocalStore;
-    bool                       mApplyingPersistedAttrs;
-    bool                       mIsWritingFastLoad;
-    bool                       mDocumentLoaded;
+    nsCOMPtr<nsIXULStore>       mLocalStore;
+    bool                        mApplyingPersistedAttrs;
+    bool                        mIsWritingFastLoad;
+    bool                        mDocumentLoaded;
     /**
      * Since ResumeWalk is interruptible, it's possible that last
      * stylesheet finishes loading while the PD walk is still in
@@ -336,7 +338,7 @@ protected:
      * An array of style sheets, that will be added (preserving order) to the
      * document after all of them are loaded (in DoneWalking).
      */
-    nsTArray<nsRefPtr<nsCSSStyleSheet> > mOverlaySheets;
+    nsTArray<nsRefPtr<CSSStyleSheet>> mOverlaySheets;
 
     nsCOMPtr<nsIDOMXULCommandDispatcher>     mCommandDispatcher; // [OWNER] of the focus tracker
 
@@ -411,14 +413,7 @@ protected:
 
     /**
      * Execute the precompiled script object scoped by this XUL document's
-     * containing window object, and using its associated script context.
-     */
-    nsresult ExecuteScript(nsIScriptContext *aContext,
-                           JS::Handle<JSScript*> aScriptObject);
-
-    /**
-     * Helper method for the above that uses aScript to find the appropriate
-     * script context and object.
+     * containing window object.
      */
     nsresult ExecuteScript(nsXULPrototypeScript *aScript);
 
@@ -460,7 +455,7 @@ protected:
      * If the current transcluded script is being compiled off thread, the
      * source for that script.
      */
-    jschar* mOffThreadCompileStringBuf;
+    char16_t* mOffThreadCompileStringBuf;
     size_t mOffThreadCompileStringLength;
 
     /**
@@ -568,7 +563,7 @@ protected:
         nsCOMPtr<nsIContent> mElement; // [OWNER]
 
     public:
-        TemplateBuilderHookup(nsIContent* aElement)
+        explicit TemplateBuilderHookup(nsIContent* aElement)
             : mElement(aElement) {}
 
         virtual Phase GetPhase() MOZ_OVERRIDE { return eHookup; }

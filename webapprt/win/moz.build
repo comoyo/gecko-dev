@@ -4,7 +4,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-PROGRAM = 'webapprt-stub'
+Program('webapprt-stub')
 
 SOURCES += [
     'webapprt.cpp',
@@ -42,4 +42,12 @@ if not CONFIG['GNU_CC']:
 
 RCINCLUDE = 'webapprt.rc'
 
+USE_LIBS += [
+    'xpcomglue_staticruntime',
+]
+
 DISABLE_STL_WRAPPING = True
+
+OS_LIBS += [
+    'shell32',
+]

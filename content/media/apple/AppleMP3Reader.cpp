@@ -260,7 +260,7 @@ AppleMP3Reader::AudioSampleCallback(UInt32 aNumBytes,
     AudioData *audio = new AudioData(mDecoder->GetResource()->Tell(),
                                      time, duration, numFrames,
                                      reinterpret_cast<AudioDataValue *>(decoded.forget()),
-                                     mAudioChannels);
+                                     mAudioChannels, mAudioSampleRate);
     mAudioQueue.Push(audio);
 
     mCurrentAudioFrame += numFrames;
@@ -329,6 +329,12 @@ AppleMP3Reader::HasVideo()
   return false;
 }
 
+bool
+AppleMP3Reader::IsMediaSeekable()
+{
+  // not used
+  return true;
+}
 
 /*
  * Query the MP3 parser for a piece of metadata.

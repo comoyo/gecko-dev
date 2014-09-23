@@ -30,6 +30,7 @@
 #include "nsILoadGroup.h"
 #include "nsILoadContext.h"
 #include "nsIConsoleService.h"
+#include "nsIDOMNode.h"
 #include "nsIDOMWindowUtils.h"
 #include "nsIDOMWindow.h"
 #include <algorithm>
@@ -47,7 +48,7 @@ LogBlockedRequest(nsIRequest* aRequest)
   nsresult rv = NS_OK;
 
   // Get the innerWindowID associated with the XMLHTTPRequest
-  PRUint64 innerWindowID = 0;
+  uint64_t innerWindowID = 0;
 
   nsCOMPtr<nsILoadGroup> loadGroup;
   aRequest->GetLoadGroup(getter_AddRefs(loadGroup));
@@ -124,7 +125,7 @@ public:
 
   struct CacheEntry : public LinkedListElement<CacheEntry>
   {
-    CacheEntry(nsCString& aKey)
+    explicit CacheEntry(nsCString& aKey)
       : mKey(aKey)
     {
       MOZ_COUNT_CTOR(nsPreflightCache::CacheEntry);
@@ -453,6 +454,10 @@ nsCORSListenerProxy::nsCORSListenerProxy(nsIStreamListener* aOuter,
   mPreflightHeaders.Sort();
 }
 
+nsCORSListenerProxy::~nsCORSListenerProxy()
+{
+}
+
 nsresult
 nsCORSListenerProxy::Init(nsIChannel* aChannel, bool aAllowDataURI)
 {
@@ -498,46 +503,6 @@ nsCORSListenerProxy::OnStartRequest(nsIRequest* aRequest,
   }
 
   return mOuterListener->OnStartRequest(aRequest, aContext);
-}
-
-bool
-IsValidHTTPToken(const nsCSubstring& aToken)
-{
-  if (aToken.IsEmpty()) {
-    return false;
-  }
-
-  nsCSubstring::const_char_iterator iter, end;
-
-  aToken.BeginReading(iter);
-  aToken.EndReading(end);
-
-  while (iter != end) {
-    if (*iter <= 32 ||
-        *iter >= 127 ||
-        *iter == '(' ||
-        *iter == ')' ||
-        *iter == '<' ||
-        *iter == '>' ||
-        *iter == '@' ||
-        *iter == ',' ||
-        *iter == ';' ||
-        *iter == ':' ||
-        *iter == '\\' ||
-        *iter == '\"' ||
-        *iter == '/' ||
-        *iter == '[' ||
-        *iter == ']' ||
-        *iter == '?' ||
-        *iter == '=' ||
-        *iter == '{' ||
-        *iter == '}') {
-      return false;
-    }
-    ++iter;
-  }
-
-  return true;
 }
 
 nsresult
@@ -612,7 +577,7 @@ nsCORSListenerProxy::CheckRequestApproved(nsIRequest* aRequest)
       if (method.IsEmpty()) {
         continue;
       }
-      if (!IsValidHTTPToken(method)) {
+      if (!NS_IsValidHTTPToken(method)) {
         return NS_ERROR_DOM_BAD_URI;
       }
       foundMethod |= mPreflightMethod.Equals(method);
@@ -631,7 +596,7 @@ nsCORSListenerProxy::CheckRequestApproved(nsIRequest* aRequest)
       if (header.IsEmpty()) {
         continue;
       }
-      if (!IsValidHTTPToken(header)) {
+      if (!NS_IsValidHTTPToken(header)) {
         return NS_ERROR_DOM_BAD_URI;
       }
       headers.AppendElement(header);
@@ -718,13 +683,15 @@ nsCORSListenerProxy::AsyncOnChannelRedirect(nsIChannel *aOldChannel,
 
     if (mHasBeenCrossSite) {
       // Once we've been cross-site, cross-origin redirects reset our source
-      // origin.
+      // origin. Note that we need to call GetChannelURIPrincipal() because
+      // we are looking for the principal that is actually being loaded and not
+      // the principal that initiated the load.
       nsCOMPtr<nsIPrincipal> oldChannelPrincipal;
       nsContentUtils::GetSecurityManager()->
-        GetChannelPrincipal(aOldChannel, getter_AddRefs(oldChannelPrincipal));
+        GetChannelURIPrincipal(aOldChannel, getter_AddRefs(oldChannelPrincipal));
       nsCOMPtr<nsIPrincipal> newChannelPrincipal;
       nsContentUtils::GetSecurityManager()->
-        GetChannelPrincipal(aNewChannel, getter_AddRefs(newChannelPrincipal));
+        GetChannelURIPrincipal(aNewChannel, getter_AddRefs(newChannelPrincipal));
       if (!oldChannelPrincipal || !newChannelPrincipal) {
         rv = NS_ERROR_OUT_OF_MEMORY;
       }
@@ -921,6 +888,8 @@ public:
   NS_DECL_NSICHANNELEVENTSINK
 
 private:
+  ~nsCORSPreflightListener() {}
+
   void AddResultToCache(nsIRequest* aRequest);
 
   nsCOMPtr<nsIChannel> mOuterChannel;
@@ -1162,9 +1131,32 @@ NS_StartCORSPreflight(nsIChannel* aRequestChannel,
   rv = aRequestChannel->GetLoadFlags(&loadFlags);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  nsCOMPtr<nsILoadInfo> loadInfo;
+  rv = aRequestChannel->GetLoadInfo(getter_AddRefs(loadInfo));
+  NS_ENSURE_SUCCESS(rv, rv);
+
   nsCOMPtr<nsIChannel> preflightChannel;
-  rv = NS_NewChannel(getter_AddRefs(preflightChannel), uri, nullptr,
-                     loadGroup, nullptr, loadFlags);
+  if (loadInfo) {
+    rv = NS_NewChannelInternal(getter_AddRefs(preflightChannel),
+                               uri,
+                               loadInfo,
+                               nullptr,   // aChannelPolicy
+                               loadGroup,
+                               nullptr,   // aCallbacks
+                               loadFlags);
+  }
+  else {
+    rv = NS_NewChannelInternal(getter_AddRefs(preflightChannel),
+                               uri,
+                               nullptr, // aRequestingNode,
+                               nsContentUtils::GetSystemPrincipal(),
+                               nsILoadInfo::SEC_NORMAL,
+                               nsIContentPolicy::TYPE_OTHER,
+                               nullptr,   // aChannelPolicy
+                               loadGroup,
+                               nullptr,   // aCallbacks
+                               loadFlags);
+  }
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIHttpChannel> preHttp = do_QueryInterface(preflightChannel);

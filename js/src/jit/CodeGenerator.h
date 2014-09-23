@@ -20,6 +20,8 @@
 # include "jit/arm/CodeGenerator-arm.h"
 #elif defined(JS_CODEGEN_MIPS)
 # include "jit/mips/CodeGenerator-mips.h"
+#elif defined(JS_CODEGEN_NONE)
+# include "jit/none/CodeGenerator-none.h"
 #else
 #error "Unknown architecture!"
 #endif
@@ -41,6 +43,7 @@ class OutOfLineLoadTypedArray;
 class OutOfLineNewGCThingPar;
 class OutOfLineUpdateCache;
 class OutOfLineCallPostWriteBarrier;
+class OutOfLineIsCallable;
 
 class CodeGenerator : public CodeGeneratorSpecific
 {
@@ -53,7 +56,7 @@ class CodeGenerator : public CodeGeneratorSpecific
 
   public:
     bool generate();
-    bool generateAsmJS(Label *stackOverflowLabel);
+    bool generateAsmJS(AsmJSFunctionLabels *labels);
     bool link(JSContext *cx, types::CompilerConstraintList *constraints);
 
     bool visitLabel(LLabel *lir);
@@ -65,6 +68,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitCloneLiteral(LCloneLiteral *lir);
     bool visitParameter(LParameter *lir);
     bool visitCallee(LCallee *lir);
+    bool visitIsConstructing(LIsConstructing *lir);
     bool visitStart(LStart *lir);
     bool visitReturn(LReturn *ret);
     bool visitDefVar(LDefVar *lir);
@@ -113,6 +117,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitElements(LElements *lir);
     bool visitConvertElementsToDoubles(LConvertElementsToDoubles *lir);
     bool visitMaybeToDoubleElement(LMaybeToDoubleElement *lir);
+    bool visitMaybeCopyElementsForWrite(LMaybeCopyElementsForWrite *lir);
     bool visitGuardObjectIdentity(LGuardObjectIdentity *guard);
     bool visitGuardShapePolymorphic(LGuardShapePolymorphic *lir);
     bool visitTypeBarrierV(LTypeBarrierV *lir);
@@ -131,6 +136,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     void emitPopArguments(LApplyArgsGeneric *apply, Register extraStackSize);
     bool visitApplyArgsGeneric(LApplyArgsGeneric *apply);
     bool visitBail(LBail *lir);
+    bool visitUnreachable(LUnreachable *unreachable);
     bool visitGetDynamicName(LGetDynamicName *lir);
     bool visitFilterArgumentsOrEvalS(LFilterArgumentsOrEvalS *lir);
     bool visitFilterArgumentsOrEvalV(LFilterArgumentsOrEvalV *lir);
@@ -141,6 +147,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitNewArrayCallVM(LNewArray *lir);
     bool visitNewArray(LNewArray *lir);
     bool visitOutOfLineNewArray(OutOfLineNewArray *ool);
+    bool visitNewArrayCopyOnWrite(LNewArrayCopyOnWrite *lir);
     bool visitNewObjectVMCall(LNewObject *lir);
     bool visitNewObject(LNewObject *lir);
     bool visitOutOfLineNewObject(OutOfLineNewObject *ool);
@@ -152,7 +159,6 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitNewPar(LNewPar *lir);
     bool visitNewDenseArrayPar(LNewDenseArrayPar *lir);
     bool visitNewDerivedTypedObject(LNewDerivedTypedObject *lir);
-    bool visitAbortPar(LAbortPar *lir);
     bool visitInitElem(LInitElem *lir);
     bool visitInitElemGetterSetter(LInitElemGetterSetter *lir);
     bool visitMutateProto(LMutateProto *lir);
@@ -249,6 +255,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitArrayPushV(LArrayPushV *lir);
     bool visitArrayPushT(LArrayPushT *lir);
     bool visitArrayConcat(LArrayConcat *lir);
+    bool visitArrayJoin(LArrayJoin *lir);
     bool visitLoadTypedArrayElement(LLoadTypedArrayElement *lir);
     bool visitLoadTypedArrayElementHole(LLoadTypedArrayElementHole *lir);
     bool visitStoreTypedArrayElement(LStoreTypedArrayElement *lir);
@@ -258,8 +265,8 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitClampVToUint8(LClampVToUint8 *lir);
     bool visitCallIteratorStart(LCallIteratorStart *lir);
     bool visitIteratorStart(LIteratorStart *lir);
-    bool visitIteratorNext(LIteratorNext *lir);
     bool visitIteratorMore(LIteratorMore *lir);
+    bool visitIsNoIterAndBranch(LIsNoIterAndBranch *lir);
     bool visitIteratorEnd(LIteratorEnd *lir);
     bool visitArgumentsLength(LArgumentsLength *lir);
     bool visitGetFrameArgument(LGetFrameArgument *lir);
@@ -269,7 +276,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitRunOncePrologue(LRunOncePrologue *lir);
     bool emitRest(LInstruction *lir, Register array, Register numActuals,
                   Register temp0, Register temp1, unsigned numFormals,
-                  JSObject *templateObject);
+                  JSObject *templateObject, bool saveAndRestore, Register resultreg);
     bool visitRest(LRest *lir);
     bool visitRestPar(LRestPar *lir);
     bool visitCallSetProperty(LCallSetProperty *ins);
@@ -290,18 +297,20 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitCallDOMNative(LCallDOMNative *lir);
     bool visitCallGetIntrinsicValue(LCallGetIntrinsicValue *lir);
     bool visitIsCallable(LIsCallable *lir);
+    bool visitOutOfLineIsCallable(OutOfLineIsCallable *ool);
+    bool visitIsObject(LIsObject *lir);
     bool visitHaveSameClass(LHaveSameClass *lir);
     bool visitHasClass(LHasClass *lir);
-    bool visitAsmJSCall(LAsmJSCall *lir);
     bool visitAsmJSParameter(LAsmJSParameter *lir);
     bool visitAsmJSReturn(LAsmJSReturn *ret);
     bool visitAsmJSVoidReturn(LAsmJSVoidReturn *ret);
+    bool visitLexicalCheck(LLexicalCheck *ins);
+    bool visitThrowUninitializedLexical(LThrowUninitializedLexical *ins);
 
     bool visitCheckOverRecursed(LCheckOverRecursed *lir);
     bool visitCheckOverRecursedFailure(CheckOverRecursedFailure *ool);
 
     bool visitCheckOverRecursedPar(LCheckOverRecursedPar *lir);
-    bool visitCheckOverRecursedFailurePar(CheckOverRecursedFailurePar *ool);
 
     bool visitInterruptCheckPar(LInterruptCheckPar *lir);
     bool visitOutOfLineInterruptCheckPar(OutOfLineInterruptCheckPar *ool);
@@ -314,8 +323,6 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitOutOfLineStoreElementHole(OutOfLineStoreElementHole *ool);
 
     bool visitOutOfLineNewGCThingPar(OutOfLineNewGCThingPar *ool);
-    bool visitOutOfLineAbortPar(OutOfLineAbortPar *ool);
-    bool visitOutOfLinePropagateAbortPar(OutOfLinePropagateAbortPar *ool);
     void loadJSScriptForBlock(MBasicBlock *block, Register reg);
     void loadOutermostJSScript(Register reg);
 
@@ -353,6 +360,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitAssertRangeV(LAssertRangeV *ins);
 
     bool visitInterruptCheck(LInterruptCheck *lir);
+    bool visitAsmJSInterruptCheck(LAsmJSInterruptCheck *lir);
     bool visitRecompileCheck(LRecompileCheck *ins);
 
     IonScriptCounts *extractScriptCounts() {
@@ -372,9 +380,9 @@ class CodeGenerator : public CodeGeneratorSpecific
                              PropertyName *name, ConstantOrRegister value, bool strict,
                              bool needsTypeBarrier, jsbytecode *profilerLeavePc);
     bool addSetElementCache(LInstruction *ins, Register obj, Register unboxIndex, Register temp,
-                            FloatRegister tempFloat, ValueOperand index, ConstantOrRegister value,
+                            FloatRegister tempDouble, FloatRegister tempFloat32,
+                            ValueOperand index, ConstantOrRegister value,
                             bool strict, bool guardHoles, jsbytecode *profilerLeavePc);
-    bool checkForAbortPar(LInstruction *lir);
 
     bool generateBranchV(const ValueOperand &value, Label *ifTrue, Label *ifFalse, FloatRegister fr);
 

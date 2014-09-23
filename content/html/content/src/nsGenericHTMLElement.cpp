@@ -116,7 +116,7 @@ using namespace mozilla::dom;
 class nsAutoFocusEvent : public nsRunnable
 {
 public:
-  nsAutoFocusEvent(nsGenericHTMLFormElement* aElement) : mElement(aElement) {}
+  explicit nsAutoFocusEvent(nsGenericHTMLFormElement* aElement) : mElement(aElement) {}
 
   NS_IMETHOD Run() {
     nsFocusManager* fm = nsFocusManager::GetFocusManager();
@@ -166,14 +166,14 @@ private:
 
 class nsGenericHTMLElementTearoff : public nsIDOMElementCSSInlineStyle
 {
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-
-  nsGenericHTMLElementTearoff(nsGenericHTMLElement *aElement)
-    : mElement(aElement)
+  virtual ~nsGenericHTMLElementTearoff()
   {
   }
 
-  virtual ~nsGenericHTMLElementTearoff()
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+
+  explicit nsGenericHTMLElementTearoff(nsGenericHTMLElement* aElement)
+    : mElement(aElement)
   {
   }
 
@@ -291,7 +291,8 @@ static const nsAttrValue::EnumTable kDirTable[] = {
 void
 nsGenericHTMLElement::GetAccessKeyLabel(nsString& aLabel)
 {
-  nsPresContext *presContext = GetPresContext();
+  //XXXsmaug We shouldn't need PresContext for this.
+  nsPresContext *presContext = GetPresContext(eForComposedDoc);
 
   if (presContext) {
     nsAutoString suffix;
@@ -346,7 +347,7 @@ nsGenericHTMLElement::GetOffsetRect(CSSIntRect& aRect)
   }
 
   nsIContent* offsetParent = nullptr;
-  Element* docElement = GetCurrentDoc()->GetRootElement();
+  Element* docElement = GetComposedDoc()->GetRootElement();
   nsIContent* content = frame->GetContent();
 
   if (content && (content->IsHTML(nsGkAtoms::body) || content == docElement)) {
@@ -397,7 +398,7 @@ nsGenericHTMLElement::GetOffsetRect(CSSIntRect& aRect)
       // parent chain. We want the offset parent in this case to be
       // the body, so we just get the body element from the document.
 
-      nsCOMPtr<nsIDOMHTMLDocument> html_doc(do_QueryInterface(GetCurrentDoc()));
+      nsCOMPtr<nsIDOMHTMLDocument> html_doc(do_QueryInterface(GetComposedDoc()));
 
       if (html_doc) {
         offsetParent = static_cast<nsHTMLDocument*>(html_doc.get())->GetBody();
@@ -1085,9 +1086,9 @@ nsGenericHTMLElement::GetAttributeMappingFunction() const
 nsIFormControlFrame*
 nsGenericHTMLElement::GetFormControlFrame(bool aFlushFrames)
 {
-  if (aFlushFrames && IsInDoc()) {
+  if (aFlushFrames && IsInComposedDoc()) {
     // Cause a flush of the frames, so we get up-to-date frame information
-    GetCurrentDoc()->FlushPendingNotifications(Flush_Frames);
+    GetComposedDoc()->FlushPendingNotifications(Flush_Frames);
   }
   nsIFrame* frame = GetPrimaryFrame();
   if (frame) {
@@ -1111,12 +1112,12 @@ nsGenericHTMLElement::GetFormControlFrame(bool aFlushFrames)
   return nullptr;
 }
 
-// XXX This creates a dependency between content and frames
 nsPresContext*
-nsGenericHTMLElement::GetPresContext()
+nsGenericHTMLElement::GetPresContext(PresContextFor aFor)
 {
   // Get the document
-  nsIDocument* doc = GetDocument();
+  nsIDocument* doc = (aFor == eForComposedDoc) ?
+    GetComposedDoc() : GetUncomposedDoc();
   if (doc) {
     // Get presentation shell.
     nsIPresShell *presShell = doc->GetShell();
@@ -1765,37 +1766,6 @@ nsGenericHTMLElement::GetURIListAttr(nsIAtom* aAttr, nsAString& aResult)
   return NS_OK;
 }
 
-void
-nsGenericHTMLElement::GetEnumAttr(nsIAtom* aAttr,
-                                  const char* aDefault,
-                                  nsAString& aResult) const
-{
-  GetEnumAttr(aAttr, aDefault, aDefault, aResult);
-}
-
-void
-nsGenericHTMLElement::GetEnumAttr(nsIAtom* aAttr,
-                                  const char* aDefaultMissing,
-                                  const char* aDefaultInvalid,
-                                  nsAString& aResult) const
-{
-  const nsAttrValue* attrVal = mAttrsAndChildren.GetAttr(aAttr);
-
-  aResult.Truncate();
-
-  if (!attrVal) {
-    if (aDefaultMissing) {
-      AppendASCIItoUTF16(nsDependentCString(aDefaultMissing), aResult);
-    }
-  } else {
-    if (attrVal->Type() == nsAttrValue::eEnum) {
-      attrVal->GetEnumString(aResult, true);
-    } else if (aDefaultInvalid) {
-      AppendASCIItoUTF16(nsDependentCString(aDefaultInvalid), aResult);
-    }
-  }
-}
-
 HTMLMenuElement*
 nsGenericHTMLElement::GetContextMenu() const
 {
@@ -1905,7 +1875,7 @@ nsGenericHTMLElement::TouchEventsEnabled(JSContext* /* unused */, JSObject* /* u
 
 //----------------------------------------------------------------------
 
-nsGenericHTMLFormElement::nsGenericHTMLFormElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+nsGenericHTMLFormElement::nsGenericHTMLFormElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : nsGenericHTMLElement(aNodeInfo)
   , mForm(nullptr)
   , mFieldSet(nullptr)
@@ -2345,8 +2315,8 @@ nsGenericHTMLFormElement::IntrinsicState() const
 nsGenericHTMLFormElement::FocusTristate
 nsGenericHTMLFormElement::FocusState()
 {
-  // We can't be focused if we aren't in a document
-  nsIDocument* doc = GetCurrentDoc();
+  // We can't be focused if we aren't in a (composed) document
+  nsIDocument* doc = GetComposedDoc();
   if (!doc)
     return eUnfocusable;
 
@@ -2574,9 +2544,8 @@ bool
 nsGenericHTMLFormElement::IsLabelable() const
 {
   // TODO: keygen should be in that list, see bug 101019.
-  // TODO: NS_FORM_INPUT_HIDDEN should be removed, see bug 597650.
   uint32_t type = GetType();
-  return type & NS_FORM_INPUT_ELEMENT ||
+  return (type & NS_FORM_INPUT_ELEMENT && type != NS_FORM_INPUT_HIDDEN) ||
          type & NS_FORM_BUTTON_ELEMENT ||
          // type == NS_FORM_KEYGEN ||
          type == NS_FORM_OUTPUT ||
@@ -2593,7 +2562,7 @@ nsGenericHTMLElement::Blur(mozilla::ErrorResult& aError)
     return;
   }
 
-  nsIDocument* doc = GetCurrentDoc();
+  nsIDocument* doc = GetComposedDoc();
   if (!doc) {
     return;
   }
@@ -2621,7 +2590,7 @@ nsGenericHTMLElement::Click()
     return;
 
   // Strong in case the event kills it
-  nsCOMPtr<nsIDocument> doc = GetCurrentDoc();
+  nsCOMPtr<nsIDocument> doc = GetComposedDoc();
 
   nsCOMPtr<nsIPresShell> shell;
   nsRefPtr<nsPresContext> context;
@@ -2651,7 +2620,7 @@ nsGenericHTMLElement::IsHTMLFocusable(bool aWithMouse,
                                       bool *aIsFocusable,
                                       int32_t *aTabIndex)
 {
-  nsIDocument *doc = GetCurrentDoc();
+  nsIDocument* doc = GetComposedDoc();
   if (!doc || doc->HasFlag(NODE_IS_EDITABLE)) {
     // In designMode documents we only allow focusing the document.
     if (aTabIndex) {
@@ -2710,7 +2679,7 @@ nsGenericHTMLElement::RegUnRegAccessKey(bool aDoReg)
   }
 
   // We have an access key, so get the ESM from the pres context.
-  nsPresContext *presContext = GetPresContext();
+  nsPresContext* presContext = GetPresContext(eForUncomposedDoc);
 
   if (presContext) {
     EventStateManager* esm = presContext->EventStateManager();
@@ -2728,7 +2697,7 @@ void
 nsGenericHTMLElement::PerformAccesskey(bool aKeyCausesActivation,
                                        bool aIsTrustedEvent)
 {
-  nsPresContext *presContext = GetPresContext();
+  nsPresContext* presContext = GetPresContext(eForUncomposedDoc);
   if (!presContext)
     return;
 
@@ -2927,7 +2896,7 @@ nsGenericHTMLElement::ChangeEditableState(int32_t aChange)
 //----------------------------------------------------------------------
 
 nsGenericHTMLFormElementWithState::nsGenericHTMLFormElementWithState(
-    already_AddRefed<nsINodeInfo>& aNodeInfo
+    already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo
   )
   : nsGenericHTMLFormElement(aNodeInfo)
 {
@@ -2942,7 +2911,7 @@ nsGenericHTMLFormElementWithState::GenerateStateKey()
     return NS_OK;
   }
 
-  nsIDocument* doc = GetDocument();
+  nsIDocument* doc = GetUncomposedDoc();
   if (!doc) {
     return NS_OK;
   }
@@ -2990,7 +2959,7 @@ nsGenericHTMLFormElementWithState::GetPrimaryPresState()
 already_AddRefed<nsILayoutHistoryState>
 nsGenericHTMLFormElementWithState::GetLayoutHistory(bool aRead)
 {
-  nsCOMPtr<nsIDocument> doc = GetDocument();
+  nsCOMPtr<nsIDocument> doc = GetUncomposedDoc();
   if (!doc) {
     return nullptr;
   }
@@ -3036,38 +3005,36 @@ nsGenericHTMLFormElementWithState::RestoreFormControlState()
 }
 
 void
-nsGenericHTMLFormElementWithState::NodeInfoChanged(nsINodeInfo* aOldNodeInfo)
+nsGenericHTMLFormElementWithState::NodeInfoChanged(mozilla::dom::NodeInfo* aOldNodeInfo)
 {
   mStateKey.SetIsVoid(true);
 }
 
-JS::Value
+void
 nsGenericHTMLElement::GetItemValue(JSContext* aCx, JSObject* aScope,
+                                   JS::MutableHandle<JS::Value> aRetval,
                                    ErrorResult& aError)
 {
   JS::Rooted<JSObject*> scope(aCx, aScope);
   if (!HasAttr(kNameSpaceID_None, nsGkAtoms::itemprop)) {
-    return JS::NullValue();
+    aRetval.setNull();
+    return;
   }
 
   if (ItemScope()) {
     JS::Rooted<JS::Value> v(aCx);
     JSAutoCompartment ac(aCx, scope);
-    if (!mozilla::dom::WrapObject(aCx, this, &v)) {
+    if (!mozilla::dom::WrapObject(aCx, this, aRetval)) {
       aError.Throw(NS_ERROR_FAILURE);
-      return JS::UndefinedValue();
     }
-    return v;
+    return;
   }
 
   nsString string;
   GetItemValueText(string);
-  JS::Rooted<JS::Value> v(aCx);
-  if (!xpc::NonVoidStringToJsval(aCx, string, &v)) {
+  if (!xpc::NonVoidStringToJsval(aCx, string, aRetval)) {
     aError.Throw(NS_ERROR_FAILURE);
-    return JS::UndefinedValue();
   }
-  return v;
 }
 
 NS_IMETHODIMP
@@ -3103,9 +3070,9 @@ nsGenericHTMLElement::SetItemValue(JSContext* aCx, JS::Value aValue,
     return;
   }
 
-  binding_detail::FakeDependentString string;
+  nsAutoString string;
   JS::Rooted<JS::Value> value(aCx, aValue);
-  if (!ConvertJSValueToString(aCx, value, &value, eStringify, eStringify, string)) {
+  if (!ConvertJSValueToString(aCx, value, eStringify, eStringify, string)) {
     aError.Throw(NS_ERROR_UNEXPECTED);
     return;
   }
@@ -3129,7 +3096,8 @@ nsGenericHTMLElement::SetItemValue(nsIVariant* aValue)
 void
 nsGenericHTMLElement::GetItemValueText(nsAString& text)
 {
-  GetTextContentInternal(text);
+  ErrorResult rv;
+  GetTextContentInternal(text, rv);
 }
 
 void

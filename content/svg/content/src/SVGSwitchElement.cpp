@@ -38,8 +38,12 @@ NS_INTERFACE_MAP_END_INHERITING(SVGSwitchElementBase)
 //----------------------------------------------------------------------
 // Implementation
 
-SVGSwitchElement::SVGSwitchElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+SVGSwitchElement::SVGSwitchElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : SVGSwitchElementBase(aNodeInfo)
+{
+}
+
+SVGSwitchElement::~SVGSwitchElement()
 {
 }
 
@@ -121,8 +125,8 @@ nsIContent *
 SVGSwitchElement::FindActiveChild() const
 {
   bool allowReorder = AttrValueIs(kNameSpaceID_None,
-                                    nsGkAtoms::allowReorder,
-                                    nsGkAtoms::yes, eCaseMatters);
+                                  nsGkAtoms::allowReorder,
+                                  nsGkAtoms::yes, eCaseMatters);
 
   const nsAdoptingString& acceptLangs =
     Preferences::GetLocalizedString("intl.accept_languages");
@@ -130,6 +134,7 @@ SVGSwitchElement::FindActiveChild() const
   if (allowReorder && !acceptLangs.IsEmpty()) {
     int32_t bestLanguagePreferenceRank = -1;
     nsIContent *bestChild = nullptr;
+    nsIContent *defaultChild = nullptr;
     for (nsIContent* child = nsINode::GetFirstChild();
          child;
          child = child->GetNextSibling()) {
@@ -148,7 +153,12 @@ SVGSwitchElement::FindActiveChild() const
             // best possible match
             return child;
           case -1:
-            // not found
+            // no match
+            break;
+          case -2:
+            // no systemLanguage attribute. If there's nothing better
+            // we'll use the last such child.
+            defaultChild = child;
             break;
           default:
             if (bestLanguagePreferenceRank == -1 ||
@@ -163,7 +173,7 @@ SVGSwitchElement::FindActiveChild() const
          bestChild = child;
       }
     }
-    return bestChild;
+    return bestChild ? bestChild : defaultChild;
   }
 
   for (nsIContent* child = nsINode::GetFirstChild();

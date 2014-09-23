@@ -38,7 +38,7 @@ WorkerNavigator::Create(bool aOnLine)
   nsRefPtr<WorkerNavigator> navigator =
     new WorkerNavigator(properties.mAppName, properties.mAppVersion,
                         properties.mPlatform, properties.mUserAgent,
-                        aOnLine);
+                        properties.mLanguages, aOnLine);
 
   return navigator.forget();
 }
@@ -117,34 +117,37 @@ GetDataStoresStructuredCloneCallbacksRead(JSContext* aCx,
     return nullptr;
   }
 
-  nsRefPtr<WorkerDataStore> workerStore =
-    new WorkerDataStore(workerPrivate->GlobalScope());
-  nsMainThreadPtrHandle<DataStore> backingStore = dataStoreholder;
+  // Protect workerStoreObj from moving GC during ~nsRefPtr.
+  JS::Rooted<JSObject*> workerStoreObj(aCx, nullptr);
+  {
+    nsRefPtr<WorkerDataStore> workerStore =
+      new WorkerDataStore(workerPrivate->GlobalScope());
+    nsMainThreadPtrHandle<DataStore> backingStore(dataStoreholder);
 
-  // When we're on the worker thread, prepare a DataStoreChangeEventProxy.
-  nsRefPtr<DataStoreChangeEventProxy> eventProxy =
-    new DataStoreChangeEventProxy(workerPrivate, workerStore);
+    // When we're on the worker thread, prepare a DataStoreChangeEventProxy.
+    nsRefPtr<DataStoreChangeEventProxy> eventProxy =
+      new DataStoreChangeEventProxy(workerPrivate, workerStore);
 
-  // Add the DataStoreChangeEventProxy as an event listener on the main thread.
-  nsRefPtr<DataStoreAddEventListenerRunnable> runnable =
-    new DataStoreAddEventListenerRunnable(workerPrivate,
-                                          backingStore,
-                                          eventProxy);
-  runnable->Dispatch(aCx);
+    // Add the DataStoreChangeEventProxy as an event listener on the main thread.
+    nsRefPtr<DataStoreAddEventListenerRunnable> runnable =
+      new DataStoreAddEventListenerRunnable(workerPrivate,
+                                            backingStore,
+                                            eventProxy);
+    runnable->Dispatch(aCx);
 
-  // Point WorkerDataStore to DataStore.
-  workerStore->SetBackingDataStore(backingStore);
+    // Point WorkerDataStore to DataStore.
+    workerStore->SetBackingDataStore(backingStore);
 
-  JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
-  if (!global) {
-    MOZ_ASSERT(false, "cannot get global!");
-    return nullptr;
-  }
-
-  JS::Rooted<JSObject*> workerStoreObj(aCx, workerStore->WrapObject(aCx));
-  if (!JS_WrapObject(aCx, &workerStoreObj)) {
-    MOZ_ASSERT(false, "cannot wrap object for workerStoreObj!");
-    return nullptr;
+    JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
+    if (!global) {
+      MOZ_ASSERT(false, "cannot get global!");
+    } else {
+      workerStoreObj = workerStore->WrapObject(aCx);
+      if (!JS_WrapObject(aCx, &workerStoreObj)) {
+        MOZ_ASSERT(false, "cannot wrap object for workerStoreObj!");
+        workerStoreObj = nullptr;
+      }
+    }
   }
 
   return workerStoreObj;
@@ -203,15 +206,18 @@ class NavigatorGetDataStoresRunnable MOZ_FINAL : public WorkerMainThreadRunnable
 {
   nsRefPtr<PromiseWorkerProxy> mPromiseWorkerProxy;
   const nsString mName;
+  const nsString mOwner;
   ErrorResult& mRv;
 
 public:
   NavigatorGetDataStoresRunnable(WorkerPrivate* aWorkerPrivate,
                                  Promise* aWorkerPromise,
                                  const nsAString& aName,
+                                 const nsAString& aOwner,
                                  ErrorResult& aRv)
     : WorkerMainThreadRunnable(aWorkerPrivate)
     , mName(aName)
+    , mOwner(aOwner)
     , mRv(aRv)
   {
     MOZ_ASSERT(aWorkerPrivate);
@@ -243,7 +249,8 @@ protected:
       return false;
     }
 
-    nsRefPtr<Promise> promise = Navigator::GetDataStores(window, mName, mRv);
+    nsRefPtr<Promise> promise =
+      Navigator::GetDataStores(window, mName, mOwner, mRv);
     promise->AppendNativeHandler(mPromiseWorkerProxy);
     return true;
   }
@@ -252,19 +259,30 @@ protected:
 already_AddRefed<Promise>
 WorkerNavigator::GetDataStores(JSContext* aCx,
                                const nsAString& aName,
+                               const nsAString& aOwner,
                                ErrorResult& aRv)
 {
   WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<Promise> promise = new Promise(workerPrivate->GlobalScope());
+  nsRefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
+  if (aRv.Failed()) {
+    return nullptr;
+  }
 
   nsRefPtr<NavigatorGetDataStoresRunnable> runnable =
-    new NavigatorGetDataStoresRunnable(workerPrivate, promise, aName, aRv);
+    new NavigatorGetDataStoresRunnable(workerPrivate, promise, aName, aOwner, aRv);
   runnable->Dispatch(aCx);
 
   return promise.forget();
+}
+
+void
+WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages)
+{
+  WorkerNavigatorBinding_workers::ClearCachedLanguagesValue(this);
+  mLanguages = aLanguages;
 }
 
 END_WORKERS_NAMESPACE

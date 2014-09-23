@@ -30,6 +30,8 @@
 #include <algorithm>
 #include <math.h>
 
+#define DEFAULT_VIDEO_MAX_FRAMERATE 30
+
 namespace mozilla {
 
 static const char* logTag ="WebrtcVideoSessionConduit";
@@ -54,6 +56,30 @@ mozilla::RefPtr<VideoSessionConduit> VideoSessionConduit::Create(VideoSessionCon
   }
   CSFLogDebug(logTag,  "%s Successfully created VideoConduit ", __FUNCTION__);
   return obj;
+}
+
+WebrtcVideoConduit::WebrtcVideoConduit():
+  mOtherDirection(nullptr),
+  mShutDown(false),
+  mVideoEngine(nullptr),
+  mTransport(nullptr),
+  mRenderer(nullptr),
+  mPtrExtCapture(nullptr),
+  mEngineTransmitting(false),
+  mEngineReceiving(false),
+  mChannel(-1),
+  mCapId(-1),
+  mCurSendCodecConfig(nullptr),
+  mSendingWidth(0),
+  mSendingHeight(0),
+  mReceivingWidth(640),
+  mReceivingHeight(480),
+  mVideoLatencyTestEnable(false),
+  mVideoLatencyAvg(0),
+  mMinBitrate(200),
+  mStartBitrate(300),
+  mMaxBitrate(2000)
+{
 }
 
 WebrtcVideoConduit::~WebrtcVideoConduit()
@@ -274,6 +300,11 @@ MediaConduitErrorCode WebrtcVideoConduit::Init(WebrtcVideoConduit *other)
       NS_WARN_IF(NS_FAILED(branch->GetIntPref("media.peerconnection.video.max_bitrate", &temp)));
       if (temp >= 0) {
         mMaxBitrate = temp;
+      }
+      bool use_loadmanager = false;
+      NS_WARN_IF(NS_FAILED(branch->GetBoolPref("media.navigator.load_adapt", &use_loadmanager)));
+      if (use_loadmanager) {
+        mLoadManager = LoadManagerBuild();
       }
     }
   }
@@ -525,6 +556,8 @@ WebrtcVideoConduit::ConfigureSendMediaCodec(const VideoCodecConfig* codecConfig)
   webrtc::VideoCodec  video_codec;
   std::string payloadName;
 
+  memset(&video_codec, 0, sizeof(video_codec));
+
   //validate basic params
   if((condError = ValidateCodecConfig(codecConfig,true)) != kMediaConduitNoError)
   {
@@ -552,9 +585,9 @@ WebrtcVideoConduit::ConfigureSendMediaCodec(const VideoCodecConfig* codecConfig)
     mEngineTransmitting = false;
   }
 
-  if (codecConfig->mLoadManager) {
-    mPtrViEBase->RegisterCpuOveruseObserver(mChannel, codecConfig->mLoadManager);
-    mPtrViEBase->SetLoadManager(codecConfig->mLoadManager);
+  if (mLoadManager) {
+    mPtrViEBase->RegisterCpuOveruseObserver(mChannel, mLoadManager);
+    mPtrViEBase->SetLoadManager(mLoadManager);
   }
 
   if (mExternalSendCodec &&
@@ -564,6 +597,15 @@ WebrtcVideoConduit::ConfigureSendMediaCodec(const VideoCodecConfig* codecConfig)
     // width/height will be overridden on the first frame
     video_codec.width = 320;
     video_codec.height = 240;
+#ifdef MOZ_WEBRTC_OMX
+    if (codecConfig->mType == webrtc::kVideoCodecH264) {
+      video_codec.resolution_divisor = 16;
+    } else {
+      video_codec.resolution_divisor = 1; // We could try using it to handle odd resolutions
+    }
+#else
+    video_codec.resolution_divisor = 1; // We could try using it to handle odd resolutions
+#endif
     video_codec.qpMax = 56;
     video_codec.numberOfSimulcastStreams = 1;
     video_codec.mode = webrtc::kRealtimeVideo;
@@ -870,7 +912,6 @@ WebrtcVideoConduit::SelectSendResolution(unsigned short width,
 {
   // XXX This will do bandwidth-resolution adaptation as well - bug 877954
 
-
   // Limit resolution to max-fs while keeping same aspect ratio as the
   // incoming image.
   if (mCurSendCodecConfig && mCurSendCodecConfig->mMaxFrameSize)
@@ -980,6 +1021,7 @@ WebrtcVideoConduit::SetExternalSendCodec(VideoCodecConfig* config,
                                               config->mType,
                                               static_cast<WebrtcVideoEncoder*>(encoder),
                                               false)) {
+    mExternalSendCodecHandle = encoder;
     mExternalSendCodec = new VideoCodecConfig(*config);
     return kMediaConduitNoError;
   }
@@ -992,6 +1034,7 @@ WebrtcVideoConduit::SetExternalRecvCodec(VideoCodecConfig* config,
   if (!mPtrExtCodec->RegisterExternalReceiveCodec(mChannel,
                                                   config->mType,
                                                   static_cast<WebrtcVideoDecoder*>(decoder))) {
+    mExternalRecvCodecHandle = decoder;
     mExternalRecvCodec = new VideoCodecConfig(*config);
     return kMediaConduitNoError;
   }
@@ -1036,10 +1079,6 @@ WebrtcVideoConduit::SendVideoFrame(unsigned char* video_frame,
     CSFLogError(logTag, "%s Engine not transmitting ", __FUNCTION__);
     return kMediaConduitSessionNotInited;
   }
-
-  // enforce even width/height (paranoia)
-  MOZ_ASSERT(!(width & 1));
-  MOZ_ASSERT(!(height & 1));
 
   if (!SelectSendResolution(width, height))
   {
@@ -1099,22 +1138,15 @@ WebrtcVideoConduit::ReceivedRTCPPacket(const void *data, int len)
   CSFLogDebug(logTag, " %s Channel %d, Len %d ", __FUNCTION__, mChannel, len);
 
   //Media Engine should be receiving already
-  if(mEngineTransmitting)
+  if(mPtrViENetwork->ReceivedRTCPPacket(mChannel,data,len) == -1)
   {
-    CSFLogError(logTag, "%s RTCP Processing ATTEMPT %d ", __FUNCTION__, len);
-    if(mPtrViENetwork->ReceivedRTCPPacket(mChannel,data,len) == -1)
+    int error = mPtrViEBase->LastError();
+    CSFLogError(logTag, "%s RTP Processing Failed %d", __FUNCTION__, error);
+    if(error >= kViERtpRtcpInvalidChannelId && error <= kViERtpRtcpRtcpDisabled)
     {
-      int error = mPtrViEBase->LastError();
-      CSFLogError(logTag, "%s RTCP Processing Failed %d", __FUNCTION__, error);
-      if(error >= kViERtpRtcpInvalidChannelId && error <= kViERtpRtcpRtcpDisabled)
-      {
-        return kMediaConduitRTPProcessingFailed;
-      }
-      return kMediaConduitRTPRTCPModuleError;
+      return kMediaConduitRTPProcessingFailed;
     }
-  } else {
-    CSFLogError(logTag, "Error: %s when not receiving", __FUNCTION__);
-    return kMediaConduitSessionNotInited;
+    return kMediaConduitRTPRTCPModuleError;
   }
   return kMediaConduitNoError;
 }
@@ -1255,24 +1287,40 @@ WebrtcVideoConduit::CodecConfigToWebRTCCodec(const VideoCodecConfig* codecInfo,
   } else if (codecInfo->mName == "I420") {
     cinst.codecType = webrtc::kVideoCodecI420;
     PL_strncpyz(cinst.plName, "I420", sizeof(cinst.plName));
+  } else {
+    cinst.codecType = webrtc::kVideoCodecUnknown;
+    PL_strncpyz(cinst.plName, "Unknown", sizeof(cinst.plName));
   }
 
   // width/height will be overridden on the first frame; they must be 'sane' for
   // SetSendCodec()
-  if (codecInfo->mMaxFrameRate > 0)
-  {
+  if (codecInfo->mMaxFrameRate > 0) {
     cinst.maxFramerate = codecInfo->mMaxFrameRate;
+  } else {
+    cinst.maxFramerate = DEFAULT_VIDEO_MAX_FRAMERATE;
   }
+
   cinst.minBitrate = mMinBitrate;
   cinst.startBitrate = mStartBitrate;
   cinst.maxBitrate = mMaxBitrate;
 
   if (cinst.codecType == webrtc::kVideoCodecH264)
   {
+#ifdef MOZ_WEBRTC_OMX
+    cinst.resolution_divisor = 16;
+#endif
     cinst.codecSpecific.H264.profile = codecInfo->mProfile;
     cinst.codecSpecific.H264.constraints = codecInfo->mConstraints;
     cinst.codecSpecific.H264.level = codecInfo->mLevel;
     cinst.codecSpecific.H264.packetizationMode = codecInfo->mPacketizationMode;
+    if (codecInfo->mMaxBitrate > 0 && codecInfo->mMaxBitrate < cinst.maxBitrate) {
+      cinst.maxBitrate = codecInfo->mMaxBitrate;
+    }
+    if (codecInfo->mMaxMBPS > 0) {
+      // Not supported yet!
+      CSFLogError(logTag,  "%s H.264 max_mbps not supported yet  ", __FUNCTION__);
+    }
+    // XXX parse the encoded SPS/PPS data
     // paranoia
     cinst.codecSpecific.H264.spsData = nullptr;
     cinst.codecSpecific.H264.spsLen = 0;
@@ -1390,6 +1438,17 @@ uint64_t
 WebrtcVideoConduit::MozVideoLatencyAvg()
 {
   return mVideoLatencyAvg / sRoundingPadding;
+}
+
+uint64_t
+WebrtcVideoConduit::CodecPluginID()
+{
+  if (mExternalSendCodecHandle) {
+    return mExternalSendCodecHandle->PluginID();
+  } else if (mExternalRecvCodecHandle) {
+    return mExternalRecvCodecHandle->PluginID();
+  }
+  return 0;
 }
 
 }// end namespace

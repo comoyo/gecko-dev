@@ -22,7 +22,7 @@ class JavaScriptBase : public WrapperOwner, public WrapperAnswer, public Base
     typedef WrapperAnswer Answer;
 
   public:
-    JavaScriptBase(JSRuntime *rt)
+    explicit JavaScriptBase(JSRuntime *rt)
       : JavaScriptShared(rt),
         WrapperOwner(rt),
         WrapperAnswer(rt)
@@ -67,25 +67,28 @@ class JavaScriptBase : public WrapperOwner, public WrapperAnswer, public Base
                       ReturnStatus *rs, bool *bp) {
         return Answer::AnswerHasOwn(objId, id, rs, bp);
     }
-    bool AnswerGet(const ObjectId &objId, const ObjectId &receiverId,
+    bool AnswerGet(const ObjectId &objId, const ObjectVariant &receiverVar,
                    const nsString &id,
                    ReturnStatus *rs, JSVariant *result) {
-        return Answer::AnswerGet(objId, receiverId, id, rs, result);
+        return Answer::AnswerGet(objId, receiverVar, id, rs, result);
     }
-    bool AnswerSet(const ObjectId &objId, const ObjectId &receiverId,
+    bool AnswerSet(const ObjectId &objId, const ObjectVariant &receiverVar,
                    const nsString &id, const bool &strict,
                    const JSVariant &value, ReturnStatus *rs, JSVariant *result) {
-        return Answer::AnswerSet(objId, receiverId, id, strict, value, rs, result);
+        return Answer::AnswerSet(objId, receiverVar, id, strict, value, rs, result);
     }
 
     bool AnswerIsExtensible(const ObjectId &objId, ReturnStatus *rs,
                             bool *result) {
         return Answer::AnswerIsExtensible(objId, rs, result);
     }
-    bool AnswerCall(const ObjectId &objId, const nsTArray<JSParam> &argv,
-                    ReturnStatus *rs, JSVariant *result,
-                    nsTArray<JSParam> *outparams) {
-        return Answer::AnswerCall(objId, argv, rs, result, outparams);
+    bool AnswerCallOrConstruct(const ObjectId &objId, const nsTArray<JSParam> &argv,
+                               const bool &construct, ReturnStatus *rs, JSVariant *result,
+                               nsTArray<JSParam> *outparams) {
+        return Answer::AnswerCallOrConstruct(objId, argv, construct, rs, result, outparams);
+    }
+    bool AnswerHasInstance(const ObjectId &objId, const JSVariant &v, ReturnStatus *rs, bool *bp) {
+        return Answer::AnswerHasInstance(objId, v, rs, bp);
     }
     bool AnswerObjectClassIs(const ObjectId &objId, const uint32_t &classValue,
                              bool *result) {
@@ -149,25 +152,28 @@ class JavaScriptBase : public WrapperOwner, public WrapperAnswer, public Base
                     ReturnStatus *rs, bool *bp) {
         return Base::CallHasOwn(objId, id, rs, bp);
     }
-    bool CallGet(const ObjectId &objId, const ObjectId &receiverId,
+    bool CallGet(const ObjectId &objId, const ObjectVariant &receiverVar,
                  const nsString &id,
                  ReturnStatus *rs, JSVariant *result) {
-        return Base::CallGet(objId, receiverId, id, rs, result);
+        return Base::CallGet(objId, receiverVar, id, rs, result);
     }
-    bool CallSet(const ObjectId &objId, const ObjectId &receiverId,
+    bool CallSet(const ObjectId &objId, const ObjectVariant &receiverVar,
                  const nsString &id, const bool &strict,
                  const JSVariant &value, ReturnStatus *rs, JSVariant *result) {
-        return Base::CallSet(objId, receiverId, id, strict, value, rs, result);
+        return Base::CallSet(objId, receiverVar, id, strict, value, rs, result);
     }
 
     bool CallIsExtensible(const ObjectId &objId, ReturnStatus *rs,
                           bool *result) {
         return Base::CallIsExtensible(objId, rs, result);
     }
-    bool CallCall(const ObjectId &objId, const nsTArray<JSParam> &argv,
-                  ReturnStatus *rs, JSVariant *result,
-                  nsTArray<JSParam> *outparams) {
-        return Base::CallCall(objId, argv, rs, result, outparams);
+    bool CallCallOrConstruct(const ObjectId &objId, const nsTArray<JSParam> &argv,
+                             const bool &construct, ReturnStatus *rs, JSVariant *result,
+                             nsTArray<JSParam> *outparams) {
+        return Base::CallCallOrConstruct(objId, argv, construct, rs, result, outparams);
+    }
+    bool CallHasInstance(const ObjectId &objId, const JSVariant &v, ReturnStatus *rs, bool *bp) {
+        return Base::CallHasInstance(objId, v, rs, bp);
     }
     bool CallObjectClassIs(const ObjectId &objId, const uint32_t &classValue,
                            bool *result) {

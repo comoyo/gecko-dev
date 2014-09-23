@@ -18,7 +18,6 @@
 #include "nsDOMString.h"
 #include "nsIContentInlines.h"
 #include "nsIDocument.h"
-#include "nsIDOMUserDataHandler.h"
 #include "nsGkAtoms.h"
 #include "nsCOMArray.h"
 #include "nsNameSpaceManager.h"
@@ -28,7 +27,7 @@
 #include "nsWrapperCacheInlines.h"
 
 nsIAttribute::nsIAttribute(nsDOMAttributeMap* aAttrMap,
-                           already_AddRefed<nsINodeInfo>& aNodeInfo,
+                           already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                            bool aNsAware)
 : nsINode(aNodeInfo), mAttrMap(aAttrMap), mNsAware(aNsAware)
 {
@@ -45,7 +44,7 @@ namespace dom {
 bool Attr::sInitialized;
 
 Attr::Attr(nsDOMAttributeMap *aAttrMap,
-           already_AddRefed<nsINodeInfo>&& aNodeInfo,
+           already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
            const nsAString  &aValue, bool aNsAware)
   : nsIAttribute(aAttrMap, aNodeInfo, aNsAware), mValue(aValue)
 {
@@ -103,7 +102,7 @@ NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_END
 
 // QueryInterface implementation for Attr
 NS_INTERFACE_TABLE_HEAD(Attr)
-  NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
+  NS_WRAPPERCACHE_INTERFACE_TABLE_ENTRY
   NS_INTERFACE_TABLE(Attr, nsINode, nsIDOMAttr, nsIAttribute, nsIDOMNode,
                      nsIDOMEventTarget, EventTarget)
   NS_INTERFACE_TABLE_TO_MAP_SEGUE_CYCLE_COLLECTION(Attr)
@@ -148,7 +147,7 @@ Attr::SetOwnerDocument(nsIDocument* aDocument)
   NS_ASSERTION(doc != aDocument, "bad call to Attr::SetOwnerDocument");
   doc->DeleteAllPropertiesFor(this);
 
-  nsCOMPtr<nsINodeInfo> newNodeInfo;
+  nsRefPtr<mozilla::dom::NodeInfo> newNodeInfo;
   newNodeInfo = aDocument->NodeInfoManager()->
     GetNodeInfo(mNodeInfo->NameAtom(), mNodeInfo->GetPrefixAtom(),
                 mNodeInfo->NamespaceID(),
@@ -277,12 +276,12 @@ Attr::SetNodeValueInternal(const nsAString& aNodeValue, ErrorResult& aError)
 }
 
 nsresult
-Attr::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
+Attr::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
 {
   nsAutoString value;
   const_cast<Attr*>(this)->GetValue(value);
 
-  nsCOMPtr<nsINodeInfo> ni = aNodeInfo;
+  nsRefPtr<mozilla::dom::NodeInfo> ni = aNodeInfo;
   *aResult = new Attr(nullptr, ni.forget(), value, mNsAware);
   if (!*aResult) {
     return NS_ERROR_OUT_OF_MEMORY;
@@ -302,7 +301,8 @@ Attr::GetBaseURI(bool aTryUseXHRDocBaseURI) const
 }
 
 void
-Attr::GetTextContentInternal(nsAString& aTextContent)
+Attr::GetTextContentInternal(nsAString& aTextContent,
+                             ErrorResult& aError)
 {
   OwnerDoc()->WarnOnceAbout(nsIDocument::eTextContent);
 

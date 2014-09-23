@@ -4,6 +4,7 @@
 
 #include "base/message_loop.h"
 #include "jsapi.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Hal.h"
@@ -20,7 +21,6 @@
 #include "TimeZoneSettingObserver.h"
 #include "xpcpublic.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
 #include "nsPrintfCString.h"
 
 #undef LOG
@@ -144,7 +144,7 @@ nsresult TimeZoneSettingObserver::SetTimeZone(const JS::Value &aValue, JSContext
 {
   // Convert the JS value to a nsCString type.
   // The value should be a JS string like "America/Chicago" or "UTC-05:00".
-  nsDependentJSString valueStr;
+  nsAutoJSString valueStr;
   if (!valueStr.init(aContext, aValue.toString())) {
     ERR("Failed to convert JS value to nsCString");
     return NS_ERROR_FAILURE;

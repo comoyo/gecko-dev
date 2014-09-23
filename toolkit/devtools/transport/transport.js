@@ -1,4 +1,4 @@
-/* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -29,6 +29,7 @@ const { dumpn, dumpv } = DevToolsUtils;
 const StreamUtils = require("devtools/toolkit/transport/stream-utils");
 const { Packet, JSONPacket, BulkPacket } =
   require("devtools/toolkit/transport/packets");
+const promise = require("promise");
 
 DevToolsUtils.defineLazyGetter(this, "Pipe", () => {
   return CC("@mozilla.org/pipe;1", "nsIPipe", "init");
@@ -88,6 +89,8 @@ const PACKET_HEADER_MAX = 200;
  *     @return Promise
  *             The promise is resolved when copying completes or rejected if any
  *             (unexpected) errors occur.
+ *             This object also emits "progress" events for each chunk that is
+ *             copied.  See stream-utils.js.
  *
  * - onClosed(reason) - called when the connection is closed. |reason| is
  *   an optional nsresult or object, typically passed when the transport is
@@ -172,6 +175,8 @@ DebuggerTransport.prototype = {
    *             @return Promise
    *                     The promise is resolved when copying completes or
    *                     rejected if any (unexpected) errors occur.
+   *                     This object also emits "progress" events for each chunk
+   *                     that is copied.  See stream-utils.js.
    */
   startBulkSend: function(header) {
     let packet = new BulkPacket(this);
@@ -254,14 +259,13 @@ DebuggerTransport.prototype = {
    * may not complete.
    */
   onOutputStreamReady: DevToolsUtils.makeInfallible(function(stream) {
-    if (this._outgoing.length === 0) {
+    if (!this._outgoingEnabled || this._outgoing.length === 0) {
       return;
     }
 
     try {
       this._currentOutgoing.write(stream);
-    } catch(e if e.result == Cr.NS_BASE_STREAM_CLOSED ||
-                 e.result == Cr.NS_ERROR_NET_RESET) {
+    } catch(e if e.result != Cr.NS_BASE_STREAM_WOULD_BLOCK) {
       this.close(e.result);
       return;
     }
@@ -338,9 +342,7 @@ DebuggerTransport.prototype = {
       while(stream.available() && this._incomingEnabled &&
             this._processIncoming(stream, stream.available())) {}
       this._waitForIncoming();
-    } catch(e if e.result == Cr.NS_BASE_STREAM_CLOSED ||
-                 e.result == Cr.NS_ERROR_CONNECTION_REFUSED ||
-                 e.result == Cr.NS_ERROR_OFFLINE) {
+    } catch(e if e.result != Cr.NS_BASE_STREAM_WOULD_BLOCK) {
       this.close(e.result);
     }
   }, "DebuggerTransport.prototype.onInputStreamReady"),
@@ -453,12 +455,12 @@ DebuggerTransport.prototype = {
    * Delivers the packet to this.hooks.onPacket.
    */
   _onJSONObjectReady: function(object) {
-    Services.tm.currentThread.dispatch(DevToolsUtils.makeInfallible(() => {
+    DevToolsUtils.executeSoon(DevToolsUtils.makeInfallible(() => {
       // Ensure the transport is still alive by the time this runs.
       if (this.active) {
         this.hooks.onPacket(object);
       }
-    }, "DebuggerTransport instance's this.hooks.onPacket"), 0);
+    }, "DebuggerTransport instance's this.hooks.onPacket"));
   },
 
   /**
@@ -468,12 +470,12 @@ DebuggerTransport.prototype = {
    * transport at the top of this file for more details.
    */
   _onBulkReadReady: function(...args) {
-    Services.tm.currentThread.dispatch(DevToolsUtils.makeInfallible(() => {
+    DevToolsUtils.executeSoon(DevToolsUtils.makeInfallible(() => {
       // Ensure the transport is still alive by the time this runs.
       if (this.active) {
         this.hooks.onBulkPacket(...args);
       }
-    }, "DebuggerTransport instance's this.hooks.onBulkPacket"), 0);
+    }, "DebuggerTransport instance's this.hooks.onBulkPacket"));
   },
 
   /**
@@ -534,7 +536,7 @@ LocalDebuggerTransport.prototype = {
     this._deepFreeze(packet);
     let other = this.other;
     if (other) {
-      Services.tm.currentThread.dispatch(DevToolsUtils.makeInfallible(() => {
+      DevToolsUtils.executeSoon(DevToolsUtils.makeInfallible(() => {
         // Avoid the cost of JSON.stringify() when logging is disabled.
         if (dumpn.wantLogging) {
           dumpn("Received packet " + serial + ": " + JSON.stringify(packet, null, 2));
@@ -542,7 +544,7 @@ LocalDebuggerTransport.prototype = {
         if (other.hooks) {
           other.hooks.onPacket(packet);
         }
-      }, "LocalDebuggerTransport instance's this.other.hooks.onPacket"), 0);
+      }, "LocalDebuggerTransport instance's this.other.hooks.onPacket"));
     }
   },
 
@@ -565,7 +567,7 @@ LocalDebuggerTransport.prototype = {
 
     let pipe = new Pipe(true, true, 0, 0, null);
 
-    Services.tm.currentThread.dispatch(DevToolsUtils.makeInfallible(() => {
+    DevToolsUtils.executeSoon(DevToolsUtils.makeInfallible(() => {
       dumpn("Received bulk packet " + serial);
       if (!this.other.hooks) {
         return;
@@ -579,9 +581,10 @@ LocalDebuggerTransport.prototype = {
         type: type,
         length: length,
         copyTo: (output) => {
-          deferred.resolve(
-            StreamUtils.copyStream(pipe.inputStream, output, length));
-          return deferred.promise;
+          let copying =
+            StreamUtils.copyStream(pipe.inputStream, output, length);
+          deferred.resolve(copying);
+          return copying;
         },
         stream: pipe.inputStream,
         done: deferred
@@ -589,21 +592,22 @@ LocalDebuggerTransport.prototype = {
 
       // Await the result of reading from the stream
       deferred.promise.then(() => pipe.inputStream.close(), this.close);
-    }, "LocalDebuggerTransport instance's this.other.hooks.onBulkPacket"), 0);
+    }, "LocalDebuggerTransport instance's this.other.hooks.onBulkPacket"));
 
     // Sender
     let sendDeferred = promise.defer();
 
     // The remote transport is not capable of resolving immediately here, so we
     // shouldn't be able to either.
-    Services.tm.currentThread.dispatch(() => {
+    DevToolsUtils.executeSoon(() => {
       let copyDeferred = promise.defer();
 
       sendDeferred.resolve({
         copyFrom: (input) => {
-          copyDeferred.resolve(
-            StreamUtils.copyStream(input, pipe.outputStream, length));
-          return copyDeferred.promise;
+          let copying =
+            StreamUtils.copyStream(input, pipe.outputStream, length);
+          copyDeferred.resolve(copying);
+          return copying;
         },
         stream: pipe.outputStream,
         done: copyDeferred
@@ -611,7 +615,7 @@ LocalDebuggerTransport.prototype = {
 
       // Await the result of writing to the stream
       copyDeferred.promise.then(() => pipe.outputStream.close(), this.close);
-    }, 0);
+    });
 
     return sendDeferred.promise;
   },

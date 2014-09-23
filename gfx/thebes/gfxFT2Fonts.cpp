@@ -23,9 +23,8 @@
 #include "gfxFT2FontBase.h"
 #include "gfxFT2Utils.h"
 #include "gfxFT2FontList.h"
+#include "gfxTextRun.h"
 #include <locale.h>
-#include "gfxHarfBuzzShaper.h"
-#include "gfxGraphiteShaper.h"
 #include "nsGkAtoms.h"
 #include "nsTArray.h"
 #include "nsUnicodeRange.h"
@@ -44,41 +43,19 @@
  */
 
 bool
-gfxFT2Font::ShapeText(gfxContext      *aContext,
+gfxFT2Font::ShapeText(gfxContext     *aContext,
                       const char16_t *aText,
-                      uint32_t         aOffset,
-                      uint32_t         aLength,
-                      int32_t          aScript,
-                      gfxShapedText   *aShapedText,
-                      bool             aPreferPlatformShaping)
+                      uint32_t        aOffset,
+                      uint32_t        aLength,
+                      int32_t         aScript,
+                      gfxShapedText  *aShapedText)
 {
-    bool ok = false;
-
-    if (FontCanSupportGraphite()) {
-        if (gfxPlatform::GetPlatform()->UseGraphiteShaping()) {
-            if (!mGraphiteShaper) {
-                mGraphiteShaper = new gfxGraphiteShaper(this);
-            }
-            ok = mGraphiteShaper->ShapeText(aContext, aText,
-                                            aOffset, aLength,
-                                            aScript, aShapedText);
-        }
-    }
-
-    if (!ok && gfxPlatform::GetPlatform()->UseHarfBuzzForScript(aScript)) {
-        if (!mHarfBuzzShaper) {
-            mHarfBuzzShaper = new gfxHarfBuzzShaper(this);
-        }
-        ok = mHarfBuzzShaper->ShapeText(aContext, aText,
-                                        aOffset, aLength,
-                                        aScript, aShapedText);
-    }
-
-    if (!ok) {
+    if (!gfxFont::ShapeText(aContext, aText, aOffset, aLength, aScript,
+                            aShapedText)) {
+        // harfbuzz must have failed(?!), just render raw glyphs
         AddRange(aText, aOffset, aLength, aShapedText);
+        PostShapingFixup(aContext, aText, aOffset, aLength, aShapedText);
     }
-
-    PostShapingFixup(aContext, aText, aOffset, aLength, aShapedText);
 
     return true;
 }
@@ -186,7 +163,7 @@ gfxFT2Font::gfxFT2Font(cairo_scaled_font_t *aCairoFont,
                        const gfxFontStyle *aFontStyle,
                        bool aNeedsBold)
     : gfxFT2FontBase(aCairoFont, aFontEntry, aFontStyle)
-    , mCharGlyphCache(64)
+    , mCharGlyphCache(32)
 {
     NS_ASSERTION(mFontEntry, "Unable to find font entry for font.  Something is whack.");
     mApplySyntheticBold = aNeedsBold;

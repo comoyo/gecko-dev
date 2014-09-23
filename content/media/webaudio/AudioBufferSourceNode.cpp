@@ -12,7 +12,6 @@
 #include "AudioNodeStream.h"
 #include "AudioDestinationNode.h"
 #include "AudioParamTimeline.h"
-#include "speex/speex_resampler.h"
 #include <limits>
 
 namespace mozilla {
@@ -155,6 +154,7 @@ public:
          (aOutRate == mBufferSampleRate && !BegunResampling()))) {
       speex_resampler_destroy(mResampler);
       mResampler = nullptr;
+      mRemainingResamplerTail = 0;
       mBeginProcessing = mStart + 0.5;
     }
 

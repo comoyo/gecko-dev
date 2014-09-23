@@ -24,7 +24,7 @@ GfxDriverInfo::GfxDriverInfo()
     mDevices(allDevices),
     mDeleteDevices(false),
     mFeature(allFeatures),
-    mFeatureStatus(nsIGfxInfo::FEATURE_NO_INFO),
+    mFeatureStatus(nsIGfxInfo::FEATURE_STATUS_OK),
     mComparisonOp(DRIVER_COMPARISON_IGNORED),
     mDriverVersion(0),
     mDriverVersionMax(0),
@@ -165,6 +165,9 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id)
       APPEND_DEVICE(0x010a); /* IntelSandyBridge_7 */
       APPEND_DEVICE(0x0080); /* IntelIvyBridge */
       break;
+    case IntelHD3000:
+      APPEND_DEVICE(0x0126);
+      break;
     case IntelMobileHDGraphics:
       APPEND_DEVICE(0x0046); /* IntelMobileHDGraphics */
       break;
@@ -207,6 +210,9 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id)
       break;
     case Geforce7300GT:
       APPEND_DEVICE(0x0393);
+      break;
+    case Nvidia310M:
+      APPEND_DEVICE(0x0A70);
       break;
     // This should never happen, but we get a warning if we don't handle this.
     case DeviceFamilyMax:

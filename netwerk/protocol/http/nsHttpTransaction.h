@@ -39,10 +39,10 @@ class nsHttpResponseHead;
 // intended to run on the socket thread.
 //-----------------------------------------------------------------------------
 
-class nsHttpTransaction : public nsAHttpTransaction
-                        , public ATokenBucketEvent
-                        , public nsIInputStreamCallback
-                        , public nsIOutputStreamCallback
+class nsHttpTransaction MOZ_FINAL : public nsAHttpTransaction
+                                  , public ATokenBucketEvent
+                                  , public nsIInputStreamCallback
+                                  , public nsIOutputStreamCallback
 {
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
@@ -51,7 +51,6 @@ public:
     NS_DECL_NSIOUTPUTSTREAMCALLBACK
 
     nsHttpTransaction();
-    virtual ~nsHttpTransaction();
 
     //
     // called to initialize the transaction
@@ -97,6 +96,10 @@ public:
     // will drop any reference to the response headers after this call.
     nsHttpResponseHead *TakeResponseHead();
 
+    // Provides a thread safe reference of the connection
+    // nsHttpTransaction::Connection should only be used on the socket thread
+    already_AddRefed<nsAHttpConnection> GetConnectionReference();
+
     // Called to find out if the transaction generated a complete response.
     bool ResponseIsComplete() { return mResponseIsComplete; }
 
@@ -110,6 +113,7 @@ public:
     void SetDontRouteViaWildCard(bool var) { mDontRouteViaWildCard = var; }
     bool DontRouteViaWildCard() { return mDontRouteViaWildCard; }
     void EnableKeepAlive() { mCaps |= NS_HTTP_ALLOW_KEEPALIVE; }
+    void MakeSticky() { mCaps |= NS_HTTP_STICKY_CONNECTION; }
 
     // SetPriority() may only be used by the connection manager.
     void    SetPriority(int32_t priority) { mPriority = priority; }
@@ -134,6 +138,9 @@ public:
     nsHttpTransaction *QueryHttpTransaction() MOZ_OVERRIDE { return this; }
 
 private:
+    friend class DeleteHttpTransaction;
+    virtual ~nsHttpTransaction();
+
     nsresult Restart();
     nsresult RestartInProgress();
     char    *LocateHttpStart(char *buf, uint32_t len,
@@ -178,7 +185,7 @@ private:
         nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
     };
 
-    Mutex mCallbacksLock;
+    Mutex mLock;
 
     nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
     nsCOMPtr<nsITransportEventSink> mTransportSink;

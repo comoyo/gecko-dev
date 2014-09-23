@@ -5,6 +5,7 @@
 
 #include "AnimationTimeline.h"
 #include "mozilla/dom/AnimationTimelineBinding.h"
+#include "AnimationUtils.h"
 #include "nsContentUtils.h"
 #include "nsIPresShell.h"
 #include "nsPresContext.h"
@@ -28,23 +29,78 @@ AnimationTimeline::WrapObject(JSContext* aCx)
 Nullable<double>
 AnimationTimeline::GetCurrentTime() const
 {
-  Nullable<double> result; // Default ctor initializes to null
+  return AnimationUtils::TimeDurationToDouble(GetCurrentTimeDuration());
+}
+
+TimeStamp
+AnimationTimeline::GetCurrentTimeStamp() const
+{
+  // Always return the same object to benefit from return-value optimization.
+  TimeStamp result = mLastCurrentTime;
+
+  // If we've never been sampled, initialize the current time to the timeline's
+  // zero time since that is the time we'll use if we don't have a refresh
+  // driver.
+  if (result.IsNull()) {
+    nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
+    if (!timing) {
+      return result;
+    }
+    result = timing->GetNavigationStartTimeStamp();
+  }
 
   nsIPresShell* presShell = mDocument->GetShell();
-  if (!presShell)
+  if (MOZ_UNLIKELY(!presShell)) {
     return result;
+  }
 
   nsPresContext* presContext = presShell->GetPresContext();
-  if (!presContext)
+  if (MOZ_UNLIKELY(!presContext)) {
     return result;
+  }
+
+  result = presContext->RefreshDriver()->MostRecentRefresh();
+  // FIXME: We would like to assert that:
+  //   mLastCurrentTime.IsNull() || result >= mLastCurrentTime
+  // but due to bug 1043078 this will not be the case when the refresh driver
+  // is restored from test control.
+  mLastCurrentTime = result;
+  return result;
+}
+
+Nullable<TimeDuration>
+AnimationTimeline::GetCurrentTimeDuration() const
+{
+  return ToTimelineTime(GetCurrentTimeStamp());
+}
+
+Nullable<TimeDuration>
+AnimationTimeline::ToTimelineTime(const TimeStamp& aTimeStamp) const
+{
+  Nullable<TimeDuration> result; // Initializes to null
+  if (aTimeStamp.IsNull()) {
+    return result;
+  }
 
   nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
-  if (!timing)
+  if (MOZ_UNLIKELY(!timing)) {
     return result;
+  }
 
-  TimeStamp now = presContext->RefreshDriver()->MostRecentRefresh();
-  result.SetValue(timing->TimeStampToDOMHighRes(now));
+  result.SetValue(aTimeStamp - timing->GetNavigationStartTimeStamp());
+  return result;
+}
 
+TimeStamp
+AnimationTimeline::ToTimeStamp(const TimeDuration& aTimeDuration) const
+{
+  TimeStamp result;
+  nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
+  if (MOZ_UNLIKELY(!timing)) {
+    return result;
+  }
+
+  result = timing->GetNavigationStartTimeStamp() + aTimeDuration;
   return result;
 }
 

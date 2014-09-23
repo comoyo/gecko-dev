@@ -6,8 +6,12 @@
 #define MP4_DEMUXER_H_
 
 #include "nsAutoPtr.h"
-#include "mozilla/gfx/Rect.h"
+#include "nsTArray.h"
 #include "mp4_demuxer/DecoderData.h"
+#include "mp4_demuxer/Interval.h"
+#include "nsISupportsImpl.h"
+
+namespace mozilla { class MediaByteRange; }
 
 namespace mp4_demuxer
 {
@@ -17,12 +21,16 @@ typedef int64_t Microseconds;
 
 class Stream
 {
-
 public:
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(Stream);
+
   virtual bool ReadAt(int64_t offset, void* data, size_t size,
                       size_t* bytes_read) = 0;
   virtual bool Length(int64_t* size) = 0;
 
+  virtual void DiscardBefore(int64_t offset) {}
+
+protected:
   virtual ~Stream() {}
 };
 
@@ -31,7 +39,7 @@ enum TrackType { kVideo = 1, kAudio };
 class MP4Demuxer
 {
 public:
-  MP4Demuxer(Stream* aSource);
+  explicit MP4Demuxer(Stream* aSource);
   ~MP4Demuxer();
 
   bool Init();
@@ -44,20 +52,34 @@ public:
   void SeekAudio(Microseconds aTime);
   void SeekVideo(Microseconds aTime);
 
-  // DemuxAudioSample and DemuxVideoSample functions return nullptr on end of
-  // stream or error.
+  // DemuxAudioSample and DemuxVideoSample functions
+  // return nullptr on end of stream or error.
   MP4Sample* DemuxAudioSample();
   MP4Sample* DemuxVideoSample();
 
+  const CryptoFile& Crypto() { return mCrypto; }
   const AudioDecoderConfig& AudioConfig() { return mAudioConfig; }
   const VideoDecoderConfig& VideoConfig() { return mVideoConfig; }
+
+  void UpdateIndex(const nsTArray<mozilla::MediaByteRange>& aByteRanges);
+
+  void ConvertByteRangesToTime(
+    const nsTArray<mozilla::MediaByteRange>& aByteRanges,
+    nsTArray<Interval<Microseconds>>* aIntervals);
+
+  int64_t GetEvictionOffset(Microseconds aTime);
 
 private:
   AudioDecoderConfig mAudioConfig;
   VideoDecoderConfig mVideoConfig;
+  CryptoFile mCrypto;
 
   nsAutoPtr<StageFrightPrivate> mPrivate;
+  nsRefPtr<Stream> mSource;
+  nsTArray<mozilla::MediaByteRange> mCachedByteRanges;
+  nsTArray<Interval<Microseconds>> mCachedTimeRanges;
 };
-}
 
-#endif
+} // namespace mozilla
+
+#endif // MP4_DEMUXER_H_

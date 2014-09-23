@@ -91,7 +91,7 @@ DecomposeCacheEntryKey(const nsCString *fullKey,
 class AutoResetStatement
 {
   public:
-    AutoResetStatement(mozIStorageStatement *s)
+    explicit AutoResetStatement(mozIStorageStatement *s)
       : mStatement(s) {}
     ~AutoResetStatement() { mStatement->Reset(); }
     mozIStorageStatement *operator->() { return mStatement; }
@@ -275,11 +275,13 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSICACHEDEVICEINFO
 
-  nsOfflineCacheDeviceInfo(nsOfflineCacheDevice* device)
+  explicit nsOfflineCacheDeviceInfo(nsOfflineCacheDevice* device)
     : mDevice(device)
   {}
 
 private:
+  ~nsOfflineCacheDeviceInfo() {}
+
   nsOfflineCacheDevice* mDevice;
 };
 
@@ -347,6 +349,8 @@ nsOfflineCacheDeviceInfo::GetMaximumSize(uint32_t *aMaximumSize)
 
 class nsOfflineCacheBinding MOZ_FINAL : public nsISupports
 {
+  ~nsOfflineCacheBinding() {}
+
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
 
@@ -514,6 +518,8 @@ CreateCacheEntry(nsOfflineCacheDevice *device,
 
 class nsOfflineCacheEntryInfo MOZ_FINAL : public nsICacheEntryInfo
 {
+  ~nsOfflineCacheEntryInfo() {}
+
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSICACHEENTRYINFO
@@ -855,7 +861,7 @@ nsApplicationCache::GetUsage(uint32_t *usage)
 
 class nsCloseDBEvent : public nsRunnable {
 public:
-  nsCloseDBEvent(mozIStorageConnection *aDB)
+  explicit nsCloseDBEvent(mozIStorageConnection *aDB)
   {
     mDB = aDB;
   }
@@ -887,10 +893,13 @@ nsOfflineCacheDevice::nsOfflineCacheDevice()
   , mDeltaCounter(0)
   , mAutoShutdown(false)
   , mLock("nsOfflineCacheDevice.lock")
-  , mActiveCaches(5)
-  , mLockedEntries(64)
+  , mActiveCaches(4)
+  , mLockedEntries(32)
 {
 }
+
+nsOfflineCacheDevice::~nsOfflineCacheDevice()
+{}
 
 /* static */
 bool

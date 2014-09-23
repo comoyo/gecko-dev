@@ -60,6 +60,10 @@ const kEventConstructors = {
                                                           return new BluetoothDiscoveryStateChangedEvent(aName, aProps);
                                                        },
                                              },
+  BluetoothPairingEvent:                     { create: function (aName, aProps) {
+                                                          return new BluetoothPairingEvent(aName, aProps);
+                                                       },
+                                             },
   BluetoothStatusChangedEvent:               { create: function (aName, aProps) {
                                                           return new BluetoothStatusChangedEvent(aName, aProps);
                                                        },
@@ -163,10 +167,6 @@ const kEventConstructors = {
                                                          return new ErrorEvent(aName, aProps);
                                                        },
   },
-  ElementReplaceEvent:                       { create: function (aName, aProps) {
-                                                         return new ElementReplaceEvent(aName, aProps);
-                                                       },
-                                             },
   FocusEvent:                                { create: function (aName, aProps) {
                                                          return new FocusEvent(aName, aProps);
                                                        },
@@ -195,6 +195,10 @@ const kEventConstructors = {
                                                          return new IDBVersionChangeEvent(aName, aProps);
                                                        },
                                              },
+  ImageCaptureErrorEvent:                                { create: function (aName, aProps) {
+                                                         return new ImageCaptureErrorEvent(aName, aProps);
+                                                       },
+                                             },
   InputEvent:                                { create: function (aName, aProps) {
                                                          return new InputEvent(aName, aProps);
                                                        },
@@ -209,6 +213,10 @@ const kEventConstructors = {
                                              },
   MediaStreamEvent:                          { create: function (aName, aProps) {
                                                          return new MediaStreamEvent(aName, aProps);
+                                                       },
+                                             },
+  MediaStreamTrackEvent:                     { create: function (aName, aProps) {
+                                                         return new MediaStreamTrackEvent(aName, aProps);
                                                        },
                                              },
   MessageEvent:                              { create: function (aName, aProps) {
@@ -253,8 +261,16 @@ const kEventConstructors = {
                                                           return new MozEmergencyCbModeEvent(aName, aProps);
                                                        },
                                              },
+  MozMessageDeletedEvent:                    { create: function (aName, aProps) {
+                                                         return new MozMessageDeletedEvent(aName, aProps);
+                                                       },
+                                             },
   MozMmsEvent:                               { create: function (aName, aProps) {
                                                          return new MozMmsEvent(aName, aProps);
+                                                       },
+                                             },
+  MozNFCPeerEvent:                           { create: function (aName, aProps) {
+                                                         return new MozNFCPeerEvent(aName, aProps);
                                                        },
                                              },
   MozOtaStatusEvent:                         { create: function (aName, aProps) {
@@ -263,6 +279,10 @@ const kEventConstructors = {
                                              },
   MozSettingsEvent:                          { create: function (aName, aProps) {
                                                          return new MozSettingsEvent(aName, aProps);
+                                                       },
+                                             },
+  MozSettingsTransactionEvent:               { create: function (aName, aProps) {
+                                                         return new MozSettingsTransactionEvent(aName, aProps);
                                                        },
                                              },
   MozSmsEvent:                               { create: function (aName, aProps) {
@@ -365,10 +385,6 @@ const kEventConstructors = {
                                                                                   aProps.allowedDirections, aProps.direction, aProps.delta || 0.0,
                                                                                   aProps.clickCount);
                                                          return e;
-                                                       },
-                                             },
-  SmartCardEvent:                            { create: function (aName, aProps) {
-                                                         return new SmartCardEvent(aName, aProps);
                                                        },
                                              },
   SpeechRecognitionEvent:                    { create: function (aName, aProps) {

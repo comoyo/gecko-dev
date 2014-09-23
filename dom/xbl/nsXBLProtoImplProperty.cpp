@@ -9,7 +9,6 @@
 #include "nsIContent.h"
 #include "nsXBLProtoImplProperty.h"
 #include "nsUnicharUtils.h"
-#include "nsCxPusher.h"
 #include "nsReadableUtils.h"
 #include "nsJSUtils.h"
 #include "nsXBLPrototypeBinding.h"
@@ -130,6 +129,7 @@ nsXBLProtoImplProperty::InstallMember(JSContext *aCx,
   MOZ_ASSERT(js::IsObjectInContextCompartment(aTargetClassObject, aCx));
   JS::Rooted<JSObject*> globalObject(aCx, JS_GetGlobalForObject(aCx, aTargetClassObject));
   MOZ_ASSERT(xpc::IsInContentXBLScope(globalObject) ||
+             xpc::IsInAddonScope(globalObject) ||
              globalObject == xpc::GetXBLScope(aCx, globalObject));
 
   JS::Rooted<JSObject*> getter(aCx, mGetter.GetJSFunction());
@@ -147,7 +147,7 @@ nsXBLProtoImplProperty::InstallMember(JSContext *aCx,
 
     nsDependentString name(mName);
     if (!::JS_DefineUCProperty(aCx, aTargetClassObject,
-                               static_cast<const jschar*>(mName),
+                               static_cast<const char16_t*>(mName),
                                name.Length(), JS::UndefinedHandleValue, mJSAttributes,
                                JS_DATA_TO_FUNC_PTR(JSPropertyOp, getter.get()),
                                JS_DATA_TO_FUNC_PTR(JSStrictPropertyOp, setter.get())))

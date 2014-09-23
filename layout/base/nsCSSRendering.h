@@ -164,17 +164,6 @@ public:
                         const nsSize& aDefaultSize);
 
   /**
-   * Draws the image to the target rendering context.
-   * aSrc is a rect on the source image which will be mapped to aDest.
-   * @see nsLayoutUtils::DrawImage() for other parameters.
-   */
-  void Draw(nsPresContext*       aPresContext,
-            nsRenderingContext&  aRenderingContext,
-            const nsRect&        aDirtyRect,
-            const nsRect&        aFill,
-            const nsRect&        aDest,
-            const mozilla::CSSIntRect& aSrc);
-  /**
    * Draws the image to the target rendering context using background-specific
    * arguments.
    * @see nsLayoutUtils::DrawImage() for parameters.
@@ -217,6 +206,21 @@ public:
   bool IsReady() { return mIsReady; }
 
 private:
+  /**
+   * Draws the image to the target rendering context.
+   * aSrc is a rect on the source image which will be mapped to aDest; it's
+   * currently only used for gradients.
+   *
+   * @see nsLayoutUtils::DrawImage() for other parameters.
+   */
+  void Draw(nsPresContext*       aPresContext,
+            nsRenderingContext&  aRenderingContext,
+            const nsRect&        aDirtyRect,
+            const nsRect&        aDest,
+            const nsRect&        aFill,
+            const nsPoint&       aAnchor,
+            const mozilla::CSSIntRect& aSrc);
+
   /**
    * Helper method for creating a gfxDrawable from mPaintServerFrame or 
    * mImageElementSurface.
@@ -279,6 +283,8 @@ struct nsBackgroundLayerState {
 };
 
 struct nsCSSRendering {
+  typedef nsIFrame::Sides Sides;
+
   /**
    * Initialize any static variables used by nsCSSRendering.
    */
@@ -308,8 +314,8 @@ struct nsCSSRendering {
 
   /**
    * Render the border for an element using css rendering rules
-   * for borders. aSkipSides is a bitmask of the sides to skip
-   * when rendering. If 0 then no sides are skipped.
+   * for borders. aSkipSides says which sides to skip
+   * when rendering, the default is to skip none.
    */
   static void PaintBorder(nsPresContext* aPresContext,
                           nsRenderingContext& aRenderingContext,
@@ -317,11 +323,12 @@ struct nsCSSRendering {
                           const nsRect& aDirtyRect,
                           const nsRect& aBorderArea,
                           nsStyleContext* aStyleContext,
-                          int aSkipSides = 0);
+                          Sides aSkipSides = Sides());
 
   /**
    * Like PaintBorder, but taking an nsStyleBorder argument instead of
-   * getting it from aStyleContext.
+   * getting it from aStyleContext. aSkipSides says which sides to skip
+   * when rendering, the default is to skip none.
    */
   static void PaintBorderWithStyleBorder(nsPresContext* aPresContext,
                                          nsRenderingContext& aRenderingContext,
@@ -330,13 +337,12 @@ struct nsCSSRendering {
                                          const nsRect& aBorderArea,
                                          const nsStyleBorder& aBorderStyle,
                                          nsStyleContext* aStyleContext,
-                                         int aSkipSides = 0);
+                                         Sides aSkipSides = Sides());
 
 
   /**
    * Render the outline for an element using css rendering rules
-   * for borders. aSkipSides is a bitmask of the sides to skip
-   * when rendering. If 0 then no sides are skipped.
+   * for borders.
    */
   static void PaintOutline(nsPresContext* aPresContext,
                           nsRenderingContext& aRenderingContext,
@@ -467,6 +473,29 @@ struct nsCSSRendering {
                          const nsRect& aBGClipRect,
                          const nsStyleBackground::Layer& aLayer);
 
+  struct BackgroundClipState {
+    nsRect mBGClipArea;  // Affected by mClippedRadii
+    nsRect mAdditionalBGClipArea;  // Not affected by mClippedRadii
+    nsRect mDirtyRect;
+    gfxRect mDirtyRectGfx;
+
+    nscoord mRadii[8];
+    gfxCornerSizes mClippedRadii;
+    bool mHasRoundedCorners;
+    bool mHasAdditionalBGClipArea;
+
+    // Whether we are being asked to draw with a caller provided background
+    // clipping area. If this is true we also disable rounded corners.
+    bool mCustomClip;
+  };
+
+  static void
+  GetBackgroundClip(const nsStyleBackground::Layer& aLayer,
+                    nsIFrame* aForFrame, const nsStyleBorder& aBorder, const nsRect& aBorderArea,
+                    const nsRect& aCallerDirtyRect, bool aWillPaintBorder,
+                    nscoord aAppUnitsPerPixel,
+                    /* out */ BackgroundClipState* aClipState);
+
   /**
    * Render the background for an element using css rendering rules
    * for backgrounds.
@@ -495,13 +524,6 @@ struct nsCSSRendering {
                               uint32_t aFlags,
                               nsRect* aBGClipRect = nullptr,
                               int32_t aLayer = -1);
- 
-  static void PaintBackgroundColor(nsPresContext* aPresContext,
-                                   nsRenderingContext& aRenderingContext,
-                                   nsIFrame* aForFrame,
-                                   const nsRect& aDirtyRect,
-                                   const nsRect& aBorderArea,
-                                   uint32_t aFlags);
 
   /**
    * Same as |PaintBackground|, except using the provided style structs.
@@ -523,14 +545,6 @@ struct nsCSSRendering {
                                     nsRect* aBGClipRect = nullptr,
                                     int32_t aLayer = -1);
 
-  static void PaintBackgroundColorWithSC(nsPresContext* aPresContext,
-                                         nsRenderingContext& aRenderingContext,
-                                         nsIFrame* aForFrame,
-                                         const nsRect& aDirtyRect,
-                                         const nsRect& aBorderArea,
-                                         nsStyleContext *aStyleContext,
-                                         const nsStyleBorder& aBorder,
-                                         uint32_t aFlags);
   /**
    * Returns the rectangle covered by the given background layer image, taking
    * into account background positioning, sizing, and repetition, but not
@@ -879,7 +893,7 @@ public:
                             const gfxRect& aSkipRect);
 
 protected:
-  gfxAlphaBoxBlur blur;
+  gfxAlphaBoxBlur mAlphaBoxBlur;
   nsRefPtr<gfxContext> mContext;
   gfxContext* mDestinationCtx;
 

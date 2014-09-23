@@ -9,6 +9,7 @@
 #include "gc/Marking.h"
 #include "js/Value.h"
 #include "vm/Debugger.h"
+#include "vm/TypedArrayCommon.h"
 
 #include "jsobjinlines.h"
 #include "vm/Shape-inl.h"
@@ -25,7 +26,6 @@ PropDesc::PropDesc()
 void
 PropDesc::setUndefined()
 {
-    descObj_ = nullptr;
     value_ = UndefinedValue();
     get_ = UndefinedValue();
     set_ = UndefinedValue();
@@ -79,7 +79,7 @@ bool
 ObjectImpl::canHaveNonEmptyElements()
 {
     JSObject *obj = static_cast<JSObject *>(this);
-    return isNative() && !obj->is<TypedArrayObject>();
+    return isNative() && !IsAnyTypedArray(obj);
 }
 
 #endif // DEBUG
@@ -98,6 +98,8 @@ ObjectElements::ConvertElementsToDoubles(JSContext *cx, uintptr_t elementsPtr)
     ObjectElements *header = ObjectElements::fromElements(elementsHeapPtr);
     JS_ASSERT(!header->shouldConvertDoubleElements());
 
+    // Note: the elements can be mutated in place even for copy on write
+    // arrays. See comment on ObjectElements.
     Value *vp = (Value *) elementsPtr;
     for (size_t i = 0; i < header->initializedLength; i++) {
         if (vp[i].isInt32())
@@ -105,6 +107,26 @@ ObjectElements::ConvertElementsToDoubles(JSContext *cx, uintptr_t elementsPtr)
     }
 
     header->setShouldConvertDoubleElements();
+    return true;
+}
+
+/* static */ bool
+ObjectElements::MakeElementsCopyOnWrite(ExclusiveContext *cx, JSObject *obj)
+{
+    // Make sure there is enough room for the owner object pointer at the end
+    // of the elements.
+    JS_STATIC_ASSERT(sizeof(HeapSlot) >= sizeof(HeapPtrObject));
+    if (!obj->ensureElements(cx, obj->getDenseInitializedLength() + 1))
+        return false;
+
+    ObjectElements *header = obj->getElementsHeader();
+
+    // Note: this method doesn't update type information to indicate that the
+    // elements might be copy on write. Handling this is left to the caller.
+    JS_ASSERT(!header->isCopyOnWrite());
+    header->flags |= COPY_ON_WRITE;
+
+    header->ownerObject().init(obj);
     return true;
 }
 
@@ -231,11 +253,6 @@ js::ObjectImpl::slotInRange(uint32_t slot, SentinelAllowed sentinel) const
 }
 #endif /* DEBUG */
 
-// See bug 844580.
-#if defined(_MSC_VER)
-# pragma optimize("g", off)
-#endif
-
 #if defined(_MSC_VER) && _MSC_VER >= 1500
 /*
  * Work around a compiler bug in MSVC9 and above, where inlining this function
@@ -251,10 +268,6 @@ js::ObjectImpl::nativeLookup(ExclusiveContext *cx, jsid id)
     Shape **spp;
     return Shape::search(cx, lastProperty(), id, &spp);
 }
-
-#if defined(_MSC_VER)
-# pragma optimize("", on)
-#endif
 
 Shape *
 js::ObjectImpl::nativeLookupPure(jsid id)
@@ -295,15 +308,27 @@ js::ObjectImpl::markChildren(JSTracer *trc)
 
     if (shape_->isNative()) {
         MarkObjectSlots(trc, obj, 0, obj->slotSpan());
-        gc::MarkArraySlots(trc, obj->getDenseInitializedLength(), obj->getDenseElements(), "objectElements");
+
+        do {
+            if (obj->denseElementsAreCopyOnWrite()) {
+                HeapPtrObject &owner = getElementsHeader()->ownerObject();
+                if (owner != this) {
+                    MarkObject(trc, &owner, "objectElementsOwner");
+                    break;
+                }
+            }
+
+            gc::MarkArraySlots(trc,
+                               obj->getDenseInitializedLength(),
+                               obj->getDenseElementsAllowCopyOnWrite(),
+                               "objectElements");
+        } while (false);
     }
 }
 
 void
 PropDesc::trace(JSTracer *trc)
 {
-    if (descObj_)
-        gc::MarkObjectRoot(trc, &descObj_, "PropDesc descriptor object");
     gc::MarkValueRoot(trc, &value_, "PropDesc value");
     gc::MarkValueRoot(trc, &get_, "PropDesc get");
     gc::MarkValueRoot(trc, &set_, "PropDesc set");

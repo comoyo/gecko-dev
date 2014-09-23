@@ -16,6 +16,7 @@
 #include "vm/ArrayObject.h"
 #include "vm/Debugger.h"
 #include "vm/Interpreter.h"
+#include "vm/TraceLogging.h"
 
 #include "jsinferinlines.h"
 
@@ -185,7 +186,7 @@ DefVarOrConst(JSContext *cx, HandlePropertyName dn, unsigned attrs, HandleObject
 {
     // Given the ScopeChain, extract the VarObj.
     RootedObject obj(cx, scopeChain);
-    while (!obj->isVarObj())
+    while (!obj->isQualifiedVarObj())
         obj = obj->enclosingScope();
 
     return DefVarOrConstOperation(cx, obj, dn, attrs);
@@ -196,7 +197,7 @@ SetConst(JSContext *cx, HandlePropertyName name, HandleObject scopeChain, Handle
 {
     // Given the ScopeChain, extract the VarObj.
     RootedObject obj(cx, scopeChain);
-    while (!obj->isVarObj())
+    while (!obj->isQualifiedVarObj())
         obj = obj->enclosingScope();
 
     return SetConstOperation(cx, obj, name, rval);
@@ -296,34 +297,6 @@ StringsEqual(JSContext *cx, HandleString lhs, HandleString rhs, bool *res)
 template bool StringsEqual<true>(JSContext *cx, HandleString lhs, HandleString rhs, bool *res);
 template bool StringsEqual<false>(JSContext *cx, HandleString lhs, HandleString rhs, bool *res);
 
-bool
-IteratorMore(JSContext *cx, HandleObject obj, bool *res)
-{
-    RootedValue tmp(cx);
-    if (!js_IteratorMore(cx, obj, &tmp))
-        return false;
-
-    *res = tmp.toBoolean();
-    return true;
-}
-
-JSObject*
-NewInitArray(JSContext *cx, uint32_t count, types::TypeObject *typeArg)
-{
-    RootedTypeObject type(cx, typeArg);
-    NewObjectKind newKind = !type ? SingletonObject : GenericObject;
-    if (type && type->shouldPreTenure())
-        newKind = TenuredObject;
-    RootedObject obj(cx, NewDenseAllocatedArray(cx, count, nullptr, newKind));
-    if (!obj)
-        return nullptr;
-
-    if (type)
-        obj->setType(type);
-
-    return obj;
-}
-
 JSObject*
 NewInitObject(JSContext *cx, HandleObject templateObject)
 {
@@ -401,6 +374,21 @@ ArrayPushDense(JSContext *cx, HandleObject obj, HandleValue v, uint32_t *length)
 {
     JS_ASSERT(obj->is<ArrayObject>());
 
+    if (MOZ_LIKELY(obj->as<ArrayObject>().lengthIsWritable())) {
+        uint32_t idx = obj->as<ArrayObject>().length();
+        JSObject::EnsureDenseResult result = obj->ensureDenseElements(cx, idx, 1);
+        if (result == JSObject::ED_FAILED)
+            return false;
+
+        if (result == JSObject::ED_OK) {
+            obj->setDenseElement(idx, v);
+            MOZ_ASSERT(idx < INT32_MAX);
+            *length = idx + 1;
+            obj->as<ArrayObject>().setLengthInt32(*length);
+            return true;
+        }
+    }
+
     JS::AutoValueArray<3> argv(cx);
     argv[0].setUndefined();
     argv[1].setObject(*obj);
@@ -456,10 +444,48 @@ ArrayConcatDense(JSContext *cx, HandleObject obj1, HandleObject obj2, HandleObje
     return &argv[0].toObject();
 }
 
+JSString *
+ArrayJoin(JSContext *cx, HandleObject array, HandleString sep)
+{
+    // The annotations in this function follow the first steps of join
+    // specified in ES5.
+
+    // Step 1
+    RootedObject obj(cx, array);
+    if (!obj)
+        return nullptr;
+
+    AutoCycleDetector detector(cx, obj);
+    if (!detector.init())
+        return nullptr;
+
+    if (detector.foundCycle())
+        return nullptr;
+
+    // Steps 2 and 3
+    uint32_t length;
+    if (!GetLengthProperty(cx, obj, &length))
+        return nullptr;
+
+    // Steps 4 and 5
+    RootedLinearString sepstr(cx);
+    if (sep) {
+        sepstr = sep->ensureLinear(cx);
+        if (!sepstr)
+            return nullptr;
+    } else {
+        sepstr = cx->names().comma;
+    }
+
+    // Step 6 to 11
+    return js::ArrayJoin<false>(cx, obj, sepstr, length);
+}
+
+
 bool
 CharCodeAt(JSContext *cx, HandleString str, int32_t index, uint32_t *code)
 {
-    jschar c;
+    char16_t c;
     if (!str->getChar(cx, index, &c))
         return false;
     *code = c;
@@ -469,12 +495,12 @@ CharCodeAt(JSContext *cx, HandleString str, int32_t index, uint32_t *code)
 JSFlatString *
 StringFromCharCode(JSContext *cx, int32_t code)
 {
-    jschar c = jschar(code);
+    char16_t c = char16_t(code);
 
     if (StaticStrings::hasUnit(c))
         return cx->staticStrings().getUnit(c);
 
-    return js_NewStringCopyN<CanGC>(cx, &c, 1);
+    return NewStringCopyN<CanGC>(cx, &c, 1);
 }
 
 bool
@@ -684,19 +710,20 @@ GetDynamicName(JSContext *cx, JSObject *scopeChain, JSString *str, Value *vp)
 bool
 FilterArgumentsOrEval(JSContext *cx, JSString *str)
 {
-    // getChars() is fallible, but cannot GC: it can only allocate a character
-    // for the flattened string. If this call fails then the calling Ion code
-    // will bailout, resume in the interpreter and likely fail again when
-    // trying to flatten the string and unwind the stack.
-    const jschar *chars = str->getChars(cx);
-    if (!chars)
+    // ensureLinear() is fallible, but cannot GC: it can only allocate a
+    // character buffer for the flattened string. If this call fails then the
+    // calling Ion code will bailout, resume in Baseline and likely fail again
+    // when trying to flatten the string and unwind the stack.
+    JS::AutoCheckCannotGC nogc;
+    JSLinearString *linear = str->ensureLinear(cx);
+    if (!linear)
         return false;
 
-    static const jschar arguments[] = {'a', 'r', 'g', 'u', 'm', 'e', 'n', 't', 's'};
-    static const jschar eval[] = {'e', 'v', 'a', 'l'};
+    static const char16_t arguments[] = {'a', 'r', 'g', 'u', 'm', 'e', 'n', 't', 's'};
+    static const char16_t eval[] = {'e', 'v', 'a', 'l'};
 
-    return !StringHasPattern(chars, str->length(), arguments, mozilla::ArrayLength(arguments)) &&
-        !StringHasPattern(chars, str->length(), eval, mozilla::ArrayLength(eval));
+    return !StringHasPattern(linear, arguments, mozilla::ArrayLength(arguments)) &&
+        !StringHasPattern(linear, eval, mozilla::ArrayLength(eval));
 }
 
 #ifdef JSGC_GENERATIONAL
@@ -758,8 +785,23 @@ DebugPrologue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool *mustRet
         return false;
 
       default:
-        MOZ_ASSUME_UNREACHABLE("Invalid trap status");
+        MOZ_CRASH("Invalid trap status");
     }
+}
+
+bool
+DebugEpilogueOnBaselineReturn(JSContext *cx, BaselineFrame *frame, jsbytecode *pc)
+{
+    if (!DebugEpilogue(cx, frame, pc, true)) {
+        // DebugEpilogue popped the frame by updating jitTop, so run the stop event
+        // here before we enter the exception handler.
+        TraceLogger *logger = TraceLoggerForMainThread(cx->runtime());
+        TraceLogStopEvent(logger, TraceLogger::Baseline);
+        TraceLogStopEvent(logger); // Leave script.
+        return false;
+    }
+
+    return true;
 }
 
 bool
@@ -767,8 +809,8 @@ DebugEpilogue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool ok)
 {
     // Unwind scope chain to stack depth 0.
     ScopeIter si(frame, pc, cx);
+    UnwindAllScopes(cx, si);
     jsbytecode *unwindPc = frame->script()->main();
-    UnwindScope(cx, si, unwindPc);
     frame->setUnwoundScopeOverridePc(unwindPc);
 
     // If ScriptDebugEpilogue returns |true| we have to return the frame's
@@ -871,14 +913,9 @@ HandleDebugTrap(JSContext *cx, BaselineFrame *frame, uint8_t *retAddr, bool *mus
 
     RootedValue rval(cx);
     JSTrapStatus status = JSTRAP_CONTINUE;
-    JSInterruptHook hook = cx->runtime()->debugHooks.interruptHook;
 
-    if (hook || script->stepModeEnabled()) {
-        if (hook)
-            status = hook(cx, script, pc, rval.address(), cx->runtime()->debugHooks.interruptHookData);
-        if (status == JSTRAP_CONTINUE && script->stepModeEnabled())
-            status = Debugger::onSingleStep(cx, &rval);
-    }
+    if (script->stepModeEnabled())
+        status = Debugger::onSingleStep(cx, &rval);
 
     if (status == JSTRAP_CONTINUE && script->hasBreakpointsAt(pc))
         status = Debugger::onTrap(cx, &rval);
@@ -900,7 +937,7 @@ HandleDebugTrap(JSContext *cx, BaselineFrame *frame, uint8_t *retAddr, bool *mus
         return false;
 
       default:
-        MOZ_ASSUME_UNREACHABLE("Invalid trap status");
+        MOZ_CRASH("Invalid trap status");
     }
 
     return true;
@@ -912,16 +949,9 @@ OnDebuggerStatement(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool *m
     *mustReturn = false;
 
     RootedScript script(cx, frame->script());
-    JSTrapStatus status = JSTRAP_CONTINUE;
     RootedValue rval(cx);
 
-    if (JSDebuggerHandler handler = cx->runtime()->debugHooks.debuggerHandler)
-        status = handler(cx, script, pc, rval.address(), cx->runtime()->debugHooks.debuggerHandlerData);
-
-    if (status == JSTRAP_CONTINUE)
-        status = Debugger::onDebuggerStatement(cx, &rval);
-
-    switch (status) {
+    switch (Debugger::onDebuggerStatement(cx, &rval)) {
       case JSTRAP_ERROR:
         return false;
 
@@ -938,7 +968,7 @@ OnDebuggerStatement(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool *m
         return false;
 
       default:
-        MOZ_ASSUME_UNREACHABLE("Invalid trap status");
+        MOZ_CRASH("Invalid trap status");
     }
 }
 
@@ -1106,9 +1136,9 @@ AssertValidObjectPtr(JSContext *cx, JSObject *obj)
 
     if (obj->isTenured()) {
         JS_ASSERT(obj->isAligned());
-        gc::AllocKind kind = obj->tenuredGetAllocKind();
+        gc::AllocKind kind = obj->asTenured()->getAllocKind();
         JS_ASSERT(kind >= js::gc::FINALIZE_OBJECT0 && kind <= js::gc::FINALIZE_OBJECT_LAST);
-        JS_ASSERT(obj->tenuredZone() == cx->zone());
+        JS_ASSERT(obj->asTenured()->zone() == cx->zone());
     }
 }
 
@@ -1122,15 +1152,15 @@ AssertValidStringPtr(JSContext *cx, JSString *str)
     }
 
     if (str->isAtom())
-        JS_ASSERT(cx->runtime()->isAtomsZone(str->tenuredZone()));
+        JS_ASSERT(cx->runtime()->isAtomsZone(str->zone()));
     else
-        JS_ASSERT(str->tenuredZone() == cx->zone());
+        JS_ASSERT(str->zone() == cx->zone());
 
     JS_ASSERT(str->runtimeFromMainThread() == cx->runtime());
     JS_ASSERT(str->isAligned());
     JS_ASSERT(str->length() <= JSString::MAX_LENGTH);
 
-    gc::AllocKind kind = str->tenuredGetAllocKind();
+    gc::AllocKind kind = str->getAllocKind();
     if (str->isFatInline())
         JS_ASSERT(kind == gc::FINALIZE_FAT_INLINE_STRING);
     else if (str->isExternal())
@@ -1142,16 +1172,33 @@ AssertValidStringPtr(JSContext *cx, JSString *str)
 }
 
 void
+AssertValidSymbolPtr(JSContext *cx, JS::Symbol *sym)
+{
+    // We can't closely inspect symbols from another runtime.
+    if (sym->runtimeFromAnyThread() != cx->runtime())
+        return;
+
+    JS_ASSERT(cx->runtime()->isAtomsZone(sym->zone()));
+
+    JS_ASSERT(sym->runtimeFromMainThread() == cx->runtime());
+    JS_ASSERT(sym->isAligned());
+    if (JSString *desc = sym->description()) {
+        JS_ASSERT(desc->isAtom());
+        AssertValidStringPtr(cx, desc);
+    }
+
+    JS_ASSERT(sym->getAllocKind() == gc::FINALIZE_SYMBOL);
+}
+
+void
 AssertValidValue(JSContext *cx, Value *v)
 {
-    if (v->isObject()) {
+    if (v->isObject())
         AssertValidObjectPtr(cx, &v->toObject());
-        return;
-    }
-    if (v->isString()) {
+    else if (v->isString())
         AssertValidStringPtr(cx, v->toString());
-        return;
-    }
+    else if (v->isSymbol())
+        AssertValidSymbolPtr(cx, v->toSymbol());
 }
 #endif
 
@@ -1162,6 +1209,39 @@ TypedObjectProto(JSObject *obj)
     JS_ASSERT(obj->is<TypedObject>());
     TypedObject &typedObj = obj->as<TypedObject>();
     return &typedObj.typedProto();
+}
+
+bool
+ObjectIsCallable(JSObject *obj)
+{
+    return obj->isCallable();
+}
+
+void
+MarkValueFromIon(JSRuntime *rt, Value *vp)
+{
+    gc::MarkValueUnbarriered(&rt->gc.marker, vp, "write barrier");
+}
+
+void
+MarkShapeFromIon(JSRuntime *rt, Shape **shapep)
+{
+    gc::MarkShapeUnbarriered(&rt->gc.marker, shapep, "write barrier");
+}
+
+void
+MarkTypeObjectFromIon(JSRuntime *rt, types::TypeObject **typep)
+{
+    gc::MarkTypeObjectUnbarriered(&rt->gc.marker, typep, "write barrier");
+}
+
+bool
+ThrowUninitializedLexical(JSContext *cx)
+{
+    ScriptFrameIter iter(cx);
+    RootedScript script(cx, iter.script());
+    ReportUninitializedLexical(cx, script, iter.pc());
+    return false;
 }
 
 } // namespace jit

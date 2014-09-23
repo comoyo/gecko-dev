@@ -94,11 +94,14 @@
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "nsLayoutUtils.h"
 #include "InputData.h"
+#include "VibrancyManager.h"
 
 using namespace mozilla;
 using namespace mozilla::layers;
 using namespace mozilla::gl;
 using namespace mozilla::widget;
+
+using mozilla::gfx::Matrix4x4;
 
 #undef DEBUG_UPDATE
 #undef INVALIDATE_DEBUGGING  // flash areas as they are invalidated
@@ -118,6 +121,7 @@ extern "C" {
 
   typedef CFTypeRef CGSRegionObj;
   CGError CGSNewRegionWithRect(const CGRect *rect, CGSRegionObj *outRegion);
+  CGError CGSNewRegionWithRectList(const CGRect *rects, int rectCount, CGSRegionObj *outRegion);
 }
 
 // defined in nsMenuBarX.mm
@@ -200,6 +204,7 @@ static uint32_t gNumberOfWidgetsNeedingEventThread = 0;
 - (APZCTreeManager*)apzctm;
 
 - (BOOL)inactiveWindowAcceptsMouseEvent:(NSEvent*)aEvent;
+- (void)updateWindowDraggableState;
 
 @end
 
@@ -216,6 +221,11 @@ static uint32_t gNumberOfWidgetsNeedingEventThread = 0;
 
 @interface NSView(NSThemeFrameCornerRadius)
 - (float)roundedCornerRadius;
+@end
+
+@interface NSView(DraggableRegion)
+- (CGSRegionObj)_regionForOpaqueDescendants:(NSRect)aRect forMove:(BOOL)aForMove;
+- (CGSRegionObj)_regionForOpaqueDescendants:(NSRect)aRect forMove:(BOOL)aForMove forUnderTitlebar:(BOOL)aForUnderTitlebar;
 @end
 
 // Starting with 10.7 the bottom corners of all windows are rounded.
@@ -286,7 +296,7 @@ namespace {
 // OMTC BasicLayers drawing.
 class RectTextureImage {
 public:
-  RectTextureImage(GLContext* aGLContext)
+  explicit RectTextureImage(GLContext* aGLContext)
    : mGLContext(aGLContext)
    , mTexture(0)
    , mInUpdate(false)
@@ -325,7 +335,7 @@ public:
 
   void Draw(mozilla::layers::GLManager* aManager,
             const nsIntPoint& aLocation,
-            const gfx3DMatrix& aTransform = gfx3DMatrix());
+            const Matrix4x4& aTransform = Matrix4x4());
 
   static nsIntSize TextureSizeForSize(const nsIntSize& aSize);
 
@@ -354,7 +364,7 @@ public:
     return context ? new GLPresenter(context) : nullptr;
   }
 
-  GLPresenter(GLContext* aContext);
+  explicit GLPresenter(GLContext* aContext);
   virtual ~GLPresenter();
 
   virtual GLContext* gl() const MOZ_OVERRIDE { return mGLContext; }
@@ -395,7 +405,7 @@ class APZCTMController : public mozilla::layers::GeckoContentController
   class RequestContentRepaintEvent : public nsRunnable
   {
   public:
-    RequestContentRepaintEvent(const FrameMetrics& aFrameMetrics)
+    explicit RequestContentRepaintEvent(const FrameMetrics& aFrameMetrics)
       : mFrameMetrics(aFrameMetrics)
     {
     }
@@ -1068,7 +1078,7 @@ nsChildView::GetDefaultScaleInternal()
 }
 
 CGFloat
-nsChildView::BackingScaleFactor()
+nsChildView::BackingScaleFactor() const
 {
   if (mBackingScaleFactor > 0.0) {
     return mBackingScaleFactor;
@@ -1478,7 +1488,7 @@ nsresult nsChildView::SynthesizeNativeMouseEvent(nsIntPoint aPoint,
   NSPoint screenPoint = NSMakePoint(pt.x, nsCocoaUtils::FlippedScreenY(pt.y));
   NSPoint windowPoint = [[mView window] convertScreenToBase:screenPoint];
 
-  NSEvent* event = [NSEvent mouseEventWithType:aNativeMessage
+  NSEvent* event = [NSEvent mouseEventWithType:(NSEventType)aNativeMessage
                                       location:windowPoint
                                  modifierFlags:aModifierFlags
                                      timestamp:[NSDate timeIntervalSinceReferenceDate]
@@ -2135,16 +2145,6 @@ nsChildView::NewCompositorParent(int aSurfaceWidth, int aSurfaceHeight)
   return compositor;
 }
 
-gfxASurface*
-nsChildView::GetThebesSurface()
-{
-  if (!mTempThebesSurface) {
-    mTempThebesSurface = new gfxQuartzSurface(gfxSize(1, 1), gfxImageFormat::ARGB32);
-  }
-
-  return mTempThebesSurface;
-}
-
 void
 nsChildView::NotifyDirtyRegion(const nsIntRegion& aDirtyRegion)
 {
@@ -2336,7 +2336,7 @@ DrawTitlebarHighlight(NSSize aWindowSize, CGFloat aRadius, CGFloat aDevicePixelW
   for (CGFloat y = 0; y < aRadius; y += aDevicePixelWidth) {
     CGFloat t = y / aRadius;
     [[NSColor colorWithDeviceWhite:1.0 alpha:0.4 * (1.0 - t)] set];
-    NSRectFill(NSMakeRect(0, y, aWindowSize.width, aDevicePixelWidth));
+    NSRectFillUsingOperation(NSMakeRect(0, y, aWindowSize.width, aDevicePixelWidth), NSCompositeSourceOver);
   }
 
   [NSGraphicsContext restoreGraphicsState];
@@ -2371,6 +2371,11 @@ nsChildView::UpdateTitlebarCGContext()
   dirtyTitlebarRegion.And(mDirtyTitlebarRegion, mTitlebarRect);
   mDirtyTitlebarRegion.SetEmpty();
 
+  if (mTitlebarRect.IsEmpty()) {
+    ReleaseTitlebarCGContext();
+    return;
+  }
+
   nsIntSize texSize = RectTextureImage::TextureSizeForSize(mTitlebarRect.Size());
   if (!mTitlebarCGContext ||
       CGBitmapContextGetWidth(mTitlebarCGContext) != size_t(texSize.width) ||
@@ -2389,15 +2394,15 @@ nsChildView::UpdateTitlebarCGContext()
 
   CGContextSaveGState(ctx);
 
-  std::vector<CGRect> rects;
+  nsTArray<CGRect> rects;
   nsIntRegionRectIterator iter(dirtyTitlebarRegion);
   for (;;) {
     const nsIntRect* r = iter.Next();
     if (!r)
       break;
-    rects.push_back(CGRectMake(r->x, r->y, r->width, r->height));
+    rects.AppendElement(CGRectMake(r->x, r->y, r->width, r->height));
   }
-  CGContextClipToRects(ctx, rects.data(), rects.size());
+  CGContextClipToRects(ctx, rects.Elements(), rects.Length());
 
   CGContextClearRect(ctx, CGRectMake(0, 0, texSize.width, texSize.height));
 
@@ -2532,8 +2537,8 @@ nsChildView::MaybeDrawRoundedCorners(GLManager* aManager, const nsIntRect& aRect
   aManager->gl()->fBlendFuncSeparate(LOCAL_GL_ZERO, LOCAL_GL_SRC_ALPHA,
                                      LOCAL_GL_ZERO, LOCAL_GL_SRC_ALPHA);
 
-  gfx3DMatrix flipX = gfx3DMatrix::ScalingMatrix(-1, 1, 1);
-  gfx3DMatrix flipY = gfx3DMatrix::ScalingMatrix(1, -1, 1);
+  Matrix4x4 flipX = Matrix4x4().Scale(-1, 1, 1);
+  Matrix4x4 flipY = Matrix4x4().Scale(1, -1, 1);
 
   if (mIsCoveringTitlebar && !mIsFullscreen) {
     // Mask the top corners.
@@ -2603,7 +2608,12 @@ FindFirstRectOfType(const nsTArray<nsIWidget::ThemeGeometry>& aThemeGeometries,
 void
 nsChildView::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries)
 {
-  if (![mView window] || ![[mView window] isKindOfClass:[ToolbarWindow class]])
+  if (![mView window])
+    return;
+
+  UpdateVibrancy(aThemeGeometries);
+
+  if (![[mView window] isKindOfClass:[ToolbarWindow class]])
     return;
 
   // Update unified toolbar height.
@@ -2624,6 +2634,58 @@ nsChildView::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometri
   [win placeWindowButtons:[mView convertRect:DevPixelsToCocoaPoints(windowButtonRect) toView:nil]];
   nsIntRect fullScreenButtonRect = FindFirstRectOfType(aThemeGeometries, NS_THEME_MOZ_MAC_FULLSCREEN_BUTTON);
   [win placeFullScreenButton:[mView convertRect:DevPixelsToCocoaPoints(fullScreenButtonRect) toView:nil]];
+}
+
+static nsIntRegion
+GatherThemeGeometryRegion(const nsTArray<nsIWidget::ThemeGeometry>& aThemeGeometries,
+                          uint8_t aWidgetType)
+{
+  nsIntRegion region;
+  for (size_t i = 0; i < aThemeGeometries.Length(); ++i) {
+    const nsIWidget::ThemeGeometry& g = aThemeGeometries[i];
+    if (g.mWidgetType == aWidgetType) {
+      region.OrWith(g.mRect);
+    }
+  }
+  return region;
+}
+
+void
+nsChildView::UpdateVibrancy(const nsTArray<ThemeGeometry>& aThemeGeometries)
+{
+  if (!VibrancyManager::SystemSupportsVibrancy()) {
+    return;
+  }
+
+  nsIntRegion vibrantLightRegion =
+    GatherThemeGeometryRegion(aThemeGeometries, NS_THEME_MAC_VIBRANCY_LIGHT);
+  nsIntRegion vibrantDarkRegion =
+    GatherThemeGeometryRegion(aThemeGeometries, NS_THEME_MAC_VIBRANCY_DARK);
+
+  // Make light win over dark in disputed areas.
+  vibrantDarkRegion.SubOut(vibrantLightRegion);
+
+  auto& vm = EnsureVibrancyManager();
+  vm.UpdateVibrantRegion(VibrancyType::LIGHT, vibrantLightRegion);
+  vm.UpdateVibrantRegion(VibrancyType::DARK, vibrantDarkRegion);
+}
+
+void
+nsChildView::ClearVibrantAreas()
+{
+  if (VibrancyManager::SystemSupportsVibrancy()) {
+    EnsureVibrancyManager().ClearVibrantAreas();
+  }
+}
+
+mozilla::VibrancyManager&
+nsChildView::EnsureVibrancyManager()
+{
+  MOZ_ASSERT(mView, "Only call this once we have a view!");
+  if (!mVibrancyManager) {
+    mVibrancyManager = MakeUnique<VibrancyManager>(*this, mView);
+  }
+  return *mVibrancyManager;
 }
 
 TemporaryRef<gfx::DrawTarget>
@@ -2691,6 +2753,15 @@ nsChildView::DoRemoteComposition(const nsIntRect& aRenderRect)
   mGLPresenter->EndFrame();
 
   [(ChildView*)mView postRender:mGLPresenter->GetNSOpenGLContext()];
+}
+
+void
+nsChildView::UpdateWindowDraggingRegion(const nsIntRegion& aRegion)
+{
+  if (mDraggableRegion != aRegion) {
+    mDraggableRegion = aRegion;
+    [(ChildView*)mView updateWindowDraggableState];
+  }
 }
 
 #ifdef ACCESSIBILITY
@@ -2859,7 +2930,7 @@ RectTextureImage::UpdateFromDrawTarget(const nsIntSize& aNewSize,
 void
 RectTextureImage::Draw(GLManager* aManager,
                        const nsIntPoint& aLocation,
-                       const gfx3DMatrix& aTransform)
+                       const Matrix4x4& aTransform)
 {
   ShaderProgramOGL* program = aManager->GetProgram(LOCAL_GL_TEXTURE_RECTANGLE_ARB,
                                                    gfx::SurfaceFormat::R8G8B8A8);
@@ -2868,9 +2939,7 @@ RectTextureImage::Draw(GLManager* aManager,
 
   program->Activate();
   program->SetProjectionMatrix(aManager->GetProjMatrix());
-  gfx::Matrix4x4 transform;
-  gfx::ToMatrix4x4(aTransform, transform);
-  program->SetLayerTransform(transform * gfx::Matrix4x4().Translate(aLocation.x, aLocation.y, 0));
+  program->SetLayerTransform(aTransform * gfx::Matrix4x4().Translate(aLocation.x, aLocation.y, 0));
   program->SetTextureTransform(gfx::Matrix4x4());
   program->SetRenderOffset(nsIntPoint(0, 0));
   program->SetTexCoordMultiplier(mUsedSize.width, mUsedSize.height);
@@ -2960,10 +3029,10 @@ GLPresenter::BeginFrame(nsIntSize aRenderSize)
 
   // Matrix to transform (0, 0, width, height) to viewport space (-1.0, 1.0,
   // 2, 2) and flip the contents.
-  gfx::Matrix viewMatrix;
-  viewMatrix.Translate(-1.0, 1.0);
-  viewMatrix.Scale(2.0f / float(aRenderSize.width), 2.0f / float(aRenderSize.height));
-  viewMatrix.Scale(1.0f, -1.0f);
+  gfx::Matrix viewMatrix = gfx::Matrix::Translation(-1.0, 1.0);
+  viewMatrix.PreScale(2.0f / float(aRenderSize.width),
+                      2.0f / float(aRenderSize.height));
+  viewMatrix.PreScale(1.0f, -1.0f);
 
   gfx::Matrix4x4 matrix3d = gfx::Matrix4x4::From2D(viewMatrix);
   matrix3d._33 = 0.0f;
@@ -3549,7 +3618,9 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
 - (BOOL)mouseDownCanMoveWindow
 {
-  return [[self window] isMovableByWindowBackground];
+  // Return YES so that _regionForOpaqueDescendants gets called, where the
+  // actual draggable region will be assembled.
+  return YES;
 }
 
 -(void)updateGLContext
@@ -3655,9 +3726,10 @@ NSEvent* gLastDragMouseDownEvent = nil;
     // Since this view is usually declared as opaque, the window's pixel
     // buffer may now contain garbage which we need to prevent from reaching
     // the screen. The only place where garbage can show is in the window
-    // corners - the rest of the window is covered by opaque content in our
-    // OpenGL surface.
-    // So we need to clear the pixel buffer contents in the corners.
+    // corners and the vibrant regions of the window - the rest of the window
+    // is covered by opaque content in our OpenGL surface.
+    // So we need to clear the pixel buffer contents in these areas.
+    mGeckoChild->ClearVibrantAreas();
     [self clearCorners];
 
     // Do GL composition and return.
@@ -4831,24 +4903,77 @@ NSEvent* gLastDragMouseDownEvent = nil;
   mGeckoChild->DispatchEvent(&event, status);
 }
 
-- (void)updateWindowDraggableStateOnMouseMove:(NSEvent*)theEvent
+- (void)updateWindowDraggableState
 {
-  if (!theEvent || !mGeckoChild) {
-    return;
+  // Trigger update to the window server.
+  [[self window] setMovableByWindowBackground:NO];
+  [[self window] setMovableByWindowBackground:YES];
+}
+
+// aRect is in view coordinates relative to this NSView.
+- (CGRect)convertToFlippedWindowCoordinates:(NSRect)aRect
+{
+  // First, convert the rect to regular window coordinates...
+  NSRect inWindowCoords = [self convertRect:aRect toView:nil];
+  // ... and then flip it again because window coordinates have their origin
+  // in the bottom left corner, and we need it to be in the top left corner.
+  inWindowCoords.origin.y = [[self window] frame].size.height - NSMaxY(inWindowCoords);
+  return NSRectToCGRect(inWindowCoords);
+}
+
+static CGSRegionObj
+NewCGSRegionFromRegion(const nsIntRegion& aRegion,
+                       CGRect (^aRectConverter)(const nsIntRect&))
+{
+  nsTArray<CGRect> rects;
+  nsIntRegionRectIterator iter(aRegion);
+  for (;;) {
+    const nsIntRect* r = iter.Next();
+    if (!r)
+      break;
+    rects.AppendElement(aRectConverter(*r));
   }
 
-  nsCocoaWindow* windowWidget = mGeckoChild->GetXULWindowWidget();
-  if (!windowWidget) {
-    return;
+  CGSRegionObj region;
+  CGSNewRegionWithRectList(rects.Elements(), rects.Length(), &region);
+  return region;
+}
+
+// This function is called with forMove:YES to calculate the draggable region
+// of the window which will be submitted to the window server. Window dragging
+// is handled on the window server without calling back into our process, so it
+// also works while our app is unresponsive.
+- (CGSRegionObj)_regionForOpaqueDescendants:(NSRect)aRect forMove:(BOOL)aForMove
+{
+  if (!aForMove || !mGeckoChild) {
+    return [super _regionForOpaqueDescendants:aRect forMove:aForMove];
   }
 
-  // We assume later on that sending a hit test event won't cause widget destruction.
-  WidgetMouseEvent hitTestEvent(true, NS_MOUSE_MOZHITTEST, mGeckoChild,
-                                WidgetMouseEvent::eReal);
-  [self convertCocoaMouseEvent:theEvent toGeckoEvent:&hitTestEvent];
-  bool result = mGeckoChild->DispatchWindowEvent(hitTestEvent);
+  nsIntRect boundingRect = mGeckoChild->CocoaPointsToDevPixels(aRect);
 
-  [windowWidget->GetCocoaWindow() setMovableByWindowBackground:result];
+  nsIntRegion opaqueRegion;
+  opaqueRegion.Sub(boundingRect, mGeckoChild->GetDraggableRegion());
+
+  return NewCGSRegionFromRegion(opaqueRegion, ^(const nsIntRect& r) {
+    return [self convertToFlippedWindowCoordinates:mGeckoChild->DevPixelsToCocoaPoints(r)];
+  });
+}
+
+// Starting with 10.10, in addition to the traditional
+// -[NSView _regionForOpaqueDescendants:forMove:] method, there's a new form with
+// an additional forUnderTitlebar argument, which is sometimes called instead of
+// the old form. We need to override the new variant as well.
+- (CGSRegionObj)_regionForOpaqueDescendants:(NSRect)aRect
+                                    forMove:(BOOL)aForMove
+                           forUnderTitlebar:(BOOL)aForUnderTitlebar
+{
+  if (!aForMove || !mGeckoChild) {
+    return [super _regionForOpaqueDescendants:aRect
+                                      forMove:aForMove
+                             forUnderTitlebar:aForUnderTitlebar];
+  }
+
+  return [self _regionForOpaqueDescendants:aRect forMove:aForMove];
 }
 
 - (void)handleMouseMoved:(NSEvent*)theEvent
@@ -5216,15 +5341,15 @@ static int32_t RoundUp(double aDouble)
     // animations. They are only dispatched on 10.8 or later, and only by
     // relatively modern devices.
     if (phase == NSEventPhaseMayBegin) {
-      apzctm->ReceiveInputEvent(PanGestureInput(PanGestureInput::PANGESTURE_MAYSTART,
-                                                eventTime, eventTimeStamp, location,
-                                                ScreenPoint(0, 0), 0), &guid);
+      PanGestureInput panInput(PanGestureInput::PANGESTURE_MAYSTART, eventTime,
+                               eventTimeStamp, location, ScreenPoint(0, 0), 0);
+      apzctm->ReceiveInputEvent(panInput, &guid);
       return;
     }
     if (phase == NSEventPhaseCancelled) {
-      apzctm->ReceiveInputEvent(PanGestureInput(PanGestureInput::PANGESTURE_CANCELLED,
-                                                eventTime, eventTimeStamp, location,
-                                                ScreenPoint(0, 0), 0), &guid);
+      PanGestureInput panInput(PanGestureInput::PANGESTURE_CANCELLED, eventTime,
+                               eventTimeStamp, location, ScreenPoint(0, 0), 0);
+      apzctm->ReceiveInputEvent(panInput, &guid);
       return;
     }
 
@@ -5239,36 +5364,36 @@ static int32_t RoundUp(double aDouble)
       momentumPhase == NSEventPhaseNone && delta != ScreenPoint(0, 0));
 
     if (phase == NSEventPhaseBegan || isLegacyScroll) {
-      apzctm->ReceiveInputEvent(PanGestureInput(PanGestureInput::PANGESTURE_START,
-                                                eventTime, eventTimeStamp, location,
-                                                ScreenPoint(0, 0), 0), &guid);
+      PanGestureInput panInput(PanGestureInput::PANGESTURE_START, eventTime,
+                               eventTimeStamp, location, ScreenPoint(0, 0), 0);
+      apzctm->ReceiveInputEvent(panInput, &guid);
     }
     if (momentumPhase == NSEventPhaseNone && delta != ScreenPoint(0, 0)) {
-      apzctm->ReceiveInputEvent(PanGestureInput(PanGestureInput::PANGESTURE_PAN,
-                                                eventTime, eventTimeStamp, location,
-                                                delta, 0), &guid);
+      PanGestureInput panInput(PanGestureInput::PANGESTURE_PAN, eventTime,
+                               eventTimeStamp, location, delta, 0);
+      apzctm->ReceiveInputEvent(panInput, &guid);
     }
     if (phase == NSEventPhaseEnded || isLegacyScroll) {
-      apzctm->ReceiveInputEvent(PanGestureInput(PanGestureInput::PANGESTURE_END,
-                                                eventTime, eventTimeStamp, location,
-                                                ScreenPoint(0, 0), 0), &guid);
+      PanGestureInput panInput(PanGestureInput::PANGESTURE_END, eventTime,
+                               eventTimeStamp, location, ScreenPoint(0, 0), 0);
+      apzctm->ReceiveInputEvent(panInput, &guid);
     }
 
     // Any device that can dispatch momentum events supports all three momentum phases.
     if (momentumPhase == NSEventPhaseBegan) {
-      apzctm->ReceiveInputEvent(PanGestureInput(PanGestureInput::PANGESTURE_MOMENTUMSTART,
-                                                eventTime, eventTimeStamp, location,
-                                                ScreenPoint(0, 0), 0), &guid);
+      PanGestureInput panInput(PanGestureInput::PANGESTURE_MOMENTUMSTART, eventTime,
+                               eventTimeStamp, location, ScreenPoint(0, 0), 0);
+      apzctm->ReceiveInputEvent(panInput, &guid);
     }
     if (momentumPhase == NSEventPhaseChanged && delta != ScreenPoint(0, 0)) {
-      apzctm->ReceiveInputEvent(PanGestureInput(PanGestureInput::PANGESTURE_MOMENTUMPAN,
-                                                eventTime, eventTimeStamp, location,
-                                                delta, 0), &guid);
+      PanGestureInput panInput(PanGestureInput::PANGESTURE_MOMENTUMPAN, eventTime,
+                               eventTimeStamp, location, delta, 0);
+      apzctm->ReceiveInputEvent(panInput, &guid);
     }
     if (momentumPhase == NSEventPhaseEnded) {
-      apzctm->ReceiveInputEvent(PanGestureInput(PanGestureInput::PANGESTURE_MOMENTUMEND,
-                                                eventTime, eventTimeStamp, location,
-                                                ScreenPoint(0, 0), 0), &guid);
+      PanGestureInput panInput(PanGestureInput::PANGESTURE_MOMENTUMEND, eventTime,
+                               eventTimeStamp, location, ScreenPoint(0, 0), 0);
+      apzctm->ReceiveInputEvent(panInput, &guid);
     }
   }
 }
@@ -5631,6 +5756,18 @@ static int32_t RoundUp(double aDouble)
 - (void)keyDown:(NSEvent*)theEvent
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+
+  // Weird things can happen on keyboard input if the key window isn't in the
+  // current space.  For example see bug 1056251.  To get around this, always
+  // make sure that, if our window is key, it's also made frontmost.  Doing
+  // this automatically switches to whatever space our window is in.  Safari
+  // does something similar.  Our window should normally always be key --
+  // otherwise why is the OS sending us a key down event?  But it's just
+  // possible we're in Gecko's hidden window, so we check first.
+  NSWindow *viewWindow = [self window];
+  if (viewWindow && [viewWindow isKeyWindow]) {
+    [viewWindow orderWindow:NSWindowAbove relativeTo:0];
+  }
 
 #if !defined(RELEASE_BUILD) || defined(DEBUG)
   if (mGeckoChild && mTextInputHandler && mTextInputHandler->IsFocused()) {
@@ -6645,7 +6782,7 @@ ChildViewMouseTracker::AttachPluginEvent(WidgetMouseEventBase& aMouseEvent,
   cocoaEvent->data.mouse.deltaX = [aNativeMouseEvent deltaX];
   cocoaEvent->data.mouse.deltaY = [aNativeMouseEvent deltaY];
   cocoaEvent->data.mouse.deltaZ = [aNativeMouseEvent deltaZ];
-  aMouseEvent.pluginEvent = cocoaEvent;
+  aMouseEvent.mPluginEvent.Copy(*cocoaEvent);
 }
 
 BOOL

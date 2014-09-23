@@ -68,7 +68,7 @@ class XPCShellRunner(MozbuildObject):
     def run_test(self, test_paths, interactive=False,
                  keep_going=False, sequential=False, shuffle=False,
                  debugger=None, debuggerArgs=None, debuggerInteractive=None,
-                 rerun_failures=False,
+                 rerun_failures=False, test_objects=None, verbose=False,
                  # ignore parameters from other platforms' options
                  **kwargs):
         """Runs an individual xpcshell test."""
@@ -85,12 +85,18 @@ class XPCShellRunner(MozbuildObject):
                            keep_going=keep_going, shuffle=shuffle, sequential=sequential,
                            debugger=debugger, debuggerArgs=debuggerArgs,
                            debuggerInteractive=debuggerInteractive,
-                           rerun_failures=rerun_failures)
+                           rerun_failures=rerun_failures,
+                           verbose=verbose)
             return
+        elif test_paths:
+            test_paths = [self._wrap_path_argument(p).relpath() for p in test_paths]
 
-        resolver = self._spawn(TestResolver)
-        tests = list(resolver.resolve_tests(paths=test_paths, flavor='xpcshell',
-            cwd=self.cwd))
+        if test_objects:
+            tests = test_objects
+        else:
+            resolver = self._spawn(TestResolver)
+            tests = list(resolver.resolve_tests(paths=test_paths,
+                flavor='xpcshell'))
 
         if not tests:
             raise InvalidTestPathError('We could not find an xpcshell test '
@@ -111,6 +117,7 @@ class XPCShellRunner(MozbuildObject):
             'debuggerInteractive': debuggerInteractive,
             'rerun_failures': rerun_failures,
             'manifest': manifest,
+            'verbose': verbose,
         }
 
         return self._run_xpcshell_harness(**args)
@@ -119,7 +126,7 @@ class XPCShellRunner(MozbuildObject):
                               test_path=None, shuffle=False, interactive=False,
                               keep_going=False, sequential=False,
                               debugger=None, debuggerArgs=None, debuggerInteractive=None,
-                              rerun_failures=False):
+                              rerun_failures=False, verbose=False):
 
         # Obtain a reference to the xpcshell test runner.
         import runxpcshelltests
@@ -135,11 +142,13 @@ class XPCShellRunner(MozbuildObject):
         modules_dir = os.path.join(self.topobjdir, '_tests', 'modules')
         # We want output from the test to be written immediately if we are only
         # running a single test.
-        verbose_output = test_path is not None or (manifest and len(manifest.test_paths())==1)
+        verbose_output = (test_path is not None or
+                          (manifest and len(manifest.test_paths())==1) or
+                          verbose)
 
         args = {
             'manifest': manifest,
-            'xpcshell': os.path.join(self.bindir, 'xpcshell'),
+            'xpcshell': self.get_binary_path('xpcshell'),
             'mozInfo': os.path.join(self.topobjdir, 'mozinfo.json'),
             'symbolsPath': os.path.join(self.distdir, 'crashreporter-symbols'),
             'interactive': interactive,
@@ -223,6 +232,7 @@ class AndroidXPCShellRunner(MozbuildObject):
     def run_test(self,
                  test_paths, keep_going,
                  devicemanager, ip, port, remote_test_root, no_setup, local_apk,
+                 test_objects=None,
                  # ignore parameters from other platforms' options
                  **kwargs):
         # TODO Bug 794506 remove once mach integrates with virtualenv.
@@ -265,6 +275,12 @@ class AndroidXPCShellRunner(MozbuildObject):
             testdirs = []
             options.testPath = None
             options.verbose = False
+        elif test_objects:
+            if len(test_objects) > 1:
+                print('Warning: only the first test will be used.')
+            testdirs = test_objects[0]['dir_relpath']
+            options.testPath = test_objects[0]['path']
+            options.verbose = True
         else:
             if len(test_paths) > 1:
                 print('Warning: only the first test path argument will be used.')
@@ -331,6 +347,7 @@ class B2GXPCShellRunner(MozbuildObject):
         return busybox_path
 
     def run_test(self, test_paths, b2g_home=None, busybox=None, device_name=None,
+                 test_objects=None,
                  # ignore parameters from other platforms' options
                  **kwargs):
         try:
@@ -342,7 +359,12 @@ class B2GXPCShellRunner(MozbuildObject):
             sys.exit(1)
 
         test_path = None
-        if test_paths:
+        if test_objects:
+            if len(test_objects) > 1:
+                print('Warning: Only the first test will be used.')
+
+            test_path = self._wrap_path_argument(test_objects[0]['path'])
+        elif test_paths:
             if len(test_paths) > 1:
                 print('Warning: Only the first test path will be used.')
 
@@ -356,7 +378,7 @@ class B2GXPCShellRunner(MozbuildObject):
         options.busybox = busybox or os.environ.get('BUSYBOX')
         options.localLib = self.bin_dir
         options.localBin = self.bin_dir
-        options.logcat_dir = self.xpcshell_dir
+        options.logdir = self.xpcshell_dir
         options.manifest = os.path.join(self.xpcshell_dir, 'xpcshell_b2g.ini')
         options.mozInfo = os.path.join(self.topobjdir, 'mozinfo.json')
         options.objdir = self.topobjdir
@@ -392,10 +414,12 @@ class MachCommands(MachCommandBase):
 
     @Command('xpcshell-test', category='testing',
         conditions=[is_platform_supported],
-        description='Run XPCOM Shell tests.')
+        description='Run XPCOM Shell tests (API direct unit testing)')
     @CommandArgument('test_paths', default='all', nargs='*', metavar='TEST',
         help='Test to run. Can be specified as a single JS file, a directory, '
              'or omitted. If omitted, the entire test suite is executed.')
+    @CommandArgument('--verbose', '-v', action='store_true',
+        help='Provide full output from each test process.')
     @CommandArgument("--debugger", default=None, metavar='DEBUGGER',
                      help = "Run xpcshell under the given debugger.")
     @CommandArgument("--debugger-args", default=None, metavar='ARGS', type=str,

@@ -34,32 +34,35 @@ class Element;
 class PropertyStringList : public DOMStringList
 {
 public:
-  PropertyStringList(HTMLPropertiesCollection* aCollection);
+  explicit PropertyStringList(HTMLPropertiesCollection* aCollection);
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(PropertyStringList, DOMStringList)
 
   bool ContainsInternal(const nsAString& aString);
 
 protected:
+  virtual ~PropertyStringList();
+
   virtual void EnsureFresh() MOZ_OVERRIDE;
 
   nsRefPtr<HTMLPropertiesCollection> mCollection;
 };
 
-class HTMLPropertiesCollection : public nsIHTMLCollection,
-                                 public nsStubMutationObserver,
-                                 public nsWrapperCache
+class HTMLPropertiesCollection MOZ_FINAL : public nsIHTMLCollection,
+                                           public nsStubMutationObserver,
+                                           public nsWrapperCache
 {
   friend class PropertyNodeList;
   friend class PropertyStringList;
 public:
-  HTMLPropertiesCollection(nsGenericHTMLElement* aRoot);
-  virtual ~HTMLPropertiesCollection();
+  explicit HTMLPropertiesCollection(nsGenericHTMLElement* aRoot);
 
   // nsWrapperCache
   using nsWrapperCache::GetWrapperPreserveColor;
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 protected:
+  virtual ~HTMLPropertiesCollection();
+
   virtual JSObject* GetWrapperPreserveColorInternal() MOZ_OVERRIDE
   {
     return nsWrapperCache::GetWrapperPreserveColor();
@@ -151,7 +154,6 @@ class PropertyNodeList : public nsINodeList,
 public:
   PropertyNodeList(HTMLPropertiesCollection* aCollection,
                    nsIContent* aRoot, const nsAString& aName);
-  virtual ~PropertyNodeList();
 
   virtual JSObject* WrapObject(JSContext *cx) MOZ_OVERRIDE;
 
@@ -190,6 +192,8 @@ public:
   void SetDirty() { mIsDirty = true; }
 
 protected:
+  virtual ~PropertyNodeList();
+
   // Make sure this list is up to date, in case the DOM has been mutated.
   void EnsureFresh();
 

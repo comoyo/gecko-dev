@@ -47,7 +47,7 @@ NS_IMPL_ISUPPORTS_INHERITED(SVGFEImageElement, SVGFEImageElementBase,
 //----------------------------------------------------------------------
 // Implementation
 
-SVGFEImageElement::SVGFEImageElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+SVGFEImageElement::SVGFEImageElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : SVGFEImageElementBase(aNodeInfo)
 {
   // We start out broken
@@ -231,8 +231,8 @@ SVGFEImageElement::GetPrimitiveDescription(nsSVGFilterInstance* aInstance,
     SVGContentUtils::GetViewBoxTransform(aFilterSubregion.width, aFilterSubregion.height,
                                          0, 0, nativeSize.width, nativeSize.height,
                                          mPreserveAspectRatio);
-  Matrix xyTM = Matrix().Translate(aFilterSubregion.x, aFilterSubregion.y);
-  Matrix TM = viewBoxTM * xyTM;
+  Matrix TM = viewBoxTM;
+  TM.PostTranslate(aFilterSubregion.x, aFilterSubregion.y);
 
   Filter filter = ToFilter(nsLayoutUtils::GetGraphicsFilterForFrame(frame));
 

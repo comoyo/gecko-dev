@@ -16,6 +16,7 @@
 #include "mozilla/layers/PCompositorParent.h"
 #include "mozilla/layers/LayerManagerComposite.h"
 #include "gfxPrefs.h"
+#include "gfxCrashReporterUtils.h"
 
 namespace mozilla {
 namespace layers {
@@ -39,6 +40,10 @@ CompositorD3D9::~CompositorD3D9()
 bool
 CompositorD3D9::Initialize()
 {
+  bool force = gfxPrefs::LayersAccelerationForceEnabled();
+
+  ScopedGfxFeatureReporter reporter("D3D9 Layers", force);
+
   if (!gfxPlatform::CanUseDirect3D9()) {
     NS_WARNING("Direct3D 9-accelerated layers are not supported on this system.");
     return false;
@@ -56,6 +61,7 @@ CompositorD3D9::Initialize()
     return false;
   }
 
+  reporter.SetSuccessful();
   return true;
 }
 
@@ -188,7 +194,7 @@ CompositorD3D9::SetRenderTarget(CompositingRenderTarget *aRenderTarget)
   RefPtr<CompositingRenderTargetD3D9> oldRT = mCurrentRT;
   mCurrentRT = static_cast<CompositingRenderTargetD3D9*>(aRenderTarget);
   mCurrentRT->BindRenderTarget(device());
-  PrepareViewport(mCurrentRT->GetSize(), Matrix());
+  PrepareViewport(mCurrentRT->GetSize());
 }
 
 static DeviceManagerD3D9::ShaderMode
@@ -483,7 +489,6 @@ CompositorD3D9::SetMask(const EffectChain &aEffectChain, uint32_t aMaskTexture)
 
   TextureSourceD3D9 *source = maskEffect->mMaskTexture->AsSourceD3D9();
 
-  MOZ_ASSERT(aMaskTexture >= 0);
   device()->SetTexture(aMaskTexture, source->GetD3D9Texture());
 
   const gfx::Matrix4x4& maskTransform = maskEffect->mMaskTransform;
@@ -591,18 +596,9 @@ CompositorD3D9::Ready()
   return false;
 }
 
-static void
-CancelCompositing(Rect* aRenderBoundsOut)
-{
-  if (aRenderBoundsOut) {
-    *aRenderBoundsOut = Rect(0, 0, 0, 0);
-  }
-}
-
 void
 CompositorD3D9::BeginFrame(const nsIntRegion& aInvalidRegion,
                            const Rect *aClipRectIn,
-                           const gfx::Matrix& aTransform,
                            const Rect& aRenderBounds,
                            Rect *aClipRectOut,
                            Rect *aRenderBoundsOut)
@@ -665,8 +661,7 @@ CompositorD3D9::EndFrame()
 }
 
 void
-CompositorD3D9::PrepareViewport(const gfx::IntSize& aSize,
-                                const Matrix &aWorldTransform)
+CompositorD3D9::PrepareViewport(const gfx::IntSize& aSize)
 {
   Matrix4x4 viewMatrix;
   /*
@@ -677,8 +672,6 @@ CompositorD3D9::PrepareViewport(const gfx::IntSize& aSize,
   viewMatrix._22 = -2.0f / aSize.height;
   viewMatrix._41 = -1.0f;
   viewMatrix._42 = 1.0f;
-
-  viewMatrix = Matrix4x4::From2D(aWorldTransform) * viewMatrix;
 
   HRESULT hr = device()->SetVertexShaderConstantF(CBmProjection, &viewMatrix._11, 4);
 

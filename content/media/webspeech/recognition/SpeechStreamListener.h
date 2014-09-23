@@ -21,7 +21,7 @@ class SpeechRecognition;
 class SpeechStreamListener : public MediaStreamListener
 {
 public:
-  SpeechStreamListener(SpeechRecognition* aRecognition);
+  explicit SpeechStreamListener(SpeechRecognition* aRecognition);
   ~SpeechStreamListener();
 
   void NotifyQueuedTrackChanges(MediaStreamGraph* aGraph, TrackID aID,
@@ -30,11 +30,12 @@ public:
                                 uint32_t aTrackEvents,
                                 const MediaSegment& aQueuedMedia) MOZ_OVERRIDE;
 
-  void NotifyFinished(MediaStreamGraph* aGraph) MOZ_OVERRIDE;
+  void NotifyEvent(MediaStreamGraph* aGraph,
+                   MediaStreamListener::MediaStreamGraphEvent event) MOZ_OVERRIDE;
 
 private:
   template<typename SampleFormatType>
-  void ConvertAndDispatchAudioChunk(int aDuration, float aVolume, SampleFormatType* aData);
+  void ConvertAndDispatchAudioChunk(int aDuration, float aVolume, SampleFormatType* aData, TrackRate aTrackRate);
   nsRefPtr<SpeechRecognition> mRecognition;
 };
 

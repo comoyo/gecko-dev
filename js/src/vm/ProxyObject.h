@@ -23,7 +23,7 @@ class ProxyObject : public JSObject
     static const uint32_t EXTRA_SLOT   = PROXY_EXTRA_SLOT;
 
   public:
-    static ProxyObject *New(JSContext *cx, BaseProxyHandler *handler, HandleValue priv,
+    static ProxyObject *New(JSContext *cx, const BaseProxyHandler *handler, HandleValue priv,
                             TaggedProto proto_, JSObject *parent_,
                             const ProxyOptions &options);
 
@@ -32,6 +32,7 @@ class ProxyObject : public JSObject
     }
 
     void initCrossCompartmentPrivate(HandleValue priv);
+    void setSameCompartmentPrivate(const Value &priv);
 
     HeapSlot *slotOfPrivate() {
         return &getReservedSlotRef(PRIVATE_SLOT);
@@ -41,14 +42,15 @@ class ProxyObject : public JSObject
         return const_cast<ProxyObject*>(this)->private_().toObjectOrNull();
     }
 
-    BaseProxyHandler *handler() {
-        return static_cast<BaseProxyHandler*>(GetReservedSlot(this, HANDLER_SLOT).toPrivate());
+    const BaseProxyHandler *handler() const {
+        return static_cast<const BaseProxyHandler*>(
+            GetReservedSlot(const_cast<ProxyObject*>(this), HANDLER_SLOT).toPrivate());
     }
 
-    void initHandler(BaseProxyHandler *handler);
+    void initHandler(const BaseProxyHandler *handler);
 
-    void setHandler(BaseProxyHandler *handler) {
-        SetReservedSlot(this, HANDLER_SLOT, PrivateValue(handler));
+    void setHandler(const BaseProxyHandler *handler) {
+        SetReservedSlot(this, HANDLER_SLOT, PrivateValue(const_cast<BaseProxyHandler*>(handler)));
     }
 
     static size_t offsetOfHandler() {
@@ -84,23 +86,26 @@ class ProxyObject : public JSObject
 
         // proxy_Trace is just a trivial wrapper around ProxyObject::trace for
         // friend api exposure.
+
+        // Proxy classes are not allowed to have call or construct hooks directly. Their
+        // callability is instead decided by a trap call
         return clasp->isProxy() &&
                (clasp->flags & JSCLASS_IMPLEMENTS_BARRIERS) &&
                clasp->trace == proxy_Trace &&
+               !clasp->call && !clasp->construct &&
                JSCLASS_RESERVED_SLOTS(clasp) >= PROXY_MINIMUM_SLOTS;
     }
 
   public:
     static unsigned grayLinkSlot(JSObject *obj);
 
-    void renew(JSContext *cx, BaseProxyHandler *handler, Value priv);
+    void renew(JSContext *cx, const BaseProxyHandler *handler, Value priv);
 
     static void trace(JSTracer *trc, JSObject *obj);
 
-    void nuke(BaseProxyHandler *handler);
+    void nuke(const BaseProxyHandler *handler);
 
-    static const Class callableClass_;
-    static const Class uncallableClass_;
+    static const Class class_;
 };
 
 } // namespace js

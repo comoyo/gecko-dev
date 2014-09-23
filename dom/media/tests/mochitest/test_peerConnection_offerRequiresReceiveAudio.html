@@ -1,4 +1,4 @@
-﻿<!DOCTYPE HTML>
+<!DOCTYPE HTML>
 <html>
 <head>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
@@ -16,9 +16,12 @@
     title: "Simple offer media constraint test with audio"
   });
 
-  runTest(function() {
+  runNetworkTest(function() {
     var test = new PeerConnectionTest();
-    test.setOfferConstraints({ mandatory: { OfferToReceiveAudio: true } });
+
+    // TODO: Stop using old constraint-like RTCOptions soon (Bug 1064223).
+    // Watch out for case-difference when fixing: { offerToReceiveAudio: true }
+    test.setOfferOptions({ mandatory: { OfferToReceiveAudio: true } });
     test.run();
   });
 </script>

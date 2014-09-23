@@ -112,7 +112,7 @@ public class GeckoMenu extends ListView
     private MenuItemsAdapter mAdapter;
 
     // Show/hide icons in the list.
-    private boolean mShowIcons;
+    boolean mShowIcons;
 
     public GeckoMenu(Context context) {
         this(context, null);
@@ -125,15 +125,14 @@ public class GeckoMenu extends ListView
     public GeckoMenu(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
 
-        setLayoutParams(new LayoutParams(LayoutParams.FILL_PARENT,
-                                         LayoutParams.FILL_PARENT));
+        setLayoutParams(new LayoutParams(LayoutParams.MATCH_PARENT,
+                                         LayoutParams.MATCH_PARENT));
 
         // Attach an adapter.
         mAdapter = new MenuItemsAdapter();
         setAdapter(mAdapter);
         setOnItemClickListener(this);
 
-        mShowIcons = false;
         mItems = new ArrayList<GeckoMenuItem>();
         mPrimaryActionItems = new HashMap<GeckoMenuItem, View>();
         mSecondaryActionItems = new HashMap<GeckoMenuItem, View>();
@@ -551,7 +550,7 @@ public class GeckoMenu extends ListView
         handleMenuItemClick(item);
     }
 
-    private void handleMenuItemClick(GeckoMenuItem item) {
+    void handleMenuItemClick(GeckoMenuItem item) {
         if (!item.isEnabled())
             return;
 
@@ -576,7 +575,7 @@ public class GeckoMenu extends ListView
         }
     }
 
-    private void handleMenuItemLongClick(GeckoMenuItem item) {
+    void handleMenuItemLongClick(GeckoMenuItem item) {
         if(!item.isEnabled()) {
             return;
         }
@@ -787,7 +786,9 @@ public class GeckoMenu extends ListView
 
         @Override
         public boolean isEnabled(int position) {
-            return getItem(position).isEnabled();
+            // Setting this to true is a workaround to fix disappearing
+            // dividers in the menu in L (bug 1050780).
+            return true;
         }
 
         public void addMenuItem(GeckoMenuItem menuItem) {

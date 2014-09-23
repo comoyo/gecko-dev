@@ -13,7 +13,7 @@
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/SubtleCryptoBinding.h"
-#include "mozilla/dom/Key.h"
+#include "mozilla/dom/CryptoKey.h"
 
 namespace mozilla {
 namespace dom {
@@ -85,82 +85,96 @@ public:
   }
 
 protected:
-  static WebCryptoTask* EncryptDecryptTask(JSContext* aCx,
+  static WebCryptoTask* CreateEncryptDecryptTask(JSContext* aCx,
                            const ObjectOrString& aAlgorithm,
-                           Key& aKey,
+                           CryptoKey& aKey,
                            const CryptoOperationData& aData,
                            bool aEncrypt);
 
-  static WebCryptoTask* SignVerifyTask(JSContext* aCx,
+  static WebCryptoTask* CreateSignVerifyTask(JSContext* aCx,
                           const ObjectOrString& aAlgorithm,
-                          Key& aKey,
+                          CryptoKey& aKey,
                           const CryptoOperationData& aSignature,
                           const CryptoOperationData& aData,
                           bool aSign);
 
 public:
-  static WebCryptoTask* EncryptTask(JSContext* aCx,
+  static WebCryptoTask* CreateEncryptTask(JSContext* aCx,
                           const ObjectOrString& aAlgorithm,
-                          Key& aKey,
+                          CryptoKey& aKey,
                           const CryptoOperationData& aData)
   {
-    return EncryptDecryptTask(aCx, aAlgorithm, aKey, aData, true);
+    return CreateEncryptDecryptTask(aCx, aAlgorithm, aKey, aData, true);
   }
 
-  static WebCryptoTask* DecryptTask(JSContext* aCx,
+  static WebCryptoTask* CreateDecryptTask(JSContext* aCx,
                           const ObjectOrString& aAlgorithm,
-                          Key& aKey,
+                          CryptoKey& aKey,
                           const CryptoOperationData& aData)
   {
-    return EncryptDecryptTask(aCx, aAlgorithm, aKey, aData, false);
+    return CreateEncryptDecryptTask(aCx, aAlgorithm, aKey, aData, false);
   }
 
-  static WebCryptoTask* SignTask(JSContext* aCx,
+  static WebCryptoTask* CreateSignTask(JSContext* aCx,
                           const ObjectOrString& aAlgorithm,
-                          Key& aKey,
+                          CryptoKey& aKey,
                           const CryptoOperationData& aData)
   {
     CryptoOperationData dummy;
     dummy.SetAsArrayBuffer(aCx);
-    return SignVerifyTask(aCx, aAlgorithm, aKey, dummy, aData, true);
+    return CreateSignVerifyTask(aCx, aAlgorithm, aKey, dummy, aData, true);
   }
 
-  static WebCryptoTask* VerifyTask(JSContext* aCx,
+  static WebCryptoTask* CreateVerifyTask(JSContext* aCx,
                           const ObjectOrString& aAlgorithm,
-                          Key& aKey,
+                          CryptoKey& aKey,
                           const CryptoOperationData& aSignature,
                           const CryptoOperationData& aData)
   {
-    return SignVerifyTask(aCx, aAlgorithm, aKey, aSignature, aData, false);
+    return CreateSignVerifyTask(aCx, aAlgorithm, aKey, aSignature, aData, false);
   }
 
-  static WebCryptoTask* DigestTask(JSContext* aCx,
+  static WebCryptoTask* CreateDigestTask(JSContext* aCx,
                           const ObjectOrString& aAlgorithm,
                           const CryptoOperationData& aData);
 
-  static WebCryptoTask* ImportKeyTask(JSContext* aCx,
+  static WebCryptoTask* CreateImportKeyTask(JSContext* aCx,
                           const nsAString& aFormat,
-                          const KeyData& aKeyData,
+                          JS::Handle<JSObject*> aKeyData,
                           const ObjectOrString& aAlgorithm,
                           bool aExtractable,
                           const Sequence<nsString>& aKeyUsages);
-  static WebCryptoTask* ExportKeyTask(const nsAString& aFormat,
-                          Key& aKey);
-  static WebCryptoTask* GenerateKeyTask(JSContext* aCx,
+  static WebCryptoTask* CreateExportKeyTask(const nsAString& aFormat,
+                          CryptoKey& aKey);
+  static WebCryptoTask* CreateGenerateKeyTask(JSContext* aCx,
                           const ObjectOrString& aAlgorithm,
                           bool aExtractable,
                           const Sequence<nsString>& aKeyUsages);
 
-  static WebCryptoTask* DeriveKeyTask(JSContext* aCx,
+  static WebCryptoTask* CreateDeriveKeyTask(JSContext* aCx,
                           const ObjectOrString& aAlgorithm,
-                          Key& aBaseKey,
+                          CryptoKey& aBaseKey,
                           const ObjectOrString& aDerivedKeyType,
                           bool extractable,
                           const Sequence<nsString>& aKeyUsages);
-  static WebCryptoTask* DeriveBitsTask(JSContext* aCx,
+  static WebCryptoTask* CreateDeriveBitsTask(JSContext* aCx,
                           const ObjectOrString& aAlgorithm,
-                          Key& aKey,
+                          CryptoKey& aKey,
                           uint32_t aLength);
+
+  static WebCryptoTask* CreateWrapKeyTask(JSContext* aCx,
+                          const nsAString& aFormat,
+                          CryptoKey& aKey,
+                          CryptoKey& aWrappingKey,
+                          const ObjectOrString& aWrapAlgorithm);
+  static WebCryptoTask* CreateUnwrapKeyTask(JSContext* aCx,
+                          const nsAString& aFormat,
+                          const ArrayBufferViewOrArrayBuffer& aWrappedKey,
+                          CryptoKey& aUnwrappingKey,
+                          const ObjectOrString& aUnwrapAlgorithm,
+                          const ObjectOrString& aUnwrappedKeyAlgorithm,
+                          bool aExtractable,
+                          const Sequence<nsString>& aKeyUsages);
 
 protected:
   nsRefPtr<Promise> mResultPromise;
@@ -180,57 +194,15 @@ protected:
   virtual void Resolve() {}
   virtual void Cleanup() {}
 
-  void FailWithError(nsresult aRv)
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-
-    // Blindly convert nsresult to DOMException
-    // Individual tasks must ensure they pass the right values
-    mResultPromise->MaybeReject(aRv);
-    // Manually release mResultPromise while we're on the main thread
-    mResultPromise = nullptr;
-    Cleanup();
-  }
+  void FailWithError(nsresult aRv);
 
   // Subclasses should override this method if they keep references to
   // any NSS objects, e.g., SECKEYPrivateKey or PK11SymKey.
   virtual void ReleaseNSSResources() MOZ_OVERRIDE {}
 
-  virtual nsresult CalculateResult() MOZ_OVERRIDE MOZ_FINAL
-  {
-    MOZ_ASSERT(!NS_IsMainThread());
+  virtual nsresult CalculateResult() MOZ_OVERRIDE MOZ_FINAL;
 
-    if (NS_FAILED(mEarlyRv)) {
-      return mEarlyRv;
-    }
-
-    if (isAlreadyShutDown()) {
-      return NS_ERROR_DOM_UNKNOWN_ERR;
-    }
-
-    return DoCrypto();
-  }
-
-  virtual void CallCallback(nsresult rv) MOZ_OVERRIDE MOZ_FINAL
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-    if (NS_FAILED(rv)) {
-      FailWithError(rv);
-      return;
-    }
-
-    nsresult rv2 = AfterCrypto();
-    if (NS_FAILED(rv2)) {
-      FailWithError(rv2);
-      return;
-    }
-
-    Resolve();
-
-    // Manually release mResultPromise while we're on the main thread
-    mResultPromise = nullptr;
-    Cleanup();
-  }
+  virtual void CallCallback(nsresult rv) MOZ_OVERRIDE MOZ_FINAL;
 };
 
 } // namespace dom

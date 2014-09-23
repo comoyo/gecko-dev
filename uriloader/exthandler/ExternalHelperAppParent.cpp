@@ -87,7 +87,8 @@ ExternalHelperAppParent::Init(ContentParent *parent,
   }
 
   helperAppService->DoContent(aMimeContentType, this, window,
-                              aForceSave, getter_AddRefs(mListener));
+                              aForceSave, nullptr,
+                              getter_AddRefs(mListener));
 }
 
 void
@@ -317,6 +318,19 @@ ExternalHelperAppParent::GetOwner(nsISupports* *aOwner)
 
 NS_IMETHODIMP
 ExternalHelperAppParent::SetOwner(nsISupports* aOwner)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+ExternalHelperAppParent::GetLoadInfo(nsILoadInfo* *aLoadInfo)
+{
+  *aLoadInfo = nullptr;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ExternalHelperAppParent::SetLoadInfo(nsILoadInfo* aLoadInfo)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }

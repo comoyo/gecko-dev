@@ -15,9 +15,11 @@ class gfxImageSurface;
  */
 class gfxReusableImageSurfaceWrapper : public gfxReusableSurfaceWrapper {
 public:
-  gfxReusableImageSurfaceWrapper(gfxImageSurface* aSurface);
+  explicit gfxReusableImageSurfaceWrapper(gfxImageSurface* aSurface);
+protected:
   ~gfxReusableImageSurfaceWrapper();
 
+public:
   const unsigned char* GetReadOnlyData() const MOZ_OVERRIDE;
   gfxImageFormat Format() MOZ_OVERRIDE;
   gfxReusableSurfaceWrapper* GetWritable(gfxImageSurface** aSurface) MOZ_OVERRIDE;

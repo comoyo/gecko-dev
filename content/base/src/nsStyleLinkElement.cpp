@@ -12,11 +12,12 @@
 
 #include "nsStyleLinkElement.h"
 
+#include "mozilla/CSSStyleSheet.h"
 #include "mozilla/css/Loader.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/FragmentOrElement.h"
 #include "mozilla/dom/ShadowRoot.h"
 #include "mozilla/Preferences.h"
-#include "nsCSSStyleSheet.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
 #include "nsIDOMComment.h"
@@ -59,7 +60,7 @@ nsStyleLinkElement::Traverse(nsCycleCollectionTraversalCallback &cb)
 }
 
 NS_IMETHODIMP 
-nsStyleLinkElement::SetStyleSheet(nsCSSStyleSheet* aStyleSheet)
+nsStyleLinkElement::SetStyleSheet(CSSStyleSheet* aStyleSheet)
 {
   if (mStyleSheet) {
     mStyleSheet->SetOwningNode(nullptr);
@@ -76,13 +77,10 @@ nsStyleLinkElement::SetStyleSheet(nsCSSStyleSheet* aStyleSheet)
   return NS_OK;
 }
 
-NS_IMETHODIMP 
-nsStyleLinkElement::GetStyleSheet(nsIStyleSheet*& aStyleSheet)
+NS_IMETHODIMP_(CSSStyleSheet*)
+nsStyleLinkElement::GetStyleSheet()
 {
-  aStyleSheet = mStyleSheet;
-  NS_IF_ADDREF(aStyleSheet);
-
-  return NS_OK;
+  return mStyleSheet;
 }
 
 NS_IMETHODIMP 
@@ -122,21 +120,30 @@ nsStyleLinkElement::SetLineNumber(uint32_t aLineNumber)
 }
 
 /* static */ bool
-nsStyleLinkElement::IsImportEnabled()
+nsStyleLinkElement::IsImportEnabled(nsIPrincipal* aPrincipal)
 {
   static bool sAdded = false;
-  static bool sImportEnabled;
+  static bool sWebComponentsEnabled;
   if (!sAdded) {
     // This part runs only once because of the static flag.
-    Preferences::AddBoolVarCache(&sImportEnabled,
+    Preferences::AddBoolVarCache(&sWebComponentsEnabled,
                                  "dom.webcomponents.enabled",
                                  false);
     sAdded = true;
   }
-  return sImportEnabled;
+
+  if (sWebComponentsEnabled) {
+    return true;
+  }
+
+  // If the web components pref is not enabled, check
+  // if we are in a certified app because imports is enabled
+  // for certified apps.
+  return aPrincipal &&
+    aPrincipal->GetAppStatus() == nsIPrincipal::APP_STATUS_CERTIFIED;
 }
 
-static uint32_t ToLinkMask(const nsAString& aLink)
+static uint32_t ToLinkMask(const nsAString& aLink, nsIPrincipal* aPrincipal)
 { 
   if (aLink.EqualsLiteral("prefetch"))
     return nsStyleLinkElement::ePREFETCH;
@@ -148,13 +155,14 @@ static uint32_t ToLinkMask(const nsAString& aLink)
     return nsStyleLinkElement::eNEXT;
   else if (aLink.EqualsLiteral("alternate"))
     return nsStyleLinkElement::eALTERNATE;
-  else if (aLink.EqualsLiteral("import") && nsStyleLinkElement::IsImportEnabled())
+  else if (aLink.EqualsLiteral("import") && aPrincipal &&
+           nsStyleLinkElement::IsImportEnabled(aPrincipal))
     return nsStyleLinkElement::eHTMLIMPORT;
   else 
     return 0;
 }
 
-uint32_t nsStyleLinkElement::ParseLinkTypes(const nsAString& aTypes)
+uint32_t nsStyleLinkElement::ParseLinkTypes(const nsAString& aTypes, nsIPrincipal* aPrincipal)
 {
   uint32_t linkMask = 0;
   nsAString::const_iterator start, done;
@@ -171,7 +179,7 @@ uint32_t nsStyleLinkElement::ParseLinkTypes(const nsAString& aTypes)
     if (nsContentUtils::IsHTMLWhitespace(*current)) {
       if (inString) {
         nsContentUtils::ASCIIToLower(Substring(start, current), subString);
-        linkMask |= ToLinkMask(subString);
+        linkMask |= ToLinkMask(subString, aPrincipal);
         inString = false;
       }
     }
@@ -185,7 +193,7 @@ uint32_t nsStyleLinkElement::ParseLinkTypes(const nsAString& aTypes)
   }
   if (inString) {
     nsContentUtils::ASCIIToLower(Substring(start, current), subString);
-    linkMask |= ToLinkMask(subString);
+    linkMask |= ToLinkMask(subString, aPrincipal);
   }
   return linkMask;
 }
@@ -193,10 +201,21 @@ uint32_t nsStyleLinkElement::ParseLinkTypes(const nsAString& aTypes)
 NS_IMETHODIMP
 nsStyleLinkElement::UpdateStyleSheet(nsICSSLoaderObserver* aObserver,
                                      bool* aWillNotify,
-                                     bool* aIsAlternate)
+                                     bool* aIsAlternate,
+                                     bool aForceReload)
 {
+  if (aForceReload) {
+    // We remove this stylesheet from the cache to load a new version.
+    nsCOMPtr<nsIContent> thisContent;
+    CallQueryInterface(this, getter_AddRefs(thisContent));
+    nsIDocument* doc = thisContent->GetCrossShadowCurrentDoc();
+    if (doc && doc->CSSLoader()->GetEnabled() &&
+        mStyleSheet && mStyleSheet->GetOriginalURI()) {
+      doc->CSSLoader()->ObsoleteSheet(mStyleSheet->GetOriginalURI());
+    }
+  }
   return DoUpdateStyleSheet(nullptr, nullptr, aObserver, aWillNotify,
-                            aIsAlternate, false);
+                            aIsAlternate, aForceReload);
 }
 
 nsresult
@@ -218,28 +237,6 @@ IsScopedStyleElement(nsIContent* aContent)
   return (aContent->IsHTML(nsGkAtoms::style) ||
           aContent->IsSVG(nsGkAtoms::style)) &&
          aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::scoped);
-}
-
-static void
-SetIsElementInStyleScopeFlagOnSubtree(Element* aElement)
-{
-  if (aElement->IsElementInStyleScope()) {
-    return;
-  }
-
-  aElement->SetIsElementInStyleScope();
-
-  nsIContent* n = aElement->GetNextNode(aElement);
-  while (n) {
-    if (n->IsElementInStyleScope()) {
-      n = n->GetNextNonChildNode(aElement);
-    } else {
-      if (n->IsElement()) {
-        n->SetIsElementInStyleScope();
-      }
-      n = n->GetNextNode(aElement);
-    }
-  }
 }
 
 static bool
@@ -283,7 +280,7 @@ UpdateIsElementInStyleScopeFlagOnSubtree(Element* aElement)
 static Element*
 GetScopeElement(nsIStyleSheet* aSheet)
 {
-  nsRefPtr<nsCSSStyleSheet> cssStyleSheet = do_QueryObject(aSheet);
+  nsRefPtr<CSSStyleSheet> cssStyleSheet = do_QueryObject(aSheet);
   if (!cssStyleSheet) {
     return nullptr;
   }
@@ -367,7 +364,7 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
   }
 
   if (mStyleSheet) {
-    if (thisContent->HasFlag(NODE_IS_IN_SHADOW_TREE)) {
+    if (thisContent->IsInShadowTree()) {
       ShadowRoot* containingShadow = thisContent->GetContainingShadow();
       containingShadow->RemoveSheet(mStyleSheet);
     } else {
@@ -396,7 +393,7 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
   Element* scopeElement = isScoped ? thisContent->GetParentElement() : nullptr;
   if (scopeElement) {
     NS_ASSERTION(isInline, "non-inline style must not have scope element");
-    SetIsElementInStyleScopeFlagOnSubtree(scopeElement);
+    scopeElement->SetIsElementInStyleScopeFlagOnSubtree(true);
   }
 
   bool doneLoading = false;
@@ -467,7 +464,7 @@ nsStyleLinkElement::UpdateStyleSheetScopedness(bool aIsNowScoped)
 
   nsIDocument* document = thisContent->GetOwnerDocument();
 
-  if (thisContent->HasFlag(NODE_IS_IN_SHADOW_TREE)) {
+  if (thisContent->IsInShadowTree()) {
     ShadowRoot* containingShadow = thisContent->GetContainingShadow();
     containingShadow->RemoveSheet(mStyleSheet);
 
@@ -488,6 +485,6 @@ nsStyleLinkElement::UpdateStyleSheetScopedness(bool aIsNowScoped)
     UpdateIsElementInStyleScopeFlagOnSubtree(oldScopeElement);
   }
   if (newScopeElement) {
-    SetIsElementInStyleScopeFlagOnSubtree(newScopeElement);
+    newScopeElement->SetIsElementInStyleScopeFlagOnSubtree(true);
   }
 }

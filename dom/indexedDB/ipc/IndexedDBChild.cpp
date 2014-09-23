@@ -103,7 +103,7 @@ public:
 class IPCDeleteDatabaseHelper : public AsyncConnectionHelper
 {
 public:
-  IPCDeleteDatabaseHelper(IDBRequest* aRequest)
+  explicit IPCDeleteDatabaseHelper(IDBRequest* aRequest)
   : AsyncConnectionHelper(static_cast<IDBDatabase*>(nullptr), aRequest)
   { }
 
@@ -159,12 +159,31 @@ public:
  * IndexedDBChild
  ******************************************************************************/
 
-IndexedDBChild::IndexedDBChild(const nsCString& aASCIIOrigin)
-: mFactory(nullptr), mASCIIOrigin(aASCIIOrigin)
+IndexedDBChild::IndexedDBChild(ContentChild* aContentChild,
+                               const nsCString& aASCIIOrigin)
+: mFactory(nullptr)
+, mManagerContent(aContentChild)
+, mManagerTab(nullptr)
+, mASCIIOrigin(aASCIIOrigin)
 #ifdef DEBUG
-  , mDisconnected(false)
+, mDisconnected(false)
 #endif
 {
+  MOZ_ASSERT(aContentChild);
+  MOZ_COUNT_CTOR(IndexedDBChild);
+}
+
+IndexedDBChild::IndexedDBChild(TabChild* aTabChild,
+                               const nsCString& aASCIIOrigin)
+: mFactory(nullptr)
+, mManagerContent(nullptr)
+, mManagerTab(aTabChild)
+, mASCIIOrigin(aASCIIOrigin)
+#ifdef DEBUG
+, mDisconnected(false)
+#endif
+{
+  MOZ_ASSERT(aTabChild);
   MOZ_COUNT_CTOR(IndexedDBChild);
 }
 

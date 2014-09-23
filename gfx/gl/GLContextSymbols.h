@@ -65,6 +65,14 @@ struct GLContextSymbols
     PFNGLBUFFERSUBDATAPROC fBufferSubData;
     typedef void (GLAPIENTRY * PFNGLCLEARPROC) (GLbitfield);
     PFNGLCLEARPROC fClear;
+    typedef void (GLAPIENTRY * PFNGLCLEARBUFFERFIPROC) (GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
+    PFNGLCLEARBUFFERFIPROC fClearBufferfi;
+    typedef void (GLAPIENTRY * PFNGLCLEARBUFFERFVPROC) (GLenum buffer, GLint drawbuffer, const GLfloat* value);
+    PFNGLCLEARBUFFERFVPROC fClearBufferfv;
+    typedef void (GLAPIENTRY * PFNGLCLEARBUFFERIVPROC) (GLenum buffer, GLint drawbuffer, const GLint* value);
+    PFNGLCLEARBUFFERIVPROC fClearBufferiv;
+    typedef void (GLAPIENTRY * PFNGLCLEARBUFFERUIVPROC) (GLenum buffer, GLint drawbuffer, const GLuint* value);
+    PFNGLCLEARBUFFERUIVPROC fClearBufferuiv;
     typedef void (GLAPIENTRY * PFNGLCLEARCOLORPROC) (GLclampf, GLclampf, GLclampf, GLclampf);
     PFNGLCLEARCOLORPROC fClearColor;
     typedef void (GLAPIENTRY * PFNGLCLEARSTENCILPROC) (GLint);
@@ -412,6 +420,12 @@ struct GLContextSymbols
     typedef realGLboolean (GLAPIENTRY * PFNGLUNMAPBUFFER) (GLenum target);
     PFNGLUNMAPBUFFER fUnmapBuffer;
 
+    // ARB_copy_buffer / OpenGL 3.1 / OpenGL ES 3.0
+    typedef void (GLAPIENTRY * PFNGLCOPYBUFFERSUBDATAPROC) (GLenum readTarget, GLenum writeTarget,
+                                                            GLintptr readOffset, GLintptr writeOffset,
+                                                            GLsizeiptr size);
+    PFNGLCOPYBUFFERSUBDATAPROC fCopyBufferSubData;
+
     typedef GLenum (GLAPIENTRY * PFNGLGETGRAPHICSRESETSTATUS) (void);
     PFNGLGETGRAPHICSRESETSTATUS fGetGraphicsResetStatus;
 
@@ -497,6 +511,22 @@ struct GLContextSymbols
     // draw_range_elements
     typedef void (GLAPIENTRY * PFNGLDRAWRANGEELEMENTS) (GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const GLvoid* indices);
     PFNGLDRAWRANGEELEMENTS fDrawRangeElements;
+
+    // NV_fence
+    typedef void (GLAPIENTRY * pfnGenFencesT) (GLsizei n, GLuint* fences);
+    pfnGenFencesT fGenFences;
+    typedef void (GLAPIENTRY * pfnDeleteFencesT) (GLsizei n, const GLuint* fences);
+    pfnDeleteFencesT fDeleteFences;
+    typedef void (GLAPIENTRY * pfnSetFenceT) (GLuint fence, GLenum condition);
+    pfnSetFenceT fSetFence;
+    typedef realGLboolean (GLAPIENTRY * pfnTestFenceT) (GLuint fence);
+    pfnTestFenceT fTestFence;
+    typedef void (GLAPIENTRY * pfnFinishFenceT) (GLuint fence);
+    pfnFinishFenceT fFinishFence;
+    typedef realGLboolean (GLAPIENTRY * pfnIsFenceT) (GLuint fence);
+    pfnIsFenceT fIsFence;
+    typedef void (GLAPIENTRY * pfnGetFenceivT) (GLuint fence, GLenum pname, GLint* params);
+    pfnGetFenceivT fGetFenceiv;
 };
 
 }

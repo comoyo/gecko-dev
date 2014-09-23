@@ -15,11 +15,13 @@
 #include "mozilla/Monitor.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/Atomics.h"
 #include "InputData.h"
 #include "Axis.h"
 #include "TaskThrottler.h"
-#include "gfx3DMatrix.h"
+#include "mozilla/gfx/Matrix.h"
+#include "nsRegion.h"
 
 #include "base/message_loop.h"
 
@@ -36,11 +38,14 @@ namespace layers {
 struct ScrollableLayerGuid;
 class CompositorParent;
 class GestureEventListener;
-class ContainerLayer;
 class PCompositorParent;
-class ViewTransform;
+struct ViewTransform;
 class AsyncPanZoomAnimation;
 class FlingAnimation;
+class InputBlockState;
+class TouchBlockState;
+class OverscrollHandoffChain;
+class StateChangeNotificationBlocker;
 
 /**
  * Controller for all panning and zooming logic. Any time a user input is
@@ -66,6 +71,7 @@ class AsyncPanZoomController {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(AsyncPanZoomController)
 
   typedef mozilla::MonitorAutoLock MonitorAutoLock;
+  typedef mozilla::gfx::Matrix4x4 Matrix4x4;
   typedef uint32_t TouchBehaviorFlags;
 
 public:
@@ -83,6 +89,7 @@ public:
    * device DPI, before we start panning the screen. This is to prevent us from
    * accidentally processing taps as touch moves, and from very short/accidental
    * touches moving the screen.
+   * Note: this distance is in global screen coordinates.
    */
   static float GetTouchStartTolerance();
 
@@ -111,6 +118,8 @@ public:
    * based on what type of input it is. For example, a PinchGestureEvent will
    * cause scaling. This should only be called externally to this class.
    * HandleInputEvent() should be used internally.
+   * See the documentation on APZCTreeManager::ReceiveInputEvent for info on
+   * return values from this function.
    */
   nsEventStatus ReceiveInputEvent(const InputData& aEvent);
 
@@ -120,14 +129,6 @@ public:
    * up.
    */
   void ZoomToRect(CSSRect aRect);
-
-  /**
-   * If we have touch listeners, this should always be called when we know
-   * definitively whether or not content has preventDefaulted any touch events
-   * that have come in. If |aPreventDefault| is true, any touch events in the
-   * queue will be discarded.
-   */
-  void ContentReceivedTouch(bool aPreventDefault);
 
   /**
    * Updates any zoom constraints contained in the <meta name="viewport"> tag.
@@ -150,25 +151,33 @@ public:
   // These methods must only be called on the compositor thread.
   //
 
+  /**
+   * Advances any animations currently running to the given timestamp.
+   * This may be called multiple times with the same timestamp.
+   *
+   * The return value indicates whether or not any currently running animation
+   * should continue. If true, the compositor should schedule another composite.
+   */
+  bool AdvanceAnimations(const TimeStamp& aSampleTime);
+
   bool UpdateAnimation(const TimeStamp& aSampleTime,
                        Vector<Task*>* aOutDeferredTasks);
 
   /**
-   * The compositor calls this when it's about to draw pannable/zoomable content
-   * and is setting up transforms for compositing the layer tree. This is not
-   * idempotent. For example, a fling transform can be applied each time this is
-   * called (though not necessarily). |aSampleTime| is the time that this is
-   * sampled at; this is used for interpolating animations. Calling this sets a
-   * new transform in |aNewTransform| which should be multiplied to the transform
-   * in the shadow layer corresponding to this APZC.
-   *
-   * Return value indicates whether or not any currently running animation
-   * should continue. That is, if true, the compositor should schedule another
-   * composite.
+   * Query the transforms that should be applied to the layer corresponding
+   * to this APZC due to asynchronous panning and zooming.
+   * This function returns two transforms via out parameters:
+   *   |aOutTransform| is the transform due to regular panning and zooming
+   *   |aOverscrollTransform| is the transform due to overscrolling
+   * The two are separated because some clients want to ignore the overscroll
+   * transform for some purposes (and for convenience to these clients, the
+   * overscroll transform parameter may be nullptr). Clients who do not want
+   * to ignore the overscroll transform should multiply the two transforms
+   * together.
    */
-  bool SampleContentTransformForFrame(const TimeStamp& aSampleTime,
-                                      ViewTransform* aNewTransform,
-                                      ScreenPoint& aScrollOffset);
+  void SampleContentTransformForFrame(ViewTransform* aOutTransform,
+                                      ScreenPoint& aScrollOffset,
+                                      Matrix4x4* aOutOverscrollTransform);
 
   /**
    * A shadow layer update has arrived. |aLayerMetrics| is the new FrameMetrics
@@ -205,7 +214,7 @@ public:
   /**
    * Returns true if Destroy() has already been called on this APZC instance.
    */
-  bool IsDestroyed();
+  bool IsDestroyed() const;
 
   /**
    * Returns the incremental transformation corresponding to the async pan/zoom
@@ -213,14 +222,14 @@ public:
    * existing transform, it will make the layer appear with the desired pan/zoom
    * amount.
    */
-  ViewTransform GetCurrentAsyncTransform();
+  ViewTransform GetCurrentAsyncTransform() const;
 
   /**
    * Returns the part of the async transform that will remain once Gecko does a
    * repaint at the desired metrics. That is, in the steady state:
-   * gfx3DMatrix(GetCurrentAsyncTransform()) === GetNontransientAsyncTransform()
+   * Matrix4x4(GetCurrentAsyncTransform()) === GetNontransientAsyncTransform()
    */
-  gfx3DMatrix GetNontransientAsyncTransform();
+  Matrix4x4 GetNontransientAsyncTransform() const;
 
   /**
    * Returns the transform to take something from the coordinate space of the
@@ -229,7 +238,15 @@ public:
    * processed, this is needed to transform input events properly into a space
    * gecko will understand.
    */
-  gfx3DMatrix GetTransformToLastDispatchedPaint();
+  Matrix4x4 GetTransformToLastDispatchedPaint() const;
+
+  /**
+   * Returns whether or not the APZC is currently in a state of checkerboarding.
+   * This is a simple computation based on the last-painted content and whether
+   * the async transform has pushed it so far that it doesn't fully contain the
+   * composition bounds.
+   */
+  bool IsCurrentlyCheckerboarding() const;
 
   /**
    * Recalculates the displayport. Ideally, this should paint an area bigger
@@ -281,11 +298,14 @@ public:
   void StartAnimation(AsyncPanZoomAnimation* aAnimation);
 
   /**
-   * Cancels any currently running animation. Note that all this does is set the
-   * state of the AsyncPanZoomController back to NOTHING, but it is the
-   * animation's responsibility to check this before advancing.
+   * Cancels any currently running animation.
    */
   void CancelAnimation();
+
+  /**
+   * Clear any overscroll on this APZC.
+   */
+  void ClearOverscroll();
 
   /**
    * Returns allowed touch behavior for the given point on the scrollable layer.
@@ -299,49 +319,46 @@ public:
   TouchBehaviorFlags GetAllowedTouchBehavior(ScreenIntPoint& aPoint);
 
   /**
-   * Sets allowed touch behavior for current touch session.
-   * This method is invoked by the APZCTreeManager which in its turn invoked by
-   * the widget after performing touch-action values retrieving.
-   * Must be called after receiving the TOUCH_START even that started the
-   * touch session.
-   */
-  void SetAllowedTouchBehavior(const nsTArray<TouchBehaviorFlags>& aBehaviors);
-
-  /**
    * Returns whether this APZC is for an element marked with the 'scrollgrab'
    * attribute.
    */
-  bool HasScrollgrab() const { return mFrameMetrics.mHasScrollgrab; }
+  bool HasScrollgrab() const { return mFrameMetrics.GetHasScrollgrab(); }
 
   /**
    * Returns whether this APZC has room to be panned (in any direction).
    */
   bool IsPannable() const;
 
+  /**
+   * Returns the identifier of the touch in the last touch event processed by
+   * this APZC. This should only be called when the last touch event contained
+   * only one touch.
+   */
+  int32_t GetLastTouchIdentifier() const;
+
+  /**
+   * Convert the vector |aVector|, rooted at the point |aAnchor|, from
+   * this APZC's local screen coordinates into global screen coordinates.
+   * The anchor is necessary because with 3D tranforms, the location of the
+   * vector can affect the result of the transform.
+   * To respect the lock ordering, mMonitor must NOT be held when calling
+   * this function (since this function acquires the tree lock).
+   */
+  void ToGlobalScreenCoordinates(ScreenPoint* aVector,
+                                 const ScreenPoint& aAnchor) const;
+
+  /**
+   * Convert the vector |aVector|, rooted at the point |aAnchor|, from
+   * global screen coordinates into this APZC's local screen coordinates .
+   * The anchor is necessary because with 3D tranforms, the location of the
+   * vector can affect the result of the transform.
+   * To respect the lock ordering, mMonitor must NOT be held when calling
+   * this function (since this function acquires the tree lock).
+   */
+  void ToLocalScreenCoordinates(ScreenPoint* aVector,
+                                const ScreenPoint& aAnchor) const;
+
 protected:
-  enum PanZoomState {
-    NOTHING,                  /* no touch-start events received */
-    FLING,                    /* all touches removed, but we're still scrolling page */
-    TOUCHING,                 /* one touch-start event received */
-
-    PANNING,                  /* panning the frame */
-    PANNING_LOCKED_X,         /* touch-start followed by move (i.e. panning with axis lock) X axis */
-    PANNING_LOCKED_Y,         /* as above for Y axis */
-
-    CROSS_SLIDING_X,          /* Panning disabled while user does a horizontal gesture
-                                 on a vertically-scrollable view. This used for the
-                                 Windows Metro "cross-slide" gesture. */
-    CROSS_SLIDING_Y,          /* as above for Y axis */
-
-    PINCHING,                 /* nth touch-start, where n > 1. this mode allows pan and zoom */
-    ANIMATING_ZOOM,           /* animated zoom to a new rect */
-    WAITING_CONTENT_RESPONSE, /* a state halfway between NOTHING and TOUCHING - the user has
-                                 put a finger down, but we don't yet know if a touch listener has
-                                 prevented the default actions yet and the allowed touch behavior
-                                 was not set yet. we still need to abort animations. */
-    SNAP_BACK,                /* snap-back animation to relieve overscroll */
-  };
-
   // Protected destructor, to discourage deletion outside of Release():
   ~AsyncPanZoomController();
 
@@ -456,9 +473,21 @@ protected:
    * Gets the displacement of the current touch since it began. That is, it is
    * the distance between the current position and the initial position of the
    * current touch (this only makes sense if a touch is currently happening and
-   * OnTouchMove() is being invoked).
+   * OnTouchMove() or the equivalent for pan gestures is being invoked).
+   * Note: This function returns a distance in global screen coordinates,
+   *       not the local screen coordinates of this APZC.
    */
-  float PanDistance();
+  float PanDistance() const;
+
+  /**
+   * Gets the start point of the current touch.
+   * Like PanDistance(), this only makes sense if a touch is currently
+   * happening and OnTouchMove() or the equivalent for pan gestures is
+   * being invoked.
+   * Unlikely PanDistance(), this function returns a point in local screen
+   * coordinates.
+   */
+  ScreenPoint PanStart() const;
 
   /**
    * Gets a vector of the velocities of each axis.
@@ -466,16 +495,15 @@ protected:
   const ScreenPoint GetVelocityVector();
 
   /**
-   * Gets a reference to the first touch point from a MultiTouchInput.  This
-   * gets only the first one and assumes the rest are either missing or not
-   * relevant.
+   * Gets the first touch point from a MultiTouchInput.  This gets only
+   * the first one and assumes the rest are either missing or not relevant.
    */
-  ScreenIntPoint& GetFirstTouchScreenPoint(const MultiTouchInput& aEvent);
+  ScreenPoint GetFirstTouchScreenPoint(const MultiTouchInput& aEvent);
 
   /**
    * Sets the panning state basing on the pan direction angle and current touch-action value.
    */
-  void HandlePanningWithTouchAction(double angle, TouchBehaviorFlags value);
+  void HandlePanningWithTouchAction(double angle);
 
   /**
    * Sets the panning state ignoring the touch action value.
@@ -484,8 +512,9 @@ protected:
 
   /**
    * Update the panning state and axis locks.
+   * Note: |aDelta| is expected to be in global screen coordinates.
    */
-  void HandlePanningUpdate(float aDX, float aDY);
+  void HandlePanningUpdate(const ScreenPoint& aDelta);
 
   /**
    * Sets up anything needed for panning. This takes us out of the "TOUCHING"
@@ -532,22 +561,11 @@ protected:
   const FrameMetrics& GetFrameMetrics() const;
 
   /**
-   * Sets the timer for content response to a series of touch events, if it
-   * hasn't been already. This is to prevent us from batching up touch events
-   * indefinitely in the case that content doesn't respond with whether or not
-   * it wants to preventDefault. When the timer is fired, the touch event queue
-   * will be flushed.
+   * Gets the pointer to the apzc tree manager. All the access to tree manager
+   * should be made via this method and not via private variable since this method
+   * ensures that no lock is set.
    */
-  void SetContentResponseTimer();
-
-  /**
-   * Timeout function for content response. This should be called on a timer
-   * after we get our first touch event in a batch, under the condition that we
-   * waiting for response from content. If a notification comes indicating whether or not
-   * content preventDefaulted a series of touch events and touch behavior values are
-   * set before the timeout, the timeout should be cancelled.
-   */
-  void TimeoutContentResponse();
+  APZCTreeManager* GetApzcTreeManager() const;
 
   /**
    * Timeout function for mozbrowserasyncscroll event. Because we throttle
@@ -558,68 +576,13 @@ protected:
   void FireAsyncScrollOnTimeout();
 
 private:
-  // State related to a single touch block. Does not persist across touch blocks.
-  struct TouchBlockState {
-
-    TouchBlockState()
-      :  mAllowedTouchBehaviorSet(false),
-         mPreventDefault(false),
-         mPreventDefaultSet(false),
-         mSingleTapOccurred(false)
-    {}
-
-    // Values of allowed touch behavior for touch points of this touch block.
-    // Since there are maybe a few current active touch points per time (multitouch case)
-    // and each touch point should have its own value of allowed touch behavior- we're
-    // keeping an array of allowed touch behavior values, not the single value.
-    nsTArray<TouchBehaviorFlags> mAllowedTouchBehaviors;
-
-    // Specifies whether mAllowedTouchBehaviors is set for this touch events block.
-    bool mAllowedTouchBehaviorSet;
-
-    // Flag used to specify that content prevented the default behavior of this
-    // touch events block.
-    bool mPreventDefault;
-
-    // Specifies whether mPreventDefault property is set for this touch events block.
-    bool mPreventDefaultSet;
-
-    // Specifies whether a single tap event was generated during this touch block.
-    bool mSingleTapOccurred;
-  };
-
-  /*
-   * Returns whether current touch behavior values allow pinch-zooming.
-   */
-  bool TouchActionAllowPinchZoom();
-
-  /*
-   * Returns whether current touch behavior values allow double-tap-zooming.
-   */
-  bool TouchActionAllowDoubleTapZoom();
-
-  /*
-   * Returns allowed touch behavior from the mAllowedTouchBehavior array.
-   * In case apzc didn't receive touch behavior values within the timeout
-   * it returns default value.
-   */
-  TouchBehaviorFlags GetTouchBehavior(uint32_t touchIndex);
-
   /**
-   * To move from the WAITING_CONTENT_RESPONSE state to TOUCHING one we need two
-   * conditions set: get content listeners response (whether they called preventDefault)
-   * and get allowed touch behaviors.
-   * This method checks both conditions and changes (or not changes) state
-   * appropriately.
+   * Given the number of touch points in an input event and touch block they
+   * belong to, check if the event can result in a panning/zooming behavior.
+   * This is primarily used to figure out when to dispatch the pointercancel
+   * event for the pointer events spec.
    */
-  void CheckContentResponse();
-
-  /**
-   * Helper to set the current state. Holds the monitor before actually setting
-   * it and fires content controller events based on state changes. Always set
-   * the state using this call, do not set it directly.
-   */
-  void SetState(PanZoomState aState);
+  bool ArePointerEventsConsumable(TouchBlockState* aBlock, uint32_t aTouchPoints);
 
   /**
    * Convert ScreenPoint relative to this APZC to CSSPoint relative
@@ -630,16 +593,10 @@ private:
   bool ConvertToGecko(const ScreenPoint& aPoint, CSSPoint* aOut);
 
   /**
-   * Internal helpers for checking general state of this apzc.
-   */
-  bool IsTransformingState(PanZoomState aState);
-  bool IsPanningState(PanZoomState mState);
-
-  /**
-   * Apply to |aTransform| a visual effect that reflects this apzc's
+   * Return in |aTransform| a visual effect that reflects this apzc's
    * overscrolled state, if any.
    */
-  void ApplyOverscrollEffect(ViewTransform* aTransform) const;
+  void GetOverscrollTransform(Matrix4x4* aTransform) const;
 
   enum AxisLockMode {
     FREE,     /* No locking at all */
@@ -674,11 +631,11 @@ private:
      compositor thread. */
   nsRefPtr<GeckoContentController> mGeckoContentController;
   nsRefPtr<GestureEventListener> mGestureEventListener;
-  Monitor mRefPtrMonitor;
+  mutable Monitor mRefPtrMonitor;
 
   /* Utility functions that return a addrefed pointer to the corresponding fields. */
-  already_AddRefed<GeckoContentController> GetGeckoContentController();
-  already_AddRefed<GestureEventListener> GetGestureEventListener();
+  already_AddRefed<GeckoContentController> GetGeckoContentController() const;
+  already_AddRefed<GestureEventListener> GetGestureEventListener() const;
 
   // If we are sharing our frame metrics with content across processes
   bool mSharingFrameMetricsAcrossProcesses;
@@ -700,16 +657,6 @@ protected:
   // would significantly limit what methods could be 'const'.
   mutable ReentrantMonitor mMonitor;
 
-  // Specifies whether we should use touch-action css property. Initialized from
-  // the preferences. This property (in comparison with the global one) simplifies
-  // testing apzc with (and without) touch-action property enabled concurrently
-  // (e.g. with the gtest framework).
-  bool mTouchActionPropertyEnabled;
-
-  // Stores the state of panning and zooming this frame. This is protected by
-  // |mMonitor|; that is, it should be held whenever this is updated.
-  PanZoomState mState;
-
 private:
   // Metrics of the container layer corresponding to this APZC. This is
   // stored here so that it is accessible from the UI/controller thread.
@@ -727,10 +674,6 @@ private:
   // through which input events and repaint requests are sent to Gecko operates
   // in a FIFO manner.
   FrameMetrics mLastDispatchedPaintMetrics;
-
-  nsTArray<MultiTouchInput> mTouchQueue;
-
-  CancelableTask* mContentResponseTimeoutTask;
 
   AxisX mX;
   AxisY mY;
@@ -765,37 +708,194 @@ private:
   // ensures the last mozbrowserasyncscroll event is always been fired.
   CancelableTask* mAsyncScrollTimeoutTask;
 
-  // Flag used to determine whether or not we should try to enter the
-  // WAITING_LISTENERS state. This is used in the case that we are processing a
-  // queued up event block. If set, this means that we are handling this queue
-  // and we don't want to queue the events back up again.
-  bool mHandlingTouchQueue;
-
-  // Stores information about the current touch block.
-  TouchBlockState mTouchBlockState;
-
   nsRefPtr<AsyncPanZoomAnimation> mAnimation;
 
   friend class Axis;
 
 
+
   /* ===================================================================
    * The functions and members in this section are used to manage
-   * fling animations and handling overscroll during a fling.
+   * the state that tracks what this APZC is doing with the input events.
+   */
+protected:
+  enum PanZoomState {
+    NOTHING,                  /* no touch-start events received */
+    FLING,                    /* all touches removed, but we're still scrolling page */
+    TOUCHING,                 /* one touch-start event received */
+
+    PANNING,                  /* panning the frame */
+    PANNING_LOCKED_X,         /* touch-start followed by move (i.e. panning with axis lock) X axis */
+    PANNING_LOCKED_Y,         /* as above for Y axis */
+
+    CROSS_SLIDING_X,          /* Panning disabled while user does a horizontal gesture
+                                 on a vertically-scrollable view. This used for the
+                                 Windows Metro "cross-slide" gesture. */
+    CROSS_SLIDING_Y,          /* as above for Y axis */
+
+    PINCHING,                 /* nth touch-start, where n > 1. this mode allows pan and zoom */
+    ANIMATING_ZOOM,           /* animated zoom to a new rect */
+    SNAP_BACK,                /* snap-back animation to relieve overscroll */
+    SMOOTH_SCROLL,            /* Smooth scrolling to destination. Used by
+                                 CSSOM-View smooth scroll-behavior */
+  };
+
+  // This is in theory protected by |mMonitor|; that is, it should be held whenever
+  // this is updated. In practice though... see bug 897017.
+  PanZoomState mState;
+
+private:
+  friend class StateChangeNotificationBlocker;
+  /**
+   * A counter of how many StateChangeNotificationBlockers are active.
+   * A non-zero count will prevent state change notifications from
+   * being dispatched. Only code that holds mMonitor should touch this.
+   */
+  int mNotificationBlockers;
+
+  /**
+   * Helper to set the current state. Holds the monitor before actually setting
+   * it and fires content controller events based on state changes. Always set
+   * the state using this call, do not set it directly.
+   */
+  void SetState(PanZoomState aState);
+  /**
+   * Fire content controller notifications about state changes, assuming no
+   * StateChangeNotificationBlocker has been activated.
+   */
+  void DispatchStateChangeNotification(PanZoomState aOldState, PanZoomState aNewState);
+  /**
+   * Internal helpers for checking general state of this apzc.
+   */
+  static bool IsTransformingState(PanZoomState aState);
+  bool IsInPanningState() const;
+
+
+
+  /* ===================================================================
+   * The functions and members in this section are used to manage
+   * blocks of touch events and the state needed to deal with content
+   * listeners.
    */
 public:
   /**
-   * Take over a fling with the given velocity from another APZC. Used for
-   * during overscroll handoff for a fling. If we are not pannable, calls
-   * mTreeManager->HandOffFling() to hand the fling off further.
-   * Returns true iff. any APZC (whether this one or one further in the handoff
-   * chain accepted the fling).
+   * This function is invoked by the APZCTreeManager which in turn is invoked
+   * by the widget when web content decides whether or not it wants to
+   * cancel a block of events. This automatically gets applied to the next
+   * block of events that has not yet been responded to. This function MUST
+   * be invoked exactly once for each touch block.
    */
-  bool TakeOverFling(ScreenPoint aVelocity);
+  void ContentReceivedTouch(bool aPreventDefault);
+
+  /**
+   * Sets allowed touch behavior for current touch session.
+   * This method is invoked by the APZCTreeManager which in its turn invoked by
+   * the widget after performing touch-action values retrieving.
+   * Must be called after receiving the TOUCH_START even that started the
+   * touch session.
+   */
+  void SetAllowedTouchBehavior(const nsTArray<TouchBehaviorFlags>& aBehaviors);
+
+private:
+  void ScheduleContentResponseTimeout();
+  void ContentResponseTimeout();
+  /**
+   * Processes any pending input blocks that are ready for processing. There
+   * must be at least one input block in the queue when this function is called.
+   */
+  void ProcessPendingInputBlocks();
+  TouchBlockState* StartNewTouchBlock(bool aCopyAllowedTouchBehaviorFromCurrent);
+  TouchBlockState* CurrentTouchBlock();
+  bool HasReadyTouchBlock();
+
+private:
+  // The queue of touch blocks that have not yet been processed by this APZC.
+  // This member must only be accessed on the controller/UI thread.
+  nsTArray<UniquePtr<TouchBlockState>> mTouchBlockQueue;
+
+  // This variable requires some explanation. Strap yourself in.
+  //
+  // For each block of events, we do two things: (1) send the events to gecko and expect
+  // exactly one call to ContentReceivedTouch in return, and (2) kick off a timeout
+  // that triggers in case we don't hear from web content in a timely fashion.
+  // Since events are constantly coming in, we need to be able to handle more than one
+  // block of input events sitting in the queue.
+  //
+  // There are ordering restrictions on events that we can take advantage of, and that
+  // we need to abide by. Blocks of events in the queue will always be in the order that
+  // the user generated them. Responses we get from content will be in the same order as
+  // as the blocks of events in the queue. The timeout callbacks that have been posted
+  // will also fire in the same order as the blocks of events in the queue.
+  // HOWEVER, we may get multiple responses from content interleaved with multiple
+  // timeout expirations, and that interleaving is not predictable.
+  //
+  // Therefore, we need to make sure that for each block of events, we process the queued
+  // events exactly once, either when we get the response from content, or when the
+  // timeout expires (whichever happens first). There is no way to associate the timeout
+  // or response from content with a particular block of events other than via ordering.
+  //
+  // So, what we do to accomplish this is to track a "touch block balance", which is the
+  // number of timeout expirations that have fired, minus the number of content responses
+  // that have been received. (Think "balance" as in teeter-totter balance). This
+  // value is:
+  // - zero when we are in a state where the next content response we expect to receive
+  //   and the next timeout expiration we expect to fire both correspond to the next
+  //   unprocessed block of events in the queue.
+  // - negative when we are in a state where we have received more content responses than
+  //   timeout expirations. This means that the next content repsonse we receive will
+  //   correspond to the first unprocessed block, but the next n timeout expirations need
+  //   to be ignored as they are for blocks we have already processed. (n is the absolute
+  //   value of the balance.)
+  // - positive when we are in a state where we have received more timeout expirations
+  //   than content responses. This means that the next timeout expiration that we will
+  //   receive will correspond to the first unprocessed block, but the next n content
+  //   responses need to be ignored as they are for blocks we have already processed.
+  //   (n is the absolute value of the balance.)
+  //
+  // Note that each touch block internally carries flags that indicate whether or not it
+  // has received a content response and/or timeout expiration. However, we cannot rely
+  // on that alone to deliver these notifications to the right input block, because
+  // once an input block has been processed, it can potentially be removed from the queue.
+  // Therefore the information in that block is lost. An alternative approach would
+  // be to keep around those blocks until they have received both the content response
+  // and timeout expiration, but that involves a higher level of memory usage.
+  //
+  // This member must only be accessed on the controller/UI thread.
+  int32_t mTouchBlockBalance;
+
+
+  /* ===================================================================
+   * The functions and members in this section are used to manage
+   * pan gestures.
+   */
+
+private:
+  UniquePtr<InputBlockState> mPanGestureState;
+
+
+  /* ===================================================================
+   * The functions and members in this section are used to manage
+   * fling animations, smooth scroll animations, and overscroll
+   * during a fling or smooth scroll.
+   */
+public:
+  /**
+   * Attempt a fling with the given velocity. If we are not pannable, tehe fling
+   * is handed off to the next APZC in the handoff chain via
+   * mTreeManager->DspatchFling(). Returns true iff. any APZC (whether this
+   * one or one further in the handoff chain) accepted the fling.
+   * |aHandoff| should be true iff. the fling was handed off from a previous
+   *            APZC, and determines whether acceleration is applied to the
+   *            fling.
+   */
+  bool AttemptFling(ScreenPoint aVelocity,
+                    const nsRefPtr<const OverscrollHandoffChain>& aOverscrollHandoffChain,
+                    bool aHandoff);
 
 private:
   friend class FlingAnimation;
   friend class OverscrollSnapBackAnimation;
+  friend class SmoothScrollAnimation;
   // The initial velocity of the most recent fling.
   ScreenPoint mLastFlingVelocity;
   // The time at which the most recent fling started.
@@ -806,14 +906,21 @@ private:
   // The overscroll is handled by trying to hand the fling off to an APZC
   // later in the handoff chain, or if there are no takers, continuing the
   // fling and entering an overscrolled state.
-  void HandleFlingOverscroll(const ScreenPoint& aVelocity);
+  void HandleFlingOverscroll(const ScreenPoint& aVelocity,
+                             const nsRefPtr<const OverscrollHandoffChain>& aOverscrollHandoffChain);
+
+  void HandleSmoothScrollOverscroll(const ScreenPoint& aVelocity);
 
   // Helper function used by TakeOverFling() and HandleFlingOverscroll().
-  void AcceptFling(const ScreenPoint& aVelocity, bool aAllowOverscroll);
+  void AcceptFling(const ScreenPoint& aVelocity,
+                   const nsRefPtr<const OverscrollHandoffChain>& aOverscrollHandoffChain,
+                   bool aHandoff,
+                   bool aAllowOverscroll);
 
   // Start a snap-back animation to relieve overscroll.
   void StartSnapBack();
 
+  void StartSmoothScroll();
 
   /* ===================================================================
    * The functions and members in this section are used to build a tree
@@ -845,6 +952,14 @@ public:
   AsyncPanZoomController* GetPrevSibling() const { return mPrevSibling; }
   AsyncPanZoomController* GetParent() const { return mParent; }
 
+  AsyncPanZoomController* GetFirstChild() const {
+    AsyncPanZoomController* child = GetLastChild();
+    while (child && child->GetPrevSibling()) {
+      child = child->GetPrevSibling();
+    }
+    return child;
+  }
+
   /* Returns true if there is no APZC higher in the tree with the same
    * layers id.
    */
@@ -870,12 +985,8 @@ private:
    * including handing off scroll to another APZC, and overscrolling.
    */
 public:
-  void SetScrollHandoffParentId(FrameMetrics::ViewID aScrollParentId) {
-    mScrollParentId = aScrollParentId;
-  }
-
   FrameMetrics::ViewID GetScrollHandoffParentId() const {
-    return mScrollParentId;
+    return mFrameMetrics.GetScrollParentId();
   }
 
   /**
@@ -889,29 +1000,36 @@ public:
    * does not find an APZC further in the handoff chain to accept the
    * overscroll, and this APZC is pannable, this APZC enters an overscrolled
    * state.
-   * |aOverscrollHandoffChainIndex| is used by the tree manager to keep track
-   * of which APZC to hand off the overscroll to; this function increments it
-   * and passes it on to APZCTreeManager::DispatchScroll() in the event of
-   * overscroll.
+   * |aOverscrollHandoffChain| and |aOverscrollHandoffChainIndex| are used by
+   * the tree manager to keep track of which APZC to hand off the overscroll
+   * to; this function increments the chain and the index and passes it on to
+   * APZCTreeManager::DispatchScroll() in the event of overscroll.
    * Returns true iff. this APZC, or an APZC further down the
    * handoff chain, accepted the scroll (possibly entering an overscrolled
-   * state). If this return false, the caller APZC knows that it should enter
+   * state). If this returns false, the caller APZC knows that it should enter
    * an overscrolled state itself if it can.
    */
   bool AttemptScroll(const ScreenPoint& aStartPoint, const ScreenPoint& aEndPoint,
+                     const OverscrollHandoffChain& aOverscrollHandoffChain,
                      uint32_t aOverscrollHandoffChainIndex = 0);
 
   void FlushRepaintForOverscrollHandoff();
 
-private:
-  FrameMetrics::ViewID mScrollParentId;
+  /**
+   * If overscrolled, start a snap-back animation and return true.
+   * Otherwise return false.
+   */
+  bool SnapBackIfOverscrolled();
 
+private:
   /**
    * A helper function for calling APZCTreeManager::DispatchScroll().
    * Guards against the case where the APZC is being concurrently destroyed
    * (and thus mTreeManager is being nulled out).
    */
-  bool CallDispatchScroll(const ScreenPoint& aStartPoint, const ScreenPoint& aEndPoint,
+  bool CallDispatchScroll(const ScreenPoint& aStartPoint,
+                          const ScreenPoint& aEndPoint,
+                          const OverscrollHandoffChain& aOverscrollHandoffChain,
                           uint32_t aOverscrollHandoffChainIndex);
 
   /**
@@ -920,8 +1038,28 @@ private:
    * and the function returns true.
    * Otherwise, nothing happens and the function return false.
    */
-  bool OverscrollBy(const CSSPoint& aOverscroll);
+  bool OverscrollBy(const ScreenPoint& aOverscroll);
 
+  /**
+   * Build the chain of APZCs along which scroll will be handed off when
+   * this APZC receives input events.
+   *
+   * Notes on lifetime and const-correctness:
+   *   - The returned handoff chain is |const|, to indicate that it cannot be
+   *     changed after being built.
+   *   - When passing the chain to a function that uses it without storing it,
+   *     pass it by reference-to-const (as in |const OverscrollHandoffChain&|).
+   *   - When storing the chain, store it by RefPtr-to-const (as in
+   *     |nsRefPtr<const OverscrollHandoffChain>|). This ensures the chain is
+   *     kept alive. Note that queueing a task that uses the chain as an
+   *     argument constitutes storing, as the task may outlive its queuer.
+   *   - When passing the chain to a function that will store it, pass it as
+   *     |const nsRefPtr<const OverscrollHandoffChain>&|. This allows the
+   *     function to copy it into the |nsRefPtr<const OverscrollHandoffChain>|
+   *     that will store it, while avoiding an unnecessary copy (and thus
+   *     AddRef() and Release()) when passing it.
+   */
+  nsRefPtr<const OverscrollHandoffChain> BuildOverscrollHandoffChain();
 
   /* ===================================================================
    * The functions and members in this section are used to maintain the
@@ -929,24 +1067,22 @@ private:
    * hit-testing to see which APZC instance should handle touch events.
    */
 public:
-  void SetLayerHitTestData(const ParentLayerRect& aRect, const gfx3DMatrix& aTransformToLayer,
-                           const gfx3DMatrix& aTransformForLayer) {
-    mVisibleRect = aRect;
+  void SetLayerHitTestData(const nsIntRegion& aRegion, const Matrix4x4& aTransformToLayer) {
+    mVisibleRegion = aRegion;
     mAncestorTransform = aTransformToLayer;
-    mCSSTransform = aTransformForLayer;
-    UpdateTransformScale();
   }
 
-  gfx3DMatrix GetAncestorTransform() const {
+  void AddHitTestRegion(const nsIntRegion& aRegion) {
+    mVisibleRegion.OrWith(aRegion);
+  }
+
+  Matrix4x4 GetAncestorTransform() const {
     return mAncestorTransform;
   }
 
-  gfx3DMatrix GetCSSTransform() const {
-    return mCSSTransform;
-  }
-
   bool VisibleRegionContains(const ParentLayerPoint& aPoint) const {
-    return mVisibleRect.Contains(aPoint);
+    ParentLayerIntPoint point = RoundedToInt(aPoint);
+    return mVisibleRegion.Contains(point.x, point.y);
   }
 
   bool IsOverscrolled() const {
@@ -954,15 +1090,14 @@ public:
   }
 
 private:
-  /* This is the visible region of the layer that this APZC corresponds to, in
-   * that layer's screen pixels (the same coordinate system in which this APZC
-   * receives events in ReceiveInputEvent()). */
-  ParentLayerRect mVisibleRect;
-  /* This is the cumulative CSS transform for all the layers between the parent
-   * APZC and this one (not inclusive) */
-  gfx3DMatrix mAncestorTransform;
-  /* This is the CSS transform for this APZC's layer. */
-  gfx3DMatrix mCSSTransform;
+  /* This is the union of the visible regions of the layers that this APZC
+   * corresponds to, in the screen pixels of those layers. (This is the same
+   * coordinate system in which this APZC receives events in
+   * ReceiveInputEvent()). */
+  nsIntRegion mVisibleRegion;
+  /* This is the cumulative CSS transform for all the layers from (and including)
+   * the parent APZC down to (but excluding) this one. */
+  Matrix4x4 mAncestorTransform;
 
 
   /* ===================================================================
@@ -974,7 +1109,7 @@ private:
    * shared FrameMeterics used in progressive tile painting. */
   const uint32_t mAPZCId;
 
-  ipc::SharedMemoryBasic* mSharedFrameMetricsBuffer;
+  nsRefPtr<ipc::SharedMemoryBasic> mSharedFrameMetricsBuffer;
   CrossProcessMutex* mSharedLock;
   /**
    * Called when ever mFrameMetrics is updated so that if it is being
@@ -991,7 +1126,7 @@ private:
 
   /* ===================================================================
    * The functions and members in this section are used for testing
-   * purposes only.
+   * and assertion purposes only.
    */
 public:
   /**
@@ -1008,6 +1143,18 @@ public:
   static void SetThreadAssertionsEnabled(bool aEnabled);
   static bool GetThreadAssertionsEnabled();
   /**
+   * This can be used to assert that the current thread is the
+   * controller/UI thread (on which input events are received).
+   * This does nothing if thread assertions are disabled.
+   */
+  static void AssertOnControllerThread();
+  /**
+   * This can be used to assert that the current thread is the
+   * compositor thread (which applies the async transform).
+   * This does nothing if thread assertions are disabled.
+   */
+  static void AssertOnCompositorThread();
+  /**
    * Set an extra offset for testing async scrolling.
    */
   void SetTestAsyncScrollOffset(const CSSPoint& aPoint)
@@ -1015,25 +1162,35 @@ public:
     mTestAsyncScrollOffset = aPoint;
   }
 
+  void MarkAsyncTransformAppliedToContent()
+  {
+    mAsyncTransformAppliedToContent = true;
+  }
+
+  bool GetAsyncTransformAppliedToContent() const
+  {
+    return mAsyncTransformAppliedToContent;
+  }
+
 private:
   // Extra offset to add in SampleContentTransformForFrame for testing
   CSSPoint mTestAsyncScrollOffset;
+  // Flag to track whether or not the APZ transform is not used. This
+  // flag is recomputed for every composition frame.
+  bool mAsyncTransformAppliedToContent;
 };
 
 class AsyncPanZoomAnimation {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(AsyncPanZoomAnimation)
 
 public:
-  AsyncPanZoomAnimation(const TimeDuration& aRepaintInterval =
-                        TimeDuration::Forever())
+  explicit AsyncPanZoomAnimation(const TimeDuration& aRepaintInterval =
+                                 TimeDuration::Forever())
     : mRepaintInterval(aRepaintInterval)
   { }
 
   virtual bool Sample(FrameMetrics& aFrameMetrics,
                       const TimeDuration& aDelta) = 0;
-
-  // Called if the animation is cancelled before it ends.
-  virtual void Cancel() {}
 
   /**
    * Get the deferred tasks in |mDeferredTasks|. See |mDeferredTasks|

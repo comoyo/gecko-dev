@@ -3,15 +3,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// XXX: This must be done prior to including cert.h (directly or indirectly).
+// CERT_AddTempCertToPerm is exposed as __CERT_AddTempCertToPerm.
+#define CERT_AddTempCertToPerm __CERT_AddTempCertToPerm
+
 #include "WifiCertService.h"
 
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/ModuleUtils.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/dom/ToJSValue.h"
 #include "cert.h"
 #include "certdb.h"
 #include "CryptoTask.h"
-#include "nsCxPusher.h"
 #include "nsIDOMFile.h"
 #include "nsIWifiService.h"
 #include "nsNetUtil.h"
@@ -243,6 +247,9 @@ WifiCertService::Shutdown()
     mRequestThread->Shutdown();
     mRequestThread = nullptr;
   }
+
+  mListener = nullptr;
+
   return NS_OK;
 }
 
@@ -255,7 +262,7 @@ WifiCertService::DispatchResult(const WifiCertServiceResultOptions& aOptions)
   JS::RootedValue val(cx);
   nsCString dummyInterface;
 
-  if (!aOptions.ToObject(cx, &val)) {
+  if (!ToJSValue(cx, aOptions, &val)) {
     return;
   }
 

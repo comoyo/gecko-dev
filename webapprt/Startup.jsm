@@ -12,17 +12,24 @@ this.EXPORTED_SYMBOLS = ["startup"];
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
+/* We load here modules that are needed to perform the application startup.
+ * We lazily load modules that aren't needed on every startup.
+ * We load modules that aren't used here but that need to perform some
+ * initialization steps later in the startup function. */
+
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/AppsUtils.jsm");
-Cu.import("resource://gre/modules/PermissionsInstaller.jsm");
-Cu.import('resource://gre/modules/Payment.jsm');
-Cu.import('resource://gre/modules/AlarmService.jsm');
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
 
 Cu.import("resource://webapprt/modules/WebappRT.jsm");
-Cu.import("resource://webapprt/modules/WebRTCHandler.jsm");
+
+// Lazily load these modules because we don't need them at every
+// startup, but only during first run or runtime update.
+
+XPCOMUtils.defineLazyModuleGetter(this, "PermissionsInstaller",
+  "resource://gre/modules/PermissionsInstaller.jsm");
 
 const PROFILE_DIR = OS.Constants.Path.profileDir;
 
@@ -96,7 +103,7 @@ this.startup = function(window) {
       appUpdated = yield WebappRT.applyUpdate();
     }
 
-    yield WebappRT.loadConfig();
+    yield WebappRT.configPromise;
 
     let appData = WebappRT.config.app;
 
@@ -134,6 +141,20 @@ this.startup = function(window) {
 
     // Wait for XUL window loading
     yield deferredWindowLoad.promise;
+
+    // Override Toolkit's nsITransfer implementation with the one from the
+    // JavaScript API for downloads. This will eventually be removed when
+    // nsIDownloadManager will not be available anymore (bug 851471).
+    Components.manager.QueryInterface(Ci.nsIComponentRegistrar)
+              .registerFactory(Components.ID("{1b4c85df-cbdd-4bb6-b04e-613caece083c}"),
+                               "", "@mozilla.org/transfer;1", null);
+
+    // Load these modules here because they aren't needed right at startup,
+    // but they need to be loaded to perform some initialization steps.
+    Cu.import("resource://gre/modules/Payment.jsm");
+    Cu.import("resource://gre/modules/AlarmService.jsm");
+    Cu.import("resource://webapprt/modules/WebRTCHandler.jsm");
+    Cu.import("resource://webapprt/modules/DownloadView.jsm");
 
     // Get the <browser> element in the webapp.xul window.
     let appBrowser = window.document.getElementById("content");

@@ -9,6 +9,8 @@
 #include "nsMathMLChar.h"
 #include <algorithm>
 
+using namespace mozilla;
+
 //
 // <mfenced> -- surround content with a pair of fences
 //
@@ -188,8 +190,8 @@ nsMathMLmfencedFrame::Reflow(nsPresContext*          aPresContext,
                              const nsHTMLReflowState& aReflowState,
                              nsReflowStatus&          aStatus)
 {
-  aDesiredSize.Width() = aDesiredSize.Height() = 0;
-  aDesiredSize.SetTopAscent(0);
+  aDesiredSize.ClearSize();
+  aDesiredSize.SetBlockStartAscent(0);
   aDesiredSize.mBoundingMetrics = nsBoundingMetrics();
 
   int32_t i;
@@ -216,7 +218,6 @@ nsMathMLmfencedFrame::Reflow(nsPresContext*          aPresContext,
   // refactored to use nsMathMLContainerFrame::Reflow() at some stage.
 
   nsReflowStatus childStatus;
-  nsSize availSize(aReflowState.ComputedWidth(), NS_UNCONSTRAINEDSIZE);
   nsIFrame* firstChild = GetFirstPrincipalChild();
   nsIFrame* childFrame = firstChild;
   nscoord ascent = 0, descent = 0;
@@ -231,6 +232,9 @@ nsMathMLmfencedFrame::Reflow(nsPresContext*          aPresContext,
     nsHTMLReflowMetrics childDesiredSize(aReflowState,
                                          aDesiredSize.mFlags
                                          | NS_REFLOW_CALC_BOUNDING_METRICS);
+    WritingMode wm = childFrame->GetWritingMode();
+    LogicalSize availSize = aReflowState.ComputedSize(wm);
+    availSize.BSize(wm) = NS_UNCONSTRAINEDSIZE;
     nsHTMLReflowState childReflowState(aPresContext, aReflowState,
                                        childFrame, availSize);
     ReflowChild(childFrame, aPresContext, childDesiredSize,
@@ -239,11 +243,13 @@ nsMathMLmfencedFrame::Reflow(nsPresContext*          aPresContext,
     SaveReflowAndBoundingMetricsFor(childFrame, childDesiredSize,
                                     childDesiredSize.mBoundingMetrics);
 
-    nscoord childDescent = childDesiredSize.Height() - childDesiredSize.TopAscent();
+    mozilla::WritingMode outerWM = aReflowState.GetWritingMode();
+    nscoord childDescent = childDesiredSize.BSize(outerWM) -
+                           childDesiredSize.BlockStartAscent();
     if (descent < childDescent)
       descent = childDescent;
-    if (ascent < childDesiredSize.TopAscent())
-      ascent = childDesiredSize.TopAscent();
+    if (ascent < childDesiredSize.BlockStartAscent())
+      ascent = childDesiredSize.BlockStartAscent();
 
     childFrame = childFrame->GetNextSibling();
   }
@@ -272,11 +278,11 @@ nsMathMLmfencedFrame::Reflow(nsPresContext*          aPresContext,
       SaveReflowAndBoundingMetricsFor(childFrame, childDesiredSize,
                                       childDesiredSize.mBoundingMetrics);
       
-      nscoord childDescent = childDesiredSize.Height() - childDesiredSize.TopAscent();
+      nscoord childDescent = childDesiredSize.Height() - childDesiredSize.BlockStartAscent();
       if (descent < childDescent)
         descent = childDescent;
-      if (ascent < childDesiredSize.TopAscent())
-        ascent = childDesiredSize.TopAscent();
+      if (ascent < childDesiredSize.BlockStartAscent())
+        ascent = childDesiredSize.BlockStartAscent();
     }
     childFrame = childFrame->GetNextSibling();
   }
@@ -355,7 +361,7 @@ nsMathMLmfencedFrame::Reflow(nsPresContext*          aPresContext,
       aDesiredSize.mBoundingMetrics += bm;
 
     FinishReflowChild(childFrame, aPresContext, childSize, nullptr,
-                      dx, ascent - childSize.TopAscent(), 0);
+                      dx, ascent - childSize.BlockStartAscent(), 0);
     dx += childSize.Width();
 
     if (i < mSeparatorsCount) {
@@ -382,10 +388,10 @@ nsMathMLmfencedFrame::Reflow(nsPresContext*          aPresContext,
 
   aDesiredSize.Width() = aDesiredSize.mBoundingMetrics.width;
   aDesiredSize.Height() = ascent + descent;
-  aDesiredSize.SetTopAscent(ascent);
+  aDesiredSize.SetBlockStartAscent(ascent);
 
   SetBoundingMetrics(aDesiredSize.mBoundingMetrics);
-  SetReference(nsPoint(0, aDesiredSize.TopAscent()));
+  SetReference(nsPoint(0, aDesiredSize.BlockStartAscent()));
 
   // see if we should fix the spacing
   FixInterFrameSpacing(aDesiredSize);
@@ -548,7 +554,7 @@ GetMaxCharWidth(nsPresContext*       aPresContext,
 }
 
 /* virtual */ void
-nsMathMLmfencedFrame::GetIntrinsicWidthMetrics(nsRenderingContext* aRenderingContext, nsHTMLReflowMetrics& aDesiredSize)
+nsMathMLmfencedFrame::GetIntrinsicISizeMetrics(nsRenderingContext* aRenderingContext, nsHTMLReflowMetrics& aDesiredSize)
 {
   nscoord width = 0;
 
@@ -572,7 +578,7 @@ nsMathMLmfencedFrame::GetIntrinsicWidthMetrics(nsRenderingContext* aRenderingCon
     // margin, so we may end up with too much space, but, with stretchy
     // characters, this is an approximation anyway.
     width += nsLayoutUtils::IntrinsicForContainer(aRenderingContext, childFrame,
-                                                  nsLayoutUtils::PREF_WIDTH);
+                                                  nsLayoutUtils::PREF_ISIZE);
 
     if (i < mSeparatorsCount) {
       width +=

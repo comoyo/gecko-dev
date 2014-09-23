@@ -5,7 +5,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ChromeObjectWrapper.h"
+#include "WrapperFactory.h"
+#include "AccessCheck.h"
+#include "JavaScriptParent.h"
+#include "xpcprivate.h"
 #include "jsapi.h"
+#include "jswrapper.h"
+#include "nsXULAppAPI.h"
 
 using namespace JS;
 
@@ -21,7 +27,7 @@ namespace xpc {
 // chromeArray.forEach(..) to Just Work without explicitly listing them in
 // __exposedProps__. Since proxies don't automatically inherit behavior from
 // their prototype, we have to instrument the traps to do this manually.
-ChromeObjectWrapper ChromeObjectWrapper::singleton;
+const ChromeObjectWrapper ChromeObjectWrapper::singleton;
 
 using js::assertEnteredPolicy;
 
@@ -32,7 +38,7 @@ AllowedByBase(JSContext *cx, HandleObject wrapper, HandleId id,
     MOZ_ASSERT(js::Wrapper::wrapperHandler(wrapper) ==
                &ChromeObjectWrapper::singleton);
     bool bp;
-    ChromeObjectWrapper *handler = &ChromeObjectWrapper::singleton;
+    const ChromeObjectWrapper *handler = &ChromeObjectWrapper::singleton;
     return handler->ChromeObjectWrapperBase::enter(cx, wrapper, id, act, &bp);
 }
 
@@ -46,9 +52,10 @@ PropIsFromStandardPrototype(JSContext *cx, JS::MutableHandle<JSPropertyDescripto
 }
 
 // Note that we're past the policy enforcement stage, here, so we can query
-// ChromeObjectWrapperBase and get an unfiltered view of the underlying object.
-// This lets us determine whether the property we would have found (given a
-// transparent wrapper) would have come off a standard prototype.
+// CrossCompartmentSecurityWrapper (our grand-parent wrapper) and get an
+// unfiltered view of the underlying object. This lets us determine whether
+// the property we would have found (given a transparent wrapper) would
+// have come off a standard prototype.
 static bool
 PropIsFromStandardPrototype(JSContext *cx, HandleObject wrapper,
                             HandleId id)
@@ -56,9 +63,9 @@ PropIsFromStandardPrototype(JSContext *cx, HandleObject wrapper,
     MOZ_ASSERT(js::Wrapper::wrapperHandler(wrapper) ==
                &ChromeObjectWrapper::singleton);
     Rooted<JSPropertyDescriptor> desc(cx);
-    ChromeObjectWrapper *handler = &ChromeObjectWrapper::singleton;
-    if (!handler->ChromeObjectWrapperBase::getPropertyDescriptor(cx, wrapper, id,
-                                                                 &desc) ||
+    const ChromeObjectWrapper *handler = &ChromeObjectWrapper::singleton;
+    if (!handler->js::CrossCompartmentSecurityWrapper::getPropertyDescriptor(cx, wrapper, id,
+                                                                             &desc) ||
         !desc.object())
     {
         return false;
@@ -70,9 +77,9 @@ bool
 ChromeObjectWrapper::getPropertyDescriptor(JSContext *cx,
                                            HandleObject wrapper,
                                            HandleId id,
-                                           JS::MutableHandle<JSPropertyDescriptor> desc)
+                                           JS::MutableHandle<JSPropertyDescriptor> desc) const
 {
-    assertEnteredPolicy(cx, wrapper, id, GET | SET);
+    assertEnteredPolicy(cx, wrapper, id, GET | SET | GET_PROPERTY_DESCRIPTOR);
     // First, try a lookup on the base wrapper if permitted.
     desc.object().set(nullptr);
     if (AllowedByBase(cx, wrapper, id, Wrapper::GET) &&
@@ -99,9 +106,88 @@ ChromeObjectWrapper::getPropertyDescriptor(JSContext *cx,
     return JS_GetPropertyDescriptorById(cx, wrapperProto, id, desc);
 }
 
+static bool
+CheckPassToChrome(JSContext *cx, HandleObject wrapper, HandleValue v)
+{
+    // Primitives are fine.
+    if (!v.isObject())
+        return true;
+    RootedObject obj(cx, &v.toObject());
+
+    // Non-wrappers are fine.
+    if (!js::IsWrapper(obj))
+        return true;
+
+    // CPOWs use COWs (in the unprivileged junk scope) for all child->parent
+    // references. Without this test, the child process wouldn't be able to
+    // pass any objects at all to CPOWs.
+    if (mozilla::jsipc::IsWrappedCPOW(obj) &&
+        js::GetObjectCompartment(wrapper) == js::GetObjectCompartment(xpc::UnprivilegedJunkScope()) &&
+        XRE_GetProcessType() == GeckoProcessType_Default)
+    {
+        return true;
+    }
+
+    // COWs are fine to pass back if and only if they have __exposedProps__,
+    // since presumably content should never have a reason to pass an opaque
+    // object back to chrome.
+    if (WrapperFactory::IsCOW(obj)) {
+        RootedObject target(cx, js::UncheckedUnwrap(obj));
+        JSAutoCompartment ac(cx, target);
+        RootedId id(cx, GetRTIdByIndex(cx, XPCJSRuntime::IDX_EXPOSEDPROPS));
+        bool found = false;
+        if (!JS_HasPropertyById(cx, target, id, &found))
+            return false;
+        if (found)
+            return true;
+    }
+
+    // Same-origin wrappers are fine.
+    if (AccessCheck::wrapperSubsumes(obj))
+        return true;
+
+    // Badness.
+    JS_ReportError(cx, "Permission denied to pass object to chrome");
+    return false;
+}
+
+static bool
+CheckPassToChrome(JSContext *cx, HandleObject wrapper, const CallArgs &args)
+{
+    if (!CheckPassToChrome(cx, wrapper, args.thisv()))
+        return false;
+    for (size_t i = 0; i < args.length(); ++i) {
+        if (!CheckPassToChrome(cx, wrapper, args[i]))
+            return false;
+    }
+    return true;
+}
+
+bool
+ChromeObjectWrapper::defineProperty(JSContext *cx, HandleObject wrapper,
+                                    HandleId id,
+                                    MutableHandle<JSPropertyDescriptor> desc) const
+{
+    if (!CheckPassToChrome(cx, wrapper, desc.value()))
+        return false;
+    return ChromeObjectWrapperBase::defineProperty(cx, wrapper, id, desc);
+}
+
+bool
+ChromeObjectWrapper::set(JSContext *cx, HandleObject wrapper,
+                         HandleObject receiver, HandleId id,
+                         bool strict, MutableHandleValue vp) const
+{
+    if (!CheckPassToChrome(cx, wrapper, vp))
+        return false;
+    return ChromeObjectWrapperBase::set(cx, wrapper, receiver, id, strict, vp);
+}
+
+
+
 bool
 ChromeObjectWrapper::has(JSContext *cx, HandleObject wrapper,
-                         HandleId id, bool *bp)
+                         HandleId id, bool *bp) const
 {
     assertEnteredPolicy(cx, wrapper, id, GET);
     // Try the lookup on the base wrapper if permitted.
@@ -130,7 +216,7 @@ ChromeObjectWrapper::has(JSContext *cx, HandleObject wrapper,
 bool
 ChromeObjectWrapper::get(JSContext *cx, HandleObject wrapper,
                          HandleObject receiver, HandleId id,
-                         MutableHandleValue vp)
+                         MutableHandleValue vp) const
 {
     assertEnteredPolicy(cx, wrapper, id, GET);
     vp.setUndefined();
@@ -160,12 +246,30 @@ ChromeObjectWrapper::get(JSContext *cx, HandleObject wrapper,
     return js::GetGeneric(cx, wrapperProto, receiver, id, vp.address());
 }
 
+bool
+ChromeObjectWrapper::call(JSContext *cx, HandleObject wrapper,
+                      const CallArgs &args) const
+{
+    if (!CheckPassToChrome(cx, wrapper, args))
+        return false;
+    return ChromeObjectWrapperBase::call(cx, wrapper, args);
+}
+
+bool
+ChromeObjectWrapper::construct(JSContext *cx, HandleObject wrapper,
+                               const CallArgs &args) const
+{
+    if (!CheckPassToChrome(cx, wrapper, args))
+        return false;
+    return ChromeObjectWrapperBase::construct(cx, wrapper, args);
+}
+
 // SecurityWrapper categorically returns false for objectClassIs, but the
 // contacts API depends on Array.isArray returning true for COW-implemented
 // contacts. This isn't really ideal, but make it work for now.
 bool
 ChromeObjectWrapper::objectClassIs(HandleObject obj, js::ESClassValue classValue,
-                                   JSContext *cx)
+                                   JSContext *cx) const
 {
   return CrossCompartmentWrapper::objectClassIs(obj, classValue, cx);
 }
@@ -176,13 +280,14 @@ ChromeObjectWrapper::objectClassIs(HandleObject obj, js::ESClassValue classValue
 // whole proto remapping thing for COWs is going to be phased out anyway.
 bool
 ChromeObjectWrapper::enter(JSContext *cx, HandleObject wrapper,
-                           HandleId id, js::Wrapper::Action act, bool *bp)
+                           HandleId id, js::Wrapper::Action act, bool *bp) const
 {
     if (AllowedByBase(cx, wrapper, id, act))
         return true;
     // COWs fail silently for GETs, and that also happens to be the only case
     // where we might want to redirect the lookup to the home prototype chain.
-    *bp = act == Wrapper::GET || act == Wrapper::ENUMERATE;
+    *bp = act == Wrapper::GET || act == Wrapper::ENUMERATE ||
+          act == Wrapper::GET_PROPERTY_DESCRIPTOR;
     if (!*bp || id == JSID_VOID)
         return false;
 

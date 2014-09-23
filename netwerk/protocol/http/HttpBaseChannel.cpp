@@ -65,11 +65,13 @@ HttpBaseChannel::HttpBaseChannel()
   , mLoadUnblocked(false)
   , mResponseTimeoutEnabled(true)
   , mAllRedirectsSameOrigin(true)
+  , mAllRedirectsPassTimingAllowCheck(true)
   , mSuspendCount(0)
   , mProxyResolveFlags(0)
   , mContentDispositionHint(UINT32_MAX)
   , mHttpHandler(gHttpHandler)
   , mRedirectCount(0)
+  , mForcePending(false)
 {
   LOG(("Creating HttpBaseChannel @%x\n", this));
 
@@ -163,6 +165,7 @@ NS_INTERFACE_MAP_BEGIN(HttpBaseChannel)
   NS_INTERFACE_MAP_ENTRY(nsIEncodedChannel)
   NS_INTERFACE_MAP_ENTRY(nsIHttpChannel)
   NS_INTERFACE_MAP_ENTRY(nsIHttpChannelInternal)
+  NS_INTERFACE_MAP_ENTRY(nsIForcePendingChannel)
   NS_INTERFACE_MAP_ENTRY(nsIRedirectHistory)
   NS_INTERFACE_MAP_ENTRY(nsIUploadChannel)
   NS_INTERFACE_MAP_ENTRY(nsIUploadChannel2)
@@ -187,7 +190,7 @@ NS_IMETHODIMP
 HttpBaseChannel::IsPending(bool *aIsPending)
 {
   NS_ENSURE_ARG_POINTER(aIsPending);
-  *aIsPending = mIsPending;
+  *aIsPending = mIsPending || mForcePending;
   return NS_OK;
 }
 
@@ -283,6 +286,20 @@ NS_IMETHODIMP
 HttpBaseChannel::SetOwner(nsISupports *aOwner)
 {
   mOwner = aOwner;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetLoadInfo(nsILoadInfo *aLoadInfo)
+{
+  mLoadInfo = aLoadInfo;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetLoadInfo(nsILoadInfo **aLoadInfo)
+{
+  NS_IF_ADDREF(*aLoadInfo = mLoadInfo);
   return NS_OK;
 }
 
@@ -588,13 +605,19 @@ HttpBaseChannel::SetApplyConversion(bool value)
   return NS_OK;
 }
 
-nsresult
-HttpBaseChannel::ApplyContentConversions()
+NS_IMETHODIMP
+HttpBaseChannel::DoApplyContentConversions(nsIStreamListener* aNextListener,
+                                           nsIStreamListener** aNewNextListener,
+                                           nsISupports *aCtxt)
 {
-  if (!mResponseHead)
+  *aNewNextListener = nullptr;
+  if (!mResponseHead || ! aNextListener) {
     return NS_OK;
+  }
 
-  LOG(("HttpBaseChannel::ApplyContentConversions [this=%p]\n", this));
+  nsCOMPtr<nsIStreamListener> nextListener = aNextListener;
+
+  LOG(("HttpBaseChannel::DoApplyContentConversions [this=%p]\n", this));
 
   if (!mApplyConversion) {
     LOG(("not applying conversion per mApplyConversion\n"));
@@ -643,8 +666,8 @@ HttpBaseChannel::ApplyContentConversions()
       ToLowerCase(from);
       rv = serv->AsyncConvertData(from.get(),
                                   "uncompressed",
-                                  mListener,
-                                  mListenerContext,
+                                  nextListener,
+                                  aCtxt,
                                   getter_AddRefs(converter));
       if (NS_FAILED(rv)) {
         LOG(("Unexpected failure of AsyncConvertData %s\n", val));
@@ -652,14 +675,15 @@ HttpBaseChannel::ApplyContentConversions()
       }
 
       LOG(("converter removed '%s' content-encoding\n", val));
-      mListener = converter;
+      nextListener = converter;
     }
     else {
       if (val)
         LOG(("Unknown content encoding '%s', ignoring\n", val));
     }
   }
-
+  *aNewNextListener = nextListener;
+  NS_IF_ADDREF(*aNewNextListener);
   return NS_OK;
 }
 
@@ -1101,18 +1125,12 @@ HttpBaseChannel::SetRequestHeader(const nsACString& aHeader,
   LOG(("HttpBaseChannel::SetRequestHeader [this=%p header=\"%s\" value=\"%s\" merge=%u]\n",
       this, flatHeader.get(), flatValue.get(), aMerge));
 
-  // Header names are restricted to valid HTTP tokens.
-  if (!nsHttp::IsValidToken(flatHeader))
+  // Verify header names are valid HTTP tokens and header values are reasonably
+  // close to whats allowed in RFC 2616.
+  if (!nsHttp::IsValidToken(flatHeader) ||
+      !nsHttp::IsReasonableHeaderValue(flatValue)) {
     return NS_ERROR_INVALID_ARG;
-
-  // Header values MUST NOT contain line-breaks.  RFC 2616 technically
-  // permits CTL characters, including CR and LF, in header values provided
-  // they are quoted.  However, this can lead to problems if servers do not
-  // interpret quoted strings properly.  Disallowing CR and LF here seems
-  // reasonable and keeps things simple.  We also disallow a null byte.
-  if (flatValue.FindCharInSet("\r\n") != kNotFound ||
-      flatValue.Length() != strlen(flatValue.get()))
-    return NS_ERROR_INVALID_ARG;
+  }
 
   nsHttpAtom atom = nsHttp::ResolveAtom(flatHeader.get());
   if (!atom) {
@@ -1616,6 +1634,25 @@ HttpBaseChannel::AddRedirect(nsIPrincipal *aRedirect)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+HttpBaseChannel::ForcePending(bool aForcePending)
+{
+  mForcePending = aForcePending;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetLastModifiedTime(PRTime* lastModifiedTime)
+{
+  if (!mResponseHead)
+    return NS_ERROR_NOT_AVAILABLE;
+  uint32_t lastMod;
+  mResponseHead->GetLastModifiedValue(&lastMod);
+  *lastModifiedTime = lastMod;
+  return NS_OK;
+}
+
+
 //-----------------------------------------------------------------------------
 // HttpBaseChannel::nsISupportsPriority
 //-----------------------------------------------------------------------------
@@ -1702,7 +1739,7 @@ HttpBaseChannel::GetPrincipal(bool requireAppId)
       return nullptr;
   }
 
-  securityManager->GetChannelPrincipal(this, getter_AddRefs(mPrincipal));
+  securityManager->GetChannelResultPrincipal(this, getter_AddRefs(mPrincipal));
   if (!mPrincipal) {
       LOG(("HttpBaseChannel::GetPrincipal: No channel principal [this=%p]",
            this));
@@ -1877,13 +1914,6 @@ HttpBaseChannel::SetupReplacementChannel(nsIURI       *newURI,
   newChannel->SetNotificationCallbacks(mCallbacks);
   newChannel->SetLoadFlags(newLoadFlags);
 
-  // If our owner is a null principal it will have been set as a security
-  // measure, so we want to propagate it to the new channel.
-  nsCOMPtr<nsIPrincipal> ownerPrincipal = do_QueryInterface(mOwner);
-  if (ownerPrincipal && ownerPrincipal->GetIsNullPrincipal()) {
-    newChannel->SetOwner(mOwner);
-  }
-
   // Try to preserve the privacy bit if it has been overridden
   if (mPrivateBrowsingOverriden) {
     nsCOMPtr<nsIPrivateBrowsingChannel> newPBChannel =
@@ -1892,6 +1922,9 @@ HttpBaseChannel::SetupReplacementChannel(nsIURI       *newURI,
       newPBChannel->SetPrivate(mPrivateBrowsing);
     }
   }
+
+  // Propagate our loadinfo if needed.
+  newChannel->SetLoadInfo(mLoadInfo);
 
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(newChannel);
   if (!httpChannel)
@@ -2055,6 +2088,17 @@ HttpBaseChannel::SetupReplacementChannel(nsIURI       *newURI,
     // Check whether or not this was a cross-domain redirect.
     newTimedChannel->SetAllRedirectsSameOrigin(
         mAllRedirectsSameOrigin && SameOriginWithOriginalUri(newURI));
+
+    // Execute the timing allow check to determine whether
+    // to report the redirect timing info
+    nsCOMPtr<nsILoadInfo> loadInfo;
+    GetLoadInfo(getter_AddRefs(loadInfo));
+    if (loadInfo) {
+      nsCOMPtr<nsIPrincipal> principal = loadInfo->LoadingPrincipal();
+      newTimedChannel->SetAllRedirectsPassTimingAllowCheck(
+        mAllRedirectsPassTimingAllowCheck &&
+        oldTimedChannel->TimingAllowCheck(principal));
+    }
   }
 
   // This channel has been redirected. Don't report timing info.
@@ -2158,6 +2202,63 @@ NS_IMETHODIMP
 HttpBaseChannel::SetAllRedirectsSameOrigin(bool aAllRedirectsSameOrigin)
 {
   mAllRedirectsSameOrigin = aAllRedirectsSameOrigin;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetAllRedirectsPassTimingAllowCheck(bool *aPassesCheck)
+{
+  *aPassesCheck = mAllRedirectsPassTimingAllowCheck;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetAllRedirectsPassTimingAllowCheck(bool aPassesCheck)
+{
+  mAllRedirectsPassTimingAllowCheck = aPassesCheck;
+  return NS_OK;
+}
+
+// http://www.w3.org/TR/resource-timing/#timing-allow-check
+NS_IMETHODIMP
+HttpBaseChannel::TimingAllowCheck(nsIPrincipal *aOrigin, bool *_retval)
+{
+  nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
+  nsCOMPtr<nsIPrincipal> resourcePrincipal;
+  nsresult rv = ssm->GetChannelURIPrincipal(this, getter_AddRefs(resourcePrincipal));
+  if (NS_FAILED(rv) || !resourcePrincipal || !aOrigin) {
+    *_retval = false;
+    return NS_OK;
+  }
+
+  bool sameOrigin = false;
+  rv = resourcePrincipal->Equals(aOrigin, &sameOrigin);
+  if (NS_SUCCEEDED(rv) && sameOrigin) {
+    *_retval = true;
+    return NS_OK;
+  }
+
+  nsAutoCString headerValue;
+  rv = GetResponseHeader(NS_LITERAL_CSTRING("Timing-Allow-Origin"), headerValue);
+  if (NS_FAILED(rv)) {
+    *_retval = false;
+    return NS_OK;
+  }
+
+  if (headerValue == "*") {
+    *_retval = true;
+    return NS_OK;
+  }
+
+  nsAutoCString origin;
+  nsContentUtils::GetASCIIOrigin(aOrigin, origin);
+
+  if (headerValue == origin) {
+    *_retval = true;
+    return NS_OK;
+  }
+
+  *_retval = false;
   return NS_OK;
 }
 

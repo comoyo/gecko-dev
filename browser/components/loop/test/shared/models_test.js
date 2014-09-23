@@ -14,6 +14,7 @@ describe("loop.shared.models", function() {
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
+    sandbox.useFakeTimers();
     fakeXHR = sandbox.useFakeXMLHttpRequest();
     requests = [];
     // https://github.com/cjohansen/Sinon.JS/issues/393
@@ -21,12 +22,17 @@ describe("loop.shared.models", function() {
       requests.push(xhr);
     };
     fakeSessionData = {
-      sessionId:    "sessionId",
-      sessionToken: "sessionToken",
-      apiKey:       "apiKey"
+      sessionId:      "sessionId",
+      sessionToken:   "sessionToken",
+      apiKey:         "apiKey",
+      callType:       "callType",
+      websocketToken: 123,
+      callToken:    "callToken"
     };
     fakeSession = _.extend({
-      connect: sandbox.spy(),
+      connect: function () {},
+      endSession: sandbox.stub(),
+      set: sandbox.stub(),
       disconnect: sandbox.spy(),
       unpublish: sandbox.spy()
     }, Backbone.Events);
@@ -44,109 +50,83 @@ describe("loop.shared.models", function() {
     describe("#initialize", function() {
       it("should require a sdk option", function() {
         expect(function() {
-          new sharedModels.ConversationModel();
+          new sharedModels.ConversationModel({}, {});
         }).to.Throw(Error, /missing required sdk/);
       });
     });
 
     describe("constructed", function() {
-      var conversation, reqCallInfoStub, reqCallsInfoStub, fakeBaseServerUrl;
+      var conversation;
 
       beforeEach(function() {
-        conversation = new sharedModels.ConversationModel({}, {sdk: fakeSDK});
+        conversation = new sharedModels.ConversationModel({}, {
+          sdk: fakeSDK
+        });
         conversation.set("loopToken", "fakeToken");
-        fakeBaseServerUrl = "http://fakeBaseServerUrl";
-        reqCallInfoStub = sandbox.stub(loop.shared.Client.prototype,
-          "requestCallInfo");
-        reqCallsInfoStub = sandbox.stub(loop.shared.Client.prototype,
-          "requestCallsInfo");
       });
 
-      describe("#initiate", function() {
-        it("call requestCallInfo on the client for outgoing calls",
-          function() {
-            conversation.initiate({
-              baseServerUrl: fakeBaseServerUrl,
-              outgoing: true
-            });
-
-            sinon.assert.calledOnce(reqCallInfoStub);
-            sinon.assert.calledWith(reqCallInfoStub, "fakeToken");
-          });
-
-        it("should not call requestCallsInfo on the client for outgoing calls",
-          function() {
-            conversation.initiate({
-              baseServerUrl: fakeBaseServerUrl,
-              outgoing: true
-            });
-
-            sinon.assert.notCalled(reqCallsInfoStub);
-          });
-
-        it("call requestCallsInfo on the client for incoming calls",
-          function() {
-            conversation.initiate({
-              baseServerUrl: fakeBaseServerUrl,
-              outgoing: false
-            });
-
-            sinon.assert.calledOnce(reqCallsInfoStub);
-            sinon.assert.calledWith(reqCallsInfoStub);
-          });
-
-        it("should not call requestCallInfo on the client for incoming calls",
-          function() {
-            conversation.initiate({
-              baseServerUrl: fakeBaseServerUrl,
-              outgoing: false
-            });
-
-            sinon.assert.notCalled(reqCallInfoStub);
-          });
-
-        it("should update conversation session information from server data",
-          function() {
-            sandbox.stub(conversation, "setReady");
-            reqCallInfoStub.callsArgWith(1, null, fakeSessionData);
-
-            conversation.initiate({
-              baseServerUrl: fakeBaseServerUrl,
-              outgoing: true
-            });
-
-            sinon.assert.calledOnce(conversation.setReady);
-            sinon.assert.calledWith(conversation.setReady, fakeSessionData);
-          });
-
-        it("should trigger a `session:error` on failure", function(done) {
-          reqCallInfoStub.callsArgWith(1,
-            new Error("failed: HTTP 400 Bad Request; fake"));
-
-          conversation.on("session:error", function(err) {
-            expect(err.message).to.match(/failed: HTTP 400 Bad Request; fake/);
+      describe("#incoming", function() {
+        it("should trigger a `call:incoming` event", function(done) {
+          conversation.once("call:incoming", function() {
             done();
-          }).initiate({
-            baseServerUrl: fakeBaseServerUrl,
-            outgoing: true
           });
+
+          conversation.incoming();
         });
       });
 
-      describe("#setReady", function() {
-        it("should update conversation session information", function() {
-          conversation.setReady(fakeSessionData);
-
-          expect(conversation.get("sessionId")).eql("sessionId");
-          expect(conversation.get("sessionToken")).eql("sessionToken");
-          expect(conversation.get("apiKey")).eql("apiKey");
-        });
-
-        it("should trigger a `session:ready` event", function(done) {
-          conversation.on("session:ready", function() {
+      describe("#setupOutgoingCall", function() {
+        it("should trigger a `call:outgoing:setup` event", function(done) {
+          conversation.once("call:outgoing:setup", function() {
             done();
-          }).setReady(fakeSessionData);
+          });
+
+          conversation.setupOutgoingCall();
         });
+      });
+
+      describe("#outgoing", function() {
+        beforeEach(function() {
+          sandbox.stub(conversation, "endSession");
+          sandbox.stub(conversation, "setOutgoingSessionData");
+          sandbox.stub(conversation, "setIncomingSessionData");
+        });
+
+        it("should save the outgoing sessionData", function() {
+          conversation.outgoing(fakeSessionData);
+
+          sinon.assert.calledOnce(conversation.setOutgoingSessionData);
+        });
+
+        it("should trigger a `call:outgoing` event", function(done) {
+          conversation.once("call:outgoing", function() {
+            done();
+          });
+
+          conversation.outgoing();
+        });
+      });
+
+      describe("#setSessionData", function() {
+        it("should update outgoing conversation session information",
+           function() {
+             conversation.setOutgoingSessionData(fakeSessionData);
+
+             expect(conversation.get("sessionId")).eql("sessionId");
+             expect(conversation.get("sessionToken")).eql("sessionToken");
+             expect(conversation.get("apiKey")).eql("apiKey");
+           });
+
+        it("should update incoming conversation session information",
+           function() {
+             conversation.setIncomingSessionData(fakeSessionData);
+
+             expect(conversation.get("sessionId")).eql("sessionId");
+             expect(conversation.get("sessionToken")).eql("sessionToken");
+             expect(conversation.get("apiKey")).eql("apiKey");
+             expect(conversation.get("callType")).eql("callType");
+             expect(conversation.get("callToken")).eql("callToken");
+           });
       });
 
       describe("#startSession", function() {
@@ -163,12 +143,83 @@ describe("loop.shared.models", function() {
           sinon.assert.calledOnce(fakeSDK.initSession);
         });
 
-        describe("Session events", function() {
-          it("should trigger a session:connected event on sessionConnected",
-            function(done) {
-              model.once("session:connected", function(){ done(); });
+        it("should call connect", function() {
+          fakeSession.connect = sandbox.stub();
 
-              fakeSession.trigger("sessionConnected");
+          model.startSession();
+
+          sinon.assert.calledOnce(fakeSession.connect);
+          sinon.assert.calledWithExactly(fakeSession.connect,
+                        sinon.match.string, sinon.match.string,
+                        sinon.match.func);
+        });
+
+        it("should set connected to true when no error is called back",
+            function() {
+              fakeSession.connect = function(key, token, cb) {
+                cb(null);
+              };
+              sandbox.stub(model, "set");
+
+              model.startSession();
+
+              sinon.assert.calledWith(model.set, "connected", true);
+            });
+
+        it("should trigger session:connected when no error is called back",
+            function() {
+              fakeSession.connect = function(key, token, cb) {
+                cb(null);
+              };
+              sandbox.stub(model, "trigger");
+
+              model.startSession();
+
+              sinon.assert.calledWithExactly(model.trigger, "session:connected");
+            });
+
+        describe("Session events", function() {
+
+          it("should trigger a fail event when an error is called back",
+            function() {
+              fakeSession.connect = function(key, token, cb) {
+                cb({
+                  error: true
+                });
+              };
+              sandbox.stub(model, "endSession");
+
+              model.startSession();
+
+              sinon.assert.calledOnce(model.endSession);
+              sinon.assert.calledWithExactly(model.endSession);
+            });
+
+          it("should trigger session:connection-error event when an error is" +
+            " called back", function() {
+              fakeSession.connect = function(key, token, cb) {
+                cb({
+                  error: true
+                });
+              };
+              sandbox.stub(model, "trigger");
+
+              model.startSession();
+
+              sinon.assert.calledOnce(model.trigger);
+              sinon.assert.calledWithExactly(model.trigger,
+                          "session:connection-error", sinon.match.object);
+            });
+
+          it("should set the connected attr to true on connection completed",
+            function() {
+              fakeSession.connect = function(key, token, cb) {
+                cb();
+              };
+
+              model.startSession();
+
+              expect(model.get("connected")).eql(true);
             });
 
           it("should trigger a session:ended event on sessionDisconnected",
@@ -178,14 +229,18 @@ describe("loop.shared.models", function() {
               fakeSession.trigger("sessionDisconnected", {reason: "ko"});
             });
 
-          it("should set the ongoing attribute to false on sessionDisconnected",
-            function(done) {
-              model.once("session:ended", function() {
-                expect(model.get("ongoing")).eql(false);
-                done();
-              });
-
+          it("should set the connected attribute to false on sessionDisconnected",
+            function() {
               fakeSession.trigger("sessionDisconnected", {reason: "ko"});
+
+              expect(model.get("connected")).eql(false);
+            });
+
+          it("should set the ongoing attribute to false on sessionDisconnected",
+            function() {
+              fakeSession.trigger("sessionDisconnected", {reason: "ko"});
+
+              expect(model.get("ongoing")).eql(false);
             });
 
           describe("connectionDestroyed event received", function() {
@@ -247,6 +302,12 @@ describe("loop.shared.models", function() {
           sinon.assert.calledOnce(fakeSession.disconnect);
         });
 
+        it("should set the connected attribute to false", function() {
+          model.endSession();
+
+          expect(model.get("connected")).eql(false);
+        });
+
         it("should set the ongoing attribute to false", function() {
           model.endSession();
 
@@ -263,6 +324,83 @@ describe("loop.shared.models", function() {
             sinon.assert.calledOnce(model.stopListening);
           });
       });
+
+      describe("#hasVideoStream", function() {
+        var model;
+
+        beforeEach(function() {
+          model = new sharedModels.ConversationModel(fakeSessionData, {
+            sdk: fakeSDK
+          });
+          model.startSession();
+        });
+
+        it("should return true for incoming callType", function() {
+          model.set("callType", "audio-video");
+
+          expect(model.hasVideoStream("incoming")).to.eql(true);
+        });
+
+        it("should return true for outgoing callType", function() {
+          model.set("selectedCallType", "audio-video");
+
+          expect(model.hasVideoStream("outgoing")).to.eql(true);
+        });
+      });
     });
+  });
+
+  describe("NotificationCollection", function() {
+    var collection, notifData, testNotif;
+
+    beforeEach(function() {
+      collection = new sharedModels.NotificationCollection();
+      sandbox.stub(l10n, "get", function(x) {
+        return "translated:" + x;
+      });
+      notifData = {level: "error", message: "plop"};
+      testNotif = new sharedModels.NotificationModel(notifData);
+    });
+
+    describe("#warn", function() {
+      it("should add a warning notification to the stack", function() {
+        collection.warn("watch out");
+
+        expect(collection).to.have.length.of(1);
+        expect(collection.at(0).get("level")).eql("warning");
+        expect(collection.at(0).get("message")).eql("watch out");
+      });
+    });
+
+    describe("#warnL10n", function() {
+      it("should warn using a l10n string id", function() {
+        collection.warnL10n("fakeId");
+
+        expect(collection).to.have.length.of(1);
+        expect(collection.at(0).get("level")).eql("warning");
+        expect(collection.at(0).get("message")).eql("translated:fakeId");
+      });
+    });
+
+    describe("#error", function() {
+      it("should add an error notification to the stack", function() {
+        collection.error("wrong");
+
+        expect(collection).to.have.length.of(1);
+        expect(collection.at(0).get("level")).eql("error");
+        expect(collection.at(0).get("message")).eql("wrong");
+      });
+    });
+
+    describe("#errorL10n", function() {
+      it("should notify an error using a l10n string id", function() {
+        collection.errorL10n("fakeId");
+
+        expect(collection).to.have.length.of(1);
+        expect(collection.at(0).get("level")).eql("error");
+        expect(collection.at(0).get("message")).eql("translated:fakeId");
+      });
+    });
+
   });
 });

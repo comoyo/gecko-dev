@@ -74,7 +74,7 @@ public:
   HRESULT Flush();
 
   // Sends a message to the MFT.
-  HRESULT SendMFTMessage(MFT_MESSAGE_TYPE aMsg, UINT32 aData);
+  HRESULT SendMFTMessage(MFT_MESSAGE_TYPE aMsg, ULONG_PTR aData);
 
 private:
 
@@ -96,6 +96,9 @@ private:
 
   // True if the IMFTransform allocates the samples that it returns.
   bool mMFTProvidesOutputSamples;
+
+  // True if we need to mark the next sample as a discontinuity.
+  bool mDiscontinuity;
 };
 
 } // namespace mozilla

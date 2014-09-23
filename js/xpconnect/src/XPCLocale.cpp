@@ -43,7 +43,6 @@ struct XPCLocaleCallbacks : public JSLocaleCallbacks
     localeToLowerCase = LocaleToLowerCase;
     localeCompare = LocaleCompare;
     localeToUnicode = LocaleToUnicode;
-    localeGetErrorMessage = nullptr;
   }
 
   ~XPCLocaleCallbacks()
@@ -102,13 +101,13 @@ private:
   ChangeCase(JSContext* cx, HandleString src, MutableHandleValue rval,
              void(*changeCaseFnc)(const nsAString&, nsAString&))
   {
-    nsDependentJSString depStr;
-    if (!depStr.init(cx, src)) {
+    nsAutoJSString autoStr;
+    if (!autoStr.init(cx, src)) {
       return false;
     }
 
     nsAutoString result;
-    changeCaseFnc(depStr, result);
+    changeCaseFnc(autoStr, result);
 
     JSString *ucstr =
       JS_NewUCStringCopyN(cx, result.get(), result.Length());
@@ -149,14 +148,14 @@ private:
       }
     }
 
-    nsDependentJSString depStr1, depStr2;
-    if (!depStr1.init(cx, src1) || !depStr2.init(cx, src2)) {
+    nsAutoJSString autoStr1, autoStr2;
+    if (!autoStr1.init(cx, src1) || !autoStr2.init(cx, src2)) {
       return false;
     }
 
     int32_t result;
     rv = mCollation->CompareString(nsICollation::kCollationStrengthDefault,
-                                   depStr1, depStr2, &result);
+                                   autoStr1, autoStr2, &result);
 
     if (NS_FAILED(rv)) {
       xpc::Throw(cx, rv);
@@ -215,11 +214,12 @@ private:
           if (unicharLength + 1 < srcLength + 1) {
             char16_t *shrunkUnichars =
               (char16_t *)JS_realloc(cx, unichars,
-                                      (unicharLength + 1) * sizeof(char16_t));
+                                     (srcLength + 1) * sizeof(char16_t),
+                                     (unicharLength + 1) * sizeof(char16_t));
             if (shrunkUnichars)
               unichars = shrunkUnichars;
           }
-          JSString *str = JS_NewUCString(cx, reinterpret_cast<jschar*>(unichars), unicharLength);
+          JSString *str = JS_NewUCString(cx, reinterpret_cast<char16_t*>(unichars), unicharLength);
           if (str) {
             rval.setString(str);
             return true;

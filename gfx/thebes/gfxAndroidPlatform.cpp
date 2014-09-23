@@ -8,11 +8,13 @@
 
 #include "gfxAndroidPlatform.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/CountingAllocatorBase.h"
 #include "mozilla/Preferences.h"
 
 #include "gfx2DGlue.h"
 #include "gfxFT2FontList.h"
 #include "gfxImageSurface.h"
+#include "gfxTextRun.h"
 #include "mozilla/dom/ContentChild.h"
 #include "nsXULAppAPI.h"
 #include "nsIScreen.h"
@@ -43,6 +45,9 @@ static FT_Library gPlatformFTLibrary = nullptr;
 class FreetypeReporter MOZ_FINAL : public nsIMemoryReporter,
                                    public CountingAllocatorBase<FreetypeReporter>
 {
+private:
+    ~FreetypeReporter() {}
+
 public:
     NS_DECL_ISUPPORTS
 
@@ -63,7 +68,7 @@ public:
     }
 
     NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                              nsISupports* aData)
+                              nsISupports* aData, bool aAnonymize)
     {
         return MOZ_COLLECT_REPORT(
             "explicit/freetype", KIND_HEAP, UNITS_BYTES, MemoryAllocated(),
@@ -302,21 +307,32 @@ gfxAndroidPlatform::GetFTLibrary()
     return gPlatformFTLibrary;
 }
 
-gfxFontEntry* 
-gfxAndroidPlatform::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                     const uint8_t *aFontData, uint32_t aLength)
+gfxFontEntry*
+gfxAndroidPlatform::LookupLocalFont(const nsAString& aFontName,
+                                    uint16_t aWeight,
+                                    int16_t aStretch,
+                                    bool aItalic)
 {
-    return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aProxyEntry,
-                                                                     aFontData,
-                                                                     aLength);
+    return gfxPlatformFontList::PlatformFontList()->LookupLocalFont(aFontName,
+                                                                    aWeight,
+                                                                    aStretch,
+                                                                    aItalic);
 }
 
-gfxFontEntry*
-gfxAndroidPlatform::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                    const nsAString& aFontName)
+gfxFontEntry* 
+gfxAndroidPlatform::MakePlatformFont(const nsAString& aFontName,
+                                     uint16_t aWeight,
+                                     int16_t aStretch,
+                                     bool aItalic,
+                                     const uint8_t* aFontData,
+                                     uint32_t aLength)
 {
-    return gfxPlatformFontList::PlatformFontList()->LookupLocalFont(aProxyEntry,
-                                                                    aFontName);
+    return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aFontName,
+                                                                     aWeight,
+                                                                     aStretch,
+                                                                     aItalic,
+                                                                     aFontData,
+                                                                     aLength);
 }
 
 TemporaryRef<ScaledFont>

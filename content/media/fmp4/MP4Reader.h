@@ -29,7 +29,7 @@ class MP4Stream;
 class MP4Reader : public MediaDecoderReader
 {
 public:
-  MP4Reader(AbstractMediaDecoder* aDecoder);
+  explicit MP4Reader(AbstractMediaDecoder* aDecoder);
 
   virtual ~MP4Reader();
 
@@ -49,10 +49,29 @@ public:
                         int64_t aStartTime,
                         int64_t aEndTime,
                         int64_t aCurrentTime) MOZ_OVERRIDE;
+
+  virtual bool IsMediaSeekable() MOZ_OVERRIDE;
+
+  virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength,
+                                 int64_t aOffset) MOZ_OVERRIDE;
+
+  virtual int64_t GetEvictionOffset(double aTime) MOZ_OVERRIDE;
+
+  virtual nsresult GetBuffered(dom::TimeRanges* aBuffered,
+                               int64_t aStartTime) MOZ_OVERRIDE;
+
+  // For Media Resource Management
+  virtual bool IsWaitingMediaResources() MOZ_OVERRIDE;
+  virtual bool IsDormantNeeded() MOZ_OVERRIDE;
+  virtual void ReleaseMediaResources() MOZ_OVERRIDE;
+
+  virtual nsresult ResetDecode() MOZ_OVERRIDE;
+
+  virtual void Shutdown() MOZ_OVERRIDE;
+
 private:
 
-  // Destroys all decoder resources.
-  void Shutdown();
+  void ExtractCryptoInitData(nsTArray<uint8_t>& aInitData);
 
   // Initializes mLayersBackendType if possible.
   void InitLayersBackendType();
@@ -68,6 +87,12 @@ private:
   void Error(mp4_demuxer::TrackType aTrack);
   bool Decode(mp4_demuxer::TrackType aTrack);
   void Flush(mp4_demuxer::TrackType aTrack);
+  void DrainComplete(mp4_demuxer::TrackType aTrack);
+  void UpdateIndex();
+  bool IsSupportedAudioMimeType(const char* aMimeType);
+  void NotifyResourcesStatusChanged();
+  bool IsWaitingOnCodecResource();
+  bool IsWaitingOnCDMResource();
 
   nsAutoPtr<mp4_demuxer::MP4Demuxer> mDemuxer;
   nsAutoPtr<PlatformDecoderModule> mPlatform;
@@ -89,6 +114,15 @@ private:
     virtual void Error() MOZ_OVERRIDE {
       mReader->Error(mType);
     }
+    virtual void DrainComplete() MOZ_OVERRIDE {
+      mReader->DrainComplete(mType);
+    }
+    virtual void NotifyResourcesStatusChanged() MOZ_OVERRIDE {
+      mReader->NotifyResourcesStatusChanged();
+    }
+    virtual void ReleaseMediaResources() MOZ_OVERRIDE {
+      mReader->ReleaseMediaResources();
+    }
   private:
     MP4Reader* mReader;
     mp4_demuxer::TrackType mType;
@@ -105,14 +139,16 @@ private:
       , mInputExhausted(false)
       , mError(false)
       , mIsFlushing(false)
+      , mDrainComplete(false)
+      , mEOS(false)
     {
     }
 
     // The platform decoder.
-    RefPtr<MediaDataDecoder> mDecoder;
+    nsRefPtr<MediaDataDecoder> mDecoder;
     // TaskQueue on which decoder can choose to decode.
     // Only non-null up until the decoder is created.
-    RefPtr<MediaTaskQueue> mTaskQueue;
+    nsRefPtr<MediaTaskQueue> mTaskQueue;
     // Callback that receives output and error notifications from the decoder.
     nsAutoPtr<DecoderCallback> mCallback;
     // Monitor that protects all non-threadsafe state; the primitives
@@ -126,10 +162,12 @@ private:
     bool mInputExhausted;
     bool mError;
     bool mIsFlushing;
+    bool mDrainComplete;
+    bool mEOS;
   };
   DecoderData mAudio;
   DecoderData mVideo;
-  // Queued frame extracted by the demuxer, but not yet sent to the platform
+  // Queued samples extracted by the demuxer, but not yet sent to the platform
   // decoder.
   nsAutoPtr<mp4_demuxer::MP4Sample> mQueuedVideoSample;
 
@@ -140,11 +178,20 @@ private:
   uint64_t mLastReportedNumDecodedFrames;
 
   DecoderData& GetDecoderData(mp4_demuxer::TrackType aTrack);
-  MP4SampleQueue& SampleQueue(mp4_demuxer::TrackType aTrack);
   MediaDataDecoder* Decoder(mp4_demuxer::TrackType aTrack);
 
   layers::LayersBackend mLayersBackendType;
 
+  nsTArray<nsTArray<uint8_t>> mInitDataEncountered;
+
+  // True if we've read the streams' metadata.
+  bool mDemuxerInitialized;
+
+  // Synchronized by decoder monitor.
+  bool mIsEncrypted;
+
+  bool mIndexReady;
+  Monitor mIndexMonitor;
 };
 
 } // namespace mozilla

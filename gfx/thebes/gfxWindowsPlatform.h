@@ -46,11 +46,12 @@
 namespace mozilla {
 namespace layers {
 class DeviceManagerD3D9;
+class ReadbackManagerD3D11;
 }
 }
-class IDirect3DDevice9;
-class ID3D11Device;
-class IDXGIAdapter1;
+struct IDirect3DDevice9;
+struct ID3D11Device;
+struct IDXGIAdapter1;
 
 class nsIMemoryReporter;
 
@@ -60,7 +61,6 @@ struct DCFromContext {
     DCFromContext(gfxContext *aContext) {
         dc = nullptr;
         nsRefPtr<gfxASurface> aSurface = aContext->CurrentSurface();
-        NS_ASSERTION(aSurface || !aContext->IsCairo(), "DCFromContext: null surface");
         if (aSurface &&
             (aSurface->GetType() == gfxSurfaceType::Win32 ||
              aSurface->GetType() == gfxSurfaceType::Win32Printing))
@@ -131,8 +131,6 @@ public:
 
     virtual mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont);
-    virtual already_AddRefed<gfxASurface>
-      GetThebesSurfaceForDrawTarget(mozilla::gfx::DrawTarget *aTarget);
 
     enum RenderMode {
         /* Use GDI and windows surfaces */
@@ -201,14 +199,19 @@ public:
     /**
      * Look up a local platform font using the full font face name (needed to support @font-face src local() )
      */
-    virtual gfxFontEntry* LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                          const nsAString& aFontName);
+    virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
+                                          uint16_t aWeight,
+                                          int16_t aStretch,
+                                          bool aItalic);
 
     /**
      * Activate a platform font (needed to support @font-face src url() )
      */
-    virtual gfxFontEntry* MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                           const uint8_t *aFontData,
+    virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
+                                           uint16_t aWeight,
+                                           int16_t aStretch,
+                                           bool aItalic,
+                                           const uint8_t* aFontData,
                                            uint32_t aLength);
 
     /**
@@ -258,6 +261,9 @@ public:
     ID3D10Device1 *GetD3D10Device() { return mD2DDevice ? cairo_d2d_device_get_device(mD2DDevice) : nullptr; }
 #endif
     ID3D11Device *GetD3D11Device();
+    ID3D11Device *GetD3D11ContentDevice();
+
+    mozilla::layers::ReadbackManagerD3D11* GetReadbackManager();
 
     static bool IsOptimus();
 
@@ -269,6 +275,7 @@ protected:
 
 private:
     void Init();
+    void InitD3D11Devices();
     IDXGIAdapter1 *GetDXGIAdapter();
 
     bool mUseDirectWrite;
@@ -286,7 +293,9 @@ private:
     mozilla::RefPtr<IDXGIAdapter1> mAdapter;
     nsRefPtr<mozilla::layers::DeviceManagerD3D9> mDeviceManager;
     mozilla::RefPtr<ID3D11Device> mD3D11Device;
+    mozilla::RefPtr<ID3D11Device> mD3D11ContentDevice;
     bool mD3D11DeviceInitialized;
+    mozilla::RefPtr<mozilla::layers::ReadbackManagerD3D11> mD3D11ReadbackManager;
 
     virtual void GetPlatformCMSOutputProfile(void* &mem, size_t &size);
 

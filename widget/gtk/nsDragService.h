@@ -48,12 +48,11 @@ class nsAutoRefTraits<GdkDragContext> :
  * Native GTK DragService wrapper
  */
 
-class nsDragService : public nsBaseDragService,
-                      public nsIObserver
+class nsDragService MOZ_FINAL : public nsBaseDragService,
+                                public nsIObserver
 {
 public:
     nsDragService();
-    virtual ~nsDragService();
 
     NS_DECL_ISUPPORTS_INHERITED
 
@@ -118,6 +117,9 @@ public:
 
     // set the drag icon during drag-begin
     void SetDragIcon(GdkDragContext* aContext);
+
+protected:
+    virtual ~nsDragService();
 
 private:
 

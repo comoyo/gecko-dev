@@ -23,6 +23,7 @@
 #include "nsString.h"
 #include "AutoRwLock.h"
 #include "nsPrintfCString.h"
+#include "nsClassHashtable.h"
 #include "ICameraControl.h"
 
 namespace mozilla {
@@ -100,6 +101,8 @@ protected:
   int32_t mExposureCompensationMaxIndex;
   nsTArray<int> mZoomRatios;
   nsTArray<nsString> mIsoModes;
+  nsTArray<nsString> mSceneModes;
+  nsClassHashtable<nsStringHashKey, nsCString> mIsoModeMap;
 
   // This subclass of android::CameraParameters just gives
   // all of the AOSP getters and setters the same signature.
@@ -119,6 +122,8 @@ protected:
     void get(const char* aKey, const char*& aRet) { aRet = get(aKey); }
     void get(const char* aKey, int& aRet)         { aRet = getInt(aKey); }
     void get(const char* aKey, bool& aRet)        { aRet = strcmp(get(aKey), FALSE); }
+
+    void remove(const char* aKey)                 { android::CameraParameters::remove(aKey); }
 
     static const char* GetTextKey(uint32_t aKey);
   };
@@ -163,6 +168,13 @@ protected:
   GetImpl(const char* aKey, T& aValue)
   {
     mParams.get(aKey, aValue);
+    return NS_OK;
+  }
+
+  nsresult
+  ClearImpl(const char* aKey)
+  {
+    mParams.remove(aKey);
     return NS_OK;
   }
 
@@ -222,6 +234,10 @@ protected:
   // Call once to initialize local cached values used in translating other
   // arguments between Gecko and Gonk. Always returns NS_OK.
   nsresult Initialize();
+
+  // Returns true if we're a memory-constrained platform that requires
+  // certain features to be disabled; returns false otherwise.
+  static bool IsLowMemoryPlatform();
 };
 
 } // namespace mozilla

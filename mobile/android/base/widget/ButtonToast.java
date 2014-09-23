@@ -16,13 +16,10 @@
 
 package org.mozilla.gecko.widget;
 
-import java.util.LinkedList;
-
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.animation.PropertyAnimator;
 
 import android.graphics.drawable.Drawable;
-import android.os.Bundle;
 import android.os.Handler;
 import android.view.View;
 import android.widget.Button;
@@ -32,16 +29,18 @@ public class ButtonToast {
     @SuppressWarnings("unused")
     private final static String LOGTAG = "GeckoButtonToast";
 
-    private final static int TOAST_DURATION = 5000;
+    public static int LENGTH_SHORT = 3000;
+    public static int LENGTH_LONG = 5000;
 
-    private final View mView;
     private final TextView mMessageView;
     private final Button mButton;
     private final Handler mHideHandler = new Handler();
-    private Toast mCurrentToast;
+    final View mView;
+    Toast mCurrentToast;
 
     public enum ReasonHidden {
         CLICKED,
+        TOUCH_OUTSIDE,
         TIMEOUT,
         REPLACED,
         STARTUP
@@ -52,11 +51,14 @@ public class ButtonToast {
         public final CharSequence buttonMessage;
         public Drawable buttonDrawable;
         public final CharSequence message;
+        public final int duration;
         public ToastListener listener;
 
-        public Toast(CharSequence aMessage, CharSequence aButtonMessage,
-                     Drawable aDrawable, ToastListener aListener) {
+        public Toast(CharSequence aMessage, int aDuration,
+                CharSequence aButtonMessage, Drawable aDrawable,
+                ToastListener aListener) {
             message = aMessage;
+            duration = aDuration;
             buttonMessage = aButtonMessage;
             buttonDrawable = aDrawable;
             listener = aListener;
@@ -90,16 +92,16 @@ public class ButtonToast {
     }
 
     public void show(boolean immediate, CharSequence message,
-                     CharSequence buttonMessage, int buttonDrawableId,
-                     ToastListener listener) {
+                     int duration, CharSequence buttonMessage,
+                     int buttonDrawableId, ToastListener listener) {
         final Drawable d = mView.getContext().getResources().getDrawable(buttonDrawableId);
-        show(false, message, buttonMessage, d, listener);
+        show(false, message, duration, buttonMessage, d, listener);
     }
 
     public void show(boolean immediate, CharSequence message,
-                     CharSequence buttonMessage, Drawable buttonDrawable,
-                     ToastListener listener) {
-        show(new Toast(message, buttonMessage, buttonDrawable, listener), immediate);
+                     int duration, CharSequence buttonMessage,
+                     Drawable buttonDrawable, ToastListener listener) {
+        show(new Toast(message, duration, buttonMessage, buttonDrawable, listener), immediate);
     }
 
     private void show(Toast t, boolean immediate) {
@@ -118,7 +120,7 @@ public class ButtonToast {
         mButton.setCompoundDrawablesWithIntrinsicBounds(t.buttonDrawable, null, null, null);
 
         mHideHandler.removeCallbacks(mHideRunnable);
-        mHideHandler.postDelayed(mHideRunnable, TOAST_DURATION);
+        mHideHandler.postDelayed(mHideRunnable, t.duration);
 
         mView.setVisibility(View.VISIBLE);
         int duration = immediate ? 0 : mView.getResources().getInteger(android.R.integer.config_longAnimTime);
@@ -129,6 +131,11 @@ public class ButtonToast {
     }
 
     public void hide(boolean immediate, ReasonHidden reason) {
+        // There's nothing to do if the view is already hidden.
+        if (mView.getVisibility() == View.GONE) {
+            return;
+        }
+
         if (mCurrentToast != null && mCurrentToast.listener != null) {
             mCurrentToast.listener.onToastHidden(reason);
         }

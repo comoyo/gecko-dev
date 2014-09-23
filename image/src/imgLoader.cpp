@@ -52,20 +52,27 @@ MOZ_DEFINE_MALLOC_SIZE_OF(ImagesMallocSizeOf)
 
 class imgMemoryReporter MOZ_FINAL : public nsIMemoryReporter
 {
+  ~imgMemoryReporter() {}
+
 public:
   NS_DECL_ISUPPORTS
 
   NS_IMETHOD CollectReports(nsIMemoryReporterCallback *aHandleReport,
-                            nsISupports *aData)
+                            nsISupports *aData, bool aAnonymize)
   {
     nsresult rv;
     ImageSizes chrome;
     ImageSizes content;
+    ImageSizes uncached;
 
     for (uint32_t i = 0; i < mKnownLoaders.Length(); i++) {
       mKnownLoaders[i]->mChromeCache.EnumerateRead(EntryImageSizes, &chrome);
       mKnownLoaders[i]->mCache.EnumerateRead(EntryImageSizes, &content);
+      MutexAutoLock lock(mKnownLoaders[i]->mUncachedImagesMutex);
+      mKnownLoaders[i]->mUncachedImages.EnumerateEntries(EntryUncachedImageSizes, &uncached);
     }
+
+    // Note that we only need to anonymize content image URIs.
 
     rv = ReportInfoArray(aHandleReport, aData, chrome.mRasterUsedImageInfo,
                          "images/chrome/raster/used");
@@ -84,19 +91,36 @@ public:
     NS_ENSURE_SUCCESS(rv, rv);
 
     rv = ReportInfoArray(aHandleReport, aData, content.mRasterUsedImageInfo,
-                         "images/content/raster/used");
+                         "images/content/raster/used", aAnonymize);
     NS_ENSURE_SUCCESS(rv, rv);
 
     rv = ReportInfoArray(aHandleReport, aData, content.mRasterUnusedImageInfo,
-                         "images/content/raster/unused");
+                         "images/content/raster/unused", aAnonymize);
     NS_ENSURE_SUCCESS(rv, rv);
 
     rv = ReportInfoArray(aHandleReport, aData, content.mVectorUsedImageDocInfo,
-                         "images/content/vector/used/documents");
+                         "images/content/vector/used/documents", aAnonymize);
     NS_ENSURE_SUCCESS(rv, rv);
 
     rv = ReportInfoArray(aHandleReport, aData, content.mVectorUnusedImageDocInfo,
-                         "images/content/vector/unused/documents");
+                         "images/content/vector/unused/documents", aAnonymize);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // The uncached images can contain both content and chrome images, so anonymize it.
+    rv = ReportInfoArray(aHandleReport, aData, uncached.mRasterUsedImageInfo,
+                         "images/uncached/raster/used", aAnonymize);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = ReportInfoArray(aHandleReport, aData, uncached.mRasterUnusedImageInfo,
+                         "images/uncached/raster/unused", aAnonymize);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = ReportInfoArray(aHandleReport, aData, uncached.mVectorUsedImageDocInfo,
+                         "images/uncached/vector/used/documents", aAnonymize);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = ReportInfoArray(aHandleReport, aData, uncached.mVectorUnusedImageDocInfo,
+                         "images/uncached/vector/unused/documents", aAnonymize);
     NS_ENSURE_SUCCESS(rv, rv);
 
     return NS_OK;
@@ -201,7 +225,7 @@ private:
   nsresult ReportInfoArray(nsIMemoryReporterCallback *aHandleReport,
                            nsISupports *aData,
                            const nsTArray<ImageInfo<Sizes> > &aInfoArray,
-                           const char *aPathPartStr)
+                           const char *aPathPartStr, bool aAnonymize = false)
   {
     nsresult rv;
     Sizes totalSizes;
@@ -214,14 +238,20 @@ private:
     // Report notable images, and compute total and non-notable aggregate sizes.
     for (uint32_t i = 0; i < aInfoArray.Length(); i++) {
       ImageInfo<Sizes> info = aInfoArray[i];
-      // info.mURI can be a data: URI, and thus extremely long. Truncate if
-      // necessary.
-      static const size_t max = 256;
-      if (info.mURI.Length() > max) {
-        info.mURI.Truncate(max);
-        info.mURI.AppendLiteral(" (truncated)");
+
+      if (aAnonymize) {
+        info.mURI.Truncate();
+        info.mURI.AppendPrintf("<anonymized-%u>", i);
+      } else {
+        // info.mURI can be a data: URI, and thus extremely long. Truncate if
+        // necessary.
+        static const size_t max = 256;
+        if (info.mURI.Length() > max) {
+          info.mURI.Truncate(max);
+          info.mURI.AppendLiteral(" (truncated)");
+        }
+        info.mURI.ReplaceChar('/', '\\');
       }
-      info.mURI.ReplaceChar('/', '\\');
 
       totalSizes.add(info.mSizes);
 
@@ -279,6 +309,45 @@ private:
         image->HeapSizeOfVectorImageDocument(&vectorInfo.mURI);
       if (!vectorInfo.mURI.IsEmpty()) {
         if (!aEntry->HasNoProxies()) {
+          sizes->mVectorUsedImageDocInfo.AppendElement(vectorInfo);
+        } else {
+          sizes->mVectorUnusedImageDocInfo.AppendElement(vectorInfo);
+        }
+      }
+    }
+
+    return PL_DHASH_NEXT;
+  }
+
+  static PLDHashOperator EntryUncachedImageSizes(nsPtrHashKey<imgRequest>* aEntry,
+                                                 void* aUserArg)
+  {
+    nsRefPtr<imgRequest> req = aEntry->GetKey();
+    Image *image = static_cast<Image*>(req->mImage.get());
+    if (image) {
+      ImageSizes *sizes = static_cast<ImageSizes*>(aUserArg);
+
+      nsRefPtr<ImageURL> imageURL(image->GetURI());
+      nsAutoCString spec;
+      imageURL->GetSpec(spec);
+      ImageInfo<RasterSizes> rasterInfo;
+      rasterInfo.mSizes.mRaw =
+          image->HeapSizeOfSourceWithComputedFallback(ImagesMallocSizeOf);
+      rasterInfo.mSizes.mUncompressedHeap =
+          image->HeapSizeOfDecodedWithComputedFallback(ImagesMallocSizeOf);
+      rasterInfo.mSizes.mUncompressedNonheap = image->NonHeapSizeOfDecoded();
+      rasterInfo.mURI = spec.get();
+      if (req->HasConsumers()) {
+        sizes->mRasterUsedImageInfo.AppendElement(rasterInfo);
+      } else {
+        sizes->mRasterUnusedImageInfo.AppendElement(rasterInfo);
+      }
+
+      ImageInfo<VectorDocSizes> vectorInfo;
+      vectorInfo.mSizes.mSize =
+        image->HeapSizeOfVectorImageDocument(&vectorInfo.mURI);
+      if (!vectorInfo.mURI.IsEmpty()) {
+        if (req->HasConsumers()) {
           sizes->mVectorUsedImageDocInfo.AppendElement(vectorInfo);
         } else {
           sizes->mVectorUnusedImageDocInfo.AppendElement(vectorInfo);
@@ -471,6 +540,7 @@ static void NewRequestAndEntry(bool aForcePrincipalCheckForCacheEntry, imgLoader
 {
   nsRefPtr<imgRequest> request = new imgRequest(aLoader);
   nsRefPtr<imgCacheEntry> entry = new imgCacheEntry(aLoader, request, aForcePrincipalCheckForCacheEntry);
+  aLoader->AddToUncachedImages(request);
   request.forget(aRequest);
   entry.forget(aEntry);
 }
@@ -565,7 +635,8 @@ static nsresult NewImageChannel(nsIChannel **aResult,
                                 const nsCString& aAcceptHeader,
                                 nsLoadFlags aLoadFlags,
                                 nsIChannelPolicy *aPolicy,
-                                nsIPrincipal *aLoadingPrincipal)
+                                nsIPrincipal *aLoadingPrincipal,
+                                nsISupports *aRequestingContext)
 {
   nsresult rv;
   nsCOMPtr<nsIHttpChannel> newHttpChannel;
@@ -589,17 +660,45 @@ static nsresult NewImageChannel(nsIChannel **aResult,
   // If all of the proxy requests are canceled then this request should be
   // canceled too.
   //
-  rv = NS_NewChannel(aResult,
-                     aURI,        // URI
-                     nullptr,      // Cached IOService
-                     nullptr,      // LoadGroup
-                     callbacks,   // Notification Callbacks
-                     aLoadFlags,
-                     aPolicy);
+  aLoadFlags |= nsIChannel::LOAD_CLASSIFY_URI;
+
+  nsCOMPtr<nsIPrincipal> requestingPrincipal = aLoadingPrincipal;
+  bool isSandBoxed = false;
+  // only inherit if we have a principal
+  bool inherit = false;
+  if (requestingPrincipal) {
+    inherit = nsContentUtils::ChannelShouldInheritPrincipal(requestingPrincipal,
+                                                            aURI,
+                                                            false,  // aInheritForAboutBlank
+                                                            false); // aForceInherit
+  }
+  else {
+    requestingPrincipal = nsContentUtils::GetSystemPrincipal();
+  }
+  nsCOMPtr<nsINode> requestingNode = do_QueryInterface(aRequestingContext);
+  nsSecurityFlags securityFlags = nsILoadInfo::SEC_NORMAL;
+  if (inherit) {
+    securityFlags |= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
+  }
+  // Note we are calling NS_NewChannelInternal() here with a node and a principal.
+  // This is for things like background images that are specified by user
+  // stylesheets, where the document is being styled, but the principal is that
+  // of the user stylesheet.
+  rv = NS_NewChannelInternal(aResult,
+                             aURI,
+                             requestingNode,
+                             requestingPrincipal,
+                             securityFlags,
+                             nsIContentPolicy::TYPE_IMAGE,
+                             aPolicy,
+                             nullptr,   // loadGroup
+                             callbacks,
+                             aLoadFlags);
+
   if (NS_FAILED(rv))
     return rv;
 
-  *aForcePrincipalCheckForCacheEntry = false;
+  *aForcePrincipalCheckForCacheEntry = inherit && !isSandBoxed;
 
   // Initialize HTTP-specific attributes
   newHttpChannel = do_QueryInterface(*aResult);
@@ -624,10 +723,6 @@ static nsresult NewImageChannel(nsIChannel **aResult,
 
     p->AdjustPriority(priority);
   }
-
-  bool setOwner = nsContentUtils::SetUpChannelOwner(aLoadingPrincipal,
-                                                      *aResult, aURI, false);
-  *aForcePrincipalCheckForCacheEntry = setOwner;
 
   // Create a new loadgroup for this new channel, using the old group as
   // the parent. The indirection keeps the channel insulated from cancels,
@@ -834,6 +929,8 @@ nsresult imgLoader::CreateNewProxyForRequest(imgRequest *aRequest, nsILoadGroup 
 
 class imgCacheObserver MOZ_FINAL : public nsIObserver
 {
+  ~imgCacheObserver() {}
+
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
@@ -844,7 +941,8 @@ NS_IMPL_ISUPPORTS(imgCacheObserver, nsIObserver)
 NS_IMETHODIMP
 imgCacheObserver::Observe(nsISupports* aSubject, const char* aTopic, const char16_t* aSomeData)
 {
-  if (strcmp(aTopic, "memory-pressure") == 0) {
+  if (strcmp(aTopic, "memory-pressure") == 0 ||
+      strcmp(aTopic, "app-theme-changed") == 0) {
     DiscardTracker::DiscardAll();
   }
   return NS_OK;
@@ -920,7 +1018,7 @@ imgLoader::PBSingleton()
 }
 
 imgLoader::imgLoader()
-: mRespectPrivacy(false)
+: mUncachedImagesMutex("imgLoader::UncachedImages"), mRespectPrivacy(false)
 {
   sMemReporter->AddRef();
   sMemReporter->RegisterLoader(this);
@@ -940,10 +1038,25 @@ imgLoader::GetInstance()
   return loader.forget();
 }
 
+static PLDHashOperator ClearLoaderPointer(nsPtrHashKey<imgRequest>* aEntry,
+                                          void *aUserArg)
+{
+  nsRefPtr<imgRequest> req = aEntry->GetKey();
+  req->ClearLoader();
+
+  return PL_DHASH_NEXT;
+}
+
 imgLoader::~imgLoader()
 {
   ClearChromeImageCache();
   ClearImageCache();
+  {
+    // If there are any of our imgRequest's left they are in the uncached
+    // images set, so clear their pointer to us.
+    MutexAutoLock lock(mUncachedImagesMutex);
+    mUncachedImages.EnumerateEntries(ClearLoaderPointer, nullptr);
+  }
   sMemReporter->UnregisterLoader(this);
   sMemReporter->Release();
 }
@@ -1001,8 +1114,10 @@ void imgLoader::GlobalInit()
   NS_ADDREF(gCacheObserver);
 
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
-  if (os)
+  if (os) {
     os->AddObserver(gCacheObserver, "memory-pressure", false);
+    os->AddObserver(gCacheObserver, "app-theme-changed", false);
+  }
 
   int32_t timeweight;
   nsresult rv = Preferences::GetInt("image.cache.timeweight", &timeweight);
@@ -1014,7 +1129,7 @@ void imgLoader::GlobalInit()
   int32_t cachesize;
   rv = Preferences::GetInt("image.cache.size", &cachesize);
   if (NS_SUCCEEDED(rv))
-    sCacheMaxSize = cachesize;
+    sCacheMaxSize = cachesize > 0 ? cachesize : 0;
   else
     sCacheMaxSize = 5 * 1024 * 1024;
 
@@ -1030,6 +1145,7 @@ nsresult imgLoader::InitCache()
     return NS_ERROR_FAILURE;
 
   os->AddObserver(this, "memory-pressure", false);
+  os->AddObserver(this, "app-theme-changed", false);
   os->AddObserver(this, "chrome-flush-skin-caches", false);
   os->AddObserver(this, "chrome-flush-caches", false);
   os->AddObserver(this, "last-pb-context-exited", false);
@@ -1064,11 +1180,14 @@ imgLoader::Observe(nsISupports* aSubject, const char* aTopic, const char16_t* aD
 {
   // We listen for pref change notifications...
   if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
-    if (!strcmp(NS_ConvertUTF16toUTF8(aData).get(), "image.http.accept")) {
+    if (!NS_strcmp(aData, MOZ_UTF16("image.http.accept"))) {
       ReadAcceptHeaderPref();
     }
 
   } else if (strcmp(aTopic, "memory-pressure") == 0) {
+    MinimizeCaches();
+  } else if (strcmp(aTopic, "app-theme-changed") == 0) {
+    ClearImageCache();
     MinimizeCaches();
   } else if (strcmp(aTopic, "chrome-flush-skin-caches") == 0 ||
              strcmp(aTopic, "chrome-flush-caches") == 0) {
@@ -1217,62 +1336,74 @@ bool imgLoader::PutIntoCache(nsIURI *key, imgCacheEntry *entry)
 
   nsRefPtr<imgRequest> request = entry->GetRequest();
   request->SetIsInCache(true);
+  RemoveFromUncachedImages(request);
 
   return true;
 }
 
-bool imgLoader::SetHasNoProxies(ImageURL *key, imgCacheEntry *entry)
+bool imgLoader::SetHasNoProxies(imgRequest *aRequest, imgCacheEntry *aEntry)
 {
+  nsRefPtr<ImageURL> uri;
+  aRequest->GetURI(getter_AddRefs(uri));
+
 #if defined(PR_LOGGING)
   nsAutoCString spec;
-  key->GetSpec(spec);
+  uri->GetSpec(spec);
 
   LOG_STATIC_FUNC_WITH_PARAM(GetImgLog(), "imgLoader::SetHasNoProxies", "uri", spec.get());
 #endif
 
-  if (entry->Evicted())
+  aEntry->SetHasNoProxies(true);
+
+  if (aEntry->Evicted())
     return false;
 
-  imgCacheQueue &queue = GetCacheQueue(key);
+  imgCacheQueue &queue = GetCacheQueue(uri);
 
   nsresult addrv = NS_OK;
 
   if (mCacheTracker)
-    addrv = mCacheTracker->AddObject(entry);
+    addrv = mCacheTracker->AddObject(aEntry);
 
   if (NS_SUCCEEDED(addrv)) {
-    queue.Push(entry);
-    entry->SetHasNoProxies(true);
+    queue.Push(aEntry);
   }
 
-  imgCacheTable &cache = GetCache(key);
+  imgCacheTable &cache = GetCache(uri);
   CheckCacheLimits(cache, queue);
 
   return true;
 }
 
-bool imgLoader::SetHasProxies(ImageURL *key)
+bool imgLoader::SetHasProxies(imgRequest *aRequest)
 {
   VerifyCacheSizes();
 
-  imgCacheTable &cache = GetCache(key);
+  nsRefPtr<ImageURL> uri;
+  aRequest->GetURI(getter_AddRefs(uri));
+
+  imgCacheTable &cache = GetCache(uri);
 
   nsAutoCString spec;
-  key->GetSpec(spec);
+  uri->GetSpec(spec);
 
   LOG_STATIC_FUNC_WITH_PARAM(GetImgLog(), "imgLoader::SetHasProxies", "uri", spec.get());
 
   nsRefPtr<imgCacheEntry> entry;
-  if (cache.Get(spec, getter_AddRefs(entry)) && entry && entry->HasNoProxies()) {
-    imgCacheQueue &queue = GetCacheQueue(key);
-    queue.Remove(entry);
+  if (cache.Get(spec, getter_AddRefs(entry)) && entry) {
+    // Make sure the cache entry is for the right request
+    nsRefPtr<imgRequest> entryRequest = entry->GetRequest();
+    if (entryRequest == aRequest && entry->HasNoProxies()) {
+      imgCacheQueue &queue = GetCacheQueue(uri);
+      queue.Remove(entry);
 
-    if (mCacheTracker)
-      mCacheTracker->RemoveObject(entry);
+      if (mCacheTracker)
+        mCacheTracker->RemoveObject(entry);
 
-    entry->SetHasNoProxies(false);
+      entry->SetHasNoProxies(false);
 
-    return true;
+      return true;
+    }
   }
 
   return false;
@@ -1291,8 +1422,8 @@ void imgLoader::CheckCacheLimits(imgCacheTable &cache, imgCacheQueue &queue)
     NS_ASSERTION(queue.GetSize() == 0,
                  "imgLoader::CheckCacheLimits -- incorrect cache size");
 
-  // Remove entries from the cache until we're back under our desired size.
-  while (queue.GetSize() >= sCacheMaxSize) {
+  // Remove entries from the cache until we're back at our desired max size.
+  while (queue.GetSize() > sCacheMaxSize) {
     // Remove the first entry in the queue.
     nsRefPtr<imgCacheEntry> entry(queue.Pop());
 
@@ -1372,7 +1503,8 @@ bool imgLoader::ValidateRequestWithNewChannel(imgRequest *request,
                          mAcceptHeader,
                          aLoadFlags,
                          aPolicy,
-                         aLoadingPrincipal);
+                         aLoadingPrincipal,
+                         aCX);
     if (NS_FAILED(rv)) {
       return false;
     }
@@ -1613,6 +1745,7 @@ bool imgLoader::RemoveFromCache(nsCString& spec,
 
     nsRefPtr<imgRequest> request = entry->GetRequest();
     request->SetIsInCache(false);
+    AddToUncachedImages(request);
 
     return true;
   }
@@ -1646,6 +1779,7 @@ bool imgLoader::RemoveFromCache(imgCacheEntry *entry)
 
       entry->SetEvicted(true);
       request->SetIsInCache(false);
+      AddToUncachedImages(request);
 
       return true;
     }
@@ -1698,6 +1832,19 @@ nsresult imgLoader::EvictEntries(imgCacheQueue &aQueueToClear)
 
   return NS_OK;
 }
+
+void imgLoader::AddToUncachedImages(imgRequest* aRequest)
+{
+  MutexAutoLock lock(mUncachedImagesMutex);
+  mUncachedImages.PutEntry(aRequest);
+}
+
+void imgLoader::RemoveFromUncachedImages(imgRequest* aRequest)
+{
+  MutexAutoLock lock(mUncachedImagesMutex);
+  mUncachedImages.RemoveEntry(aRequest);
+}
+
 
 #define LOAD_FLAGS_CACHE_MASK    (nsIRequest::LOAD_BYPASS_CACHE | \
                                   nsIRequest::LOAD_FROM_CACHE)
@@ -1871,7 +2018,8 @@ nsresult imgLoader::LoadImage(nsIURI *aURI,
                          mAcceptHeader,
                          requestFlags,
                          aPolicy,
-                         aLoadingPrincipal);
+                         aLoadingPrincipal,
+                         aCX);
     if (NS_FAILED(rv))
       return NS_ERROR_FAILURE;
 

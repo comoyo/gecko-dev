@@ -37,14 +37,13 @@ public:
                     nsHTMLReflowMetrics& aDesiredSize,
                     nsMathMLContainerFrame* aForFrame,
                     nscoord              aUserSubScriptShift,
-                    nscoord              aUserSupScriptShift,
-                    nscoord              aScriptSpace);
+                    nscoord              aUserSupScriptShift);
 
   uint8_t
   ScriptIncrement(nsIFrame* aFrame) MOZ_OVERRIDE;
 
 protected:
-  nsMathMLmmultiscriptsFrame(nsStyleContext* aContext) : nsMathMLContainerFrame(aContext) {}
+  explicit nsMathMLmmultiscriptsFrame(nsStyleContext* aContext) : nsMathMLContainerFrame(aContext) {}
   virtual ~nsMathMLmmultiscriptsFrame();
   
 

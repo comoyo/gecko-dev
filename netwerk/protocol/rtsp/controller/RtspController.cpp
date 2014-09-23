@@ -17,6 +17,7 @@
 #include "nsIProtocolProxyService.h"
 #include "nsIProxyInfo.h"
 #include "nsIProxiedChannel.h"
+#include "nsIHttpProtocolHandler.h"
 
 #include "nsAutoPtr.h"
 #include "nsStandardURL.h"
@@ -200,7 +201,8 @@ RtspController::AsyncOpen(nsIStreamingProtocolListener *aListener)
   LOG(("RtspController AsyncOpen uri=%s", uriSpec.get()));
 
   if (!mRtspSource.get()) {
-    mRtspSource = new android::RTSPSource(this, uriSpec.get(), false, 0);
+    mRtspSource = new android::RTSPSource(this, uriSpec.get(),
+                                          mUserAgent.get(), false, 0);
   }
   // Connect to Rtsp Server.
   mRtspSource->start();
@@ -366,6 +368,27 @@ RtspController::Init(nsIURI *aURI)
 
   mURI = aURI;
 
+  // Get User-Agent.
+  nsCOMPtr<nsIHttpProtocolHandler>
+    service(do_GetService(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "http", &rv));
+  rv = service->GetUserAgent(mUserAgent);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+RtspController::PlaybackEnded()
+{
+  LOG(("RtspController::PlaybackEnded()"));
+  if (!mRtspSource.get()) {
+    MOZ_ASSERT(mRtspSource.get(), "mRtspSource should not be null!");
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+
+  mRtspSource->playbackEnded();
   return NS_OK;
 }
 

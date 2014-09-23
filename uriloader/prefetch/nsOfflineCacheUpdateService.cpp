@@ -31,7 +31,6 @@
 #include "nsIWebProgress.h"
 #include "nsIWebNavigation.h"
 #include "nsICryptoHash.h"
-#include "nsICacheEntryDescriptor.h"
 #include "nsIPermissionManager.h"
 #include "nsIPrincipal.h"
 #include "nsIScriptSecurityManager.h"
@@ -150,6 +149,8 @@ public:
         }
 
 private:
+    ~nsOfflineCachePendingUpdate() {}
+
     nsRefPtr<nsOfflineCacheUpdateService> mService;
     nsCOMPtr<nsIURI> mManifestURI;
     nsCOMPtr<nsIURI> mDocumentURI;
@@ -489,6 +490,7 @@ nsresult
 nsOfflineCacheUpdateService::FindUpdate(nsIURI *aManifestURI,
                                         uint32_t aAppID,
                                         bool aInBrowser,
+                                        nsIFile *aCustomProfileDir,
                                         nsOfflineCacheUpdate **aUpdate)
 {
     nsresult rv;
@@ -516,7 +518,7 @@ nsOfflineCacheUpdateService::FindUpdate(nsIURI *aManifestURI,
             continue;
         }
 
-        if (update->IsForGroupID(groupID)) {
+        if (update->IsForGroupID(groupID) && update->IsForProfile(aCustomProfileDir)) {
             update.swap(*aUpdate);
             return NS_OK;
         }

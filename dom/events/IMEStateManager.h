@@ -37,6 +37,7 @@ class IMEStateManager
   typedef widget::InputContextAction InputContextAction;
 
 public:
+  static void Init();
   static void Shutdown();
 
   static nsresult OnDestroyPresContext(nsPresContext* aPresContext);
@@ -65,6 +66,13 @@ public:
   // widget.  So, the caller must have focus.
   static void UpdateIMEState(const IMEState &aNewIMEState,
                              nsIContent* aContent);
+
+  // This method is called when user operates mouse button in focused editor
+  // and before the editor handles it.
+  // Returns true if IME consumes the event.  Otherwise, false.
+  static bool OnMouseButtonEventInEditor(nsPresContext* aPresContext,
+                                         nsIContent* aContent,
+                                         nsIDOMMouseEvent* aMouseEvent);
 
   // This method is called when user clicked in an editor.
   // aContent must be:
@@ -135,7 +143,7 @@ protected:
 
   static void EnsureTextCompositionArray();
   static void CreateIMEContentObserver();
-  static void DestroyTextStateManager();
+  static void DestroyIMEContentObserver();
 
   static bool IsEditable(nsINode* node);
 
@@ -145,6 +153,23 @@ protected:
   static nsPresContext* sPresContext;
   static bool           sInstalledMenuKeyboardListener;
   static bool           sIsTestingIME;
+  static bool           sIsGettingNewIMEState;
+
+  class MOZ_STACK_CLASS GettingNewIMEStateBlocker MOZ_FINAL
+  {
+  public:
+    GettingNewIMEStateBlocker()
+      : mOldValue(IMEStateManager::sIsGettingNewIMEState)
+    {
+      IMEStateManager::sIsGettingNewIMEState = true;
+    }
+    ~GettingNewIMEStateBlocker()
+    {
+      IMEStateManager::sIsGettingNewIMEState = mOldValue;
+    }
+  private:
+    bool mOldValue;
+  };
 
   static IMEContentObserver* sActiveIMEContentObserver;
 

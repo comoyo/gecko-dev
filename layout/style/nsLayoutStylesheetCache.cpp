@@ -7,6 +7,7 @@
 #include "nsLayoutStylesheetCache.h"
 
 #include "nsAppDirectoryServiceDefs.h"
+#include "mozilla/CSSStyleSheet.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/css/Loader.h"
@@ -15,7 +16,7 @@
 #include "nsIObserverService.h"
 #include "nsServiceManagerUtils.h"
 #include "nsIXULRuntime.h"
-#include "nsCSSStyleSheet.h"
+#include "nsPrintfCString.h"
 
 using namespace mozilla;
 
@@ -50,195 +51,147 @@ nsLayoutStylesheetCache::Observe(nsISupports* aSubject,
   return NS_OK;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::ScrollbarsSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
 
   if (!gStyleCache->mScrollbarsSheet) {
-    nsCOMPtr<nsIURI> sheetURI;
-    NS_NewURI(getter_AddRefs(sheetURI),
-              NS_LITERAL_CSTRING("chrome://global/skin/scrollbars.css"));
-
     // Scrollbars don't need access to unsafe rules
-    if (sheetURI)
-      LoadSheet(sheetURI, gStyleCache->mScrollbarsSheet, false);
-    NS_ASSERTION(gStyleCache->mScrollbarsSheet, "Could not load scrollbars.css.");
+    LoadSheetURL("chrome://global/skin/scrollbars.css",
+                 gStyleCache->mScrollbarsSheet, false);
   }
 
   return gStyleCache->mScrollbarsSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::FormsSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
 
   if (!gStyleCache->mFormsSheet) {
-    nsCOMPtr<nsIURI> sheetURI;
-      NS_NewURI(getter_AddRefs(sheetURI),
-                NS_LITERAL_CSTRING("resource://gre-resources/forms.css"));
-
     // forms.css needs access to unsafe rules
-    if (sheetURI)
-      LoadSheet(sheetURI, gStyleCache->mFormsSheet, true);
-
-    NS_ASSERTION(gStyleCache->mFormsSheet, "Could not load forms.css.");
+    LoadSheetURL("resource://gre-resources/forms.css",
+                 gStyleCache->mFormsSheet, true);
   }
 
   return gStyleCache->mFormsSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::NumberControlSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
 
   if (!sNumberControlEnabled) {
     return nullptr;
   }
 
   if (!gStyleCache->mNumberControlSheet) {
-    nsCOMPtr<nsIURI> sheetURI;
-    NS_NewURI(getter_AddRefs(sheetURI),
-              NS_LITERAL_CSTRING("resource://gre-resources/number-control.css"));
-
-    if (sheetURI)
-      LoadSheet(sheetURI, gStyleCache->mNumberControlSheet, false);
-
-    NS_ASSERTION(gStyleCache->mNumberControlSheet, "Could not load number-control.css");
+    LoadSheetURL("resource://gre-resources/number-control.css",
+                 gStyleCache->mNumberControlSheet, false);
   }
 
   return gStyleCache->mNumberControlSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::UserContentSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
-
   return gStyleCache->mUserContentSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::UserChromeSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
-
   return gStyleCache->mUserChromeSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::UASheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
-
   return gStyleCache->mUASheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::HTMLSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
-
   return gStyleCache->mHTMLSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::MinimalXULSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
-
   return gStyleCache->mMinimalXULSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::XULSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
-
   return gStyleCache->mXULSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::QuirkSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
-
   return gStyleCache->mQuirkSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::FullScreenOverrideSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
-
   return gStyleCache->mFullScreenOverrideSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::SVGSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
-
   return gStyleCache->mSVGSheet;
 }
 
-nsCSSStyleSheet*
+CSSStyleSheet*
 nsLayoutStylesheetCache::MathMLSheet()
 {
   EnsureGlobal();
-  if (!gStyleCache)
-    return nullptr;
 
   if (!gStyleCache->mMathMLSheet) {
-    nsCOMPtr<nsIURI> uri;
-    NS_NewURI(getter_AddRefs(uri), "resource://gre-resources/mathml.css");
-    if (uri) {
-      LoadSheet(uri, gStyleCache->mMathMLSheet, true);
-    }
-    NS_ASSERTION(gStyleCache->mMathMLSheet, "Could not load mathml.css");
+    LoadSheetURL("resource://gre-resources/mathml.css",
+                 gStyleCache->mMathMLSheet, true);
   }
 
   return gStyleCache->mMathMLSheet;
+}
+
+CSSStyleSheet*
+nsLayoutStylesheetCache::CounterStylesSheet()
+{
+  EnsureGlobal();
+
+  return gStyleCache->mCounterStylesSheet;
 }
 
 void
 nsLayoutStylesheetCache::Shutdown()
 {
   NS_IF_RELEASE(gCSSLoader);
-  NS_IF_RELEASE(gStyleCache);
+  gStyleCache = nullptr;
 }
 
 MOZ_DEFINE_MALLOC_SIZE_OF(LayoutStylesheetCacheMallocSizeOf)
 
 NS_IMETHODIMP
 nsLayoutStylesheetCache::CollectReports(nsIHandleReportCallback* aHandleReport,
-                                        nsISupports* aData)
+                                        nsISupports* aData, bool aAnonymize)
 {
   return MOZ_COLLECT_REPORT(
     "explicit/layout/style-sheet-cache", KIND_HEAP, UNITS_BYTES,
@@ -254,21 +207,20 @@ nsLayoutStylesheetCache::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf
 
   #define MEASURE(s) n += s ? s->SizeOfIncludingThis(aMallocSizeOf) : 0;
 
-  MEASURE(mScrollbarsSheet);
+  MEASURE(mCounterStylesSheet);
   MEASURE(mFormsSheet);
-  MEASURE(mNumberControlSheet);
-  MEASURE(mUserContentSheet);
-  MEASURE(mUserChromeSheet);
-  MEASURE(mUASheet);
-  MEASURE(mHTMLSheet);
-  MEASURE(mMinimalXULSheet);
-  MEASURE(mXULSheet);
-  MEASURE(mQuirkSheet);
   MEASURE(mFullScreenOverrideSheet);
+  MEASURE(mHTMLSheet);
+  MEASURE(mMathMLSheet);
+  MEASURE(mMinimalXULSheet);
+  MEASURE(mNumberControlSheet);
+  MEASURE(mQuirkSheet);
   MEASURE(mSVGSheet);
-  if (mMathMLSheet) {
-    MEASURE(mMathMLSheet);
-  }
+  MEASURE(mScrollbarsSheet);
+  MEASURE(mUASheet);
+  MEASURE(mUserChromeSheet);
+  MEASURE(mUserContentSheet);
+  MEASURE(mXULSheet);
 
   // Measurement of the following members may be added later if DMD finds it is
   // worthwhile:
@@ -294,57 +246,31 @@ nsLayoutStylesheetCache::nsLayoutStylesheetCache()
 
   // And make sure that we load our UA sheets.  No need to do this
   // per-profile, since they're profile-invariant.
-  nsCOMPtr<nsIURI> uri;
-  NS_NewURI(getter_AddRefs(uri), "resource://gre-resources/ua.css");
-  if (uri) {
-    LoadSheet(uri, mUASheet, true);
-  }
-  NS_ASSERTION(mUASheet, "Could not load ua.css");
+  LoadSheetURL("resource://gre-resources/counterstyles.css",
+               mCounterStylesSheet, true);
+  LoadSheetURL("resource://gre-resources/full-screen-override.css",
+               mFullScreenOverrideSheet, true);
+  LoadSheetURL("resource://gre-resources/html.css",
+               mHTMLSheet, true);
+  LoadSheetURL("chrome://global/content/minimal-xul.css",
+               mMinimalXULSheet, true);
+  LoadSheetURL("resource://gre-resources/quirk.css",
+               mQuirkSheet, true);
+  LoadSheetURL("resource://gre/res/svg.css",
+               mSVGSheet, true);
+  LoadSheetURL("resource://gre-resources/ua.css",
+               mUASheet, true);
+  LoadSheetURL("chrome://global/content/xul.css",
+               mXULSheet, true);
 
-  NS_NewURI(getter_AddRefs(uri), "resource://gre-resources/html.css");
-  if (uri) {
-    LoadSheet(uri, mHTMLSheet, true);
-  }
-  NS_ASSERTION(mHTMLSheet, "Could not load xul.css");
-
-  NS_NewURI(getter_AddRefs(uri), "chrome://global/content/minimal-xul.css");
-  if (uri) {
-    LoadSheet(uri, mMinimalXULSheet, true);
-  }
-  NS_ASSERTION(mMinimalXULSheet, "Could not load minimal-xul.css");
-
-  NS_NewURI(getter_AddRefs(uri), "chrome://global/content/xul.css");
-  if (uri) {
-    LoadSheet(uri, mXULSheet, true);
-  }
-  NS_ASSERTION(mXULSheet, "Could not load xul.css");
-
-  NS_NewURI(getter_AddRefs(uri), "resource://gre-resources/quirk.css");
-  if (uri) {
-    LoadSheet(uri, mQuirkSheet, true);
-  }
-  NS_ASSERTION(mQuirkSheet, "Could not load quirk.css");
-
-  NS_NewURI(getter_AddRefs(uri), "resource://gre-resources/full-screen-override.css");
-  if (uri) {
-    LoadSheet(uri, mFullScreenOverrideSheet, true);
-  }
-  NS_ASSERTION(mFullScreenOverrideSheet, "Could not load full-screen-override.css");
-
-  NS_NewURI(getter_AddRefs(uri), "resource://gre/res/svg.css");
-  if (uri) {
-    LoadSheet(uri, mSVGSheet, true);
-  }
-  NS_ASSERTION(mSVGSheet, "Could not load svg.css");
-
-  // mMathMLSheet is created on-demand since its use is rare. This helps save
-  // memory for Firefox OS apps.
+  // The remaining sheets are created on-demand since their use is rarer. This
+  // helps save memory for Firefox OS apps.
 }
 
 nsLayoutStylesheetCache::~nsLayoutStylesheetCache()
 {
   mozilla::UnregisterWeakMemoryReporter(this);
-  gStyleCache = nullptr;
+  MOZ_ASSERT(!gStyleCache);
 }
 
 void
@@ -356,12 +282,11 @@ nsLayoutStylesheetCache::InitMemoryReporter()
 void
 nsLayoutStylesheetCache::EnsureGlobal()
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   if (gStyleCache) return;
 
   gStyleCache = new nsLayoutStylesheetCache();
-  if (!gStyleCache) return;
-
-  NS_ADDREF(gStyleCache);
 
   gStyleCache->InitMemoryReporter();
 
@@ -399,8 +324,21 @@ nsLayoutStylesheetCache::InitFromProfile()
   LoadSheetFile(chromeFile, mUserChromeSheet);
 }
 
+/* static */ void
+nsLayoutStylesheetCache::LoadSheetURL(const char* aURL,
+                                      nsRefPtr<CSSStyleSheet>& aSheet,
+                                      bool aEnableUnsafeRules)
+{
+  nsCOMPtr<nsIURI> uri;
+  NS_NewURI(getter_AddRefs(uri), aURL);
+  LoadSheet(uri, aSheet, aEnableUnsafeRules);
+  if (!aSheet) {
+    NS_ERROR(nsPrintfCString("Could not load %s", aURL).get());
+  }
+}
+
 void
-nsLayoutStylesheetCache::LoadSheetFile(nsIFile* aFile, nsRefPtr<nsCSSStyleSheet> &aSheet)
+nsLayoutStylesheetCache::LoadSheetFile(nsIFile* aFile, nsRefPtr<CSSStyleSheet>& aSheet)
 {
   bool exists = false;
   aFile->Exists(&exists);
@@ -413,29 +351,47 @@ nsLayoutStylesheetCache::LoadSheetFile(nsIFile* aFile, nsRefPtr<nsCSSStyleSheet>
   LoadSheet(uri, aSheet, false);
 }
 
+static void
+ErrorLoadingBuiltinSheet(nsIURI* aURI, const char* aMsg)
+{
+  nsAutoCString spec;
+  if (aURI) {
+    aURI->GetSpec(spec);
+  }
+  NS_RUNTIMEABORT(nsPrintfCString("%s loading built-in stylesheet '%s'",
+                                  aMsg, spec.get()).get());
+}
+
 void
 nsLayoutStylesheetCache::LoadSheet(nsIURI* aURI,
-                                   nsRefPtr<nsCSSStyleSheet> &aSheet,
+                                   nsRefPtr<CSSStyleSheet>& aSheet,
                                    bool aEnableUnsafeRules)
 {
   if (!aURI) {
-    NS_ERROR("Null URI. Out of memory?");
+    ErrorLoadingBuiltinSheet(aURI, "null URI");
     return;
   }
 
   if (!gCSSLoader) {
     gCSSLoader = new mozilla::css::Loader();
     NS_IF_ADDREF(gCSSLoader);
+    if (!gCSSLoader) {
+      ErrorLoadingBuiltinSheet(aURI, "no Loader");
+      return;
+    }
   }
 
-  if (gCSSLoader) {
-    gCSSLoader->LoadSheetSync(aURI, aEnableUnsafeRules, true,
-                              getter_AddRefs(aSheet));
+
+  nsresult rv = gCSSLoader->LoadSheetSync(aURI, aEnableUnsafeRules, true,
+                                          getter_AddRefs(aSheet));
+  if (NS_FAILED(rv)) {
+    ErrorLoadingBuiltinSheet(aURI,
+      nsPrintfCString("LoadSheetSync failed with error %x", rv).get());
   }
 }
 
-nsLayoutStylesheetCache*
-nsLayoutStylesheetCache::gStyleCache = nullptr;
+mozilla::StaticRefPtr<nsLayoutStylesheetCache>
+nsLayoutStylesheetCache::gStyleCache;
 
 mozilla::css::Loader*
 nsLayoutStylesheetCache::gCSSLoader = nullptr;

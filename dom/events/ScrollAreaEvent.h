@@ -45,22 +45,22 @@ public:
 
   float X() const
   {
-    return mClientArea.Left();
+    return mClientArea->Left();
   }
 
   float Y() const
   {
-    return mClientArea.Top();
+    return mClientArea->Top();
   }
 
   float Width() const
   {
-    return mClientArea.Width();
+    return mClientArea->Width();
   }
 
   float Height() const
   {
-    return mClientArea.Height();
+    return mClientArea->Height();
   }
 
   void InitScrollAreaEvent(const nsAString& aType,
@@ -77,7 +77,9 @@ public:
   }
 
 protected:
-  DOMRect mClientArea;
+  ~ScrollAreaEvent() {}
+
+  nsRefPtr<DOMRect> mClientArea;
 };
 
 } // namespace dom

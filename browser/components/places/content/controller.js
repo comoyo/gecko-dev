@@ -1,4 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -37,18 +37,18 @@ const REMOVE_PAGES_CHUNKLEN = 300;
  *          insertion point to accommodate the orientation should be done by
  *          the person who constructs the IP, not the user. The orientation
  *          is provided for informational purposes only!
- * @param   [optional] aIsTag
- *          Indicates if parent container is a tag
+ * @param   [optional] aTag
+ *          The tag name if this IP is set to a tag, null otherwise.
  * @param   [optional] aDropNearItemId
  *          When defined we will calculate index based on this itemId
  * @constructor
  */
-function InsertionPoint(aItemId, aIndex, aOrientation, aIsTag,
-                        aDropNearItemId) {
+function InsertionPoint(aItemId, aIndex, aOrientation, aTagName = null,
+                        aDropNearItemId = false) {
   this.itemId = aItemId;
   this._index = aIndex;
   this.orientation = aOrientation;
-  this.isTag = aIsTag;
+  this.tagName = aTagName;
   this.dropNearItemId = aDropNearItemId;
 }
 
@@ -57,7 +57,7 @@ InsertionPoint.prototype = {
     return this._index = val;
   },
 
-  promiseGUID: function () PlacesUtils.promiseItemGUID(this.itemId),
+  promiseGuid: function () PlacesUtils.promiseItemGuid(this.itemId),
 
   get index() {
     if (this.dropNearItemId > 0) {
@@ -67,7 +67,9 @@ InsertionPoint.prototype = {
       return this.orientation == Ci.nsITreeView.DROP_BEFORE ? index : index + 1;
     }
     return this._index;
-  }
+  },
+
+  get isTag() typeof(this.tagName) == "string"
 };
 
 /**
@@ -127,14 +129,8 @@ PlacesController.prototype = {
   isCommandEnabled: function PC_isCommandEnabled(aCommand) {
     if (PlacesUIUtils.useAsyncTransactions) {
       switch (aCommand) {
-      case "cmd_cut":
-      case "placesCmd_cut":
-      case "cmd_copy":
-      case "cmd_paste":
       case "cmd_delete":
       case "placesCmd_delete":
-      case "cmd_paste":
-      case "placesCmd_paste":
       case "placesCmd_new:folder":
       case "placesCmd_new:bookmark":
       case "placesCmd_createBookmark":
@@ -243,7 +239,7 @@ PlacesController.prototype = {
       break;
     case "cmd_paste":
     case "placesCmd_paste":
-      this.paste();
+      this.paste().then(null, Components.utils.reportError);
       break;
     case "cmd_delete":
     case "placesCmd_delete":
@@ -367,20 +363,6 @@ PlacesController.prototype = {
   },
 
   /**
-   * Determines whether or not the root node for the view is selected
-   */
-  rootNodeIsSelected: function PC_rootNodeIsSelected() {
-    var nodes = this._view.selectedNodes;
-    var root = this._view.result.root;
-    for (var i = 0; i < nodes.length; ++i) {
-      if (nodes[i] == root)
-        return true;
-    }
-
-    return false;
-  },
-
-  /**
    * Looks at the data on the clipboard to see if it is paste-able.
    * Paste-able data is:
    *   - in a format that the view can receive
@@ -392,7 +374,7 @@ PlacesController.prototype = {
     // if the clipboard contains TYPE_X_MOZ_PLACE_* data, it is definitely
     // pasteable, with no need to unwrap all the nodes.
 
-    var flavors = PlacesControllerDragHelper.placesFlavors;
+    var flavors = PlacesUIUtils.PLACES_FLAVORS;
     var clipboard = this.clipboard;
     var hasPlacesData =
       clipboard.hasDataMatchingFlavors(flavors, flavors.length,
@@ -433,7 +415,7 @@ PlacesController.prototype = {
    * Gathers information about the selected nodes according to the following
    * rules:
    *    "link"              node is a URI
-   *    "bookmark"          node is a bookamrk
+   *    "bookmark"          node is a bookmark
    *    "livemarkChild"     node is a child of a livemark
    *    "tagChild"          node is a child of a tag
    *    "folder"            node is a folder
@@ -447,15 +429,10 @@ PlacesController.prototype = {
    *         node are set on its corresponding object as properties.
    * Notes:
    *   1) This can be slow, so don't call it anywhere performance critical!
-   *   2) A single-object array corresponding the root node is returned if
-   *      there's no selection.
    */
   _buildSelectionMetadata: function PC__buildSelectionMetadata() {
     var metadata = [];
-    var root = this._view.result.root;
     var nodes = this._view.selectedNodes;
-    if (nodes.length == 0)
-      nodes.push(root); // See the second note above
 
     for (var i = 0; i < nodes.length; i++) {
       var nodeData = {};
@@ -536,10 +513,23 @@ PlacesController.prototype = {
    */
   _shouldShowMenuItem: function PC__shouldShowMenuItem(aMenuItem, aMetaData) {
     var selectiontype = aMenuItem.getAttribute("selectiontype");
-    if (selectiontype == "multiple" && aMetaData.length == 1)
+    if (!selectiontype) {
+      selectiontype = "single|multiple";
+    }
+    var selectionTypes = selectiontype.split("|");
+    if (selectionTypes.indexOf("any") != -1) {
+      return true;
+    }
+    var count = aMetaData.length;
+    if (count > 1 && selectionTypes.indexOf("multiple") == -1)
       return false;
-    if (selectiontype == "single" && aMetaData.length != 1)
+    if (count == 1 && selectionTypes.indexOf("single") == -1)
       return false;
+    // NB: if there is no selection, we show the item if and only if
+    // the selectiontype includes 'none' - the metadata list will be
+    // empty so none of the other criteria will apply anyway.
+    if (count == 0)
+      return selectionTypes.indexOf("none") != -1;
 
     var forceHideAttr = aMenuItem.getAttribute("forcehideselection");
     if (forceHideAttr) {
@@ -586,9 +576,11 @@ PlacesController.prototype = {
    *  1) The "selectiontype" attribute may be set on a menu-item to "single"
    *     if the menu-item should be visible only if there is a single node
    *     selected, or to "multiple" if the menu-item should be visible only if
-   *     multiple nodes are selected. If the attribute is not set or if it is
-   *     set to an invalid value, the menu-item may be visible for both types of
-   *     selection.
+   *     multiple nodes are selected, or to "none" if the menuitems should be
+   *     visible for if there are no selected nodes, or to a |-separated
+   *     combination of these.
+   *     If the attribute is not set or set to an invalid value, the menu-item
+   *     may be visible irrespective of the selection.
    *  2) The "selection" attribute may be set on a menu-item to the various
    *     meta-data rules for which it may be visible. The rules should be
    *     separated with the | character.
@@ -619,18 +611,19 @@ PlacesController.prototype = {
 
     var separator = null;
     var visibleItemsBeforeSep = false;
-    var anyVisible = false;
+    var usableItemCount = 0;
     for (var i = 0; i < aPopup.childNodes.length; ++i) {
       var item = aPopup.childNodes[i];
       if (item.localName != "menuseparator") {
         // We allow pasting into tag containers, so special case that.
         var hideIfNoIP = item.getAttribute("hideifnoinsertionpoint") == "true" &&
                          noIp && !(ip && ip.isTag && item.id == "placesContext_paste");
-        item.hidden = hideIfNoIP || !this._shouldShowMenuItem(item, metadata);
+        var shouldHideItem = hideIfNoIP || !this._shouldShowMenuItem(item, metadata);
+        item.hidden = item.disabled = shouldHideItem;
 
         if (!item.hidden) {
           visibleItemsBeforeSep = true;
-          anyVisible = true;
+          usableItemCount++;
 
           // Show the separator above the menu-item if any
           if (separator) {
@@ -654,21 +647,21 @@ PlacesController.prototype = {
     }
 
     // Set Open Folder/Links In Tabs items enabled state if they're visible
-    if (anyVisible) {
+    if (usableItemCount > 0) {
       var openContainerInTabsItem = document.getElementById("placesContext_openContainer:tabs");
-      if (!openContainerInTabsItem.hidden && this._view.selectedNode &&
-          PlacesUtils.nodeIsContainer(this._view.selectedNode)) {
-        openContainerInTabsItem.disabled =
-          !PlacesUtils.hasChildURIs(this._view.selectedNode);
-      }
-      else {
-        // see selectiontype rule in the overlay
-        var openLinksInTabsItem = document.getElementById("placesContext_openLinks:tabs");
-        openLinksInTabsItem.disabled = openLinksInTabsItem.hidden;
+      if (!openContainerInTabsItem.hidden) {
+        var containerToUse = this._view.selectedNode || this._view.result.root;
+        if (PlacesUtils.nodeIsContainer(containerToUse)) {
+          if (!PlacesUtils.hasChildURIs(containerToUse, true)) {
+            openContainerInTabsItem.disabled = true;
+            // Ensure that we don't display the menu if nothing is enabled:
+            usableItemCount--;
+          }
+        }
       }
     }
 
-    return anyVisible;
+    return usableItemCount > 0;
   },
 
   /**
@@ -734,10 +727,15 @@ PlacesController.prototype = {
    */
   openSelectionInTabs: function PC_openLinksInTabs(aEvent) {
     var node = this._view.selectedNode;
+    var nodes = this._view.selectedNodes;
+    // In the case of no selection, open the root node:
+    if (!node && !nodes.length) {
+      node = this._view.result.root;
+    }
     if (node && PlacesUtils.nodeIsContainer(node))
-      PlacesUIUtils.openContainerNodeInTabs(this._view.selectedNode, aEvent, this._view);
+      PlacesUIUtils.openContainerNodeInTabs(node, aEvent, this._view);
     else
-      PlacesUIUtils.openURINodesInTabs(this._view.selectedNodes, aEvent, this._view);
+      PlacesUIUtils.openURINodesInTabs(nodes, aEvent, this._view);
   },
 
   /**
@@ -783,7 +781,7 @@ PlacesController.prototype = {
       return;
     }
 
-    let txn = PlacesTransactions.NewSeparator({ parentGUID: yield ip.promiseGUID()
+    let txn = PlacesTransactions.NewSeparator({ parentGuid: yield ip.promiseGuid()
                                               , index: ip.index });
     let guid = yield PlacesTransactions.transact(txn);
     let itemId = yield PlacesUtils.promiseItemId(guid);
@@ -810,7 +808,7 @@ PlacesController.prototype = {
       PlacesUtils.transactionManager.doTransaction(txn);
       return;
     }
-    let guid = yield PlacesUtils.promiseItemGUID(itemId);
+    let guid = yield PlacesUtils.promiseItemGuid(itemId);
     yield PlacesTransactions.transact(PlacesTransactions.SortByName(guid));
   }),
 
@@ -1251,7 +1249,7 @@ PlacesController.prototype = {
   /**
    * Paste Bookmarks and Folders from the clipboard
    */
-  paste: function PC_paste() {
+  paste: Task.async(function* () {
     // No reason to proceed if there isn't a valid insertion point.
     let ip = this._view.insertionPoint;
     if (!ip)
@@ -1283,54 +1281,91 @@ PlacesController.prototype = {
       return;
     }
 
-    let transactions = [];
-    let insertionIndex = ip.index;
-    for (let i = 0; i < items.length; ++i) {
+    let itemsToSelect = [];
+    if (PlacesUIUtils.useAsyncTransactions) {
       if (ip.isTag) {
-        // Pasting into a tag container means tagging the item, regardless of
-        // the requested action.
-        let tagTxn = new PlacesTagURITransaction(NetUtil.newURI(items[i].uri),
-                                                 [ip.itemId]);
-        transactions.push(tagTxn);
-        continue;
+        let uris = [for (item of items) if ("uri" in item)
+                    NetUtil.newURI(item.uri)];
+        yield PlacesTransactions.transact(
+          PlacesTransactions.Tag({ uris: uris, tag: ip.tagName }));
       }
+      else {
+        yield PlacesTransactions.transact(function* () {
+          let insertionIndex = ip.index;
+          let parent = yield ip.promiseGuid();
 
-      // Adjust index to make sure items are pasted in the correct position.
-      // If index is DEFAULT_INDEX, items are just appended.
-      if (ip.index != PlacesUtils.bookmarks.DEFAULT_INDEX)
-        insertionIndex = ip.index + i;
+          for (let item of items) {
+            let doCopy = action == "copy";
 
-      // If this is not a copy, check for safety that we can move the source,
-      // otherwise report an error and fallback to a copy.
-      if (action != "copy" && !PlacesControllerDragHelper.canMoveUnwrappedNode(items[i])) {
-        Components.utils.reportError("Tried to move an unmovable Places node, " +
-                                     "reverting to a copy operation.");
-        action = "copy";
+            // If this is not a copy, check for safety that we can move the
+            // source, otherwise report an error and fallback to a copy.
+            if (!doCopy &&
+                !PlacesControllerDragHelper.canMoveUnwrappedNode(item)) {
+              Cu.reportError("Tried to move an unmovable Places node, " +
+                             "reverting to a copy operation.");
+              doCopy = true;
+            }
+            let guid = yield PlacesUIUtils.getTransactionForData(
+              item, type, parent, insertionIndex, doCopy);
+            itemsToSelect.push(yield PlacesUtils.promiseItemId(guid));
+
+            // Adjust index to make sure items are pasted in the correct
+            // position.  If index is DEFAULT_INDEX, items are just appended.
+            if (insertionIndex != PlacesUtils.bookmarks.DEFAULT_INDEX)
+              insertionIndex++;
+          }
+        });
       }
-      transactions.push(
-        PlacesUIUtils.makeTransaction(items[i], type, ip.itemId,
-                                      insertionIndex, action == "copy")
-      );
     }
- 
-    let aggregatedTxn = new PlacesAggregatedTransaction("Paste", transactions);
-    PlacesUtils.transactionManager.doTransaction(aggregatedTxn);
+    else {
+      let transactions = [];
+      for (let i = 0; i < items.length; ++i) {
+        let insertionIndex = ip.index + i;
+        if (ip.isTag) {
+          // Pasting into a tag container means tagging the item, regardless of
+          // the requested action.
+          let tagTxn = new PlacesTagURITransaction(NetUtil.newURI(items[i].uri),
+                                                   [ip.itemId]);
+          transactions.push(tagTxn);
+          continue;
+        }
+
+        // Adjust index to make sure items are pasted in the correct position.
+        // If index is DEFAULT_INDEX, items are just appended.
+        if (ip.index != PlacesUtils.bookmarks.DEFAULT_INDEX)
+          insertionIndex = ip.index + i;
+
+        // If this is not a copy, check for safety that we can move the source,
+        // otherwise report an error and fallback to a copy.
+        if (action != "copy" && !PlacesControllerDragHelper.canMoveUnwrappedNode(items[i])) {
+          Components.utils.reportError("Tried to move an unmovable Places node, " +
+                                       "reverting to a copy operation.");
+          action = "copy";
+        }
+        transactions.push(
+          PlacesUIUtils.makeTransaction(items[i], type, ip.itemId,
+                                        insertionIndex, action == "copy")
+        );
+      }
+
+      let aggregatedTxn = new PlacesAggregatedTransaction("Paste", transactions);
+      PlacesUtils.transactionManager.doTransaction(aggregatedTxn);
+
+      for (let i = 0; i < transactions.length; ++i) {
+        itemsToSelect.push(
+          PlacesUtils.bookmarks.getIdForItemAt(ip.itemId, ip.index + i)
+        );
+      }
+    }
 
     // Cut/past operations are not repeatable, so clear the clipboard.
     if (action == "cut") {
       this._clearClipboard();
     }
 
-    // Select the pasted items, they should be consecutive.
-    let insertedNodeIds = [];
-    for (let i = 0; i < transactions.length; ++i) {
-      insertedNodeIds.push(
-        PlacesUtils.bookmarks.getIdForItemAt(ip.itemId, ip.index + i)
-      );
-    }
-    if (insertedNodeIds.length > 0)
-      this._view.selectItems(insertedNodeIds, false);
-  },
+    if (itemsToSelect.length > 0)
+      this._view.selectItems(itemsToSelect, false);
+  }),
 
   /**
    * Cache the livemark info for a node.  This allows the controller and the
@@ -1410,7 +1445,7 @@ let PlacesControllerDragHelper = {
    */
   getFirstValidFlavor: function PCDH_getFirstValidFlavor(aFlavors) {
     for (let i = 0; i < aFlavors.length; i++) {
-      if (this.GENERIC_VIEW_DROP_TYPES.indexOf(aFlavors[i]) != -1)
+      if (PlacesUIUtils.SUPPORTED_FLAVORS.indexOf(aFlavors[i]) != -1)
         return aFlavors[i];
     }
 
@@ -1567,12 +1602,15 @@ let PlacesControllerDragHelper = {
    * @param   insertionPoint
    *          The insertion point where the items should be dropped
    */
-  onDrop: function PCDH_onDrop(insertionPoint, dt) {
+  onDrop: Task.async(function* (insertionPoint, dt) {
     let doCopy = ["copy", "link"].indexOf(dt.dropEffect) != -1;
 
     let transactions = [];
     let dropCount = dt.mozItemCount;
     let movedCount = 0;
+    let parentGuid = PlacesUIUtils.useAsyncTransactions ?
+                       (yield insertionPoint.promiseGuid()) : null;
+    let tagName = insertionPoint.tagName;
     for (let i = 0; i < dropCount; ++i) {
       let flavor = this.getFirstValidFlavor(dt.mozTypesAt(i));
       if (!flavor)
@@ -1611,8 +1649,10 @@ let PlacesControllerDragHelper = {
           insertionPoint.orientation == Ci.nsITreeView.DROP_ON) {
         let uri = NetUtil.newURI(unwrapped.uri);
         let tagItemId = insertionPoint.itemId;
-        let tagTxn = new PlacesTagURITransaction(uri, [tagItemId]);
-        transactions.push(tagTxn);
+        if (PlacesUIUtils.useAsyncTransactions)
+          transactions.push(PlacesTransactions.Tag({ uri: uri, tag: tagName }));
+        else
+          transactions.push(new PlacesTagURITransaction(uri, [tagItemId]));
       }
       else {
         // If this is not a copy, check for safety that we can move the source,
@@ -1622,15 +1662,30 @@ let PlacesControllerDragHelper = {
                                        "reverting to a copy operation.");
           doCopy = true;
         }
-        transactions.push(PlacesUIUtils.makeTransaction(unwrapped,
-                          flavor, insertionPoint.itemId,
-                          index, doCopy));
+        if (PlacesUIUtils.useAsyncTransactions) {
+          transactions.push(
+            PlacesUIUtils.getTransactionForData(unwrapped,
+                                                flavor,
+                                                parentGuid,
+                                                index,
+                                                doCopy));
+        }
+        else {
+          transactions.push(PlacesUIUtils.makeTransaction(unwrapped,
+                              flavor, insertionPoint.itemId,
+                              index, doCopy));
+        }
       }
     }
 
-    let txn = new PlacesAggregatedTransaction("DropItems", transactions);
-    PlacesUtils.transactionManager.doTransaction(txn);
-  },
+    if (PlacesUIUtils.useAsyncTransactions) {
+      yield PlacesTransactions.transact(transactions);
+    }
+    else {
+      let txn = new PlacesAggregatedTransaction("DropItems", transactions);
+      PlacesUtils.transactionManager.doTransaction(txn);
+    }
+  }),
 
   /**
    * Checks if we can insert into a container.
@@ -1645,19 +1700,7 @@ let PlacesControllerDragHelper = {
     // Disallow insertion of items under readonly folders.
     return (!PlacesUtils.nodeIsFolder(aContainer) ||
              PlacesUtils.nodeIsReadOnly(aContainer));
-  },
-
-  placesFlavors: [PlacesUtils.TYPE_X_MOZ_PLACE_CONTAINER,
-                  PlacesUtils.TYPE_X_MOZ_PLACE_SEPARATOR,
-                  PlacesUtils.TYPE_X_MOZ_PLACE],
-
-  // The order matters.
-  GENERIC_VIEW_DROP_TYPES: [PlacesUtils.TYPE_X_MOZ_PLACE_CONTAINER,
-                            PlacesUtils.TYPE_X_MOZ_PLACE_SEPARATOR,
-                            PlacesUtils.TYPE_X_MOZ_PLACE,
-                            PlacesUtils.TYPE_X_MOZ_URL,
-                            TAB_DROP_TYPE,
-                            PlacesUtils.TYPE_UNICODE],
+  }
 };
 
 

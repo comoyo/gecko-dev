@@ -27,7 +27,7 @@ public:
 
 protected:
   virtual PHttpChannelChild*
-    AllocPHttpChannelChild(PBrowserChild*, const SerializedLoadContext&,
+    AllocPHttpChannelChild(const PBrowserOrId&, const SerializedLoadContext&,
                            const HttpChannelCreationArgs& aOpenArgs) MOZ_OVERRIDE;
   virtual bool DeallocPHttpChannelChild(PHttpChannelChild*) MOZ_OVERRIDE;
   virtual PCookieServiceChild* AllocPCookieServiceChild() MOZ_OVERRIDE;
@@ -35,23 +35,23 @@ protected:
   virtual PWyciwygChannelChild* AllocPWyciwygChannelChild() MOZ_OVERRIDE;
   virtual bool DeallocPWyciwygChannelChild(PWyciwygChannelChild*) MOZ_OVERRIDE;
   virtual PFTPChannelChild*
-    AllocPFTPChannelChild(PBrowserChild* aBrowser,
+    AllocPFTPChannelChild(const PBrowserOrId& aBrowser,
                           const SerializedLoadContext& aSerialized,
                           const FTPChannelCreationArgs& aOpenArgs) MOZ_OVERRIDE;
   virtual bool DeallocPFTPChannelChild(PFTPChannelChild*) MOZ_OVERRIDE;
   virtual PWebSocketChild*
-    AllocPWebSocketChild(PBrowserChild*, const SerializedLoadContext&) MOZ_OVERRIDE;
+    AllocPWebSocketChild(const PBrowserOrId&,
+                         const SerializedLoadContext&) MOZ_OVERRIDE;
   virtual bool DeallocPWebSocketChild(PWebSocketChild*) MOZ_OVERRIDE;
-  virtual PTCPSocketChild* AllocPTCPSocketChild() MOZ_OVERRIDE;
+  virtual PTCPSocketChild* AllocPTCPSocketChild(const nsString& host,
+                                                const uint16_t& port) MOZ_OVERRIDE;
   virtual bool DeallocPTCPSocketChild(PTCPSocketChild*) MOZ_OVERRIDE;
   virtual PTCPServerSocketChild*
     AllocPTCPServerSocketChild(const uint16_t& aLocalPort,
                                const uint16_t& aBacklog,
                                const nsString& aBinaryType) MOZ_OVERRIDE;
   virtual bool DeallocPTCPServerSocketChild(PTCPServerSocketChild*) MOZ_OVERRIDE;
-  virtual PUDPSocketChild* AllocPUDPSocketChild(const nsCString& aHost,
-                                                const uint16_t& aPort,
-                                                const nsCString& aFilter) MOZ_OVERRIDE;
+  virtual PUDPSocketChild* AllocPUDPSocketChild(const nsCString& aFilter) MOZ_OVERRIDE;
   virtual bool DeallocPUDPSocketChild(PUDPSocketChild*) MOZ_OVERRIDE;
   virtual PDNSRequestChild* AllocPDNSRequestChild(const nsCString& aHost,
                                                   const uint32_t& aFlags) MOZ_OVERRIDE;
@@ -71,6 +71,10 @@ protected:
   AllocPChannelDiverterChild(const ChannelDiverterArgs& channel) MOZ_OVERRIDE;
   virtual bool
   DeallocPChannelDiverterChild(PChannelDiverterChild* actor) MOZ_OVERRIDE;
+  virtual bool RecvAsyncAuthPromptForNestedFrame(const uint64_t& aNestedFrameId,
+                                                 const nsCString& aUri,
+                                                 const nsString& aRealm,
+                                                 const uint64_t& aCallbackId) MOZ_OVERRIDE;
 };
 
 /**

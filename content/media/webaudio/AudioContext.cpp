@@ -14,6 +14,7 @@
 #include "mozilla/dom/OfflineAudioContextBinding.h"
 #include "mozilla/dom/OwningNonNull.h"
 #include "MediaStreamGraph.h"
+#include "AudioChannelService.h"
 #include "AudioDestinationNode.h"
 #include "AudioBufferSourceNode.h"
 #include "AudioBuffer.h"
@@ -70,8 +71,8 @@ static float GetSampleRateForAudioContext(bool aIsOffline, float aSampleRate)
   if (aIsOffline) {
     return aSampleRate;
   } else {
-    AudioStream::InitPreferredSampleRate();
-    return static_cast<float>(AudioStream::PreferredSampleRate());
+    CubebUtils::InitPreferredSampleRate();
+    return static_cast<float>(CubebUtils::PreferredSampleRate());
   }
 }
 
@@ -95,9 +96,10 @@ AudioContext::AudioContext(nsPIDOMWindow* aWindow,
   // bound to the window.
   mDestination = new AudioDestinationNode(this, aIsOffline, aChannel,
                                           aNumberOfChannels, aLength, aSampleRate);
-  // We skip calling SetIsOnlyNodeForContext during mDestination's constructor,
-  // because we can only call SetIsOnlyNodeForContext after mDestination has
-  // been set up.
+  // We skip calling SetIsOnlyNodeForContext and the creation of the
+  // audioChannelAgent during mDestination's constructor, because we can only
+  // call them after mDestination has been set up.
+  mDestination->CreateAudioChannelAgent();
   mDestination->SetIsOnlyNodeForContext(true);
 }
 
@@ -131,7 +133,9 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
     return nullptr;
   }
 
-  nsRefPtr<AudioContext> object = new AudioContext(window, false);
+  nsRefPtr<AudioContext> object =
+    new AudioContext(window, false,
+                     AudioChannelService::GetDefaultAudioChannel());
 
   RegisterWeakMemoryReporter(object);
 
@@ -434,6 +438,7 @@ AudioContext::DecodeAudioData(const ArrayBuffer& aBuffer,
                               const Optional<OwningNonNull<DecodeErrorCallback> >& aFailureCallback)
 {
   AutoJSAPI jsapi;
+  jsapi.Init();
   JSContext* cx = jsapi.cx();
   JSAutoCompartment ac(cx, aBuffer.Obj());
 
@@ -459,7 +464,7 @@ AudioContext::DecodeAudioData(const ArrayBuffer& aBuffer,
                           &aSuccessCallback, failureCallback));
   mDecoder.AsyncDecodeMedia(contentType.get(), data, length, *job);
   // Transfer the ownership to mDecodeJobs
-  mDecodeJobs.AppendElement(job);
+  mDecodeJobs.AppendElement(job.forget());
 }
 
 void
@@ -513,7 +518,7 @@ AudioContext::UpdatePannerSource()
 uint32_t
 AudioContext::MaxChannelCount() const
 {
-  return mIsOffline ? mNumberOfChannels : AudioStream::MaxNumberOfChannels();
+  return mIsOffline ? mNumberOfChannels : CubebUtils::MaxNumberOfChannels();
 }
 
 MediaStreamGraph*
@@ -534,8 +539,9 @@ AudioContext::DestinationStream() const
 double
 AudioContext::CurrentTime() const
 {
-  return MediaTimeToSeconds(Destination()->Stream()->GetCurrentTime()) +
-      ExtraCurrentTime();
+  MediaStream* stream = Destination()->Stream();
+  return StreamTimeToDOMTime(stream->
+                             StreamTimeToSeconds(stream->GetCurrentTime()));
 }
 
 void
@@ -549,6 +555,8 @@ AudioContext::Shutdown()
   if (!mIsOffline) {
     Mute();
   }
+
+  mDecoder.Shutdown();
 
   // Release references to active nodes.
   // Active AudioNodes don't unregister in destructors, at which point the
@@ -646,6 +654,15 @@ AudioContext::SetMozAudioChannelType(AudioChannel aValue, ErrorResult& aRv)
   mDestination->SetMozAudioChannelType(aValue, aRv);
 }
 
+AudioChannel
+AudioContext::TestAudioChannelInAudioNodeStream()
+{
+  MediaStream* stream = mDestination->Stream();
+  MOZ_ASSERT(stream);
+
+  return stream->AudioChannelType();
+}
+
 size_t
 AudioContext::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 {
@@ -669,7 +686,7 @@ AudioContext::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 
 NS_IMETHODIMP
 AudioContext::CollectReports(nsIHandleReportCallback* aHandleReport,
-                             nsISupports* aData)
+                             nsISupports* aData, bool aAnonymize)
 {
   int64_t amount = SizeOfIncludingThis(MallocSizeOf);
   return MOZ_COLLECT_REPORT("explicit/webaudio/audiocontext", KIND_HEAP, UNITS_BYTES,

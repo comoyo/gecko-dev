@@ -16,7 +16,7 @@ namespace jsipc {
 class WrapperAnswer : public virtual JavaScriptShared
 {
   public:
-    WrapperAnswer(JSRuntime *rt) : JavaScriptShared(rt) {}
+    explicit WrapperAnswer(JSRuntime *rt) : JavaScriptShared(rt) {}
 
     bool AnswerPreventExtensions(const ObjectId &objId, ReturnStatus *rs);
     bool AnswerGetPropertyDescriptor(const ObjectId &objId, const nsString &id,
@@ -36,18 +36,19 @@ class WrapperAnswer : public virtual JavaScriptShared
                        ReturnStatus *rs, bool *bp);
     bool AnswerHasOwn(const ObjectId &objId, const nsString &id,
                           ReturnStatus *rs, bool *bp);
-    bool AnswerGet(const ObjectId &objId, const ObjectId &receiverId,
+    bool AnswerGet(const ObjectId &objId, const ObjectVariant &receiverVar,
                        const nsString &id,
                        ReturnStatus *rs, JSVariant *result);
-    bool AnswerSet(const ObjectId &objId, const ObjectId &receiverId,
+    bool AnswerSet(const ObjectId &objId, const ObjectVariant &receiverVar,
                    const nsString &id, const bool &strict,
                    const JSVariant &value, ReturnStatus *rs, JSVariant *result);
 
     bool AnswerIsExtensible(const ObjectId &objId, ReturnStatus *rs,
                             bool *result);
-    bool AnswerCall(const ObjectId &objId, const nsTArray<JSParam> &argv,
-                    ReturnStatus *rs, JSVariant *result,
-                    nsTArray<JSParam> *outparams);
+    bool AnswerCallOrConstruct(const ObjectId &objId, const nsTArray<JSParam> &argv,
+                               const bool &construct, ReturnStatus *rs, JSVariant *result,
+                               nsTArray<JSParam> *outparams);
+    bool AnswerHasInstance(const ObjectId &objId, const JSVariant &v, ReturnStatus *rs, bool *bp);
     bool AnswerObjectClassIs(const ObjectId &objId, const uint32_t &classValue,
                              bool *result);
     bool AnswerClassName(const ObjectId &objId, nsString *result);

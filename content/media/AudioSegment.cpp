@@ -9,7 +9,7 @@
 #include "AudioMixer.h"
 #include "AudioChannelFormat.h"
 #include "Latency.h"
-#include "speex/speex_resampler.h"
+#include <speex/speex_resampler.h>
 
 namespace mozilla {
 
@@ -114,15 +114,13 @@ DownmixAndInterleave(const nsTArray<const void*>& aChannelData,
                              aDuration, aVolume, aOutputChannels, aOutput);
 }
 
-void AudioSegment::ResampleChunks(SpeexResamplerState* aResampler)
+void AudioSegment::ResampleChunks(SpeexResamplerState* aResampler, uint32_t aInRate, uint32_t aOutRate)
 {
-  uint32_t inRate, outRate;
-
   if (mChunks.IsEmpty()) {
     return;
   }
 
-  speex_resampler_get_rate(aResampler, &inRate, &outRate);
+  MOZ_ASSERT(aResampler || IsNull(), "We can only be here without a resampler if this segment is null.");
 
   AudioSampleFormat format = AUDIO_FORMAT_SILENCE;
   for (ChunkIterator ci(*this); !ci.IsEnded(); ci.Next()) {
@@ -137,10 +135,10 @@ void AudioSegment::ResampleChunks(SpeexResamplerState* aResampler)
     // the chunks duration.
     case AUDIO_FORMAT_SILENCE:
     case AUDIO_FORMAT_FLOAT32:
-      Resample<float>(aResampler, inRate, outRate);
+      Resample<float>(aResampler, aInRate, aOutRate);
     break;
     case AUDIO_FORMAT_S16:
-      Resample<int16_t>(aResampler, inRate, outRate);
+      Resample<int16_t>(aResampler, aInRate, aOutRate);
     break;
     default:
       MOZ_ASSERT(false);
@@ -149,21 +147,20 @@ void AudioSegment::ResampleChunks(SpeexResamplerState* aResampler)
 }
 
 void
-AudioSegment::WriteTo(uint64_t aID, AudioStream* aOutput, AudioMixer* aMixer)
+AudioSegment::WriteTo(uint64_t aID, AudioMixer& aMixer, uint32_t aOutputChannels, uint32_t aSampleRate)
 {
-  uint32_t outputChannels = aOutput->GetChannels();
   nsAutoTArray<AudioDataValue,AUDIO_PROCESSING_FRAMES*GUESS_AUDIO_CHANNELS> buf;
   nsAutoTArray<const void*,GUESS_AUDIO_CHANNELS> channelData;
+  // Offset in the buffer that will end up sent to the AudioStream, in samples.
+  uint32_t offset = 0;
 
   if (!GetDuration()) {
     return;
   }
 
-  uint32_t outBufferLength = GetDuration() * outputChannels;
+  uint32_t outBufferLength = GetDuration() * aOutputChannels;
   buf.SetLength(outBufferLength);
 
-  // Offset in the buffer that will end up sent to the AudioStream.
-  uint32_t offset = 0;
 
   for (ChunkIterator ci(*this); !ci.IsEnded(); ci.Next()) {
     AudioChunk& c = *ci;
@@ -174,36 +171,32 @@ AudioSegment::WriteTo(uint64_t aID, AudioStream* aOutput, AudioMixer* aMixer)
     // AudioStream, and we don't have real data to write to it (just silence).
     // To avoid overbuffering in the AudioStream, we simply drop the silence,
     // here. The stream will underrun and output silence anyways.
-    if (c.mBuffer || aOutput->GetWritten()) {
-      if (c.mBuffer && c.mBufferFormat != AUDIO_FORMAT_SILENCE) {
-        channelData.SetLength(c.mChannelData.Length());
-        for (uint32_t i = 0; i < channelData.Length(); ++i) {
-          channelData[i] = c.mChannelData[i];
-        }
-
-        if (channelData.Length() < outputChannels) {
-          // Up-mix. Note that this might actually make channelData have more
-          // than outputChannels temporarily.
-          AudioChannelsUpMix(&channelData, outputChannels, gZeroChannel);
-        }
-
-        if (channelData.Length() > outputChannels) {
-          // Down-mix.
-          DownmixAndInterleave(channelData, c.mBufferFormat, frames,
-                               c.mVolume, outputChannels, buf.Elements() + offset);
-        } else {
-          InterleaveAndConvertBuffer(channelData.Elements(), c.mBufferFormat,
-                                     frames, c.mVolume,
-                                     outputChannels,
-                                     buf.Elements() + offset);
-        }
-      } else {
-        // Assumes that a bit pattern of zeroes == 0.0f
-        memset(buf.Elements() + offset, 0, outputChannels * frames * sizeof(AudioDataValue));
+    if (c.mBuffer && c.mBufferFormat != AUDIO_FORMAT_SILENCE) {
+      channelData.SetLength(c.mChannelData.Length());
+      for (uint32_t i = 0; i < channelData.Length(); ++i) {
+        channelData[i] = c.mChannelData[i];
       }
+      if (channelData.Length() < aOutputChannels) {
+        // Up-mix. Note that this might actually make channelData have more
+        // than aOutputChannels temporarily.
+        AudioChannelsUpMix(&channelData, aOutputChannels, gZeroChannel);
+      }
+      if (channelData.Length() > aOutputChannels) {
+        // Down-mix.
+        DownmixAndInterleave(channelData, c.mBufferFormat, frames,
+                             c.mVolume, aOutputChannels, buf.Elements() + offset);
+      } else {
+        InterleaveAndConvertBuffer(channelData.Elements(), c.mBufferFormat,
+                                   frames, c.mVolume,
+                                   aOutputChannels,
+                                   buf.Elements() + offset);
+      }
+    } else {
+      // Assumes that a bit pattern of zeroes == 0.0f
+      memset(buf.Elements() + offset, 0, aOutputChannels * frames * sizeof(AudioDataValue));
     }
 
-    offset += frames * outputChannels;
+    offset += frames * aOutputChannels;
 
     if (!c.mTimeStamp.IsNull()) {
       TimeStamp now = TimeStamp::Now();
@@ -213,12 +206,9 @@ AudioSegment::WriteTo(uint64_t aID, AudioStream* aOutput, AudioMixer* aMixer)
     }
   }
 
-  aOutput->Write(buf.Elements(), GetDuration(), &(mChunks[mChunks.Length() - 1].mTimeStamp));
-
-  if (aMixer) {
-    aMixer->Mix(buf.Elements(), outputChannels, GetDuration(), aOutput->GetRate());
+  if (offset) {
+    aMixer.Mix(buf.Elements(), aOutputChannels, offset / aOutputChannels, aSampleRate);
   }
-  aOutput->Start();
 }
 
 }

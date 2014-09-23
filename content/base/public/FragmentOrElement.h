@@ -31,8 +31,13 @@ class nsIControllers;
 class nsICSSDeclaration;
 class nsIDocument;
 class nsDOMStringMap;
-class nsINodeInfo;
 class nsIURI;
+
+namespace mozilla {
+namespace dom {
+class Element;
+}
+}
 
 /**
  * Class that implements the nsIDOMNodeList interface (a list of children of
@@ -43,7 +48,7 @@ class nsIURI;
 class nsChildContentList MOZ_FINAL : public nsINodeList
 {
 public:
-  nsChildContentList(nsINode* aNode)
+  explicit nsChildContentList(nsINode* aNode)
     : mNode(aNode)
   {
     SetIsDOMBinding();
@@ -73,6 +78,8 @@ public:
   }
 
 private:
+  ~nsChildContentList() {}
+
   // The node whose children make up the list (weak reference)
   nsINode* mNode;
 };
@@ -89,7 +96,7 @@ public:
 
   NS_DECL_NSIDOMXPATHNSRESOLVER
 
-  nsNode3Tearoff(nsINode *aNode) : mNode(aNode)
+  explicit nsNode3Tearoff(nsINode *aNode) : mNode(aNode)
   {
   }
 
@@ -107,18 +114,17 @@ private:
 class nsNodeWeakReference MOZ_FINAL : public nsIWeakReference
 {
 public:
-  nsNodeWeakReference(nsINode* aNode)
+  explicit nsNodeWeakReference(nsINode* aNode)
     : mNode(aNode)
   {
   }
-
-  ~nsNodeWeakReference();
 
   // nsISupports
   NS_DECL_ISUPPORTS
 
   // nsIWeakReference
   NS_DECL_NSIWEAKREFERENCE
+  virtual size_t SizeOfOnlyThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
   void NoticeNodeDestruction()
   {
@@ -126,6 +132,8 @@ public:
   }
 
 private:
+  ~nsNodeWeakReference();
+
   nsINode* mNode;
 };
 
@@ -135,7 +143,7 @@ private:
 class nsNodeSupportsWeakRefTearoff MOZ_FINAL : public nsISupportsWeakReference
 {
 public:
-  nsNodeSupportsWeakRefTearoff(nsINode* aNode)
+  explicit nsNodeSupportsWeakRefTearoff(nsINode* aNode)
     : mNode(aNode)
   {
   }
@@ -149,6 +157,8 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS(nsNodeSupportsWeakRefTearoff)
 
 private:
+  ~nsNodeSupportsWeakRefTearoff() {}
+
   nsCOMPtr<nsINode> mNode;
 };
 
@@ -165,9 +175,8 @@ class UndoManager;
 class FragmentOrElement : public nsIContent
 {
 public:
-  FragmentOrElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
-  FragmentOrElement(already_AddRefed<nsINodeInfo>&& aNodeInfo);
-  virtual ~FragmentOrElement();
+  explicit FragmentOrElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
+  explicit FragmentOrElement(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
@@ -181,7 +190,8 @@ public:
   virtual nsresult InsertChildAt(nsIContent* aKid, uint32_t aIndex,
                                  bool aNotify) MOZ_OVERRIDE;
   virtual void RemoveChildAt(uint32_t aIndex, bool aNotify) MOZ_OVERRIDE;
-  virtual void GetTextContentInternal(nsAString& aTextContent) MOZ_OVERRIDE;
+  virtual void GetTextContentInternal(nsAString& aTextContent,
+                                      mozilla::ErrorResult& aError) MOZ_OVERRIDE;
   virtual void SetTextContentInternal(const nsAString& aTextContent,
                                       mozilla::ErrorResult& aError) MOZ_OVERRIDE;
 
@@ -230,6 +240,14 @@ public:
     return Children()->Length();
   }
 
+  /**
+   * Sets the IsElementInStyleScope flag on each element in the subtree rooted
+   * at this node, including any elements reachable through shadow trees.
+   *
+   * @param aInStyleScope The flag value to set.
+   */
+  void SetIsElementInStyleScopeFlagOnSubtree(bool aInStyleScope);
+
 public:
   /**
    * If there are listeners for DOMNodeInserted event, fires the event on all
@@ -275,10 +293,10 @@ public:
   static void InitCCCallbacks();
   static void MarkUserData(void* aObject, nsIAtom* aKey, void* aChild,
                            void *aData);
-  static void MarkUserDataHandler(void* aObject, nsIAtom* aKey, void* aChild,
-                                  void* aData);
 
 protected:
+  virtual ~FragmentOrElement();
+
   /**
    * Copy attributes and state to another element
    * @param aDest the object to copy to
@@ -414,6 +432,14 @@ protected:
   {
     return static_cast<nsDOMSlots*>(GetExistingSlots());
   }
+
+  /**
+   * Calls SetIsElementInStyleScopeFlagOnSubtree for each shadow tree attached
+   * to this node, which is assumed to be an Element.
+   *
+   * @param aInStyleScope The IsElementInStyleScope flag value to set.
+   */
+  void SetIsElementInStyleScopeFlagOnShadowTree(bool aInStyleScope);
 
   friend class ::ContentUnbinder;
   /**

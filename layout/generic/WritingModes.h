@@ -36,6 +36,72 @@
 #define CHECK_WRITING_MODE(param) \
    NS_ASSERTION(param == mWritingMode, "writing-mode mismatch")
 
+namespace mozilla {
+// Logical side constants for use in various places.
+enum LogicalSide { eLogicalSideBStart, eLogicalSideBEnd,
+                   eLogicalSideIStart, eLogicalSideIEnd };
+
+enum LogicalSideBits {
+  eLogicalSideBitsNone   = 0,
+  eLogicalSideBitsBStart = 1 << eLogicalSideBStart,
+  eLogicalSideBitsBEnd   = 1 << eLogicalSideBEnd,
+  eLogicalSideBitsIEnd   = 1 << eLogicalSideIEnd,
+  eLogicalSideBitsIStart = 1 << eLogicalSideIStart,
+  eLogicalSideBitsBBoth = eLogicalSideBitsBStart | eLogicalSideBitsBEnd,
+  eLogicalSideBitsIBoth = eLogicalSideBitsIStart | eLogicalSideBitsIEnd,
+  eLogicalSideBitsAll = eLogicalSideBitsBBoth | eLogicalSideBitsIBoth
+};
+
+/**
+ * LogicalSides represents a set of logical sides.
+ */
+struct LogicalSides MOZ_FINAL {
+  LogicalSides() : mBits(0) {}
+  explicit LogicalSides(LogicalSideBits aSideBits)
+  {
+    MOZ_ASSERT((aSideBits & ~eLogicalSideBitsAll) == 0, "illegal side bits");
+    mBits = aSideBits;
+  }
+  bool IsEmpty() const { return mBits == 0; }
+  bool BStart()  const { return mBits & eLogicalSideBitsBStart; }
+  bool BEnd()    const { return mBits & eLogicalSideBitsBEnd; }
+  bool IStart()  const { return mBits & eLogicalSideBitsIStart; }
+  bool IEnd()    const { return mBits & eLogicalSideBitsIEnd; }
+  bool Contains(LogicalSideBits aSideBits) const
+  {
+    MOZ_ASSERT((aSideBits & ~eLogicalSideBitsAll) == 0, "illegal side bits");
+    return (mBits & aSideBits) == aSideBits;
+  }
+  LogicalSides operator|(LogicalSides aOther) const
+  {
+    return LogicalSides(LogicalSideBits(mBits | aOther.mBits));
+  }
+  LogicalSides operator|(LogicalSideBits aSideBits) const
+  {
+    return *this | LogicalSides(aSideBits);
+  }
+  LogicalSides& operator|=(LogicalSides aOther)
+  {
+    mBits |= aOther.mBits;
+    return *this;
+  }
+  LogicalSides& operator|=(LogicalSideBits aSideBits)
+  {
+    return *this |= LogicalSides(aSideBits);
+  }
+  bool operator==(LogicalSides aOther) const
+  {
+    return mBits == aOther.mBits;
+  }
+  bool operator!=(LogicalSides aOther) const
+  {
+    return !(*this == aOther);
+  }
+
+private:
+  uint8_t mBits;
+};
+
 /**
  * mozilla::WritingMode is an immutable class representing a
  * writing mode.
@@ -48,9 +114,6 @@
  * See CSS3 Writing Modes for more information
  *   http://www.w3.org/TR/css3-writing-modes/
  */
-
-namespace mozilla {
-
 class WritingMode {
 public:
   /**
@@ -157,7 +220,7 @@ public:
   /**
    * Construct writing mode based on a style context
    */
-  WritingMode(const nsStyleVisibility* aStyleVisibility)
+  explicit WritingMode(const nsStyleVisibility* aStyleVisibility)
   {
     NS_ASSERTION(aStyleVisibility, "we need an nsStyleVisibility here");
 
@@ -215,6 +278,19 @@ public:
     return mWritingMode == aOther.mWritingMode;
   }
 
+  bool operator!=(const WritingMode& aOther) const
+  {
+    return mWritingMode != aOther.mWritingMode;
+  }
+
+  /**
+   * Check whether two modes are orthogonal to each other.
+   */
+  bool IsOrthogonalTo(const WritingMode& aOther) const
+  {
+    return IsVertical() != aOther.IsVertical();
+  }
+
 private:
   friend class LogicalPoint;
   friend class LogicalSize;
@@ -233,7 +309,7 @@ private:
    * Constructing a WritingMode with an arbitrary value is a private operation
    * currently only used by the Unknown() static method.
    */
-  WritingMode(uint8_t aValue)
+  explicit WritingMode(uint8_t aValue)
     : mWritingMode(aValue)
   { }
 
@@ -297,7 +373,7 @@ private:
  */
 class LogicalPoint {
 public:
-  LogicalPoint(WritingMode aWritingMode)
+  explicit LogicalPoint(WritingMode aWritingMode)
     :
 #ifdef DEBUG
       mWritingMode(aWritingMode),
@@ -501,7 +577,7 @@ private:
  */
 class LogicalSize {
 public:
-  LogicalSize(WritingMode aWritingMode)
+  explicit LogicalSize(WritingMode aWritingMode)
     :
 #ifdef DEBUG
       mWritingMode(aWritingMode),
@@ -531,6 +607,12 @@ public:
     }
   }
 
+  void SizeTo(WritingMode aWritingMode, nscoord aISize, nscoord aBSize)
+  {
+    CHECK_WRITING_MODE(aWritingMode);
+    mSize.SizeTo(aISize, aBSize);
+  }
+
   /**
    * Dimensions in logical and physical terms
    */
@@ -557,7 +639,7 @@ public:
   }
 
   /**
-   * Writable references to the logical dimensions
+   * Writable references to the logical and physical dimensions
    */
   nscoord& ISize(WritingMode aWritingMode) // inline-size
   {
@@ -570,26 +652,15 @@ public:
     return mSize.height;
   }
 
-  /**
-   * Setters for the physical dimensions
-   */
-  void SetWidth(WritingMode aWritingMode, nscoord aWidth)
+  nscoord& Width(WritingMode aWritingMode)
   {
     CHECK_WRITING_MODE(aWritingMode);
-    if (aWritingMode.IsVertical()) {
-      BSize() = aWidth;
-    } else {
-      ISize() = aWidth;
-    }
+    return aWritingMode.IsVertical() ? BSize() : ISize();
   }
-  void SetHeight(WritingMode aWritingMode, nscoord aHeight)
+  nscoord& Height(WritingMode aWritingMode)
   {
     CHECK_WRITING_MODE(aWritingMode);
-    if (aWritingMode.IsVertical()) {
-      ISize() = aHeight;
-    } else {
-      BSize() = aHeight;
-    }
+    return aWritingMode.IsVertical() ? ISize() : BSize();
   }
 
   /**
@@ -610,6 +681,44 @@ public:
     CHECK_WRITING_MODE(aFromMode);
     return aToMode == aFromMode ?
       *this : LogicalSize(aToMode, GetPhysicalSize(aFromMode));
+  }
+
+  bool operator==(const LogicalSize& aOther) const
+  {
+    return mWritingMode == aOther.mWritingMode && mSize == aOther.mSize;
+  }
+
+  bool operator!=(const LogicalSize& aOther) const
+  {
+    return mWritingMode != aOther.mWritingMode || mSize != aOther.mSize;
+  }
+
+  LogicalSize operator+(const LogicalSize& aOther) const
+  {
+    CHECK_WRITING_MODE(aOther.GetWritingMode());
+    return LogicalSize(mWritingMode, ISize() + aOther.ISize(),
+                                     BSize() + aOther.BSize());
+  }
+  LogicalSize& operator+=(const LogicalSize& aOther)
+  {
+    CHECK_WRITING_MODE(aOther.GetWritingMode());
+    ISize() += aOther.ISize();
+    BSize() += aOther.BSize();
+    return *this;
+  }
+
+  LogicalSize operator-(const LogicalSize& aOther) const
+  {
+    CHECK_WRITING_MODE(aOther.GetWritingMode());
+    return LogicalSize(mWritingMode, ISize() - aOther.ISize(),
+                                     BSize() - aOther.BSize());
+  }
+  LogicalSize& operator-=(const LogicalSize& aOther)
+  {
+    CHECK_WRITING_MODE(aOther.GetWritingMode());
+    ISize() -= aOther.ISize();
+    BSize() -= aOther.BSize();
+    return *this;
   }
 
 private:
@@ -650,7 +759,7 @@ private:
  */
 class LogicalMargin {
 public:
-  LogicalMargin(WritingMode aWritingMode)
+  explicit LogicalMargin(WritingMode aWritingMode)
     :
 #ifdef DEBUG
       mWritingMode(aWritingMode),
@@ -755,6 +864,16 @@ public:
   }
 
   /**
+   * Return a LogicalSize representing the total size of the inline-
+   * and block-dimension margins.
+   */
+  LogicalSize Size(WritingMode aWritingMode) const
+  {
+    CHECK_WRITING_MODE(aWritingMode);
+    return LogicalSize(aWritingMode, IStartEnd(), BStartEnd());
+  }
+
+  /**
    * Accessors for physical margins, using our writing mode to convert from
    * logical values.
    */
@@ -831,6 +950,22 @@ public:
     CHECK_WRITING_MODE(aFromMode);
     return aToMode == aFromMode ?
       *this : LogicalMargin(aToMode, GetPhysicalMargin(aFromMode));
+  }
+
+  void ApplySkipSides(LogicalSides aSkipSides)
+  {
+    if (aSkipSides.BStart()) {
+      BStart() = 0;
+    }
+    if (aSkipSides.BEnd()) {
+      BEnd() = 0;
+    }
+    if (aSkipSides.IStart()) {
+      IStart() = 0;
+    }
+    if (aSkipSides.IEnd()) {
+      IEnd() = 0;
+    }
   }
 
   bool IsEmpty() const
@@ -920,7 +1055,7 @@ private:
  */
 class LogicalRect {
 public:
-  LogicalRect(WritingMode aWritingMode)
+  explicit LogicalRect(WritingMode aWritingMode)
     :
 #ifdef DEBUG
       mWritingMode(aWritingMode),
@@ -1158,6 +1293,8 @@ public:
     return (mRect.width == 0 && mRect.height == 0);
   }
 
+  void SetEmpty() { mRect.SetEmpty(); }
+
 /* XXX are these correct?
   nscoord ILeft(WritingMode aWritingMode) const
   {
@@ -1254,6 +1391,19 @@ public:
       return nsRect(aWritingMode.IsBidiLTR() ?
                       IStart() : aContainerWidth - IEnd(),
                     BStart(), ISize(), BSize());
+    }
+  }
+
+  nsPoint GetPhysicalPosition(WritingMode aWritingMode,
+                              nscoord aContainerWidth) const
+  {
+    CHECK_WRITING_MODE(aWritingMode);
+    if (aWritingMode.IsVertical()) {
+      return nsPoint(aWritingMode.IsVerticalLR() ? BStart() : aContainerWidth - BEnd(),
+                     IStart());
+    } else {
+      return nsPoint(aWritingMode.IsBidiLTR() ? IStart() : aContainerWidth - IEnd(),
+                     BStart());
     }
   }
 

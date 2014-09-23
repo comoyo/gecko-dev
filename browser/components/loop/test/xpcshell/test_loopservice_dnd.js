@@ -4,8 +4,7 @@
 
 XPCOMUtils.defineLazyModuleGetter(this, "Chat",
                                   "resource:///modules/Chat.jsm");
-
-var openChatOrig = Chat.open;
+let openChatOrig = Chat.open;
 
 add_test(function test_get_do_not_disturb() {
   Services.prefs.setBoolPref("loop.do_not_disturb", false);
@@ -32,37 +31,35 @@ add_test(function test_set_do_not_disturb() {
 add_test(function test_do_not_disturb_disabled_should_open_chat_window() {
   MozLoopService.doNotDisturb = false;
 
-  MozLoopService.register().then(() => {
-    let webSocket = gMockWebSocketChannelFactory.createdInstances[0];
-
+  MozLoopService.register(mockPushHandler).then(() => {
     let opened = false;
     Chat.open = function() {
       opened = true;
     };
 
-    webSocket.notify(1);
+    mockPushHandler.notify(1);
 
-    do_check_true(opened, "should open a chat window");
-
-    run_next_test();
+    waitForCondition(function() opened).then(() => {
+      run_next_test();
+    }, () => {
+      do_throw("should have opened a chat window");
+    });
   });
 });
 
 add_test(function test_do_not_disturb_enabled_shouldnt_open_chat_window() {
   MozLoopService.doNotDisturb = true;
 
-  MozLoopService.register().then(() => {
-    let webSocket = gMockWebSocketChannelFactory.createdInstances[0];
+  // We registered in the previous test, so no need to do that on this one.
+  let opened = false;
+  Chat.open = function() {
+    opened = true;
+  };
 
-    let opened = false;
-    Chat.open = function() {
-      opened = true;
-    };
+  mockPushHandler.notify(1);
 
-    webSocket.notify(1);
-
+  do_timeout(500, function() {
     do_check_false(opened, "should not open a chat window");
-
     run_next_test();
   });
 });
@@ -76,13 +73,14 @@ function run_test()
     response.processAsync();
     response.finish();
   });
-
-  // Registrations and pref settings.
-  gMockWebSocketChannelFactory.register();
+  loopServer.registerPathHandler("/calls", (request, response) => {
+    response.setStatusLine(null, 200, "OK");
+    response.write(JSON.stringify({calls: [{callId: 4444333221, websocketToken: "0deadbeef0"}]}));
+    response.processAsync();
+    response.finish();
+  });
 
   do_register_cleanup(function() {
-    gMockWebSocketChannelFactory.unregister();
-
     // Revert original Chat.open implementation
     Chat.open = openChatOrig;
 

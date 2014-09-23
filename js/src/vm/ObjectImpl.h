@@ -30,6 +30,10 @@ class ObjectImpl;
 class Nursery;
 class Shape;
 
+namespace gc {
+class ForkJoinNursery;
+}
+
 /*
  * To really poison a set of values, using 'magic' or 'undefined' isn't good
  * enough since often these will just be ignored by buggy code (see bug 629974)
@@ -165,11 +169,21 @@ class ObjectElements
 {
   public:
     enum Flags {
+        // Integers written to these elements must be converted to doubles.
         CONVERT_DOUBLE_ELEMENTS     = 0x1,
 
         // Present only if these elements correspond to an array with
         // non-writable length; never present for non-arrays.
-        NONWRITABLE_ARRAY_LENGTH    = 0x2
+        NONWRITABLE_ARRAY_LENGTH    = 0x2,
+
+        // These elements are shared with another object and must be copied
+        // before they can be changed. A pointer to the original owner of the
+        // elements, which is immutable, is stored immediately after the
+        // elements data. There is one case where elements can be written to
+        // before being copied: when setting the CONVERT_DOUBLE_ELEMENTS flag
+        // the shared elements may change (from ints to doubles) without
+        // making a copy first.
+        COPY_ON_WRITE               = 0x4
     };
 
   private:
@@ -177,6 +191,7 @@ class ObjectElements
     friend class ObjectImpl;
     friend class ArrayObject;
     friend class Nursery;
+    friend class gc::ForkJoinNursery;
 
     template <ExecutionMode mode>
     friend bool
@@ -201,25 +216,30 @@ class ObjectElements
     /* 'length' property of array objects, unused for other objects. */
     uint32_t length;
 
-    void staticAsserts() {
-        static_assert(sizeof(ObjectElements) == VALUES_PER_HEADER * sizeof(Value),
-                      "Elements size and values-per-Elements mismatch");
-    }
-
     bool shouldConvertDoubleElements() const {
         return flags & CONVERT_DOUBLE_ELEMENTS;
     }
     void setShouldConvertDoubleElements() {
+        // Note: allow isCopyOnWrite() here, see comment above.
         flags |= CONVERT_DOUBLE_ELEMENTS;
     }
     void clearShouldConvertDoubleElements() {
+        JS_ASSERT(!isCopyOnWrite());
         flags &= ~CONVERT_DOUBLE_ELEMENTS;
     }
     bool hasNonwritableArrayLength() const {
         return flags & NONWRITABLE_ARRAY_LENGTH;
     }
     void setNonwritableArrayLength() {
+        JS_ASSERT(!isCopyOnWrite());
         flags |= NONWRITABLE_ARRAY_LENGTH;
+    }
+    bool isCopyOnWrite() const {
+        return flags & COPY_ON_WRITE;
+    }
+    void clearCopyOnWrite() {
+        JS_ASSERT(isCopyOnWrite());
+        flags &= ~COPY_ON_WRITE;
     }
 
   public:
@@ -230,8 +250,16 @@ class ObjectElements
     HeapSlot *elements() {
         return reinterpret_cast<HeapSlot*>(uintptr_t(this) + sizeof(ObjectElements));
     }
+    const HeapSlot *elements() const {
+        return reinterpret_cast<const HeapSlot*>(uintptr_t(this) + sizeof(ObjectElements));
+    }
     static ObjectElements * fromElements(HeapSlot *elems) {
         return reinterpret_cast<ObjectElements*>(uintptr_t(elems) - sizeof(ObjectElements));
+    }
+
+    HeapPtrObject &ownerObject() const {
+        JS_ASSERT(isCopyOnWrite());
+        return *(HeapPtrObject *)(&elements()[initializedLength]);
     }
 
     static int offsetOfFlags() {
@@ -248,15 +276,21 @@ class ObjectElements
     }
 
     static bool ConvertElementsToDoubles(JSContext *cx, uintptr_t elements);
+    static bool MakeElementsCopyOnWrite(ExclusiveContext *cx, JSObject *obj);
 
+    // This is enough slots to store an object of this class. See the static
+    // assertion below.
     static const size_t VALUES_PER_HEADER = 2;
 };
+
+static_assert(ObjectElements::VALUES_PER_HEADER * sizeof(HeapSlot) == sizeof(ObjectElements),
+              "ObjectElements doesn't fit in the given number of slots");
 
 /* Shared singleton for objects with no elements. */
 extern HeapSlot *const emptyObjectElements;
 
 struct Class;
-struct GCMarker;
+class GCMarker;
 struct ObjectOps;
 class Shape;
 
@@ -315,11 +349,8 @@ IsObjectValueInCompartment(js::Value v, JSCompartment *comp);
  * will change so that some members are private, and only certain methods that
  * act upon them will be protected.
  */
-class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
+class ObjectImpl : public gc::Cell
 {
-    friend Zone *js::gc::BarrieredCell<ObjectImpl>::zone() const;
-    friend Zone *js::gc::BarrieredCell<ObjectImpl>::zoneFromAnyThread() const;
-
   protected:
     /*
      * Shape of the object, encodes the layout of the object's properties and
@@ -401,7 +432,12 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
 
     HeapSlotArray getDenseElements() {
         JS_ASSERT(isNative());
-        return HeapSlotArray(elements);
+        return HeapSlotArray(elements, !getElementsHeader()->isCopyOnWrite());
+    }
+    HeapSlotArray getDenseElementsAllowCopyOnWrite() {
+        // Backdoor allowing direct access to copy on write elements.
+        JS_ASSERT(isNative());
+        return HeapSlotArray(elements, true);
     }
     const Value &getDenseElement(uint32_t idx) {
         JS_ASSERT(isNative());
@@ -445,6 +481,7 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
 
   private:
     friend class Nursery;
+    friend class gc::ForkJoinNursery;
 
     /*
      * Get internal pointers to the range of values starting at start and
@@ -485,7 +522,7 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
     }
 
   protected:
-    friend struct GCMarker;
+    friend class GCMarker;
     friend class Shape;
     friend class NewObjectCache;
 
@@ -732,7 +769,7 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
         getSlotRef(slot).set(this->asObjectPtr(), HeapSlot::Slot, slot, value);
     }
 
-    inline void setCrossCompartmentSlot(uint32_t slot, const Value &value) {
+    MOZ_ALWAYS_INLINE void setCrossCompartmentSlot(uint32_t slot, const Value &value) {
         MOZ_ASSERT(slotInRange(slot));
         getSlotRef(slot).set(this->asObjectPtr(), HeapSlot::Slot, slot, value);
     }
@@ -786,7 +823,8 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
 
     /* Memory usage functions. */
     size_t tenuredSizeOfThis() const {
-        return js::gc::Arena::thingSize(tenuredGetAllocKind());
+        MOZ_ASSERT(isTenured());
+        return js::gc::Arena::thingSize(asTenured()->getAllocKind());
     }
 
     /* Elements accessors. */
@@ -902,7 +940,26 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
     }
 
     /* GC Accessors */
+    static const size_t MaxTagBits = 3;
     void setInitialSlots(HeapSlot *newSlots) { slots = newSlots; }
+    static bool isNullLike(const ObjectImpl *obj) { return uintptr_t(obj) < (1 << MaxTagBits); }
+    MOZ_ALWAYS_INLINE JS::Zone *zone() const {
+        return shape_->zone();
+    }
+    MOZ_ALWAYS_INLINE JS::shadow::Zone *shadowZone() const {
+        return JS::shadow::Zone::asShadowZone(zone());
+    }
+    MOZ_ALWAYS_INLINE JS::Zone *zoneFromAnyThread() const {
+        return shape_->zoneFromAnyThread();
+    }
+    MOZ_ALWAYS_INLINE JS::shadow::Zone *shadowZoneFromAnyThread() const {
+        return JS::shadow::Zone::asShadowZone(zoneFromAnyThread());
+    }
+    static MOZ_ALWAYS_INLINE void readBarrier(ObjectImpl *obj);
+    static MOZ_ALWAYS_INLINE void writeBarrierPre(ObjectImpl *obj);
+    static MOZ_ALWAYS_INLINE void writeBarrierPost(ObjectImpl *obj, void *cellp);
+    static MOZ_ALWAYS_INLINE void writeBarrierPostRelocate(ObjectImpl *obj, void *cellp);
+    static MOZ_ALWAYS_INLINE void writeBarrierPostRemove(ObjectImpl *obj, void *cellp);
 
     /* JIT Accessors */
     static size_t offsetOfShape() { return offsetof(ObjectImpl, shape_); }
@@ -923,37 +980,22 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
     static size_t offsetOfSlots() { return offsetof(ObjectImpl, slots); }
 };
 
-namespace gc {
-
-template <>
-MOZ_ALWAYS_INLINE Zone *
-BarrieredCell<ObjectImpl>::zone() const
+/* static */ MOZ_ALWAYS_INLINE void
+ObjectImpl::readBarrier(ObjectImpl *obj)
 {
-    const ObjectImpl* obj = static_cast<const ObjectImpl*>(this);
-    JS::Zone *zone = obj->shape_->zone();
-    JS_ASSERT(CurrentThreadCanAccessZone(zone));
-    return zone;
+    if (!isNullLike(obj) && obj->isTenured())
+        obj->asTenured()->readBarrier(obj->asTenured());
 }
 
-template <>
-MOZ_ALWAYS_INLINE Zone *
-BarrieredCell<ObjectImpl>::zoneFromAnyThread() const
+/* static */ MOZ_ALWAYS_INLINE void
+ObjectImpl::writeBarrierPre(ObjectImpl *obj)
 {
-    const ObjectImpl* obj = static_cast<const ObjectImpl*>(this);
-    return obj->shape_->zoneFromAnyThread();
+    if (!isNullLike(obj) && obj->isTenured())
+        obj->asTenured()->writeBarrierPre(obj->asTenured());
 }
 
-// TypeScript::global uses 0x1 as a special value.
-template<>
-/* static */ inline bool
-BarrieredCell<ObjectImpl>::isNullLike(ObjectImpl *obj)
-{
-    return IsNullTaggedPointer(obj);
-}
-
-template<>
-/* static */ inline void
-BarrieredCell<ObjectImpl>::writeBarrierPost(ObjectImpl *obj, void *cellp)
+/* static */ MOZ_ALWAYS_INLINE void
+ObjectImpl::writeBarrierPost(ObjectImpl *obj, void *cellp)
 {
     JS_ASSERT(cellp);
 #ifdef JSGC_GENERATIONAL
@@ -962,13 +1004,12 @@ BarrieredCell<ObjectImpl>::writeBarrierPost(ObjectImpl *obj, void *cellp)
     JS_ASSERT(obj == *static_cast<ObjectImpl **>(cellp));
     gc::StoreBuffer *storeBuffer = obj->storeBuffer();
     if (storeBuffer)
-        storeBuffer->putCellFromAnyThread(static_cast<Cell **>(cellp));
+        storeBuffer->putCellFromAnyThread(static_cast<gc::Cell **>(cellp));
 #endif
 }
 
-template<>
-/* static */ inline void
-BarrieredCell<ObjectImpl>::writeBarrierPostRelocate(ObjectImpl *obj, void *cellp)
+/* static */ MOZ_ALWAYS_INLINE void
+ObjectImpl::writeBarrierPostRelocate(ObjectImpl *obj, void *cellp)
 {
     JS_ASSERT(cellp);
     JS_ASSERT(obj);
@@ -976,31 +1017,28 @@ BarrieredCell<ObjectImpl>::writeBarrierPostRelocate(ObjectImpl *obj, void *cellp
 #ifdef JSGC_GENERATIONAL
     gc::StoreBuffer *storeBuffer = obj->storeBuffer();
     if (storeBuffer)
-        storeBuffer->putRelocatableCellFromAnyThread(static_cast<Cell **>(cellp));
+        storeBuffer->putRelocatableCellFromAnyThread(static_cast<gc::Cell **>(cellp));
 #endif
 }
 
-template<>
-/* static */ inline void
-BarrieredCell<ObjectImpl>::writeBarrierPostRemove(ObjectImpl *obj, void *cellp)
+/* static */ MOZ_ALWAYS_INLINE void
+ObjectImpl::writeBarrierPostRemove(ObjectImpl *obj, void *cellp)
 {
     JS_ASSERT(cellp);
     JS_ASSERT(obj);
     JS_ASSERT(obj == *static_cast<ObjectImpl **>(cellp));
 #ifdef JSGC_GENERATIONAL
     obj->shadowRuntimeFromAnyThread()->gcStoreBufferPtr()->removeRelocatableCellFromAnyThread(
-        static_cast<Cell **>(cellp));
+        static_cast<gc::Cell **>(cellp));
 #endif
 }
-
-} // namespace gc
 
 inline void
 ObjectImpl::privateWriteBarrierPre(void **oldval)
 {
 #ifdef JSGC_INCREMENTAL
     JS::shadow::Zone *shadowZone = this->shadowZoneFromAnyThread();
-    if (shadowZone->needsBarrier()) {
+    if (shadowZone->needsIncrementalBarrier()) {
         if (*oldval && getClass()->trace)
             getClass()->trace(shadowZone->barrierTracer(), this->asObjectPtr());
     }

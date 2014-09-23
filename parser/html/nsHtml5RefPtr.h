@@ -14,7 +14,7 @@ class nsHtml5RefPtrReleaser : public nsRunnable
     private:
       T* mPtr;
     public:
-      nsHtml5RefPtrReleaser(T* aPtr)
+      explicit nsHtml5RefPtrReleaser(T* aPtr)
           : mPtr(aPtr)
         {}
       NS_IMETHODIMP Run()
@@ -97,7 +97,7 @@ class nsHtml5RefPtr
             mRawPtr->AddRef();
         }
 
-      nsHtml5RefPtr( T* aRawPtr )
+      explicit nsHtml5RefPtr( T* aRawPtr )
             : mRawPtr(aRawPtr)
           // construct from a raw pointer (of the right type)
         {
@@ -105,7 +105,7 @@ class nsHtml5RefPtr
             mRawPtr->AddRef();
         }
 
-      nsHtml5RefPtr( const already_AddRefed<T>& aSmartPtr )
+      explicit nsHtml5RefPtr( const already_AddRefed<T>& aSmartPtr )
             : mRawPtr(aSmartPtr.mRawPtr)
           // construct from |dont_AddRef(expr)|
         {
@@ -378,14 +378,6 @@ operator!=( const U* lhs, const nsHtml5RefPtr<T>& rhs )
     return static_cast<const U*>(lhs) != static_cast<const T*>(rhs.get());
   }
 
-  // To avoid ambiguities caused by the presence of builtin |operator==|s
-  // creating a situation where one of the |operator==| defined above
-  // has a better conversion for one argument and the builtin has a
-  // better conversion for the other argument, define additional
-  // |operator==| without the |const| on the raw pointer.
-  // See bug 65664 for details.
-
-#ifndef NSCAP_DONT_PROVIDE_NONCONST_OPEQ
 template <class T, class U>
 inline
 bool
@@ -417,7 +409,6 @@ operator!=( U* lhs, const nsHtml5RefPtr<T>& rhs )
   {
     return const_cast<const U*>(lhs) != static_cast<const T*>(rhs.get());
   }
-#endif
 
 
 

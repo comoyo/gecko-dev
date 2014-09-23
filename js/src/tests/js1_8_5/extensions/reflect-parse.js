@@ -24,6 +24,7 @@ function throwStmt(expr) Pattern({ type: "ThrowStatement", argument: expr })
 function returnStmt(expr) Pattern({ type: "ReturnStatement", argument: expr })
 function yieldExpr(expr) Pattern({ type: "YieldExpression", argument: expr })
 function lit(val) Pattern({ type: "Literal", value: val })
+function comp(name) Pattern({ type: "ComputedName", name: name })
 function spread(val) Pattern({ type: "SpreadExpression", expression: val})
 var thisExpr = Pattern({ type: "ThisExpression" });
 function funDecl(id, params, body, defaults=[], rest=null) Pattern(
@@ -53,6 +54,7 @@ function forEachInStmt(lhs, rhs, body) Pattern({ type: "ForInStatement", left: l
 function breakStmt(lab) Pattern({ type: "BreakStatement", label: lab })
 function continueStmt(lab) Pattern({ type: "ContinueStatement", label: lab })
 function blockStmt(body) Pattern({ type: "BlockStatement", body: body })
+function literal(val) Pattern({ type: "Literal",  value: val })
 var emptyStmt = Pattern({ type: "EmptyStatement" })
 function ifStmt(test, cons, alt) Pattern({ type: "IfStatement", test: test, alternate: alt, consequent: cons })
 function labStmt(lab, stmt) Pattern({ type: "LabeledStatement", label: lab, body: stmt })
@@ -91,6 +93,12 @@ function newExpr(callee, args) Pattern({ type: "NewExpression", callee: callee, 
 function callExpr(callee, args) Pattern({ type: "CallExpression", callee: callee, arguments: args })
 function arrExpr(elts) Pattern({ type: "ArrayExpression", elements: elts })
 function objExpr(elts) Pattern({ type: "ObjectExpression", properties: elts })
+function computedName(elts) Pattern({ type: "ComputedName", name: elts })
+function templateLit(elts) Pattern({ type: "TemplateLiteral", elements: elts })
+function taggedTemplate(tagPart, templatePart) Pattern({ type: "TaggedTemplate", callee: tagPart,
+                arguments : templatePart })
+function template(raw, cooked, ...args) Pattern([{ type: "CallSiteObject", raw: raw, cooked:
+cooked}, ...args])
 function compExpr(body, blocks, filter) Pattern({ type: "ComprehensionExpression", body: body, blocks: blocks, filter: filter })
 function genExpr(body, blocks, filter) Pattern({ type: "GeneratorExpression", body: body, blocks: blocks, filter: filter })
 function graphExpr(idx, body) Pattern({ type: "GraphExpression", index: idx, expression: body })
@@ -135,6 +143,10 @@ function assertLocalDecl(src, patt) {
 
 function assertGlobalStmt(src, patt, builder) {
     program([patt]).assert(Reflect.parse(src, {builder: builder}));
+}
+
+function assertStringExpr(src, patt) {
+    program([exprStmt(patt)]).assert(Reflect.parse(src));
 }
 
 function assertGlobalExpr(src, patt, builder) {
@@ -213,7 +225,7 @@ assertDecl("function foo(a, b=4, ...rest) { }",
            funDecl(ident("foo"), [ident("a"), ident("b")], blockStmt([]), [lit(4)], ident("rest")));
 assertDecl("function foo(a=(function () {})) { function a() {} }",
            funDecl(ident("foo"), [ident("a")], blockStmt([funDecl(ident("a"), [], blockStmt([]))]),
-                   [funExpr(ident("a"), [], blockStmt([]))]));
+                   [funExpr(null, [], blockStmt([]))]));
 
 
 // Bug 591437: rebound args have their defs turned into uses
@@ -337,6 +349,8 @@ assertExpr("[1,(2,3)]", arrExpr([lit(1),seqExpr([lit(2),lit(3)])]));
 assertExpr("[,(2,3)]", arrExpr([null,seqExpr([lit(2),lit(3)])]));
 assertExpr("({})", objExpr([]));
 assertExpr("({x:1})", objExpr([{ key: ident("x"), value: lit(1) }]));
+assertExpr("({x:x, y})", objExpr([{ key: ident("x"), value: ident("x"), shorthand: false },
+                                  { key: ident("y"), value: ident("y"), shorthand: true }]));
 assertExpr("({x:1, y:2})", objExpr([{ key: ident("x"), value: lit(1) },
                                     { key: ident("y"), value: lit(2) } ]));
 assertExpr("({x:1, y:2, z:3})", objExpr([{ key: ident("x"), value: lit(1) },
@@ -351,6 +365,14 @@ assertExpr("({'x':1, 'y':2, z:3})", objExpr([{ key: lit("x"), value: lit(1) },
 assertExpr("({'x':1, 'y':2, 3:3})", objExpr([{ key: lit("x"), value: lit(1) },
                                              { key: lit("y"), value: lit(2) },
                                              { key: lit(3), value: lit(3) } ]));
+assertExpr("({__proto__:x})", objExpr([{ type: "PrototypeMutation", value: ident("x") }]));
+assertExpr("({'__proto__':x})", objExpr([{ type: "PrototypeMutation", value: ident("x") }]));
+assertExpr("({['__proto__']:x})", objExpr([{ type: "Property", key: comp(lit("__proto__")), value: ident("x") }]));
+assertExpr("({['__proto__']:q, __proto__() {}, __proto__: null })",
+           objExpr([{ type: "Property", key: comp(lit("__proto__")), value: ident("q") },
+                    { type: "Property", key: ident("__proto__"), method: true },
+                    { type: "PrototypeMutation", value: lit(null) }]));
+
 
 // Bug 571617: eliminate constant-folding
 assertExpr("2 + 3", binExpr("+", lit(2), lit(3)));
@@ -366,6 +388,36 @@ program([exprStmt(ident("f")),
          ifStmt(lit(1),
                 funDecl(ident("f"), [], blockStmt([])),
                 null)]).assert(Reflect.parse("f; if (1) function f(){}"));
+
+// Bug 924688: computed property names
+assertExpr('a= {[field1]: "a", [field2=1]: "b"}',
+          aExpr("=", ident("a"),
+                objExpr([{ key: computedName(ident("field1")), value: lit("a")},
+                         { key: computedName(aExpr("=", ident("field2"), lit(1))),
+                           value: lit("b")}])));
+
+assertExpr('a= {["field1"]: "a", field2 : "b"}',
+          aExpr("=", ident("a"),
+                objExpr([{ key: computedName(lit("field1")), value: lit("a") },
+                         { key: ident("field2"), value: lit("b") }])));
+
+assertExpr('a= {[1]: 1, 2 : 2}',
+          aExpr("=", ident("a"),
+                objExpr([{ key: computedName(lit(1)), value: lit(1) },
+                         { key: lit(2), value: lit(2) }])));
+
+// Bug 924688: computed property names - location information
+var node = Reflect.parse("a = {[field1]: 5}");
+Pattern({ body: [ { expression: { right: { properties: [ {key: { loc:
+    { start: { line: 1, column: 5 }, end: { line: 1, column: 13 }}}}]}}}]}).match(node);
+
+// Bug 1048384 - Getter/setter syntax with computed names
+assertExpr("b = { get [meth]() { } }", aExpr("=", ident("b"),
+              objExpr([{ key: computedName(ident("meth")), value: funExpr(null, [], blockStmt([])),
+                method: false, kind: "get"}])));
+assertExpr("b = { set [meth](a) { } }", aExpr("=", ident("b"),
+              objExpr([{ key: computedName(ident("meth")), value: funExpr(null, [ident("a")],
+                blockStmt([])), method: false, kind: "set"}])));
 
 // statements
 
@@ -395,6 +447,30 @@ assertStmt("if (foo) { throw 1; throw 2; throw 3; } else true;",
            ifStmt(ident("foo"),
                   blockStmt([throwStmt(lit(1)), throwStmt(lit(2)), throwStmt(lit(3))]),
                   exprStmt(lit(true))));
+
+// template strings
+assertStringExpr("`hey there`", literal("hey there"));
+assertStringExpr("`hey\nthere`", literal("hey\nthere"));
+assertExpr("`hey${\"there\"}`", templateLit([lit("hey"), lit("there"), lit("")]));
+assertExpr("`hey${\"there\"}mine`", templateLit([lit("hey"), lit("there"), lit("mine")]));
+assertExpr("`hey${a == 5}mine`", templateLit([lit("hey"), binExpr("==", ident("a"), lit(5)), lit("mine")]));
+assertExpr("`hey${`there${\"how\"}`}mine`", templateLit([lit("hey"),
+           templateLit([lit("there"), lit("how"), lit("")]), lit("mine")]));
+assertExpr("func`hey`", taggedTemplate(ident("func"), template(["hey"], ["hey"])));
+assertExpr("func`hey${\"4\"}there`", taggedTemplate(ident("func"),
+           template(["hey", "there"], ["hey", "there"], lit("4"))));
+assertExpr("func`hey${\"4\"}there${5}`", taggedTemplate(ident("func"),
+           template(["hey", "there", ""], ["hey", "there", ""],
+                  lit("4"), lit(5))));
+assertExpr("func`hey\r\n`", taggedTemplate(ident("func"), template(["hey\n"], ["hey\n"])));
+assertExpr("func`hey${4}``${5}there``mine`",
+           taggedTemplate(taggedTemplate(taggedTemplate(
+               ident("func"), template(["hey", ""], ["hey", ""], lit(4))),
+               template(["", "there"], ["", "there"], lit(5))),
+               template(["mine"], ["mine"])));
+
+assertStringExpr("\"hey there\"", literal("hey there"));
+
 assertStmt("foo: for(;;) break foo;", labStmt(ident("foo"), forStmt(null, null, null, breakStmt(ident("foo")))));
 assertStmt("foo: for(;;) continue foo;", labStmt(ident("foo"), forStmt(null, null, null, continueStmt(ident("foo")))));
 assertStmt("with (obj) { }", withStmt(ident("obj"), blockStmt([])));
@@ -442,6 +518,16 @@ assertStmt("try { } catch (e if foo) { } catch (e if bar) { } catch (e) { } fina
                    catchClause(ident("e"), null, blockStmt([])),
                    blockStmt([])));
 
+
+// Bug 924672: Method definitions
+assertExpr("b = { a() { } }", aExpr("=", ident("b"),
+              objExpr([{ key: ident("a"), value: funExpr(ident("a"), [], blockStmt([])), method:
+              true}])));
+
+assertExpr("b = { *a() { } }", aExpr("=", ident("b"),
+              objExpr([{ key: ident("a"), value: genFunExpr(ident("a"), [], blockStmt([])), method:
+              true}])));
+
 // Bug 632028: yield outside of a function should throw
 (function() {
     var threw = false;
@@ -469,8 +555,10 @@ assertStmt("function f() { var x = 42; var x = 43; }",
                                               varDecl([{ id: ident("x"), init: lit(43) }])])));
 
 
-assertDecl("var {x:y} = foo;", varDecl([{ id: objPatt([{ key: ident("x"), value: ident("y") }]),
+assertDecl("var {x:y} = foo;", varDecl([{ id: objPatt([{ key: ident("x"), value: ident("y"), shorthand: false }]),
                                           init: ident("foo") }]));
+assertDecl("var {x} = foo;", varDecl([{ id: objPatt([{ key: ident("x"), value: ident("x"), shorthand: true }]),
+                                        init: ident("foo") }]));
 
 // Bug 632030: redeclarations between var and funargs, var and function
 assertStmt("function g(x) { var x }",
@@ -578,6 +666,9 @@ testParamPatternCombinations(function(n) ("{a" + n + ":x" + n + "," + "b" + n + 
 testParamPatternCombinations(function(n) ("[x" + n + "," + "y" + n + "," + "z" + n + "]"),
                              function(n) (arrPatt([ident("x" + n), ident("y" + n), ident("z" + n)])));
 
+testParamPatternCombinations(function(n) ("[a" + n + ", ..." + "b" + n + "]"),
+                             function(n) (arrPatt([ident("a" + n), spread(ident("b" + n))])));
+
 
 // destructuring variable declarations
 
@@ -613,6 +704,10 @@ testVarPatternCombinations(function (n) ("{a" + n + ":x" + n + "," + "b" + n + "
 
 testVarPatternCombinations(function(n) ("[x" + n + "," + "y" + n + "," + "z" + n + "] = 0"),
                            function(n) ({ id: arrPatt([ident("x" + n), ident("y" + n), ident("z" + n)]),
+                                          init: lit(0) }));
+
+testVarPatternCombinations(function(n) ("[a" + n + ", ..." + "b" + n + "] = 0"),
+                           function(n) ({ id: arrPatt([ident("a" + n), spread(ident("b" + n))]),
                                           init: lit(0) }));
 
 // destructuring assignment
@@ -982,13 +1077,6 @@ try {
 if (!thrown)
     throw new Error("builder exception not propagated");
 
-// Missing property RHS's in an object literal should throw.
-try {
-    Reflect.parse("({foo})");
-    throw new Error("object literal missing property RHS didn't throw");
-} catch (e if e instanceof SyntaxError) { }
-
-
 // A simple proof-of-concept that the builder API can be used to generate other
 // formats, such as JsonMLAst:
 // 
@@ -1111,6 +1199,14 @@ return {
     },
     thisExpression: function() {
         return ["ThisExpr", {}];
+    },
+    templateLiteral: function(elts) {
+        for (var i = 0; i < elts.length; i++) {
+            if (!elts[i])
+                elts[i] = ["Empty"];
+        }
+        elts.unshift("TemplateLit", {});
+        return elts;
     },
 
     graphExpression: reject,

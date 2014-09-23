@@ -16,12 +16,7 @@
 #include "nsCRT.h" /* should be <limits.h>? */
 
 #include <gtk/gtk.h>
-#if (MOZ_WIDGET_GTK == 2)
-#include <gtk/gtkprinter.h>
-#include <gtk/gtkprintjob.h>
-#else
 #include <gtk/gtkunixprint.h>
-#endif
 
 #define NS_PORTRAIT  0
 #define NS_LANDSCAPE 1
@@ -49,9 +44,9 @@ public:
 
   NS_IMETHOD GetPath (const char **aPath);    
   static nsresult GetPrintMethod(const char *aPrinter, PrintMethod &aMethod);
-  virtual ~nsDeviceContextSpecGTK();
   
 protected:
+  virtual ~nsDeviceContextSpecGTK();
   nsCOMPtr<nsIPrintSettings> mPrintSettings;
   bool mToPrinter : 1;      /* If true, print to printer */
   bool mIsPPreview : 1;     /* If true, is print preview */
@@ -72,6 +67,7 @@ protected:
 //-------------------------------------------------------------------------
 class nsPrinterEnumeratorGTK MOZ_FINAL : public nsIPrinterEnumerator
 {
+  ~nsPrinterEnumeratorGTK() {}
 public:
   nsPrinterEnumeratorGTK();
   NS_DECL_ISUPPORTS

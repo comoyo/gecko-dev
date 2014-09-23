@@ -1,4 +1,4 @@
-/* -*- js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+/* -*- js-indent-level: 2; indent-tabs-mode: nil -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,7 +7,6 @@
 "use strict";
 
 const { Cc, Ci, Cu } = require("chrome");
-const Debugger = require("Debugger");
 const { DebuggerServer, ActorPool } = require("devtools/server/main");
 const { EnvironmentActor, LongStringActor, ObjectActor, ThreadActor } = require("devtools/server/actors/script");
 const { update } = require("devtools/toolkit/DevToolsUtils");
@@ -67,12 +66,15 @@ function WebConsoleActor(aConnection, aParentActor)
 
   this._prefs = {};
 
-  this.dbg = new Debugger();
+  this.dbg = this.parentActor.makeDebugger();
 
   this._netEvents = new Map();
   this._gripDepth = 0;
+  this._listeners = new Set();
 
   this._onWillNavigate = this._onWillNavigate.bind(this);
+  this._onChangedToplevelDocument = this._onChangedToplevelDocument.bind(this);
+  events.on(this.parentActor, "changed-toplevel-document", this._onChangedToplevelDocument);
   this._onObserverNotification = this._onObserverNotification.bind(this);
   if (this.parentActor.isRootActor) {
     Services.obs.addObserver(this._onObserverNotification,
@@ -125,6 +127,14 @@ WebConsoleActor.prototype =
    * @type Map
    */
   _netEvents: null,
+
+  /**
+   * Holds a set of all currently registered listeners.
+   *
+   * @private
+   * @type Set
+   */
+  _listeners: null,
 
   /**
    * The debugger server connection instance.
@@ -337,6 +347,7 @@ WebConsoleActor.prototype =
       this.consoleReflowListener.destroy();
       this.consoleReflowListener = null;
     }
+    events.off(this.parentActor, "changed-toplevel-document", this._onChangedToplevelDocument);
     this.conn.removeActorPool(this._actorPool);
     if (this.parentActor.isRootActor) {
       Services.obs.removeObserver(this._onObserverNotification,
@@ -565,6 +576,10 @@ WebConsoleActor.prototype =
           break;
       }
     }
+
+    // Update the live list of running listeners
+    startedListeners.forEach(this._listeners.add, this._listeners);
+
     return {
       startedListeners: startedListeners,
       nativeConsoleAPI: this.hasNativeConsoleAPI(this.window),
@@ -632,6 +647,9 @@ WebConsoleActor.prototype =
           break;
       }
     }
+
+    // Update the live list of running listeners
+    stoppedListeners.forEach(this._listeners.delete, this._listeners);
 
     return { stoppedListeners: stoppedListeners };
   },
@@ -726,7 +744,9 @@ WebConsoleActor.prototype =
       bindObjectActor: aRequest.bindObjectActor,
       frameActor: aRequest.frameActor,
       url: aRequest.url,
+      selectedNodeActor: aRequest.selectedNodeActor,
     };
+
     let evalInfo = this.evalWithDebugger(input, evalOptions);
     let evalResult = evalInfo.result;
     let helperResult = evalInfo.helperResult;
@@ -750,10 +770,19 @@ WebConsoleActor.prototype =
       }
     }
 
+    // If a value is encountered that the debugger server doesn't support yet,
+    // the console should remain functional.
+    let resultGrip;
+    try {
+      resultGrip = this.createValueGrip(result);
+    } catch (e) {
+      errorMessage = e;
+    }
+
     return {
       from: this.actorID,
       input: input,
-      result: this.createValueGrip(result),
+      result: resultGrip,
       timestamp: timestamp,
       exception: errorGrip,
       exceptionMessage: errorMessage,
@@ -904,13 +933,31 @@ WebConsoleActor.prototype =
     };
     JSTermHelpers(helpers);
 
-    // Make sure the helpers can be used during eval.
+    let evalWindow = this.evalWindow;
+    function maybeExport(obj, name) {
+      if (typeof obj[name] != "function") {
+        return;
+      }
+
+      // By default, chrome-implemented functions that are exposed to content
+      // refuse to accept arguments that are cross-origin for the caller. This
+      // is generally the safe thing, but causes problems for certain console
+      // helpers like cd(), where we users sometimes want to pass a cross-origin
+      // window. To circumvent this restriction, we use exportFunction along
+      // with a special option designed for this purpose. See bug 1051224.
+      obj[name] =
+        Cu.exportFunction(obj[name], evalWindow, { allowCrossOriginArguments: true });
+    }
     for (let name in helpers.sandbox) {
       let desc = Object.getOwnPropertyDescriptor(helpers.sandbox, name);
-      if (desc.get || desc.set) {
-        continue;
+      maybeExport(desc, 'get');
+      maybeExport(desc, 'set');
+      maybeExport(desc, 'value');
+      if (desc.value) {
+        // Make sure the helpers can be used during eval.
+        desc.value = aDebuggerGlobal.makeDebuggeeValue(desc.value);
       }
-      helpers.sandbox[name] = aDebuggerGlobal.makeDebuggeeValue(desc.value);
+      Object.defineProperty(helpers.sandbox, name, desc);
     }
     return helpers;
   },
@@ -959,6 +1006,10 @@ WebConsoleActor.prototype =
    *          ObjectActor.
    *        - frameActor: the FrameActor ID to use for evaluation. The given
    *        debugger frame is used for evaluation, instead of the global window.
+   *        - selectedNodeActor: the NodeActor ID of the currently selected node
+   *        in the Inspector (or null, if there is no selection). This is used
+   *        for helper functions that make reference to the currently selected
+   *        node, like $0.
    * @return object
    *         An object that holds the following properties:
    *         - dbg: the debugger where the string was evaluated.
@@ -1002,7 +1053,6 @@ WebConsoleActor.prototype =
     // If we have an object to bind to |_self|, create a Debugger.Object
     // referring to that object, belonging to dbg.
     let bindSelf = null;
-    let dbgWindow = dbg.makeGlobalObjectReference(this.evalWindow);
     if (aOptions.bindObjectActor) {
       let objActor = this.getActorByID(aOptions.bindObjectActor);
       if (objActor) {
@@ -1022,6 +1072,13 @@ WebConsoleActor.prototype =
     let bindings = helpers.sandbox;
     if (bindSelf) {
       bindings._self = bindSelf;
+    }
+
+    if (aOptions.selectedNodeActor) {
+      let actor = this.conn.getActor(aOptions.selectedNodeActor);
+      if (actor) {
+        helpers.selectedNode = actor.rawNode;
+      }
     }
 
     // Check if the Debugger.Frame or Debugger.Object for the global include
@@ -1068,6 +1125,7 @@ WebConsoleActor.prototype =
     let helperResult = helpers.helperResult;
     delete helpers.evalInput;
     delete helpers.helperResult;
+    delete helpers.selectedNode;
 
     if ($) {
       bindings.$ = $;
@@ -1385,6 +1443,24 @@ WebConsoleActor.prototype =
       this._progressListenerActive = false;
     }
   },
+
+  /**
+   * This listener is called when we switch to another frame,
+   * mostly to unregister previous listeners and start listening on the new document.
+   */
+  _onChangedToplevelDocument: function WCA__onChangedToplevelDocument()
+  {
+    // Convert the Set to an Array
+    let listeners = [...this._listeners];
+
+    // Unregister existing listener on the previous document
+    // (pass a copy of the array as it will shift from it)
+    this.onStopListeners({listeners: listeners.slice()});
+
+    // This method is called after this.window is changed,
+    // so we register new listener on this new window
+    this.onStartListeners({listeners: listeners});
+  },
 };
 
 WebConsoleActor.prototype.requestTypes =
@@ -1399,6 +1475,8 @@ WebConsoleActor.prototype.requestTypes =
   setPreferences: WebConsoleActor.prototype.onSetPreferences,
   sendHTTPRequest: WebConsoleActor.prototype.onSendHTTPRequest
 };
+
+exports.WebConsoleActor = WebConsoleActor;
 
 
 /**
@@ -1917,14 +1995,4 @@ NetworkEventActor.prototype.requestTypes =
   "getResponseCookies": NetworkEventActor.prototype.onGetResponseCookies,
   "getResponseContent": NetworkEventActor.prototype.onGetResponseContent,
   "getEventTimings": NetworkEventActor.prototype.onGetEventTimings,
-};
-
-exports.register = function(handle) {
-  handle.addGlobalActor(WebConsoleActor, "consoleActor");
-  handle.addTabActor(WebConsoleActor, "consoleActor");
-};
-
-exports.unregister = function(handle) {
-  handle.removeGlobalActor(WebConsoleActor, "consoleActor");
-  handle.removeTabActor(WebConsoleActor, "consoleActor");
 };

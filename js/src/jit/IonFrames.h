@@ -7,8 +7,6 @@
 #ifndef jit_IonFrames_h
 #define jit_IonFrames_h
 
-#ifdef JS_ION
-
 #include <stdint.h>
 
 #include "jscntxt.h"
@@ -24,8 +22,11 @@ typedef void * CalleeToken;
 enum CalleeTokenTag
 {
     CalleeToken_Function = 0x0, // untagged
-    CalleeToken_Script = 0x1
+    CalleeToken_FunctionConstructing = 0x1,
+    CalleeToken_Script = 0x2
 };
+
+static const uintptr_t CalleeTokenMask = ~uintptr_t(0x3);
 
 static inline CalleeTokenTag
 GetCalleeTokenTag(CalleeToken token)
@@ -35,9 +36,10 @@ GetCalleeTokenTag(CalleeToken token)
     return tag;
 }
 static inline CalleeToken
-CalleeToToken(JSFunction *fun)
+CalleeToToken(JSFunction *fun, bool constructing)
 {
-    return CalleeToken(uintptr_t(fun) | uintptr_t(CalleeToken_Function));
+    CalleeTokenTag tag = constructing ? CalleeToken_FunctionConstructing : CalleeToken_Function;
+    return CalleeToken(uintptr_t(fun) | uintptr_t(tag));
 }
 static inline CalleeToken
 CalleeToToken(JSScript *script)
@@ -47,19 +49,25 @@ CalleeToToken(JSScript *script)
 static inline bool
 CalleeTokenIsFunction(CalleeToken token)
 {
-    return GetCalleeTokenTag(token) == CalleeToken_Function;
+    CalleeTokenTag tag = GetCalleeTokenTag(token);
+    return tag == CalleeToken_Function || tag == CalleeToken_FunctionConstructing;
+}
+static inline bool
+CalleeTokenIsConstructing(CalleeToken token)
+{
+    return GetCalleeTokenTag(token) == CalleeToken_FunctionConstructing;
 }
 static inline JSFunction *
 CalleeTokenToFunction(CalleeToken token)
 {
-    JS_ASSERT(CalleeTokenIsFunction(token));
-    return (JSFunction *)token;
+    MOZ_ASSERT(CalleeTokenIsFunction(token));
+    return (JSFunction *)(uintptr_t(token) & CalleeTokenMask);
 }
 static inline JSScript *
 CalleeTokenToScript(CalleeToken token)
 {
     JS_ASSERT(GetCalleeTokenTag(token) == CalleeToken_Script);
-    return (JSScript *)(uintptr_t(token) & ~uintptr_t(0x3));
+    return (JSScript *)(uintptr_t(token) & CalleeTokenMask);
 }
 
 static inline JSScript *
@@ -69,9 +77,10 @@ ScriptFromCalleeToken(CalleeToken token)
       case CalleeToken_Script:
         return CalleeTokenToScript(token);
       case CalleeToken_Function:
+      case CalleeToken_FunctionConstructing:
         return CalleeTokenToFunction(token)->nonLazyScript();
     }
-    MOZ_ASSUME_UNREACHABLE("invalid callee token tag");
+    MOZ_CRASH("invalid callee token tag");
 }
 
 // In between every two frames lies a small header describing both frames. This
@@ -264,14 +273,15 @@ void HandleParallelFailure(ResumeFromException *rfe);
 
 void EnsureExitFrame(IonCommonFrameLayout *frame);
 
-void MarkJitActivations(JSRuntime *rt, JSTracer *trc);
+void MarkJitActivations(PerThreadData *ptd, JSTracer *trc);
 void MarkIonCompilerRoots(JSTracer *trc);
 
 JSCompartment *
 TopmostIonActivationCompartment(JSRuntime *rt);
 
 #ifdef JSGC_GENERATIONAL
-void UpdateJitActivationsForMinorGC(JSRuntime *rt, JSTracer *trc);
+template<typename T>
+void UpdateJitActivationsForMinorGC(PerThreadData *ptd, JSTracer *trc);
 #endif
 
 static inline uint32_t
@@ -300,6 +310,17 @@ GetTopIonJSScript(uint8_t *jitTop, void **returnAddrOut, ExecutionMode mode)
     JS_ASSERT(iter.isScripted());
     return iter.script();
 }
+
+#ifdef JS_CODEGEN_MIPS
+uint8_t *alignDoubleSpillWithOffset(uint8_t *pointer, int32_t offset);
+#else
+inline uint8_t *
+alignDoubleSpillWithOffset(uint8_t *pointer, int32_t offset)
+{
+    // This is NO-OP on non-MIPS platforms.
+    return pointer;
+}
+#endif
 
 // Layout of the frame prefix. This assumes the stack architecture grows down.
 // If this is ever not the case, we'll have to refactor.
@@ -443,7 +464,9 @@ class IonExitFooterFrame
     // This should only be called for function()->outParam == Type_Handle
     template <typename T>
     T *outParam() {
-        return reinterpret_cast<T *>(reinterpret_cast<char *>(this) - sizeof(T));
+        uint8_t *address = reinterpret_cast<uint8_t *>(this);
+        address = alignDoubleSpillWithOffset(address, sizeof(intptr_t));
+        return reinterpret_cast<T *>(address - sizeof(T));
     }
 };
 
@@ -497,7 +520,7 @@ class IonExitFrameLayout : public IonCommonFrameLayout
         return footer()->jitCode() == T::Token();
     }
     template <typename T> inline T *as() {
-        MOZ_ASSERT(is<T>());
+        MOZ_ASSERT(this->is<T>());
         return reinterpret_cast<T *>(footer());
     }
 };
@@ -817,7 +840,7 @@ class IonBaselineStubFrameLayout : public IonCommonFrameLayout
 // An invalidation bailout stack is at the stack pointer for the callee frame.
 class InvalidationBailoutStack
 {
-    mozilla::Array<double, FloatRegisters::Total> fpregs_;
+    mozilla::Array<double, FloatRegisters::TotalPhys> fpregs_;
     mozilla::Array<uintptr_t, Registers::Total> regs_;
     IonScript   *ionScript_;
     uint8_t       *osiPointReturnAddress_;
@@ -855,7 +878,5 @@ MarkCalleeToken(JSTracer *trc, CalleeToken token);
 
 } /* namespace jit */
 } /* namespace js */
-
-#endif // JS_ION
 
 #endif /* jit_IonFrames_h */

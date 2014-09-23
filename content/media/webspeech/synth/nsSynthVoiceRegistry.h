@@ -23,14 +23,13 @@ class SpeechSynthesisChild;
 class nsSpeechTask;
 class VoiceData;
 
-class nsSynthVoiceRegistry : public nsISynthVoiceRegistry
+class nsSynthVoiceRegistry MOZ_FINAL : public nsISynthVoiceRegistry
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSISYNTHVOICEREGISTRY
 
   nsSynthVoiceRegistry();
-  virtual ~nsSynthVoiceRegistry();
 
   already_AddRefed<nsSpeechTask> SpeakUtterance(SpeechSynthesisUtterance& aUtterance,
                                                 const nsAString& aDocLang);
@@ -55,6 +54,8 @@ public:
   static void Shutdown();
 
 private:
+  virtual ~nsSynthVoiceRegistry();
+
   VoiceData* FindBestMatch(const nsAString& aUri, const nsAString& lang);
 
   bool FindVoiceByLang(const nsAString& aLang, VoiceData** aRetval);

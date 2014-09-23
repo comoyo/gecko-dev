@@ -16,8 +16,6 @@
 #include "mozilla/StaticPtr.h"
 #include "mozilla/TextRange.h"
 
-class gfxASurface;
-
 struct ANPEvent;
 
 namespace mozilla {
@@ -34,11 +32,13 @@ namespace mozilla {
 class nsWindow :
     public nsBaseWidget
 {
+private:
+    virtual ~nsWindow();
+
 public:
     using nsBaseWidget::GetLayerManager;
 
     nsWindow();
-    virtual ~nsWindow();
 
     NS_DECL_ISUPPORTS_INHERITED
 
@@ -48,6 +48,7 @@ public:
 
     nsWindow* FindWindowForPoint(const nsIntPoint& pt);
 
+    void OnContextmenuEvent(mozilla::AndroidGeckoEvent *ae);
     bool OnMultitouchEvent(mozilla::AndroidGeckoEvent *ae);
     void OnNativeGestureEvent(mozilla::AndroidGeckoEvent *ae);
     void OnMouseEvent(mozilla::AndroidGeckoEvent *ae);
@@ -168,8 +169,6 @@ public:
 protected:
     void BringToFront();
     nsWindow *FindTopLevel();
-    bool DrawTo(gfxASurface *targetSurface);
-    bool DrawTo(gfxASurface *targetSurface, const nsIntRect &aRect);
     bool IsTopLevel();
     void RemoveIMEComposition();
     void PostFlushIMEChanges();
@@ -190,9 +189,10 @@ protected:
     nsCOMPtr<nsIIdleServiceInternal> mIdleService;
 
     bool mIMEComposing;
+    int32_t mIMEComposingStart;
+    nsString mIMEComposingText;
     bool mIMEMaskSelectionUpdate, mIMEMaskTextUpdate;
     int32_t mIMEMaskEventsCount; // Mask events when > 0
-    nsString mIMEComposingText;
     nsRefPtr<mozilla::TextRangeArray> mIMERanges;
     bool mIMEUpdatingContext;
     nsAutoTArray<mozilla::AndroidGeckoEvent, 8> mIMEKeyEvents;
@@ -233,9 +233,6 @@ private:
     void InitKeyEvent(mozilla::WidgetKeyboardEvent& event,
                       mozilla::AndroidGeckoEvent& key,
                       ANPEvent* pluginEvent);
-    void DispatchMotionEvent(mozilla::WidgetInputEvent &event,
-                             mozilla::AndroidGeckoEvent *ae,
-                             const nsIntPoint &refPoint);
     void DispatchGestureEvent(uint32_t msg, uint32_t direction, double delta,
                               const nsIntPoint &refPoint, uint64_t time);
     void HandleSpecialKey(mozilla::AndroidGeckoEvent *ae);

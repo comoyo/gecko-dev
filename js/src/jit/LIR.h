@@ -57,23 +57,23 @@ class LAllocation : public TempObject
 {
     uintptr_t bits_;
 
-    static const uintptr_t TAG_BIT = 1;
-    static const uintptr_t TAG_SHIFT = 0;
-    static const uintptr_t TAG_MASK = 1 << TAG_SHIFT;
+    // 3 bits gives us enough for an interesting set of Kinds and also fits
+    // within the alignment bits of pointers to Value, which are always
+    // 8-byte aligned.
     static const uintptr_t KIND_BITS = 3;
-    static const uintptr_t KIND_SHIFT = TAG_SHIFT + TAG_BIT;
+    static const uintptr_t KIND_SHIFT = 0;
     static const uintptr_t KIND_MASK = (1 << KIND_BITS) - 1;
 
   protected:
-    static const uintptr_t DATA_BITS = (sizeof(uint32_t) * 8) - KIND_BITS - TAG_BIT;
+    static const uintptr_t DATA_BITS = (sizeof(uint32_t) * 8) - KIND_BITS;
     static const uintptr_t DATA_SHIFT = KIND_SHIFT + KIND_BITS;
     static const uintptr_t DATA_MASK = (1 << DATA_BITS) - 1;
 
   public:
     enum Kind {
-        USE,            // Use of a virtual register, with physical allocation policy.
         CONSTANT_VALUE, // Constant js::Value.
         CONSTANT_INDEX, // Constant arbitrary index.
+        USE,            // Use of a virtual register, with physical allocation policy.
         GPR,            // General purpose register.
         FPU,            // Floating-point register.
         STACK_SLOT,     // Stack slot.
@@ -81,20 +81,16 @@ class LAllocation : public TempObject
     };
 
   protected:
-    bool isTagged() const {
-        return !!(bits_ & TAG_MASK);
+    uint32_t data() const {
+        return uint32_t(bits_) >> DATA_SHIFT;
     }
-
-    int32_t data() const {
-        return int32_t(bits_) >> DATA_SHIFT;
-    }
-    void setData(int32_t data) {
-        JS_ASSERT(int32_t(data) <= int32_t(DATA_MASK));
+    void setData(uint32_t data) {
+        JS_ASSERT(data <= DATA_MASK);
         bits_ &= ~(DATA_MASK << DATA_SHIFT);
         bits_ |= (data << DATA_SHIFT);
     }
     void setKindAndData(Kind kind, uint32_t data) {
-        JS_ASSERT(int32_t(data) <= int32_t(DATA_MASK));
+        JS_ASSERT(data <= DATA_MASK);
         bits_ = (uint32_t(kind) << KIND_SHIFT) | data << DATA_SHIFT;
     }
 
@@ -107,7 +103,9 @@ class LAllocation : public TempObject
 
   public:
     LAllocation() : bits_(0)
-    { }
+    {
+        JS_ASSERT(isBogus());
+    }
 
     static LAllocation *New(TempAllocator &alloc) {
         return new(alloc) LAllocation();
@@ -117,20 +115,22 @@ class LAllocation : public TempObject
         return new(alloc) LAllocation(other);
     }
 
-    // The value pointer must be rooted in MIR and have its low bit cleared.
+    // The value pointer must be rooted in MIR and have its low bits cleared.
     explicit LAllocation(const Value *vp) {
+        JS_ASSERT(vp);
         bits_ = uintptr_t(vp);
-        JS_ASSERT(!isTagged());
-        bits_ |= TAG_MASK;
+        JS_ASSERT((bits_ & (KIND_MASK << KIND_SHIFT)) == 0);
+        bits_ |= CONSTANT_VALUE << KIND_SHIFT;
     }
     inline explicit LAllocation(AnyRegister reg);
 
     Kind kind() const {
-        if (isTagged())
-            return CONSTANT_VALUE;
         return (Kind)((bits_ >> KIND_SHIFT) & KIND_MASK);
     }
 
+    bool isBogus() const {
+        return bits_ == 0;
+    }
     bool isUse() const {
         return kind() == USE;
     }
@@ -142,9 +142,6 @@ class LAllocation : public TempObject
     }
     bool isConstantIndex() const {
         return kind() == CONSTANT_INDEX;
-    }
-    bool isValue() const {
-        return kind() == CONSTANT_VALUE;
     }
     bool isGeneralReg() const {
         return kind() == GPR;
@@ -178,7 +175,7 @@ class LAllocation : public TempObject
 
     const Value *toConstant() const {
         JS_ASSERT(isConstantValue());
-        return reinterpret_cast<const Value *>(bits_ & ~TAG_MASK);
+        return reinterpret_cast<const Value *>(bits_ & ~(KIND_MASK << KIND_SHIFT));
     }
 
     bool operator ==(const LAllocation &other) const {
@@ -198,8 +195,9 @@ class LAllocation : public TempObject
 #else
     const char *toString() const { return "???"; }
 #endif
-
+    bool aliases(const LAllocation &other) const;
     void dump() const;
+
 };
 
 class LUse : public LAllocation
@@ -207,7 +205,7 @@ class LUse : public LAllocation
     static const uint32_t POLICY_BITS = 3;
     static const uint32_t POLICY_SHIFT = 0;
     static const uint32_t POLICY_MASK = (1 << POLICY_BITS) - 1;
-    static const uint32_t REG_BITS = 5;
+    static const uint32_t REG_BITS = 6;
     static const uint32_t REG_SHIFT = POLICY_SHIFT + POLICY_BITS;
     static const uint32_t REG_MASK = (1 << REG_BITS) - 1;
 
@@ -217,7 +215,7 @@ class LUse : public LAllocation
     static const uint32_t USED_AT_START_MASK = (1 << USED_AT_START_BITS) - 1;
 
   public:
-    // Virtual registers get the remaining 20 bits.
+    // Virtual registers get the remaining 19 bits.
     static const uint32_t VREG_BITS = DATA_BITS - (USED_AT_START_SHIFT + USED_AT_START_BITS);
     static const uint32_t VREG_SHIFT = USED_AT_START_SHIFT + USED_AT_START_BITS;
     static const uint32_t VREG_MASK = (1 << VREG_BITS) - 1;
@@ -287,6 +285,7 @@ class LUse : public LAllocation
     }
     uint32_t virtualRegister() const {
         uint32_t index = (data() >> VREG_SHIFT) & VREG_MASK;
+        JS_ASSERT(index != 0);
         return index;
     }
     uint32_t registerCode() const {
@@ -335,11 +334,6 @@ class LConstantIndex : public LAllocation
     { }
 
   public:
-    // Used as a placeholder for inputs that can be ignored.
-    static LConstantIndex Bogus() {
-        return LConstantIndex(0);
-    }
-
     static LConstantIndex FromIndex(uint32_t index) {
         return LConstantIndex(index);
     }
@@ -383,14 +377,14 @@ class LDefinition
 
     // Before register allocation, this optionally contains a fixed policy.
     // Register allocation assigns this field to a physical policy if none is
-    // preset.
+    // fixed.
     //
     // Right now, pre-allocated outputs are limited to the following:
     //   * Physical argument stack slots.
     //   * Physical registers.
     LAllocation output_;
 
-    static const uint32_t TYPE_BITS = 3;
+    static const uint32_t TYPE_BITS = 4;
     static const uint32_t TYPE_SHIFT = 0;
     static const uint32_t TYPE_MASK = (1 << TYPE_BITS) - 1;
     static const uint32_t POLICY_BITS = 2;
@@ -406,26 +400,20 @@ class LDefinition
     // unless the policy specifies that an input can be re-used and that input
     // is a stack slot.
     enum Policy {
-        // A random register of an appropriate class will be assigned.
-        DEFAULT,
-
         // The policy is predetermined by the LAllocation attached to this
         // definition. The allocation may be:
         //   * A register, which may not appear as any fixed temporary.
         //   * A stack slot or argument.
         //
-        // Register allocation will not modify a preset allocation.
-        PRESET,
+        // Register allocation will not modify a fixed allocation.
+        FIXED,
+
+        // A random register of an appropriate class will be assigned.
+        REGISTER,
 
         // One definition per instruction must re-use the first input
         // allocation, which (for now) must be a register.
-        MUST_REUSE_INPUT,
-
-        // This definition's virtual register is the same as another; this is
-        // for instructions which consume a register and silently define it as
-        // the same register. It is not legal to use this if doing so would
-        // change the type of the virtual register.
-        PASSTHROUGH
+        MUST_REUSE_INPUT
     };
 
     enum Type {
@@ -435,6 +423,8 @@ class LDefinition
         SLOTS,      // Slots/elements pointer that may be moved by minor GCs (GPR).
         FLOAT32,    // 32-bit floating-point value (FPU).
         DOUBLE,     // 64-bit floating-point value (FPU).
+        INT32X4,    // SIMD data containing four 32-bit integers (FPU).
+        FLOAT32X4,  // SIMD data containing four 32-bit floats (FPU).
 #ifdef JS_NUNBOX32
         // A type virtual register must be followed by a payload virtual
         // register, as both will be tracked as a single gcthing.
@@ -448,34 +438,37 @@ class LDefinition
     void set(uint32_t index, Type type, Policy policy) {
         JS_STATIC_ASSERT(MAX_VIRTUAL_REGISTERS <= VREG_MASK);
         bits_ = (index << VREG_SHIFT) | (policy << POLICY_SHIFT) | (type << TYPE_SHIFT);
+        JS_ASSERT_IF(!SupportsSimd, !isSimdType());
     }
 
   public:
-    LDefinition(uint32_t index, Type type, Policy policy = DEFAULT) {
+    LDefinition(uint32_t index, Type type, Policy policy = REGISTER) {
         set(index, type, policy);
     }
 
-    explicit LDefinition(Type type, Policy policy = DEFAULT) {
+    explicit LDefinition(Type type, Policy policy = REGISTER) {
         set(0, type, policy);
     }
 
     LDefinition(Type type, const LAllocation &a)
       : output_(a)
     {
-        set(0, type, PRESET);
+        set(0, type, FIXED);
     }
 
     LDefinition(uint32_t index, Type type, const LAllocation &a)
       : output_(a)
     {
-        set(index, type, PRESET);
+        set(index, type, FIXED);
     }
 
     LDefinition() : bits_(0)
-    { }
+    {
+        JS_ASSERT(isBogusTemp());
+    }
 
     static LDefinition BogusTemp() {
-        return LDefinition(GENERAL, LConstantIndex::Bogus());
+        return LDefinition();
     }
 
     Policy policy() const {
@@ -484,11 +477,38 @@ class LDefinition
     Type type() const {
         return (Type)((bits_ >> TYPE_SHIFT) & TYPE_MASK);
     }
+    bool isSimdType() const {
+        return type() == INT32X4 || type() == FLOAT32X4;
+    }
+    bool isCompatibleReg(const AnyRegister &r) const {
+        if (isFloatReg() && r.isFloat()) {
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+            if (type() == FLOAT32)
+                return r.fpu().isSingle();
+            return r.fpu().isDouble();
+#else
+            return true;
+#endif
+        }
+        return !isFloatReg() && !r.isFloat();
+    }
+    bool isCompatibleDef(const LDefinition &other) const {
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+        if (isFloatReg() && other.isFloatReg())
+            return type() == other.type();
+        return !isFloatReg() && !other.isFloatReg();
+#else
+        return isFloatReg() == other.isFloatReg();
+#endif
+    }
+
     bool isFloatReg() const {
-        return type() == FLOAT32 || type() == DOUBLE;
+        return type() == FLOAT32 || type() == DOUBLE || isSimdType();
     }
     uint32_t virtualRegister() const {
-        return (bits_ >> VREG_SHIFT) & VREG_MASK;
+        uint32_t index = (bits_ >> VREG_SHIFT) & VREG_MASK;
+        //JS_ASSERT(index != 0);
+        return index;
     }
     LAllocation *output() {
         return &output_;
@@ -496,11 +516,11 @@ class LDefinition
     const LAllocation *output() const {
         return &output_;
     }
-    bool isPreset() const {
-        return policy() == PRESET;
+    bool isFixed() const {
+        return policy() == FIXED;
     }
     bool isBogusTemp() const {
-        return isPreset() && output()->isConstantIndex();
+        return isFixed() && output()->isBogus();
     }
     void setVirtualRegister(uint32_t index) {
         JS_ASSERT(index < VREG_MASK);
@@ -511,7 +531,7 @@ class LDefinition
         output_ = a;
         if (!a.isUse()) {
             bits_ &= ~(POLICY_MASK << POLICY_SHIFT);
-            bits_ |= PRESET << POLICY_SHIFT;
+            bits_ |= FIXED << POLICY_SHIFT;
         }
     }
     void setReusedInput(uint32_t operand) {
@@ -531,6 +551,7 @@ class LDefinition
             static_assert(sizeof(bool) <= sizeof(int32_t), "bool doesn't fit in an int32 slot");
             return LDefinition::INT32;
           case MIRType_String:
+          case MIRType_Symbol:
           case MIRType_Object:
             return LDefinition::OBJECT;
           case MIRType_Double:
@@ -548,10 +569,22 @@ class LDefinition
             return LDefinition::GENERAL;
           case MIRType_ForkJoinContext:
             return LDefinition::GENERAL;
+          case MIRType_Int32x4:
+            return LDefinition::INT32X4;
+          case MIRType_Float32x4:
+            return LDefinition::FLOAT32X4;
           default:
-            MOZ_ASSUME_UNREACHABLE("unexpected type");
+            MOZ_CRASH("unexpected type");
         }
     }
+
+#ifdef DEBUG
+    const char *toString() const;
+#else
+    const char *toString() const { return "???"; }
+#endif
+
+    void dump() const;
 };
 
 // Forward declarations of LIR types.
@@ -721,7 +754,7 @@ class LInstructionVisitor
     {}
 
   public:
-#define VISIT_INS(op) virtual bool visit##op(L##op *) { MOZ_ASSUME_UNREACHABLE("NYI: " #op); }
+#define VISIT_INS(op) virtual bool visit##op(L##op *) { MOZ_CRASH("NYI: " #op); }
     LIR_OPCODE_LIST(VISIT_INS)
 #undef VISIT_INS
 };
@@ -789,8 +822,8 @@ class LBlock : public TempObject
         JS_ASSERT(!at->isLabel());
         instructions_.insertBefore(at, ins);
     }
-    uint32_t firstId();
-    uint32_t lastId();
+    uint32_t firstId() const;
+    uint32_t lastId() const;
 
     // Return the label to branch to when branching to this block.
     Label *label() {
@@ -936,12 +969,22 @@ class LRecoverInfo : public TempObject
     {
       private:
         MNode **it_;
+        MNode **end_;
         size_t op_;
 
       public:
-        explicit OperandIter(MNode **it)
-          : it_(it), op_(0)
-        { }
+        explicit OperandIter(LRecoverInfo *recoverInfo)
+          : it_(recoverInfo->begin()), end_(recoverInfo->end()), op_(0)
+        {
+            settle();
+        }
+
+        void settle() {
+            while ((*it_)->numOperands() == 0) {
+                ++it_;
+                op_ = 0;
+            }
+        }
 
         MDefinition *operator *() {
             return (*it_)->getOperand(op_);
@@ -956,11 +999,14 @@ class LRecoverInfo : public TempObject
                 op_ = 0;
                 ++it_;
             }
+            if (!*this)
+                settle();
+
             return *this;
         }
 
-        bool operator !=(const OperandIter &where) const {
-            return it_ != where.it_ || op_ != where.op_;
+        operator bool() const {
+            return it_ == end_;
         }
 
 #ifdef DEBUG
@@ -1386,7 +1432,7 @@ class LSafepoint : public TempObject
         // In general, pointer arithmetic on code is bad, but in this case,
         // getting the return address from a call instruction, stepping over pools
         // would be wrong.
-        return osiCallPointOffset_ + Assembler::patchWrite_NearCallSize();
+        return osiCallPointOffset_ + Assembler::PatchWrite_NearCallSize();
     }
     uint32_t osiCallPointOffset() const {
         return osiCallPointOffset_;
@@ -1540,10 +1586,10 @@ class LIRGraph
     // platform stack alignment requirement, and so that it's a multiple of
     // the number of slots per Value.
     uint32_t paddedLocalSlotCount() const {
-        // Round to StackAlignment, but also round to at least sizeof(Value) in
-        // case that's greater, because StackOffsetOfPassedArg rounds argument
-        // slots to 8-byte boundaries.
-        size_t Alignment = Max(size_t(StackAlignment), sizeof(Value));
+        // Round to ABIStackAlignment, but also round to at least sizeof(Value)
+        // in case that's greater, because StackOffsetOfPassedArg rounds
+        // argument slots to 8-byte boundaries.
+        size_t Alignment = Max(size_t(ABIStackAlignment), sizeof(Value));
         return AlignBytes(localSlotCount(), Alignment);
     }
     size_t paddedLocalSlotsSize() const {
@@ -1570,7 +1616,7 @@ class LIRGraph
     }
     void setEntrySnapshot(LSnapshot *snapshot) {
         JS_ASSERT(!entrySnapshot_);
-        JS_ASSERT(snapshot->bailoutKind() == Bailout_Normal);
+        JS_ASSERT(snapshot->bailoutKind() == Bailout_InitialState);
         snapshot->setBailoutKind(Bailout_ArgumentCheck);
         entrySnapshot_ = snapshot;
     }
@@ -1637,6 +1683,8 @@ LAllocation::toRegister() const
 # include "jit/arm/LIR-arm.h"
 #elif defined(JS_CODEGEN_MIPS)
 # include "jit/mips/LIR-mips.h"
+#elif defined(JS_CODEGEN_NONE)
+# include "jit/none/LIR-none.h"
 #else
 # error "Unknown architecture!"
 #endif

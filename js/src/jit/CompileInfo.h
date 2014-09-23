@@ -83,6 +83,9 @@ class InlineScriptTree {
     bool isOutermostCaller() const {
         return caller_ == nullptr;
     }
+    bool hasCaller() const {
+        return caller_ != nullptr;
+    }
     InlineScriptTree *outermostCaller() {
         if (isOutermostCaller())
             return this;
@@ -97,11 +100,26 @@ class InlineScriptTree {
         return script_;
     }
 
-    InlineScriptTree *children() const {
+    bool hasChildren() const {
+        return children_ != nullptr;
+    }
+    InlineScriptTree *firstChild() const {
+        JS_ASSERT(hasChildren());
         return children_;
     }
+
+    bool hasNextCallee() const {
+        return nextCallee_ != nullptr;
+    }
     InlineScriptTree *nextCallee() const {
+        JS_ASSERT(hasNextCallee());
         return nextCallee_;
+    }
+
+    unsigned depth() const {
+        if (isOutermostCaller())
+            return 1;
+        return 1 + caller_->depth();
     }
 };
 
@@ -119,7 +137,14 @@ class BytecodeSite {
 
     BytecodeSite(InlineScriptTree *tree, jsbytecode *pc)
       : tree_(tree), pc_(pc)
-    {}
+    {
+        JS_ASSERT(tree_ != nullptr);
+        JS_ASSERT(pc_ != nullptr);
+    }
+
+    bool hasTree() const {
+        return tree_ != nullptr;
+    }
 
     InlineScriptTree *tree() const {
         return tree_;
@@ -127,6 +152,10 @@ class BytecodeSite {
 
     jsbytecode *pc() const {
         return pc_;
+    }
+
+    JSScript *script() const {
+        return tree_ ? tree_->script() : nullptr;
     }
 };
 
@@ -158,8 +187,9 @@ class CompileInfo
         nimplicit_ = StartArgSlot(script)                   /* scope chain and argument obj */
                    + (fun ? 1 : 0);                         /* this */
         nargs_ = fun ? fun->nargs() : 0;
-        nfixedvars_ = script->nfixedvars();
+        nbodyfixed_ = script->nbodyfixed();
         nlocals_ = script->nfixed();
+        fixedLexicalBegin_ = script->fixedLexicalBegin();
         nstack_ = script->nslots() - script->nfixed();
         nslots_ = nimplicit_ + nargs_ + nlocals_ + nstack_;
     }
@@ -171,10 +201,11 @@ class CompileInfo
     {
         nimplicit_ = 0;
         nargs_ = 0;
-        nfixedvars_ = 0;
+        nbodyfixed_ = 0;
         nlocals_ = nlocals;
         nstack_ = 1;  /* For FunctionCompiler::pushPhiInput/popPhiOutput */
         nslots_ = nlocals_ + nstack_;
+        fixedLexicalBegin_ = nlocals;
     }
 
     JSScript *script() const {
@@ -262,10 +293,10 @@ class CompileInfo
     unsigned nargs() const {
         return nargs_;
     }
-    // Number of slots needed for "fixed vars".  Note that this is only non-zero
-    // for function code.
-    unsigned nfixedvars() const {
-        return nfixedvars_;
+    // Number of slots needed for fixed body-level bindings.  Note that this
+    // is only non-zero for function code.
+    unsigned nbodyfixed() const {
+        return nbodyfixed_;
     }
     // Number of slots needed for all local variables.  This includes "fixed
     // vars" (see above) and also block-scoped locals.
@@ -274,6 +305,10 @@ class CompileInfo
     }
     unsigned ninvoke() const {
         return nslots_ - nstack_;
+    }
+    // The slot number at which fixed lexicals begin.
+    unsigned fixedLexicalBegin() const {
+        return fixedLexicalBegin_;
     }
 
     uint32_t scopeChainSlot() const {
@@ -348,9 +383,9 @@ class CompileInfo
 
         uint32_t local = index - firstLocalSlot();
         if (local < nlocals()) {
-            // First, check if this local is a var.
-            if (local < nfixedvars())
-                return script()->varIsAliased(local);
+            // First, check if this local is body-level.
+            if (local < nbodyfixed())
+                return script()->bodyLevelLocalIsAliased(local);
 
             // Otherwise, it might be part of a block scope.
             for (; staticScope; staticScope = staticScope->enclosingNestedScope()) {
@@ -437,10 +472,11 @@ class CompileInfo
   private:
     unsigned nimplicit_;
     unsigned nargs_;
-    unsigned nfixedvars_;
+    unsigned nbodyfixed_;
     unsigned nlocals_;
     unsigned nstack_;
     unsigned nslots_;
+    unsigned fixedLexicalBegin_;
     JSScript *script_;
     JSFunction *fun_;
     jsbytecode *osrPc_;

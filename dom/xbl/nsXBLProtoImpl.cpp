@@ -9,15 +9,14 @@
 #include "nsIContent.h"
 #include "nsIDocument.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
-#include "nsIScriptGlobalObject.h"
-#include "nsIScriptContext.h"
 #include "nsIXPConnect.h"
 #include "nsIServiceManager.h"
 #include "nsIDOMNode.h"
 #include "nsXBLPrototypeBinding.h"
 #include "nsXBLProtoImplProperty.h"
 #include "nsIURI.h"
+#include "mozilla/AddonPathService.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/XULElementBinding.h"
 #include "xpcpublic.h"
 #include "js/CharacterEncoding.h"
@@ -41,13 +40,20 @@ nsXBLProtoImpl::InstallImplementation(nsXBLPrototypeBinding* aPrototypeBinding,
   // nsXBLProtoImplAnonymousMethod::Execute
   nsIDocument* document = aBinding->GetBoundElement()->OwnerDoc();
 
-  nsCOMPtr<nsIScriptGlobalObject> global =  do_QueryInterface(document->GetScopeObject());
-  if (!global) return NS_OK;
+  // This sometimes gets called when we have no outer window and if we don't
+  // catch this, we get leaks during crashtests and reftests.
+  if (NS_WARN_IF(!document->GetWindow())) {
+    return NS_OK;
+  }
 
-  nsCOMPtr<nsIScriptContext> context = global->GetContext();
-  if (!context) return NS_OK;
-  JSContext* cx = context->GetNativeContext();
-  AutoCxPusher pusher(cx);
+  // |propertyHolder| (below) can be an existing object, so in theory we might
+  // hit something that could end up running script. We never want that to
+  // happen here, so we use an AutoJSAPI instead of an AutoEntryScript.
+  dom::AutoJSAPI jsapi;
+  if (NS_WARN_IF(!jsapi.Init(document->GetScopeObject()))) {
+    return NS_OK;
+  }
+  JSContext* cx = jsapi.cx();
 
   // InitTarget objects gives us back the JS object that represents the bound element and the
   // class object in the bound document that represents the concrete version of this implementation.
@@ -75,9 +81,10 @@ nsXBLProtoImpl::InstallImplementation(nsXBLPrototypeBinding* aPrototypeBinding,
 
   // First, start by entering the compartment of the XBL scope. This may or may
   // not be the same compartment as globalObject.
+  JSAddonId* addonId = MapURIToAddonID(aPrototypeBinding->BindingURI());
   JS::Rooted<JSObject*> globalObject(cx,
     GetGlobalForObjectCrossCompartment(targetClassObject));
-  JS::Rooted<JSObject*> scopeObject(cx, xpc::GetXBLScopeOrGlobal(cx, globalObject));
+  JS::Rooted<JSObject*> scopeObject(cx, xpc::GetScopeForXBLExecution(cx, globalObject, addonId));
   NS_ENSURE_TRUE(scopeObject, NS_ERROR_OUT_OF_MEMORY);
   JSAutoCompartment ac(cx, scopeObject);
 
@@ -132,13 +139,25 @@ nsXBLProtoImpl::InstallImplementation(nsXBLPrototypeBinding* aPrototypeBinding,
   if (propertyHolder != targetClassObject) {
     AssertSameCompartment(propertyHolder, scopeObject);
     AssertSameCompartment(targetClassObject, globalObject);
+    bool inContentXBLScope = xpc::IsInContentXBLScope(scopeObject);
     for (nsXBLProtoImplMember* curr = mMembers; curr; curr = curr->GetNext()) {
-      if (curr->ShouldExposeToUntrustedContent()) {
+      if (!inContentXBLScope || curr->ShouldExposeToUntrustedContent()) {
         JS::Rooted<jsid> id(cx);
         JS::TwoByteChars chars(curr->GetName(), NS_strlen(curr->GetName()));
         bool ok = JS_CharsToId(cx, chars, &id);
         NS_ENSURE_TRUE(ok, NS_ERROR_UNEXPECTED);
-        JS_CopyPropertyFrom(cx, id, targetClassObject, propertyHolder);
+
+        bool found;
+        ok = JS_HasPropertyById(cx, propertyHolder, id, &found);
+        NS_ENSURE_TRUE(ok, NS_ERROR_UNEXPECTED);
+        if (!found) {
+          // Some members don't install anything in InstallMember (e.g.,
+          // nsXBLProtoImplAnonymousMethod). We need to skip copying in
+          // those cases.
+          continue;
+        }
+
+        ok = JS_CopyPropertyFrom(cx, id, targetClassObject, propertyHolder);
         NS_ENSURE_TRUE(ok, NS_ERROR_UNEXPECTED);
       }
     }
@@ -221,8 +240,7 @@ nsXBLProtoImpl::CompilePrototypeMembers(nsXBLPrototypeBinding* aBinding)
   // bind the prototype to a real xbl instance, we'll clone the pre-compiled JS into the real instance's 
   // context.
   AutoSafeJSContext cx;
-  JS::Rooted<JSObject*> compilationGlobal(cx, xpc::GetCompilationScope());
-  NS_ENSURE_TRUE(compilationGlobal, NS_ERROR_UNEXPECTED);
+  JS::Rooted<JSObject*> compilationGlobal(cx, xpc::CompilationScope());
   JSAutoCompartment ac(cx, compilationGlobal);
 
   mPrecompiledMemberHolder = JS_NewObjectWithGivenProto(cx, nullptr, JS::NullPtr(), compilationGlobal);
@@ -319,7 +337,7 @@ nsXBLProtoImpl::UndefineFields(JSContext *cx, JS::Handle<JSObject*> obj) const
   for (nsXBLProtoImplField* f = mFields; f; f = f->GetNext()) {
     nsDependentString name(f->GetName());
 
-    const jschar* s = name.get();
+    const char16_t* s = name.get();
     bool hasProp;
     if (::JS_AlreadyHasOwnUCProperty(cx, obj, s, name.Length(), &hasProp) &&
         hasProp) {

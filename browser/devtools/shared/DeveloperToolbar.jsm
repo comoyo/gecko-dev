@@ -73,8 +73,7 @@ let CommandUtils = {
    */
   createRequisition: function(environment) {
     return gcli.load().then(() => {
-      let Requisition = require("gcli/cli").Requisition
-      return new Requisition({ environment: environment });
+      return gcli.createRequisition({ environment: environment });
     });
   },
 
@@ -105,11 +104,23 @@ let CommandUtils = {
         if (command == null) {
           throw new Error("No command '" + typed + "'");
         }
+
+        // Do not build a button for a non-remote safe command in a non-local target.
+        if (!target.isLocalTab && !command.isRemoteSafe) {
+          requisition.clear();
+          return;
+        }
+
         if (command.buttonId != null) {
           button.id = command.buttonId;
+          if (command.buttonClass != null) {
+            button.className = command.buttonClass;
+          }
         }
-        if (command.buttonClass != null) {
-          button.className = command.buttonClass;
+        else {
+          button.setAttribute("text-as-image", "true");
+          button.setAttribute("label", command.name);
+          button.className = "devtools-toolbarbutton";
         }
         if (command.tooltipText != null) {
           button.setAttribute("tooltiptext", command.tooltipText);
@@ -125,20 +136,46 @@ let CommandUtils = {
         // Allow the command button to be toggleable
         if (command.state) {
           button.setAttribute("autocheck", false);
-          let onChange = (event, eventTab) => {
-            if (eventTab == target.tab) {
-              if (command.state.isChecked(target)) {
-                button.setAttribute("checked", true);
+
+          /**
+           * The onChange event should be called with an event object that
+           * contains a target property which specifies which target the event
+           * applies to. For legacy reasons the event object can also contain
+           * a tab property.
+           */
+          let onChange = (eventName, ev) => {
+            if (ev.target == target || ev.tab == target.tab) {
+
+              let updateChecked = (checked) => {
+                if (checked) {
+                  button.setAttribute("checked", true);
+                }
+                else if (button.hasAttribute("checked")) {
+                  button.removeAttribute("checked");
+                }
+              };
+
+              // isChecked would normally be synchronous. An annoying quirk
+              // of the 'csscoverage toggle' command forces us to accept a
+              // promise here, but doing Promise.resolve(reply).then(...) here
+              // makes this async for everyone, which breaks some tests so we
+              // treat non-promise replies separately to keep then synchronous.
+              let reply = command.state.isChecked(target);
+              if (typeof reply.then == "function") {
+                reply.then(updateChecked, console.error);
               }
-              else if (button.hasAttribute("checked")) {
-                button.removeAttribute("checked");
+              else {
+                updateChecked(reply);
               }
             }
           };
+
           command.state.onChange(target, onChange);
-          onChange(null, target.tab);
+          onChange("", { target: target });
           document.defaultView.addEventListener("unload", () => {
-            command.state.offChange(target, onChange);
+            if (command.state.offChange) {
+              command.state.offChange(target, onChange);
+            }
           }, false);
         }
 
@@ -290,9 +327,9 @@ Object.defineProperty(DeveloperToolbar.prototype, 'sequenceId', {
  */
 DeveloperToolbar.prototype.toggle = function() {
   if (this.visible) {
-    return this.hide();
+    return this.hide().catch(console.error);
   } else {
-    return this.show(true);
+    return this.show(true).catch(console.error);
   }
 };
 
@@ -951,7 +988,7 @@ OutputPanel.prototype._update = function() {
         this._div.removeChild(this._div.firstChild);
       }
 
-      var links = node.ownerDocument.querySelectorAll('*[href]');
+      var links = node.querySelectorAll('*[href]');
       for (var i = 0; i < links.length; i++) {
         links[i].setAttribute('target', '_blank');
       }

@@ -30,14 +30,14 @@ public:
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(nsHistory)
 
 public:
-  nsHistory(nsPIDOMWindow* aInnerWindow);
-  virtual ~nsHistory();
+  explicit nsHistory(nsPIDOMWindow* aInnerWindow);
 
   nsPIDOMWindow* GetParentObject() const;
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 
   uint32_t GetLength(mozilla::ErrorResult& aRv) const;
-  JS::Value GetState(JSContext* aCx, mozilla::ErrorResult& aRv) const;
+  void GetState(JSContext* aCx, JS::MutableHandle<JS::Value> aResult,
+                mozilla::ErrorResult& aRv) const;
   void Go(int32_t aDelta, mozilla::ErrorResult& aRv);
   void Back(mozilla::ErrorResult& aRv);
   void Forward(mozilla::ErrorResult& aRv);
@@ -49,6 +49,8 @@ public:
                     mozilla::ErrorResult& aRv);
 
 protected:
+  virtual ~nsHistory();
+
   nsIDocShell* GetDocShell() const;
 
   void PushOrReplaceState(JSContext* aCx, JS::Handle<JS::Value> aData,

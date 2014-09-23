@@ -314,7 +314,7 @@ nsScriptNameSpaceManager::RegisterInterface(const char* aIfName,
   return NS_OK;
 }
 
-#define GLOBALNAME_HASHTABLE_INITIAL_SIZE	1024
+#define GLOBALNAME_HASHTABLE_INITIAL_LENGTH   512
 
 nsresult
 nsScriptNameSpaceManager::Init()
@@ -333,14 +333,14 @@ nsScriptNameSpaceManager::Init()
 
   mIsInitialized = PL_DHashTableInit(&mGlobalNames, &hash_table_ops,
                                      nullptr, sizeof(GlobalNameMapEntry),
-                                     GLOBALNAME_HASHTABLE_INITIAL_SIZE,
-                                     fallible_t());
+                                     fallible_t(),
+                                     GLOBALNAME_HASHTABLE_INITIAL_LENGTH);
   NS_ENSURE_TRUE(mIsInitialized, NS_ERROR_OUT_OF_MEMORY);
 
   mIsInitialized = PL_DHashTableInit(&mNavigatorNames, &hash_table_ops,
                                      nullptr, sizeof(GlobalNameMapEntry),
-                                     GLOBALNAME_HASHTABLE_INITIAL_SIZE,
-                                     fallible_t());
+                                     fallible_t(),
+                                     GLOBALNAME_HASHTABLE_INITIAL_LENGTH);
   if (!mIsInitialized) {
     PL_DHashTableFinish(&mGlobalNames);
 
@@ -816,7 +816,7 @@ MOZ_DEFINE_MALLOC_SIZE_OF(ScriptNameSpaceManagerMallocSizeOf)
 
 NS_IMETHODIMP
 nsScriptNameSpaceManager::CollectReports(
-  nsIHandleReportCallback* aHandleReport, nsISupports* aData)
+  nsIHandleReportCallback* aHandleReport, nsISupports* aData, bool aAnonymize)
 {
   return MOZ_COLLECT_REPORT(
     "explicit/script-namespace-manager", KIND_HEAP, UNITS_BYTES,

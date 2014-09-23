@@ -41,7 +41,7 @@ public:
   // Whether an error was received.
   static bool sError;
 
-  UnownedCallback(mozIStorageConnection* aDBConn)
+  explicit UnownedCallback(mozIStorageConnection* aDBConn)
   : mDBConn(aDBConn)
   , mCompleted(false)
   {
@@ -50,12 +50,14 @@ public:
     sError = false;
   }
 
+private:
   ~UnownedCallback()
   {
     sAlive = false;
     blocking_async_close(mDBConn);
   }
 
+public:
   NS_IMETHOD HandleResult(mozIStorageResultSet* aResultSet)
   {
     sResult = true;

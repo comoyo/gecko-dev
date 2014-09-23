@@ -68,7 +68,8 @@ public:
    * relative to the current scroll offset. HandleLongTapUp will always be
    * preceeded by HandleLongTap. However not all calls to HandleLongTap will
    * be followed by a HandleLongTapUp (for example, if the user drags
-   * around between the long-tap and lifting their finger).
+   * around between the long-tap and lifting their finger, or if content
+   * notifies the APZ that the long-tap event was prevent-defaulted).
    */
   virtual void HandleLongTapUp(const CSSPoint& aPoint,
                                int32_t aModifiers,
@@ -115,7 +116,7 @@ public:
     return false;
   }
 
-  MOZ_BEGIN_NESTED_ENUM_CLASS(APZStateChange, int8_t)
+  enum APZStateChange {
     /**
      * APZ started modifying the view (including panning, zooming, and fling).
      */
@@ -139,7 +140,7 @@ public:
      */
     EndTouch,
     APZStateChangeSentinel
-  MOZ_END_NESTED_ENUM_CLASS(APZStateChange)
+  };
 
   /**
    * General notices of APZ state changes for consumers.
@@ -158,8 +159,6 @@ protected:
   // Protected destructor, to discourage deletion outside of Release():
   virtual ~GeckoContentController() {}
 };
-
-MOZ_FINISH_NESTED_ENUM_CLASS(GeckoContentController::APZStateChange)
 
 }
 }

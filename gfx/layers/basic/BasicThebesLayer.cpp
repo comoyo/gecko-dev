@@ -90,10 +90,10 @@ BasicThebesLayer::PaintThebes(gfxContext* aContext,
       } else {
         groupContext = aContext;
       }
-      SetAntialiasingFlags(this, groupContext);
+      SetAntialiasingFlags(this, groupContext->GetDrawTarget());
       aCallback(this, groupContext, toDraw, DrawRegionClip::CLIP_NONE, nsIntRegion(), aCallbackData);
       if (needsGroup) {
-        BasicManager()->PopGroupToSourceWithCachedSurface(aContext, groupContext);
+        aContext->PopGroupToSource();
         if (needsClipToVisibleRegion) {
           gfxUtils::ClipToRegion(aContext, toDraw);
         }
@@ -119,7 +119,7 @@ BasicThebesLayer::PaintThebes(gfxContext* aContext,
   AutoMoz2DMaskData mask;
   SourceSurface* maskSurface = nullptr;
   Matrix maskTransform;
-  if (GetMaskData(aMaskLayer, Point(), &mask)) {
+  if (GetMaskData(aMaskLayer, aContext->GetDeviceOffset(), &mask)) {
     maskSurface = mask.GetSurface();
     maskTransform = mask.GetTransform();
   }
@@ -209,7 +209,7 @@ BasicThebesLayer::Validate(LayerManager::DrawThebesLayerCallback aCallback,
     if (ctx) {
       NS_ASSERTION(GetEffectiveOpacity() == 1.0, "Should only read back opaque layers");
       NS_ASSERTION(!GetMaskLayer(), "Should only read back layers without masks");
-      ctx->Translate(gfxPoint(offset.x, offset.y));
+      ctx->SetMatrix(ctx->CurrentMatrix().Translate(offset.x, offset.y));
       mContentClient->DrawTo(this, ctx->GetDrawTarget(), 1.0,
                              CompositionOpForOp(ctx->CurrentOperator()),
                              nullptr, nullptr);

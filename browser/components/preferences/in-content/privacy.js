@@ -20,11 +20,52 @@ var gPrivacyPane = {
    */
   init: function ()
   {
+    function setEventListener(aId, aEventType, aCallback)
+    {
+      document.getElementById(aId)
+              .addEventListener(aEventType, aCallback.bind(gPrivacyPane));
+    }
+
     this._updateSanitizeSettingsButton();
     this.initializeHistoryMode();
     this.updateHistoryModePane();
     this.updatePrivacyMicroControls();
     this.initAutoStartPrivateBrowsingReverter();
+
+    setEventListener("browser.urlbar.default.behavior", "change",
+      document.getElementById('browser.urlbar.autocomplete.enabled')
+              .updateElements
+    );
+    setEventListener("privacy.sanitize.sanitizeOnShutdown", "change",
+                     gPrivacyPane._updateSanitizeSettingsButton);
+    setEventListener("browser.privatebrowsing.autostart", "change",
+                     gPrivacyPane.updatePrivacyMicroControls);
+    setEventListener("historyMode", "command", function () {
+      gPrivacyPane.updateHistoryModePane();
+      gPrivacyPane.updateHistoryModePrefs();
+      gPrivacyPane.updatePrivacyMicroControls();
+      gPrivacyPane.updateAutostart();
+    });
+    setEventListener("historyRememberClear", "click", function () {
+      gPrivacyPane.clearPrivateDataNow(false);
+      return false;
+    });
+    setEventListener("historyRememberCookies", "click", function () {
+      gPrivacyPane.showCookies();
+      return false;
+    });
+    setEventListener("historyDontRememberClear", "click", function () {
+      gPrivacyPane.clearPrivateDataNow(true);
+      return false;
+    });
+    setEventListener("privateBrowsingAutoStart", "command",
+                     gPrivacyPane.updateAutostart);
+    setEventListener("cookieExceptions", "command",
+                     gPrivacyPane.showCookieExceptions);
+    setEventListener("showCookiesButton", "command",
+                     gPrivacyPane.showCookies);
+    setEventListener("clearDataSettings", "command",
+                     gPrivacyPane.showClearPrivateDataSettings);
   },
 
   // HISTORY MODE
@@ -284,7 +325,6 @@ var gPrivacyPane = {
 
         if (shouldProceed) {
           pref.value = autoStart.hasAttribute('checked');
-          document.documentElement.acceptDialog();
           let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"]
                              .getService(Ci.nsIAppStartup);
           appStartup.quit(Ci.nsIAppStartup.eAttemptQuit |  Ci.nsIAppStartup.eRestart);
@@ -470,9 +510,8 @@ var gPrivacyPane = {
                    permissionType : "cookie",
                    windowTitle    : bundlePreferences.getString("cookiepermissionstitle"),
                    introText      : bundlePreferences.getString("cookiepermissionstext") };
-    openDialog("chrome://browser/content/preferences/permissions.xul",
-               "Browser:Permissions",
-               "modal=yes", params);
+    gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
+                    null, params);
   },
 
   /**
@@ -480,9 +519,7 @@ var gPrivacyPane = {
    */
   showCookies: function (aCategory)
   {
-    openDialog("chrome://browser/content/preferences/cookies.xul",
-               "Browser:Cookies",
-               "modal=yes", null);
+    gSubDialog.open("chrome://browser/content/preferences/cookies.xul");
   },
 
   // CLEAR PRIVATE DATA
@@ -500,8 +537,7 @@ var gPrivacyPane = {
    */
   showClearPrivateDataSettings: function ()
   {
-    openDialog("chrome://browser/content/preferences/sanitize.xul",
-               "modal=yes", null);
+    gSubDialog.open("chrome://browser/content/preferences/sanitize.xul");
   },
 
 

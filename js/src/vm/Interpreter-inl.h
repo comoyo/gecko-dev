@@ -22,6 +22,7 @@
 #include "jsinferinlines.h"
 #include "jsobjinlines.h"
 
+#include "vm/ScopeObject-inl.h"
 #include "vm/Stack-inl.h"
 #include "vm/String-inl.h"
 
@@ -103,6 +104,62 @@ GuardFunApplyArgumentsOptimization(JSContext *cx, AbstractFramePtr frame, Handle
         }
     }
 
+    return true;
+}
+
+/*
+ * Per ES6, lexical declarations may not be accessed in any fashion until they
+ * are initialized (i.e., until the actual declaring statement is
+ * executed). The various LEXICAL opcodes need to check if the slot is an
+ * uninitialized let declaration, represented by the magic value
+ * JS_UNINITIALIZED_LEXICAL.
+ */
+static inline bool
+IsUninitializedLexical(const Value &val)
+{
+    // Use whyMagic here because JS_OPTIMIZED_ARGUMENTS could flow into here.
+    return val.isMagic() && val.whyMagic() == JS_UNINITIALIZED_LEXICAL;
+}
+
+static inline bool
+IsUninitializedLexicalSlot(HandleObject obj, HandleShape shape)
+{
+    if (obj->is<DynamicWithObject>())
+        return false;
+    // We check for IsImplicitDenseOrTypedArrayElement even though the shape
+    // is always a non-indexed property because proxy hooks may return a
+    // "non-native property found" shape, which happens to be encoded in the
+    // same way as the "dense element" shape. See MarkNonNativePropertyFound.
+    if (!shape ||
+        IsImplicitDenseOrTypedArrayElement(shape) ||
+        !shape->hasSlot() ||
+        !shape->hasDefaultGetter() ||
+        !shape->hasDefaultSetter())
+    {
+        return false;
+    }
+    MOZ_ASSERT(obj->nativeContainsPure(shape));
+    return IsUninitializedLexical(obj->nativeGetSlot(shape->slot()));
+}
+
+static inline bool
+CheckUninitializedLexical(JSContext *cx, PropertyName *name_, HandleValue val)
+{
+    if (IsUninitializedLexical(val)) {
+        RootedPropertyName name(cx, name_);
+        ReportUninitializedLexical(cx, name);
+        return false;
+    }
+    return true;
+}
+
+static inline bool
+CheckUninitializedLexical(JSContext *cx, HandleScript script, jsbytecode *pc, HandleValue val)
+{
+    if (IsUninitializedLexical(val)) {
+        ReportUninitializedLexical(cx, script, pc);
+        return false;
+    }
     return true;
 }
 
@@ -225,6 +282,22 @@ SetIntrinsicOperation(JSContext *cx, JSScript *script, jsbytecode *pc, HandleVal
     return cx->global()->setIntrinsicValue(cx, name, val);
 }
 
+inline void
+SetAliasedVarOperation(JSContext *cx, JSScript *script, jsbytecode *pc,
+                       ScopeObject &obj, ScopeCoordinate sc, const Value &val,
+                       MaybeCheckLexical checkLexical)
+{
+    MOZ_ASSERT_IF(checkLexical, !IsUninitializedLexical(obj.aliasedVar(sc)));
+
+    // Avoid computing the name if no type updates are needed, as this may be
+    // expensive on scopes with large numbers of variables.
+    PropertyName *name = obj.hasSingletonType()
+                         ? ScopeCoordinateName(cx->runtime()->scopeCoordinateNameCache, script, pc)
+                         : nullptr;
+
+    obj.setAliasedVar(cx, sc, name, val);
+}
+
 inline bool
 SetNameOperation(JSContext *cx, JSScript *script, jsbytecode *pc, HandleObject scope,
                  HandleValue val)
@@ -241,7 +314,7 @@ SetNameOperation(JSContext *cx, JSScript *script, jsbytecode *pc, HandleObject s
      * undeclared global variable. To do this, we call SetPropertyHelper
      * directly and pass Unqualified.
      */
-    if (scope->is<GlobalObject>()) {
+    if (scope->isUnqualifiedVarObj()) {
         JS_ASSERT(!scope->getOps()->setProperty);
         RootedId id(cx, NameToId(name));
         return baseops::SetPropertyHelper<SequentialExecution>(cx, scope, scope, id,
@@ -255,7 +328,7 @@ SetNameOperation(JSContext *cx, JSScript *script, jsbytecode *pc, HandleObject s
 inline bool
 DefVarOrConstOperation(JSContext *cx, HandleObject varobj, HandlePropertyName dn, unsigned attrs)
 {
-    JS_ASSERT(varobj->isVarObj());
+    JS_ASSERT(varobj->isQualifiedVarObj());
 
     RootedShape prop(cx);
     RootedObject obj2(cx);
@@ -352,6 +425,16 @@ GetObjectElementOperation(JSContext *cx, JSOp op, JSObject *objArg, bool wasObje
             RootedObject obj(cx, objArg);
             if (!JSObject::getElement(cx, obj, obj, index, res))
                 return false;
+            objArg = obj;
+            break;
+        }
+
+        if (rref.isSymbol()) {
+            RootedObject obj(cx, objArg);
+            RootedId id(cx, SYMBOL_TO_JSID(rref.toSymbol()));
+            if (!JSObject::getGeneric(cx, obj, obj, id, res))
+                return false;
+
             objArg = obj;
             break;
         }
@@ -511,6 +594,28 @@ InitArrayElemOperation(JSContext *cx, jsbytecode *pc, HandleObject obj, uint32_t
     return true;
 }
 
+static MOZ_ALWAYS_INLINE bool
+ProcessCallSiteObjOperation(JSContext *cx, RootedObject &cso, RootedObject &raw,
+                            RootedValue &rawValue)
+{
+    bool extensible;
+    if (!JSObject::isExtensible(cx, cso, &extensible))
+        return false;
+    if (extensible) {
+        JSAtom *name = cx->names().raw;
+        if (!JSObject::defineProperty(cx, cso, name->asPropertyName(), rawValue,
+                                      nullptr, nullptr, 0))
+        {
+            return false;
+        }
+        if (!JSObject::freeze(cx, raw))
+            return false;
+        if (!JSObject::freeze(cx, cso))
+            return false;
+    }
+    return true;
+}
+
 #define RELATIONAL_OP(OP)                                                     \
     JS_BEGIN_MACRO                                                            \
         /* Optimize for two int-tagged operands (typical loop control). */    \
@@ -530,7 +635,7 @@ InitArrayElemOperation(JSContext *cx, jsbytecode *pc, HandleObject obj, uint32_t
             } else {                                                          \
                 double l, r;                                                  \
                 if (!ToNumber(cx, lhs, &l) || !ToNumber(cx, rhs, &r))         \
-                    return false;;                                            \
+                    return false;                                             \
                 *res = (l OP r);                                              \
             }                                                                 \
         }                                                                     \
@@ -652,20 +757,17 @@ class FastInvokeGuard
     InvokeArgs args_;
     RootedFunction fun_;
     RootedScript script_;
-#ifdef JS_ION
+
     // Constructing an IonContext is pretty expensive due to the TLS access,
     // so only do this if we have to.
     bool useIon_;
-#endif
 
   public:
     FastInvokeGuard(JSContext *cx, const Value &fval)
       : args_(cx)
       , fun_(cx)
       , script_(cx)
-#ifdef JS_ION
       , useIon_(jit::IsIonEnabled(cx))
-#endif
     {
         JS_ASSERT(!InParallelSection());
         initFunction(fval);
@@ -684,7 +786,6 @@ class FastInvokeGuard
     }
 
     bool invoke(JSContext *cx) {
-#ifdef JS_ION
         if (useIon_ && fun_) {
             if (!script_) {
                 script_ = fun_->getOrCreateScript(cx);
@@ -709,11 +810,10 @@ class FastInvokeGuard
 
             if (script_->canIonCompile()) {
                 // This script is not yet hot. Since calling into Ion is much
-                // faster here, bump the use count a bit to account for this.
-                script_->incUseCount(5);
+                // faster here, bump the warm-up counter a bit to account for this.
+                script_->incWarmUpCounter(5);
             }
         }
-#endif
 
         return Invoke(cx, args_);
     }

@@ -19,15 +19,17 @@ namespace layers {
 
 class BasicContainerLayer : public ContainerLayer, public BasicImplData {
 public:
-  BasicContainerLayer(BasicLayerManager* aManager) :
+  explicit BasicContainerLayer(BasicLayerManager* aManager) :
     ContainerLayer(aManager,
                    static_cast<BasicImplData*>(MOZ_THIS_IN_INITIALIZER_LIST()))
   {
     MOZ_COUNT_CTOR(BasicContainerLayer);
     mSupportsComponentAlphaChildren = true;
   }
+protected:
   virtual ~BasicContainerLayer();
 
+public:
   virtual void SetVisibleRegion(const nsIntRegion& aRegion)
   {
     NS_ASSERTION(BasicManager()->InConstruction(),
@@ -85,6 +87,12 @@ public:
   virtual void Validate(LayerManager::DrawThebesLayerCallback aCallback,
                         void* aCallbackData,
                         ReadbackProcessor* aReadback) MOZ_OVERRIDE;
+
+  /**
+   * We don't really have a hard restriction for max layer size, but we pick
+   * 4096 to avoid excessive memory usage.
+   */
+  virtual int32_t GetMaxLayerSize() MOZ_OVERRIDE { return 4096; }
 
 protected:
   BasicLayerManager* BasicManager()

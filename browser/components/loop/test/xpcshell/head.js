@@ -11,13 +11,22 @@ Cu.import("resource://testing-common/httpd.js");
 XPCOMUtils.defineLazyModuleGetter(this, "MozLoopService",
                                   "resource:///modules/loop/MozLoopService.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "MozLoopPushHandler",
+                                  "resource:///modules/loop/MozLoopPushHandler.jsm");
+
 const kMockWebSocketChannelName = "Mock WebSocket Channel";
 const kWebSocketChannelContractID = "@mozilla.org/network/protocol;1?name=wss";
 
 const kServerPushUrl = "http://localhost:3456";
+const kEndPointUrl = "http://example.com/fake";
+const kUAID = "f47ac11b-58ca-4372-9567-0e02b2c3d479";
 
 // Fake loop server
 var loopServer;
+
+// Ensure loop is always enabled for tests
+Services.prefs.setBoolPref("loop.enabled", true);
+Services.prefs.setBoolPref("loop.throttled", false);
 
 function setupFakeLoopServer() {
   loopServer = new HttpServer();
@@ -33,12 +42,61 @@ function setupFakeLoopServer() {
   });
 }
 
+function waitForCondition(aConditionFn, aMaxTries=50, aCheckInterval=100) {
+  function tryAgain() {
+    function tryNow() {
+      tries++;
+      if (aConditionFn()) {
+        deferred.resolve();
+      } else if (tries < aMaxTries) {
+        tryAgain();
+      } else {
+        deferred.reject("Condition timed out: " + aConditionFn.toSource());
+      }
+    }
+    do_timeout(aCheckInterval, tryNow);
+  }
+  let deferred = Promise.defer();
+  let tries = 0;
+  tryAgain();
+  return deferred.promise;
+}
+
+/**
+ * This is used to fake push registration and notifications for
+ * MozLoopService tests. There is only one object created per test instance, as
+ * once registration has taken place, the object cannot currently be changed.
+ */
+let mockPushHandler = {
+  // This sets the registration result to be returned when initialize
+  // is called. By default, it is equivalent to success.
+  registrationResult: null,
+  registrationPushURL: undefined,
+
+  /**
+   * MozLoopPushHandler API
+   */
+  initialize: function(registerCallback, notificationCallback) {
+    registerCallback(this.registrationResult, this.registrationPushURL);
+    this._notificationCallback = notificationCallback;
+  },
+
+  /**
+   * Test-only API to simplify notifying a push notification result.
+   */
+  notify: function(version) {
+    this._notificationCallback(version);
+  }
+};
+
 /**
  * Mock nsIWebSocketChannel for tests. This mocks the WebSocketChannel, and
  * enables us to check parameters and return messages similar to the push
  * server.
  */
-let MockWebSocketChannel = function() {
+let MockWebSocketChannel = function(options) {
+  let _options = options || {};
+  this.defaultMsgHandler = _options.defaultMsgHandler;
 };
 
 MockWebSocketChannel.prototype = {
@@ -57,105 +115,48 @@ MockWebSocketChannel.prototype = {
     this.listener.onStart(this.context);
   },
 
-  notify: function(version) {
-    this.listener.onMessageAvailable(this.context,
-      JSON.stringify({
-        messageType: "notification", updates: [{
-          channelID: "8b1081ce-9b35-42b5-b8f5-3ff8cb813a50",
-          version: version
-        }]
-    }));
-  },
-
   sendMsg: function(aMsg) {
     var message = JSON.parse(aMsg);
 
     switch(message.messageType) {
       case "hello":
         this.listener.onMessageAvailable(this.context,
-          JSON.stringify({messageType: "hello"}));
+          JSON.stringify({messageType: "hello",
+                          uaid: kUAID}));
         break;
       case "register":
+        this.channelID = message.channelID;
+        let statusCode = 200;
+        if (this.initRegStatus) {
+          statusCode = this.initRegStatus;
+          this.initRegStatus = 0;
+        }
         this.listener.onMessageAvailable(this.context,
-          JSON.stringify({messageType: "register", pushEndpoint: "http://example.com/fake"}));
+          JSON.stringify({messageType: "register",
+                          status: statusCode,
+                          channelID: this.channelID,
+                          pushEndpoint: kEndPointUrl}));
         break;
+      default:
+        this.defaultMsgHandler && this.defaultMsgHandler(message);
     }
-  }
-};
-
-/**
- * The XPCOM factory for registering and creating the mock.
- */
-let gMockWebSocketChannelFactory = {
-  _registered: false,
-
-  // We keep a list of instances so that we can access them outside of the service
-  // that creates them.
-  createdInstances: [],
-
-  resetInstances: function() {
-    this.createdInstances = [];
   },
 
-  get CID() {
-    let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
-    return registrar.contractIDToCID(kWebSocketChannelContractID);
+  notify: function(version) {
+    this.listener.onMessageAvailable(this.context,
+      JSON.stringify({
+        messageType: "notification", updates: [{
+          channelID: this.channelID,
+          version: version
+        }]
+    }));
   },
 
-  /**
-   * Registers the MockWebSocketChannel, and stores the original.
-   */
-  register: function() {
-    if (this._registered)
-      return;
-
-    let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
-
-    this._origFactory = Components.manager
-                                  .getClassObject(Cc[kWebSocketChannelContractID],
-                                                  Ci.nsIFactory);
-
-    registrar.unregisterFactory(Components.ID(this.CID),
-                                this._origFactory);
-
-    registrar.registerFactory(Components.ID(this.CID),
-                              kMockWebSocketChannelName,
-                              kWebSocketChannelContractID,
-                              gMockWebSocketChannelFactory);
-
-    this._registered = true;
+  stop: function (err) {
+    this.listener.onStop(this.context, err || -1);
   },
 
-  /* Unregisters the MockWebSocketChannel, and re-registers the original
-   * Prompt Service.
-   */
-  unregister: function() {
-    if (!this._registered)
-      return;
-
-    let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
-
-    registrar.unregisterFactory(Components.ID(this.CID),
-                                gMockWebSocketChannelFactory);
-    registrar.registerFactory(Components.ID(this.CID),
-                              kMockWebSocketChannelName,
-                              kWebSocketChannelContractID,
-                              this._origFactory);
-
-    delete this._origFactory;
-
-    this._registered = false;
+  serverClose: function (err) {
+    this.listener.onServerClose(this.context, err || -1);
   },
-
-  createInstance: function(outer, iid) {
-    if (outer != null) {
-      throw Cr.NS_ERROR_NO_AGGREGATION;
-    }
-
-    let newChannel = new MockWebSocketChannel()
-
-    this.createdInstances.push(newChannel);
-
-    return newChannel;
-  }
 };

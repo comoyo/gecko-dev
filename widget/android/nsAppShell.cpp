@@ -23,9 +23,10 @@
 #include "nsIDOMClientRect.h"
 #include "nsIDOMWakeLockListener.h"
 #include "nsIPowerManagerService.h"
-#include "nsFrameManager.h"
 #include "nsINetworkLinkService.h"
+#include "nsCategoryManagerUtils.h"
 
+#include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/Services.h"
 #include "mozilla/unused.h"
 #include "mozilla/Preferences.h"
@@ -110,7 +111,10 @@ private:
 };
 
 class WakeLockListener MOZ_FINAL : public nsIDOMMozWakeLockListener {
- public:
+private:
+  ~WakeLockListener() {}
+
+public:
   NS_DECL_ISUPPORTS;
 
   nsresult Callback(const nsAString& topic, const nsAString& state) {
@@ -183,6 +187,7 @@ nsAppShell::Init()
         mozilla::services::GetObserverService();
     if (obsServ) {
         obsServ->AddObserver(this, "xpcom-shutdown", false);
+        obsServ->AddObserver(this, "browser-delayed-startup-finished", false);
     }
 
     if (sPowerManagerService)
@@ -208,6 +213,9 @@ nsAppShell::Observe(nsISupports* aSubject,
                nsDependentString(aData).Equals(NS_LITERAL_STRING(PREFNAME_COALESCE_TOUCHES))) {
         mAllowCoalescingTouches = Preferences::GetBool(PREFNAME_COALESCE_TOUCHES, true);
         return NS_OK;
+    } else if (!strcmp(aTopic, "browser-delayed-startup-finished")) {
+        NS_CreateServicesFromCategory("browser-delayed-startup-finished", nullptr,
+                                      "browser-delayed-startup-finished");
     }
     return NS_OK;
 }
@@ -256,6 +264,8 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
 
     if (!curEvent)
         return false;
+
+    mozilla::BackgroundHangMonitor().NotifyActivity();
 
     EVLOG("nsAppShell: event %p %d", (void*)curEvent.get(), curEvent->Type());
 
@@ -422,7 +432,7 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
     }
 
     case AndroidGeckoEvent::TELEMETRY_UI_EVENT: {
-        if (curEvent->Characters().Length() == 0)
+        if (curEvent->Data().Length() == 0)
             break;
 
         nsCOMPtr<nsIUITelemetryObserver> obs;
@@ -734,16 +744,15 @@ nsAppShell::PostEvent(AndroidGeckoEvent *ae)
             break;
 
         case AndroidGeckoEvent::MOTION_EVENT:
-            if (ae->Action() == AndroidMotionEvent::ACTION_MOVE && mAllowCoalescingTouches) {
+        case AndroidGeckoEvent::APZ_INPUT_EVENT:
+            if (mAllowCoalescingTouches && mEventQueue.Length() > 0) {
                 int len = mEventQueue.Length();
-                if (len > 0) {
-                    AndroidGeckoEvent* event = mEventQueue[len - 1];
-                    if (event->Type() == AndroidGeckoEvent::MOTION_EVENT && event->Action() == AndroidMotionEvent::ACTION_MOVE) {
-                        // consecutive motion-move events; drop the last one before adding the new one
-                        EVLOG("nsAppShell: Dropping old move event at %p in favour of new move event %p", event, ae);
-                        mEventQueue.RemoveElementAt(len - 1);
-                        delete event;
-                    }
+                AndroidGeckoEvent* event = mEventQueue[len - 1];
+                if (ae->CanCoalesceWith(event)) {
+                    // consecutive motion-move events; drop the last one before adding the new one
+                    EVLOG("nsAppShell: Dropping old move event at %p in favour of new move event %p", event, ae);
+                    mEventQueue.RemoveElementAt(len - 1);
+                    delete event;
                 }
             }
             mEventQueue.AppendElement(ae);

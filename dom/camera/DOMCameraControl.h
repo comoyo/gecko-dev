@@ -26,10 +26,10 @@ namespace mozilla {
 
 namespace dom {
   class CameraCapabilities;
-  class CameraPictureOptions;
-  class CameraStartRecordingOptions;
-  class CameraRegion;
-  class CameraSize;
+  struct CameraPictureOptions;
+  struct CameraStartRecordingOptions;
+  struct CameraRegion;
+  struct CameraSize;
   template<typename T> class Optional;
 }
 class ErrorResult;
@@ -76,12 +76,14 @@ public:
   double GetFocusDistanceNear(ErrorResult& aRv);
   double GetFocusDistanceOptimum(ErrorResult& aRv);
   double GetFocusDistanceFar(ErrorResult& aRv);
-  void SetExposureCompensation(const dom::Optional<double>& aCompensation, ErrorResult& aRv);
+  void SetExposureCompensation(double aCompensation, ErrorResult& aRv);
   double GetExposureCompensation(ErrorResult& aRv);
   int32_t SensorAngle();
   already_AddRefed<dom::CameraCapabilities> Capabilities();
   void GetIsoMode(nsString& aMode, ErrorResult& aRv);
   void SetIsoMode(const nsAString& aMode, ErrorResult& aRv);
+  double GetPictureQuality(ErrorResult& aRv);
+  void SetPictureQuality(double aQuality, ErrorResult& aRv);
 
   // Unsolicited event handlers.
   dom::CameraShutterCallback* GetOnShutter();
@@ -143,7 +145,7 @@ protected:
     NS_INLINE_DECL_REFCOUNTING(DOMCameraConfiguration)
 
     DOMCameraConfiguration();
-    DOMCameraConfiguration(const dom::CameraConfiguration& aConfiguration);
+    explicit DOMCameraConfiguration(const dom::CameraConfiguration& aConfiguration);
 
     // Additional configuration options that aren't exposed to the DOM
     uint32_t mMaxFocusAreas;
@@ -214,7 +216,7 @@ protected:
   DOMCameraControlListener* mListener;
 
   // our viewfinder stream
-  CameraPreviewMediaStream* mInput;
+  nsRefPtr<CameraPreviewMediaStream> mInput;
 
   // set once when this object is created
   nsCOMPtr<nsPIDOMWindow>   mWindow;

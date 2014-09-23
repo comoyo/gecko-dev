@@ -11,7 +11,7 @@
 #include "jscompartment.h"
 #include "jsgc.h"
 
-#include "assembler/jit/ExecutableAllocator.h"
+#include "jit/ExecutableAllocator.h"
 #include "jit/IonCode.h"
 #include "jit/IonMacroAssembler.h"
 #include "jit/JitCompartment.h"
@@ -29,14 +29,14 @@ class Linker
     }
 
     template <AllowGC allowGC>
-    JitCode *newCode(JSContext *cx, JSC::ExecutableAllocator *execAlloc, JSC::CodeKind kind) {
+    JitCode *newCode(JSContext *cx, ExecutableAllocator *execAlloc, CodeKind kind) {
         JS_ASSERT(masm.numAsmJSAbsoluteLinks() == 0);
 
         gc::AutoSuppressGC suppressGC(cx);
         if (masm.oom())
             return fail(cx);
 
-        JSC::ExecutablePool *pool;
+        ExecutablePool *pool;
         size_t bytesNeeded = masm.bytesNeeded() + sizeof(JitCode *) + CodeAlignment;
         if (bytesNeeded >= MAX_BUFFER_SIZE)
             return fail(cx);
@@ -77,25 +77,20 @@ class Linker
     }
 
     template <AllowGC allowGC>
-    JitCode *newCode(JSContext *cx, JSC::CodeKind kind) {
+    JitCode *newCode(JSContext *cx, CodeKind kind) {
         return newCode<allowGC>(cx, cx->runtime()->jitRuntime()->execAlloc(), kind);
     }
 
     JitCode *newCodeForIonScript(JSContext *cx) {
-#ifdef JS_CODEGEN_ARM
-        // ARM does not yet use implicit interrupt checks, see bug 864220.
-        return newCode<CanGC>(cx, JSC::ION_CODE);
-#else
         // The caller must lock the runtime against interrupt requests, as the
         // thread requesting an interrupt may use the executable allocator below.
         JS_ASSERT(cx->runtime()->currentThreadOwnsInterruptLock());
 
-        JSC::ExecutableAllocator *alloc = cx->runtime()->jitRuntime()->getIonAlloc(cx);
+        ExecutableAllocator *alloc = cx->runtime()->jitRuntime()->getIonAlloc(cx);
         if (!alloc)
             return nullptr;
 
-        return newCode<CanGC>(cx, alloc, JSC::ION_CODE);
-#endif
+        return newCode<CanGC>(cx, alloc, ION_CODE);
     }
 };
 

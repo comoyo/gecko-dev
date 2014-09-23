@@ -11,6 +11,13 @@
 #include "js/TypeDecls.h"
 class nsPresContext;
 class nsIPresShell;
+
+namespace mozilla {
+namespace dom {
+class URLSearchParams;
+}
+}
+
 %}
 
 /**
@@ -19,6 +26,7 @@ class nsIPresShell;
 
 [ptr] native nsPresContext(nsPresContext);
 [ptr] native nsIPresShell(nsIPresShell);
+[ptr] native URLSearchParams(mozilla::dom::URLSearchParams);
 
 interface nsIURI;
 interface nsIChannel;
@@ -46,7 +54,7 @@ interface nsITabParent;
  
 typedef unsigned long nsLoadFlags;
 
-[scriptable, builtinclass, uuid(9c65a466-9814-48f8-a4ca-c4600b03b15d)]
+[scriptable, builtinclass, uuid(2b8e4a50-7744-454d-a05b-debead8070fe)]
 interface nsIDocShell : nsIDocShellTreeItem
 {
   /**
@@ -113,7 +121,9 @@ interface nsIDocShell : nsIDocShellTreeItem
   // Whether the load should be treated as srcdoc load, rather than a URI one.
   const long INTERNAL_LOAD_FLAGS_IS_SRCDOC               = 0x40;
 
-  const long INTERNAL_LOAD_FLAGS_FIXUP_SCHEME_TYPOS      = 0x80;
+  const long INTERNAL_LOAD_FLAGS_NO_OPENER               = 0x100;
+
+  // NB: 0x80 is available.
 
   /**
    * Loads the given URI.  This method is identical to loadURI(...) except
@@ -448,6 +458,11 @@ interface nsIDocShell : nsIDocShellTreeItem
                         in wstring aURL,
                         [optional] in nsIChannel aFailedChannel);
 
+  /**
+   * The channel that failed to load and resulted in an error page.
+   * May be null. Relevant only to error pages.
+   */
+  readonly attribute nsIChannel failedChannel;
 
   /**
    * Keeps track of the previous SHTransaction index and the current
@@ -554,6 +569,19 @@ interface nsIDocShell : nsIDocShellTreeItem
    */
   [infallible] readonly attribute boolean hasMixedDisplayContentBlocked;
 
+   /**
+   * This attribute determines whether a document has Tracking Content
+   * that has been blocked from loading.
+   */
+   [infallible] readonly attribute boolean hasTrackingContentBlocked;
+
+   /**
+   * This attribute determines whether Tracking Content is loaded on the
+   * document. When it is true, tracking content was not blocked and has
+   * loaded (or is about to load) on the page.
+   */
+  [infallible] readonly attribute boolean hasTrackingContentLoaded;
+
   /**
    * Disconnects this docshell's editor from its window, and stores the
    * editor data in the open document's session history entry.  This
@@ -638,6 +666,17 @@ interface nsIDocShell : nsIDocShellTreeItem
     out ACString parentCharset,
     out int32_t parentCharsetSource,
     out nsIPrincipal parentCharsetPrincipal);
+
+  /**
+   * Whether the docShell records profile timeline markers at the moment
+   */
+  [infallible] attribute boolean recordProfileTimelineMarkers;
+
+  /**
+   * Returns and flushes the profile timeline markers gathered by the docShell
+   */
+  [implicit_jscontext]
+  jsval popProfileTimelineMarkers();
 
   /**
    * Add an observer to the list of parties to be notified when this docshell's
@@ -975,4 +1014,7 @@ interface nsIDocShell : nsIDocShellTreeItem
    */
   [noscript,notxpcom,nostdcall] void setOpenedRemote(in nsITabParent aOpenedRemote);
   [noscript,notxpcom,nostdcall] nsITabParent getOpenedRemote();
+
+  // URLSearchParams for the window.location is owned by the docShell.
+  [noscript,notxpcom] URLSearchParams getURLSearchParams();
 };

@@ -11,12 +11,16 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/devtools/Loader.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "promise", "resource://gre/modules/Promise.jsm", "Promise");
+
+XPCOMUtils.defineLazyModuleGetter(this, "promise",
+                                  "resource://gre/modules/Promise.jsm", "Promise");
+
+XPCOMUtils.defineLazyModuleGetter(this, "console",
+                                  "resource://gre/modules/devtools/Console.jsm");
 
 const EventEmitter = devtools.require("devtools/toolkit/event-emitter");
 const FORBIDDEN_IDS = new Set(["toolbox", ""]);
 const MAX_ORDINAL = 99;
-
 
 /**
  * DevTools is a class that represents a set of developer tools, it holds a
@@ -24,6 +28,7 @@ const MAX_ORDINAL = 99;
  */
 this.DevTools = function DevTools() {
   this._tools = new Map();     // Map<toolId, tool>
+  this._themes = new Map();    // Map<themeId, theme>
   this._toolboxes = new Map(); // Map<target, toolbox>
 
   // destroy() is an observer's handler so we need to preserve context.
@@ -36,7 +41,7 @@ this.DevTools = function DevTools() {
 
   Services.obs.addObserver(this._teardown, "devtools-unloaded", false);
   Services.obs.addObserver(this.destroy, "quit-application", false);
-}
+};
 
 DevTools.prototype = {
   /**
@@ -57,8 +62,6 @@ DevTools.prototype = {
       // testing/profiles/prefs_general.js so lets set it to the same as it is
       // in a default browser profile for the duration of the test.
       Services.prefs.setBoolPref("dom.send_after_paint_to_content", false);
-    } else {
-      Services.prefs.setBoolPref("dom.send_after_paint_to_content", true);
     }
   },
 
@@ -227,6 +230,136 @@ DevTools.prototype = {
   },
 
   /**
+   * Register a new theme for developer tools toolbox.
+   *
+   * A definition is a light object that holds various information about a
+   * theme.
+   *
+   * Each themeDefinition has the following properties:
+   * - id: Unique identifier for this theme (string|required)
+   * - label: Localized name for the theme to be displayed to the user
+   *          (string|required)
+   * - stylesheets: Array of URLs pointing to a CSS document(s) containing
+   *                the theme style rules (array|required)
+   * - classList: Array of class names identifying the theme within a document.
+   *              These names are set to document element when applying
+   *              the theme (array|required)
+   * - onApply: Function that is executed by the framework when the theme
+   *            is applied. The function takes the current iframe window
+   *            and the previous theme id as arguments (function)
+   * - onUnapply: Function that is executed by the framework when the theme
+   *            is unapplied. The function takes the current iframe window
+   *            and the new theme id as arguments (function)
+   */
+  registerTheme: function DT_registerTheme(themeDefinition) {
+    let themeId = themeDefinition.id;
+
+    if (!themeId) {
+      throw new Error("Invalid theme id");
+    }
+
+    if (this._themes.get(themeId)) {
+      throw new Error("Theme with the same id is already registered");
+    }
+
+    this._themes.set(themeId, themeDefinition);
+
+    this.emit("theme-registered", themeId);
+  },
+
+  /**
+   * Removes an existing theme from the list of registered themes.
+   * Needed so that add-ons can remove themselves when they are deactivated
+   *
+   * @param {string|object} theme
+   *        Definition or the id of the theme to unregister.
+   */
+  unregisterTheme: function DT_unregisterTheme(theme) {
+    let themeId = null;
+    if (typeof theme == "string") {
+      themeId = theme;
+      theme = this._themes.get(theme);
+    }
+    else {
+      themeId = theme.id;
+    }
+
+    let currTheme = Services.prefs.getCharPref("devtools.theme");
+
+    // Change the current theme if it's being dynamically removed together
+    // with the owner (bootstrapped) extension.
+    // But, do not change it if the application is just shutting down.
+    if (!Services.startup.shuttingDown && theme.id == currTheme) {
+      Services.prefs.setCharPref("devtools.theme", "light");
+
+      let data = {
+        pref: "devtools.theme",
+        newValue: "light",
+        oldValue: currTheme
+      };
+
+      gDevTools.emit("pref-changed", data);
+
+      this.emit("theme-unregistered", theme);
+    }
+
+    this._themes.delete(themeId);
+  },
+
+  /**
+   * Get a theme definition if it exists.
+   *
+   * @param {string} themeId
+   *        The id of the theme
+   *
+   * @return {ThemeDefinition|null} theme
+   *         The ThemeDefinition for the id or null.
+   */
+  getThemeDefinition: function DT_getThemeDefinition(themeId) {
+    let theme = this._themes.get(themeId);
+    if (!theme) {
+      return null;
+    }
+    return theme;
+  },
+
+  /**
+   * Get map of registered themes.
+   *
+   * @return {Map} themes
+   *         A map of the the theme definitions registered in this instance
+   */
+  getThemeDefinitionMap: function DT_getThemeDefinitionMap() {
+    let themes = new Map();
+
+    for (let [id, definition] of this._themes) {
+      if (this.getThemeDefinition(id)) {
+        themes.set(id, definition);
+      }
+    }
+
+    return themes;
+  },
+
+  /**
+   * Get registered themes definitions sorted by ordinal value.
+   *
+   * @return {Array} themes
+   *         A sorted array of the theme definitions registered in this instance
+   */
+  getThemeDefinitionArray: function DT_getThemeDefinitionArray() {
+    let definitions = [];
+
+    for (let [id, definition] of this._themes) {
+      if (this.getThemeDefinition(id)) {
+        definitions.push(definition);
+      }
+    }
+
+    return definitions.sort(this.ordinalSort);
+  },
+
+  /**
    * Show a Toolbox for a target (either by creating a new one, or if a toolbox
    * already exists for the target, by bring to the front the existing one)
    * If |toolId| is specified then the displayed toolbox will have the
@@ -273,26 +406,17 @@ DevTools.prototype = {
 
       this._toolboxes.set(target, toolbox);
 
-      toolbox.once("destroyed", function() {
+      toolbox.once("destroyed", () => {
         this._toolboxes.delete(target);
         this.emit("toolbox-destroyed", target);
-      }.bind(this));
+      });
 
-      // If we were asked for a specific tool then we need to wait for the
-      // tool to be ready, otherwise we can just wait for toolbox open
-      if (toolId != null) {
-        toolbox.once(toolId + "-ready", function(event, panel) {
-          this.emit("toolbox-ready", toolbox);
-          deferred.resolve(toolbox);
-        }.bind(this));
-        toolbox.open();
-      }
-      else {
-        toolbox.open().then(function() {
-          deferred.resolve(toolbox);
-          this.emit("toolbox-ready", toolbox);
-        }.bind(this));
-      }
+      // If toolId was passed in, it will already be selected before the
+      // open promise resolves.
+      toolbox.open().then(() => {
+        deferred.resolve(toolbox);
+        this.emit("toolbox-ready", toolbox);
+      });
     }
 
     return deferred.promise;
@@ -431,12 +555,16 @@ let gDevToolsBrowser = {
       focusEl.setAttribute("disabled", "true");
     }
     if (devToolbarEnabled && Services.prefs.getBoolPref("devtools.toolbar.visible")) {
-      win.DeveloperToolbar.show(false);
+      win.DeveloperToolbar.show(false).catch(console.error);
     }
+
+    // Enable WebIDE?
+    let webIDEEnabled = Services.prefs.getBoolPref("devtools.webide.enabled");
+    toggleCmd("Tools:WebIDE", webIDEEnabled);
 
     // Enable App Manager?
     let appMgrEnabled = Services.prefs.getBoolPref("devtools.appmanager.enabled");
-    toggleCmd("Tools:DevAppMgr", appMgrEnabled);
+    toggleCmd("Tools:DevAppMgr", !webIDEEnabled && appMgrEnabled);
 
     // Enable Browser Toolbox?
     let chromeEnabled = Services.prefs.getBoolPref("devtools.chrome.enabled");
@@ -501,12 +629,14 @@ let gDevToolsBrowser = {
       } else {
         toolbox.destroy();
       }
+      gDevTools.emit("select-tool-command", toolId);
     } else {
       gDevTools.showToolbox(target, toolId).then(() => {
         let target = devtools.TargetFactory.forTab(gBrowser.selectedTab);
         let toolbox = gDevTools.getToolbox(target);
 
         toolbox.fireCustomKey(toolId);
+        gDevTools.emit("select-tool-command", toolId);
       });
     }
   },
@@ -522,16 +652,19 @@ let gDevToolsBrowser = {
    * Open the App Manager
    */
   openAppManager: function(gBrowser) {
-    if (Services.prefs.getBoolPref("devtools.webide.enabled")) {
-      let win = Services.wm.getMostRecentWindow("devtools:webide");
-      if (win) {
-        win.focus();
-      } else {
-        let ww = Cc["@mozilla.org/embedcomp/window-watcher;1"].getService(Ci.nsIWindowWatcher);
-        ww.openWindow(null, "chrome://webide/content/", "webide", "chrome,centerscreen,resizable", null);
-      }
+    gBrowser.selectedTab = gBrowser.addTab("about:app-manager");
+  },
+
+  /**
+   * Open WebIDE
+   */
+  openWebIDE: function() {
+    let win = Services.wm.getMostRecentWindow("devtools:webide");
+    if (win) {
+      win.focus();
     } else {
-      gBrowser.selectedTab = gBrowser.addTab("about:app-manager");
+      let ww = Cc["@mozilla.org/embedcomp/window-watcher;1"].getService(Ci.nsIWindowWatcher);
+      ww.openWindow(null, "chrome://webide/content/", "webide", "chrome,centerscreen,resizable", null);
     }
   },
 
@@ -891,24 +1024,13 @@ let gDevToolsBrowser = {
   },
 
   /**
-   * Connects to the SPS profiler when the developer tools are open.
+   * Connects to the SPS profiler when the developer tools are open. This is
+   * necessary because of the WebConsole's `profile` and `profileEnd` methods.
    */
-  _connectToProfiler: function DT_connectToProfiler() {
-    let ProfilerController = devtools.require("devtools/profiler/controller");
-
-    for (let win of gDevToolsBrowser._trackedBrowserWindows) {
-      if (devtools.TargetFactory.isKnownTab(win.gBrowser.selectedTab)) {
-        let target = devtools.TargetFactory.forTab(win.gBrowser.selectedTab);
-        if (gDevTools._toolboxes.has(target)) {
-          target.makeRemote().then(() => {
-            let profiler = new ProfilerController(target);
-            profiler.connect();
-          }).then(null, Cu.reportError);
-
-          return;
-        }
-      }
-    }
+  _connectToProfiler: function DT_connectToProfiler(event, toolbox) {
+    let SharedProfilerUtils = devtools.require("devtools/profiler/shared");
+    let connection = SharedProfilerUtils.getProfilerConnection(toolbox);
+    connection.open();
   },
 
   /**

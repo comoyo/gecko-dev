@@ -4,10 +4,7 @@
 
 "use strict";
 
-let Cu = Components.utils;
-let Cc = Components.classes;
-let Ci = Components.interfaces;
-let CC = Components.Constructor;
+let {Cu, Cc, Ci} = require("chrome");
 
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -15,6 +12,28 @@ Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 
 let {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
+
+let DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
+let { ActorPool } = require("devtools/server/actors/common");
+let { DebuggerServer } = require("devtools/server/main");
+let Services = require("Services");
+
+let AppFramesMock = null;
+
+exports.setAppFramesMock = function (mock) {
+  AppFramesMock = mock;
+}
+
+DevToolsUtils.defineLazyGetter(this, "AppFrames", () => {
+  // Offer a way for unit test to provide a mock
+  if (AppFramesMock) {
+    return AppFramesMock;
+  }
+  try {
+    return Cu.import("resource://gre/modules/AppFrames.jsm", {}).AppFrames;
+  } catch(e) {}
+  return null;
+});
 
 function debug(aMsg) {
   /*
@@ -164,8 +183,9 @@ PackageUploadBulkActor.prototype._closeFile = function() {
 };
 
 PackageUploadBulkActor.prototype.stream = function({copyTo}) {
-  copyTo(this.openedFile).then(() => {
+  return copyTo(this.openedFile).then(() => {
     this._closeFile();
+    return {};
   });
 };
 
@@ -243,10 +263,19 @@ WebappsActor.prototype = {
     reg._readManifests([{ id: aId }]).then((aResult) => {
       let manifest = aResult[0].manifest;
       aApp.name = manifest.name;
+      aApp.csp = manifest.csp || "";
+      aApp.role = manifest.role || "";
       reg.updateAppHandlers(null, manifest, aApp);
 
       reg._saveApps().then(() => {
         aApp.manifest = manifest;
+
+        // We need the manifest to set the app kind for hosted apps,
+        // because of appcache.
+        if (aApp.kind == undefined) {
+          aApp.kind = manifest.appcache_path ? reg.kHostedAppcache
+                                             : reg.kHosted;
+        }
 
         // Needed to evict manifest cache on content side
         // (has to be dispatched first, otherwise other messages like
@@ -254,7 +283,7 @@ WebappsActor.prototype = {
         reg.broadcastMessage("Webapps:UpdateState", {
           app: aApp,
           manifest: manifest,
-          manifestURL: aApp.manifestURL
+          id: aApp.id
         });
         reg.broadcastMessage("Webapps:FireEvent", {
           eventType: ["downloadsuccess", "downloadapplied"],
@@ -275,7 +304,8 @@ WebappsActor.prototype = {
 
         // We can't have appcache for packaged apps.
         if (!aApp.origin.startsWith("app://")) {
-          reg.startOfflineCacheDownload(new ManifestHelper(manifest, aApp.origin));
+          reg.startOfflineCacheDownload(
+            new ManifestHelper(manifest, aApp.origin, aApp.manifestURL), aApp);
         }
       });
       // Cleanup by removing the temporary directory.
@@ -500,11 +530,11 @@ WebappsActor.prototype = {
           // frame script. That will flush the jar cache for this app and allow
           // loading fresh updated resources if we reload its document.
           let FlushFrameScript = function (path) {
-            let jar = Components.classes["@mozilla.org/file/local;1"]
-                                .createInstance(Components.interfaces.nsILocalFile);
+            let jar = Cc["@mozilla.org/file/local;1"]
+                        .createInstance(Ci.nsILocalFile);
             jar.initWithPath(path);
-            let obs = Components.classes["@mozilla.org/observer-service;1"]
-                                .getService(Components.interfaces.nsIObserverService);
+            let obs = Cc["@mozilla.org/observer-service;1"]
+                        .getService(Ci.nsIObserverService);
             obs.notifyObservers(jar, "flush-cache-entry", null);
           };
           for each (let frame in self._appFrames()) {
@@ -523,6 +553,7 @@ WebappsActor.prototype = {
             manifestURL: manifestURL,
             appStatus: appType,
             receipts: aReceipts,
+            kind: DOMApplicationRegistry.kPackaged,
           }
 
           self._registerApp(deferred, app, id, aDir);
@@ -688,23 +719,11 @@ WebappsActor.prototype = {
 
     let manifestURL = aRequest.manifestURL;
     if (!manifestURL) {
-      return { error: "missingParameter",
-               message: "missing parameter manifestURL" };
+      return Promise.resolve({ error: "missingParameter",
+                         message: "missing parameter manifestURL" });
     }
 
-    let deferred = promise.defer();
-    let reg = DOMApplicationRegistry;
-    reg.uninstall(
-      manifestURL,
-      function onsuccess() {
-        deferred.resolve({});
-      },
-      function onfailure(reason) {
-        deferred.resolve({ error: reason });
-      }
-    );
-
-    return deferred.promise;
+    return DOMApplicationRegistry.uninstall(manifestURL);
   },
 
   _findManifestByURL: function wa__findManifestByURL(aManifestURL) {
@@ -739,7 +758,7 @@ WebappsActor.prototype = {
     let deferred = promise.defer();
 
     this._findManifestByURL(manifestURL).then(jsonManifest => {
-      let manifest = new ManifestHelper(jsonManifest, app.origin);
+      let manifest = new ManifestHelper(jsonManifest, app.origin, manifestURL);
       let iconURL = manifest.iconURLForSize(aRequest.size || 128);
       if (!iconURL) {
         deferred.resolve({
@@ -840,22 +859,11 @@ WebappsActor.prototype = {
   },
 
   _appFrames: function () {
-    // For now, we only support app frames on b2g
-    if (Services.appinfo.ID != "{3c2e2abc-06d4-11e1-ac3b-374f68613e61}") {
-      return;
-    }
-    // Register the system app
-    let chromeWindow = Services.wm.getMostRecentWindow('navigator:browser');
-    let systemAppFrame = chromeWindow.shell.contentBrowser;
-    yield systemAppFrame;
-
-    // Register apps hosted in the system app. i.e. the homescreen, all regular
-    // apps and the keyboard.
-    // Bookmark apps and other system app internal frames like captive portal
-    // are also hosted in system app, but they are not using mozapp attribute.
-    let frames = systemAppFrame.contentDocument.querySelectorAll("iframe[mozapp]");
-    for (let i = 0; i < frames.length; i++) {
-      yield frames[i];
+    // Try to filter on b2g and mulet
+    if (AppFrames) {
+      return AppFrames.list();
+    } else {
+      return [];
     }
   },
 
@@ -865,8 +873,13 @@ WebappsActor.prototype = {
     let appPromises = [];
     let apps = [];
 
-    for each (let frame in this._appFrames()) {
+    for (let frame of this._appFrames()) {
       let manifestURL = frame.getAttribute("mozapp");
+
+      // _appFrames can return more than one frame with the same manifest url
+      if (apps.indexOf(manifestURL) != -1) {
+        continue;
+      }
 
       appPromises.push(this._isAppAllowedForURL(manifestURL).then(allowed => {
         if (allowed) {
@@ -883,12 +896,23 @@ WebappsActor.prototype = {
   getAppActor: function ({ manifestURL }) {
     debug("getAppActor\n");
 
+    // Connects to the main app frame, whose `name` attribute
+    // is set to 'main' by gaia. If for any reason, gaia doesn't set any
+    // frame as main, no frame matches, then we connect arbitrary
+    // to the first app frame...
     let appFrame = null;
-    for each (let frame in this._appFrames()) {
+    let frames = [];
+    for (let frame of this._appFrames()) {
       if (frame.getAttribute("mozapp") == manifestURL) {
-        appFrame = frame;
-        break;
+        if (frame.name == "main") {
+          appFrame = frame;
+          break;
+        }
+        frames.push(frame);
       }
+    }
+    if (!appFrame && frames.length > 0) {
+      appFrame = frames[0];
     }
 
     let notFoundError = {
@@ -930,13 +954,9 @@ WebappsActor.prototype = {
   },
 
   watchApps: function () {
-    this._openedApps = new Set();
     // For now, app open/close events are only implement on b2g
-    if (Services.appinfo.ID == "{3c2e2abc-06d4-11e1-ac3b-374f68613e61}") {
-      let chromeWindow = Services.wm.getMostRecentWindow('navigator:browser');
-      let systemAppFrame = chromeWindow.getContentWindow();
-      systemAppFrame.addEventListener("appwillopen", this);
-      systemAppFrame.addEventListener("appterminated", this);
+    if (AppFrames) {
+      AppFrames.addObserver(this);
     }
     Services.obs.addObserver(this, "webapps-installed", false);
     Services.obs.addObserver(this, "webapps-uninstall", false);
@@ -945,12 +965,8 @@ WebappsActor.prototype = {
   },
 
   unwatchApps: function () {
-    this._openedApps = null;
-    if (Services.appinfo.ID == "{3c2e2abc-06d4-11e1-ac3b-374f68613e61}") {
-      let chromeWindow = Services.wm.getMostRecentWindow('navigator:browser');
-      let systemAppFrame = chromeWindow.getContentWindow();
-      systemAppFrame.removeEventListener("appwillopen", this);
-      systemAppFrame.removeEventListener("appterminated", this);
+    if (AppFrames) {
+      AppFrames.removeObserver(this);
     }
     Services.obs.removeObserver(this, "webapps-installed", false);
     Services.obs.removeObserver(this, "webapps-uninstall", false);
@@ -958,46 +974,46 @@ WebappsActor.prototype = {
     return {};
   },
 
-  handleEvent: function (event) {
-    let manifestURL;
-    switch(event.type) {
-      case "appwillopen":
-        manifestURL = event.detail.manifestURL;
-
-        // Ignore the event if we already received an appwillopen for this app
-        // (appwillopen is also fired when the app has been moved to background
-        // and get back to foreground)
-        if (this._openedApps.has(manifestURL)) {
-          return;
-        }
-        this._openedApps.add(manifestURL);
-
-        this._isAppAllowedForURL(manifestURL).then(allowed => {
-          if (allowed) {
-            this.conn.send({ from: this.actorID,
-                             type: "appOpen",
-                             manifestURL: manifestURL
-                           });
-          }
-        });
-
-        break;
-
-      case "appterminated":
-        manifestURL = event.detail.manifestURL;
-        this._openedApps.delete(manifestURL);
-
-        this._isAppAllowedForURL(manifestURL).then(allowed => {
-          if (allowed) {
-            this.conn.send({ from: this.actorID,
-                             type: "appClose",
-                             manifestURL: manifestURL
-                           });
-          }
-        });
-
-        break;
+  onAppFrameCreated: function (frame, isFirstAppFrame) {
+    if (!isFirstAppFrame) {
+      return;
     }
+
+    let manifestURL = frame.appManifestURL;
+    // Only track app frames
+    if (!manifestURL) {
+      return;
+    }
+
+    this._isAppAllowedForURL(manifestURL).then(allowed => {
+      if (allowed) {
+        this.conn.send({ from: this.actorID,
+                         type: "appOpen",
+                         manifestURL: manifestURL
+                       });
+      }
+    });
+  },
+
+  onAppFrameDestroyed: function (frame, isLastAppFrame) {
+    if (!isLastAppFrame) {
+      return;
+    }
+
+    let manifestURL = frame.appManifestURL;
+    // Only track app frames
+    if (!manifestURL) {
+      return;
+    }
+
+    this._isAppAllowedForURL(manifestURL).then(allowed => {
+      if (allowed) {
+        this.conn.send({ from: this.actorID,
+                         type: "appClose",
+                         manifestURL: manifestURL
+                       });
+      }
+    });
   },
 
   observe: function (subject, topic, data) {
@@ -1034,4 +1050,4 @@ WebappsActor.prototype.requestTypes = {
   "getIconAsDataURL": WebappsActor.prototype.getIconAsDataURL
 };
 
-DebuggerServer.addGlobalActor(WebappsActor, "webappsActor");
+exports.WebappsActor = WebappsActor;

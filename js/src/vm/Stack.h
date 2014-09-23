@@ -12,7 +12,7 @@
 #include "jsfun.h"
 #include "jsscript.h"
 
-#include "jit/AsmJSLink.h"
+#include "asmjs/AsmJSFrameIterator.h"
 #include "jit/JitFrameIterator.h"
 #ifdef CHECK_OSIPOINT_REGISTERS
 #include "jit/Registers.h" // for RegisterDump
@@ -33,7 +33,7 @@ class SPSProfiler;
 class InterpreterFrame;
 class StaticBlockObject;
 
-struct ScopeCoordinate;
+class ScopeCoordinate;
 
 // VM stack layout
 //
@@ -66,6 +66,7 @@ struct ScopeCoordinate;
 // InterpreterActivation) is a local var of js::Interpret.
 
 enum MaybeCheckAliasing { CHECK_ALIASING = true, DONT_CHECK_ALIASING = false };
+enum MaybeCheckLexical { CheckLexical = true, DontCheckLexical = false };
 
 /*****************************************************************************/
 
@@ -135,11 +136,6 @@ class AbstractFramePtr
         MOZ_ASSERT_IF(fp, asRematerializedFrame() == fp);
     }
 
-    explicit AbstractFramePtr(JSAbstractFramePtr frame)
-        : ptr_(uintptr_t(frame.raw()))
-    {
-    }
-
     static AbstractFramePtr FromRaw(void *raw) {
         AbstractFramePtr frame;
         frame.ptr_ = uintptr_t(raw);
@@ -197,7 +193,6 @@ class AbstractFramePtr
     inline bool isFunctionFrame() const;
     inline bool isGlobalFrame() const;
     inline bool isEvalFrame() const;
-    inline bool isFramePushedByExecute() const;
     inline bool isDebuggerFrame() const;
 
     inline JSScript *script() const;
@@ -235,8 +230,6 @@ class AbstractFramePtr
 
     JSObject *evalPrevScopeChain(JSContext *cx) const;
 
-    inline void *maybeHookData() const;
-    inline void setHookData(void *data) const;
     inline HandleValue returnValue() const;
     inline void setReturnValue(const Value &rval) const;
 
@@ -318,7 +311,6 @@ class InterpreterFrame
         HAS_ARGS_OBJ       =      0x200,  /* ArgumentsObject created for needsArgsObj script */
 
         /* Lazy frame initialization */
-        HAS_HOOK_DATA      =      0x400,  /* frame has hookData_ set */
         HAS_RVAL           =      0x800,  /* frame has rval_ set */
         HAS_SCOPECHAIN     =     0x1000,  /* frame has scopeChain_ set */
 
@@ -361,7 +353,7 @@ class InterpreterFrame
     jsbytecode          *prevpc_;
     Value               *prevsp_;
 
-    void                *hookData_;     /* if HAS_HOOK_DATA, closure returned by call hook */
+    void                *unused;
 
     /*
      * For an eval-in-frame DEBUGGER frame, the frame in whose scope we're
@@ -432,8 +424,12 @@ class InterpreterFrame
 
     bool initFunctionScopeObjects(JSContext *cx);
 
-    /* Initialize local variables of newly-pushed frame. */
-    void initVarsToUndefined();
+    /*
+     * Initialize local variables of newly-pushed frame. 'var' bindings are
+     * initialized to undefined and lexical bindings are initialized to
+     * JS_UNINITIALIZED_LEXICAL.
+     */
+    void initLocals();
 
     /*
      * Stack frame type
@@ -742,25 +738,7 @@ class InterpreterFrame
 
     inline JSCompartment *compartment() const;
 
-    /* Debugger hook data */
-
-    bool hasHookData() const {
-        return !!(flags_ & HAS_HOOK_DATA);
-    }
-
-    void* hookData() const {
-        JS_ASSERT(hasHookData());
-        return hookData_;
-    }
-
-    void* maybeHookData() const {
-        return hasHookData() ? hookData_ : nullptr;
-    }
-
-    void setHookData(void *v) {
-        hookData_ = v;
-        flags_ |= HAS_HOOK_DATA;
-    }
+    /* Profiler flags */
 
     bool hasPushedSPSFrame() {
         return !!(flags_ & HAS_PUSHED_SPS_FRAME);
@@ -777,11 +755,11 @@ class InterpreterFrame
     /* Return value */
 
     bool hasReturnValue() const {
-        return !!(flags_ & HAS_RVAL);
+        return flags_ & HAS_RVAL;
     }
 
     MutableHandleValue returnValue() {
-        if (!(flags_ & HAS_RVAL))
+        if (!hasReturnValue())
             rval_.setUndefined();
         return MutableHandleValue::fromMarkedLocation(&rval_);
     }
@@ -846,17 +824,6 @@ class InterpreterFrame
     template <TriggerPostBarriers doPostBarrier>
     void copyFrameAndValues(JSContext *cx, Value *vp, InterpreterFrame *otherfp,
                             const Value *othervp, Value *othersp);
-
-    /*
-     * js::Execute pushes both global and function frames (since eval() in a
-     * function pushes a frame with isFunctionFrame() && isEvalFrame()). Most
-     * code should not care where a frame was pushed, but if it is necessary to
-     * pick out frames pushed by js::Execute, this is the right query:
-     */
-
-    bool isFramePushedByExecute() const {
-        return !!(flags_ & (GLOBAL | EVAL));
-    }
 
     /*
      * Other flags
@@ -1093,7 +1060,7 @@ class InterpreterStack
     }
 };
 
-void MarkInterpreterActivations(JSRuntime *rt, JSTracer *trc);
+void MarkInterpreterActivations(PerThreadData *ptd, JSTracer *trc);
 
 /*****************************************************************************/
 
@@ -1141,6 +1108,7 @@ class Activation
     ThreadSafeContext *cx_;
     JSCompartment *compartment_;
     Activation *prev_;
+    Activation *prevProfiling_;
 
     // Counter incremented by JS_SaveFrameChain on the top-most activation and
     // decremented by JS_RestoreFrameChain. If > 0, ScriptFrameIter should stop
@@ -1171,6 +1139,8 @@ class Activation
     Activation *prev() const {
         return prev_;
     }
+    Activation *prevProfiling() const { return prevProfiling_; }
+    inline Activation *mostRecentProfiling();
 
     bool isInterpreter() const {
         return kind_ == Interpreter;
@@ -1184,6 +1154,10 @@ class Activation
     bool isAsmJS() const {
         return kind_ == AsmJS;
     }
+
+    inline bool isProfiling() const;
+    void registerProfiling();
+    void unregisterProfiling();
 
     InterpreterActivation *asInterpreter() const {
         JS_ASSERT(isInterpreter());
@@ -1276,6 +1250,10 @@ class InterpreterActivation : public Activation
         return opMask_;
     }
 
+    bool isProfiling() const {
+        return false;
+    }
+
     // If this js::Interpret frame is running |script|, enable interrupts.
     void enableInterruptsIfRunning(JSScript *script) {
         if (regs_.fp()->script() == script)
@@ -1329,22 +1307,18 @@ class JitActivation : public Activation
 {
     uint8_t *prevJitTop_;
     JSContext *prevJitJSContext_;
-    bool firstFrameIsConstructing_;
     bool active_;
 
-#ifdef JS_ION
     // Rematerialized Ion frames which has info copied out of snapshots. Maps
     // frame pointers (i.e. jitTop) to a vector of rematerializations of all
     // inline frames associated with that frame.
     //
     // This table is lazily initialized by calling getRematerializedFrame.
-    typedef Vector<RematerializedFrame *, 1> RematerializedFrameVector;
+    typedef Vector<RematerializedFrame *> RematerializedFrameVector;
     typedef HashMap<uint8_t *, RematerializedFrameVector> RematerializedFrameTable;
     RematerializedFrameTable *rematerializedFrames_;
 
-    void freeRematerializedFramesInVector(RematerializedFrameVector &frames);
     void clearRematerializedFrames();
-#endif
 
 #ifdef CHECK_OSIPOINT_REGISTERS
   protected:
@@ -1355,7 +1329,7 @@ class JitActivation : public Activation
 #endif
 
   public:
-    JitActivation(JSContext *cx, bool firstFrameIsConstructing, bool active = true);
+    explicit JitActivation(JSContext *cx, bool active = true);
     explicit JitActivation(ForkJoinContext *cx);
     ~JitActivation();
 
@@ -1364,11 +1338,12 @@ class JitActivation : public Activation
     }
     void setActive(JSContext *cx, bool active = true);
 
+    bool isProfiling() const {
+        return false;
+    }
+
     uint8_t *prevJitTop() const {
         return prevJitTop_;
-    }
-    bool firstFrameIsConstructing() const {
-        return firstFrameIsConstructing_;
     }
     static size_t offsetOfPrevJitTop() {
         return offsetof(JitActivation, prevJitTop_);
@@ -1393,14 +1368,16 @@ class JitActivation : public Activation
     }
 #endif
 
-#ifdef JS_ION
     // Look up a rematerialized frame keyed by the fp, rematerializing the
     // frame if one doesn't already exist. A frame can only be rematerialized
     // if an IonFrameIterator pointing to the nearest uninlined frame can be
     // provided, as values need to be read out of snapshots.
     //
+    // T is either JitFrameIterator or IonBailoutIterator.
+    //
     // The inlineDepth must be within bounds of the frame pointed to by iter.
-    RematerializedFrame *getRematerializedFrame(ThreadSafeContext *cx, JitFrameIterator &iter,
+    template <class T>
+    RematerializedFrame *getRematerializedFrame(ThreadSafeContext *cx, const T &iter,
                                                 size_t inlineDepth = 0);
 
     // Look up a rematerialized frame by the fp. If inlineDepth is out of
@@ -1415,7 +1392,6 @@ class JitActivation : public Activation
     void removeRematerializedFrame(uint8_t *top);
 
     void markRematerializedFrames(JSTracer *trc);
-#endif
 };
 
 // A filtering of the ActivationIterator to only stop at JitActivations.
@@ -1506,12 +1482,12 @@ class AsmJSActivation : public Activation
 {
     AsmJSModule &module_;
     AsmJSActivation *prevAsmJS_;
-    void *errorRejoinSP_;
+    AsmJSActivation *prevAsmJSForModule_;
+    void *entrySP_;
     SPSProfiler *profiler_;
     void *resumePC_;
-    uint8_t *exitSP_;
-
-    static const intptr_t InterruptedSP = -1;
+    uint8_t *fp_;
+    AsmJSExit::Reason exitReason_;
 
   public:
     AsmJSActivation(JSContext *cx, AsmJSModule &module);
@@ -1521,22 +1497,28 @@ class AsmJSActivation : public Activation
     AsmJSModule &module() const { return module_; }
     AsmJSActivation *prevAsmJS() const { return prevAsmJS_; }
 
+    bool isProfiling() const {
+        return true;
+    }
+
+    // Returns a pointer to the base of the innermost stack frame of asm.js code
+    // in this activation.
+    uint8_t *fp() const { return fp_; }
+
+    // Returns the reason why asm.js code called out of asm.js code.
+    AsmJSExit::Reason exitReason() const { return exitReason_; }
+
     // Read by JIT code:
     static unsigned offsetOfContext() { return offsetof(AsmJSActivation, cx_); }
     static unsigned offsetOfResumePC() { return offsetof(AsmJSActivation, resumePC_); }
 
-    // Initialized by JIT code:
-    static unsigned offsetOfErrorRejoinSP() { return offsetof(AsmJSActivation, errorRejoinSP_); }
-    static unsigned offsetOfExitSP() { return offsetof(AsmJSActivation, exitSP_); }
+    // Written by JIT code:
+    static unsigned offsetOfEntrySP() { return offsetof(AsmJSActivation, entrySP_); }
+    static unsigned offsetOfFP() { return offsetof(AsmJSActivation, fp_); }
+    static unsigned offsetOfExitReason() { return offsetof(AsmJSActivation, exitReason_); }
 
     // Set from SIGSEGV handler:
-    void setInterrupted(void *pc) { resumePC_ = pc; exitSP_ = (uint8_t*)InterruptedSP; }
-    bool isInterruptedSP() const { return exitSP_ == (uint8_t*)InterruptedSP; }
-
-    // Note: exitSP is the sp right before the call instruction. On x86, this
-    // means before the return address is pushed on the stack, on ARM, this
-    // means after.
-    uint8_t *exitSP() const { JS_ASSERT(!isInterruptedSP()); return exitSP_; }
+    void setResumePC(void *pc) { resumePC_ = pc; }
 };
 
 // A FrameIter walks over the runtime's stack of JS script activations,
@@ -1584,11 +1566,9 @@ class FrameIter
         InterpreterFrameIterator interpFrames_;
         ActivationIterator activations_;
 
-#ifdef JS_ION
         jit::JitFrameIterator jitFrames_;
         unsigned ionInlineFrameNo_;
         AsmJSFrameIterator asmJSFrames_;
-#endif
 
         Data(ThreadSafeContext *cx, SavedOption savedOption, ContextOption contextOption,
              JSPrincipals *principals);
@@ -1706,20 +1686,14 @@ class FrameIter
 
   private:
     Data data_;
-#ifdef JS_ION
     jit::InlineFrameIterator ionInlineFrames_;
-#endif
 
     void popActivation();
     void popInterpreterFrame();
-#ifdef JS_ION
     void nextJitFrame();
     void popJitFrame();
     void popAsmJSFrame();
-#endif
     void settleOnActivation();
-
-    friend class ::JSBrokenFrameIterator;
 };
 
 class ScriptFrameIter : public FrameIter
@@ -1876,34 +1850,22 @@ FrameIter::script() const
     JS_ASSERT(!done());
     if (data_.state_ == INTERP)
         return interpFrame()->script();
-#ifdef JS_ION
     JS_ASSERT(data_.state_ == JIT);
     if (data_.jitFrames_.isIonJS())
         return ionInlineFrames_.script();
     return data_.jitFrames_.script();
-#else
-    return nullptr;
-#endif
 }
 
 inline bool
 FrameIter::isIon() const
 {
-#ifdef JS_ION
     return isJit() && data_.jitFrames_.isIonJS();
-#else
-    return false;
-#endif
 }
 
 inline bool
 FrameIter::isBaseline() const
 {
-#ifdef JS_ION
     return isJit() && data_.jitFrames_.isBaselineJS();
-#else
-    return false;
-#endif
 }
 
 inline InterpreterFrame *

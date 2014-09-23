@@ -57,7 +57,7 @@ public:
    */
   class SurfaceReleaser : public nsRunnable {
   public:
-    SurfaceReleaser(RawRef aRef) : mRef(aRef) {}
+    explicit SurfaceReleaser(RawRef aRef) : mRef(aRef) {}
     NS_IMETHOD Run() {
       mRef->Release();
       return NS_OK;
@@ -198,7 +198,7 @@ protected:
  * its active image.
  */
 class BufferRecycleBin MOZ_FINAL {
-  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(RecycleBin)
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(BufferRecycleBin)
 
   //typedef mozilla::gl::GLContext GLContext;
 
@@ -350,7 +350,7 @@ public:
 
   enum { DISABLE_ASYNC = 0x0, ENABLE_ASYNC = 0x01 };
 
-  ImageContainer(int flag = 0);
+  explicit ImageContainer(int flag = 0);
 
   /**
    * Create an Image in one of the given formats.
@@ -511,6 +511,11 @@ public:
     mImageFactory = aFactory ? aFactory : new ImageFactory();
   }
 
+  ImageFactory* GetImageFactory() const
+  {
+    return mImageFactory;
+  }
+
   /**
    * Returns the time at which the currently contained image was first
    * painted.  This is reset every time a new image is set as the current
@@ -661,7 +666,7 @@ private:
 class AutoLockImage
 {
 public:
-  AutoLockImage(ImageContainer *aContainer) : mContainer(aContainer) { mImage = mContainer->LockCurrentImage(); }
+  explicit AutoLockImage(ImageContainer *aContainer) : mContainer(aContainer) { mImage = mContainer->LockCurrentImage(); }
   AutoLockImage(ImageContainer *aContainer, RefPtr<gfx::SourceSurface> *aSurface) : mContainer(aContainer) {
     *aSurface = mContainer->LockCurrentAsSourceSurface(&mSize, getter_AddRefs(mImage));
   }
@@ -816,7 +821,7 @@ public:
 
   virtual gfx::IntSize GetSize() { return mSize; }
 
-  PlanarYCbCrImage(BufferRecycleBin *aRecycleBin);
+  explicit PlanarYCbCrImage(BufferRecycleBin *aRecycleBin);
 
   virtual SharedPlanarYCbCrImage *AsSharedPlanarYCbCrImage() { return nullptr; }
 
@@ -860,8 +865,8 @@ protected:
  * device output color space. This class is very simple as all backends
  * have to know about how to deal with drawing a cairo image.
  */
-class CairoImage : public Image,
-                   public ISharedImage {
+class CairoImage MOZ_FINAL : public Image,
+                             public ISharedImage {
 public:
   struct Data {
     gfx::IntSize mSize;
@@ -912,6 +917,39 @@ public:
   gfx::IntSize mSize;
   RemoteImageData::Format mFormat;
 };
+
+#ifdef MOZ_WIDGET_GONK
+class OverlayImage : public Image {
+  /**
+   * OverlayImage is a special Image type that does not hold any buffer.
+   * It only hold an Id as identifier to the real content of the Image.
+   * Therefore, OverlayImage must be handled by some specialized hardware(e.g. HWC) 
+   * to show its content.
+   */
+public:
+  struct Data {
+    int32_t mOverlayId;
+    gfx::IntSize mSize;
+  };
+
+  OverlayImage() : Image(nullptr, ImageFormat::OVERLAY_IMAGE) { mOverlayId = INVALID_OVERLAY; }
+
+  void SetData(const Data& aData)
+  {
+    mOverlayId = aData.mOverlayId;
+    mSize = aData.mSize;
+  }
+
+  TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() { return nullptr; } ;
+  int32_t GetOverlayId() { return mOverlayId; }
+
+  gfx::IntSize GetSize() { return mSize; }
+
+private:
+  int32_t mOverlayId;
+  gfx::IntSize mSize;
+};
+#endif
 
 } //namespace
 } //namespace

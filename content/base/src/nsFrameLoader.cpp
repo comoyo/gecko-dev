@@ -30,7 +30,6 @@
 #include "nsIDocShell.h"
 #include "nsIDocShellTreeOwner.h"
 #include "nsIDocShellLoadInfo.h"
-#include "nsIDOMApplicationRegistry.h"
 #include "nsIBaseWindow.h"
 #include "nsContentUtils.h"
 #include "nsIXPConnect.h"
@@ -88,6 +87,7 @@
 #include "mozilla/dom/SVGIFrameElement.h"
 #include "nsSandboxFlags.h"
 #include "JavaScriptParent.h"
+#include "CompositorChild.h"
 
 #include "mozilla/dom/StructuredCloneUtils.h"
 
@@ -106,7 +106,7 @@ typedef FrameMetrics::ViewID ViewID;
 class nsAsyncDocShellDestroyer : public nsRunnable
 {
 public:
-  nsAsyncDocShellDestroyer(nsIDocShell* aDocShell)
+  explicit nsAsyncDocShellDestroyer(nsIDocShell* aDocShell)
     : mDocShell(aDocShell)
   {
   }
@@ -121,117 +121,6 @@ public:
   }
   nsRefPtr<nsIDocShell> mDocShell;
 };
-
-NS_IMPL_ISUPPORTS(nsContentView, nsIContentView)
-
-nsresult
-nsContentView::Update(const ViewConfig& aConfig)
-{
-  if (aConfig == mConfig) {
-    return NS_OK;
-  }
-  mConfig = aConfig;
-
-  // View changed.  Try to locate our subdoc frame and invalidate
-  // it if found.
-  if (!mFrameLoader) {
-    if (IsRoot()) {
-      // Oops, don't have a frame right now.  That's OK; the view
-      // config persists and will apply to the next frame we get, if we
-      // ever get one.
-      return NS_OK;
-    } else {
-      // This view is no longer valid.
-      return NS_ERROR_NOT_AVAILABLE;
-    }
-  }
-
-  if (RenderFrameParent* rfp = mFrameLoader->GetCurrentRemoteFrame()) {
-    rfp->ContentViewScaleChanged(this);
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsContentView::ScrollTo(float aXpx, float aYpx)
-{
-  ViewConfig config(mConfig);
-  config.mScrollOffset = nsPoint(nsPresContext::CSSPixelsToAppUnits(aXpx),
-                                 nsPresContext::CSSPixelsToAppUnits(aYpx));
-  return Update(config);
-}
-
-NS_IMETHODIMP
-nsContentView::ScrollBy(float aDXpx, float aDYpx)
-{
-  ViewConfig config(mConfig);
-  config.mScrollOffset.MoveBy(nsPresContext::CSSPixelsToAppUnits(aDXpx),
-                              nsPresContext::CSSPixelsToAppUnits(aDYpx));
-  return Update(config);
-}
-
-NS_IMETHODIMP
-nsContentView::SetScale(float aXScale, float aYScale)
-{
-  ViewConfig config(mConfig);
-  config.mXScale = aXScale;
-  config.mYScale = aYScale;
-  return Update(config);
-}
-
-NS_IMETHODIMP
-nsContentView::GetScrollX(float* aViewScrollX)
-{
-  *aViewScrollX = nsPresContext::AppUnitsToFloatCSSPixels(
-    mConfig.mScrollOffset.x);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsContentView::GetScrollY(float* aViewScrollY)
-{
-  *aViewScrollY = nsPresContext::AppUnitsToFloatCSSPixels(
-    mConfig.mScrollOffset.y);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsContentView::GetViewportWidth(float* aWidth)
-{
-  *aWidth = nsPresContext::AppUnitsToFloatCSSPixels(mViewportSize.width);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsContentView::GetViewportHeight(float* aHeight)
-{
-  *aHeight = nsPresContext::AppUnitsToFloatCSSPixels(mViewportSize.height);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsContentView::GetContentWidth(float* aWidth)
-{
-  *aWidth = nsPresContext::AppUnitsToFloatCSSPixels(mContentSize.width);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsContentView::GetContentHeight(float* aHeight)
-{
-  *aHeight = nsPresContext::AppUnitsToFloatCSSPixels(mContentSize.height);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsContentView::GetId(nsContentViewId* aId)
-{
-  NS_ASSERTION(sizeof(nsContentViewId) == sizeof(ViewID),
-               "ID size for XPCOM ID and internal ID type are not the same!");
-  *aId = mScrollId;
-  return NS_OK;
-}
 
 // Bug 136580: Limit to the number of nested content frames that can have the
 //             same URL. This is to stop content that is recursively loading
@@ -256,7 +145,6 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(nsFrameLoader)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsFrameLoader)
   NS_INTERFACE_MAP_ENTRY(nsIFrameLoader)
-  NS_INTERFACE_MAP_ENTRY(nsIContentViewManager)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIFrameLoader)
 NS_INTERFACE_MAP_END
 
@@ -420,7 +308,7 @@ nsFrameLoader::ReallyStartLoading()
 class DelayedStartLoadingRunnable : public nsRunnable
 {
 public:
-  DelayedStartLoadingRunnable(nsFrameLoader* aFrameLoader)
+  explicit DelayedStartLoadingRunnable(nsFrameLoader* aFrameLoader)
     : mFrameLoader(aFrameLoader)
   {
   }
@@ -470,13 +358,6 @@ nsFrameLoader::ReallyStartLoadingInternal()
                               "remote-browser-pending", nullptr);
           mPendingFrameSent = true;
         }
-      }
-      if (Preferences::GetBool("dom.ipc.processPrelaunch.enabled", false) &&
-          !ContentParent::PreallocatedProcessReady()) {
-
-        ContentParent::RunAfterPreallocatedProcessReady(
-            new DelayedStartLoadingRunnable(this));
-        return NS_ERROR_FAILURE;
       }
 
       TryRemoteBrowser();
@@ -827,7 +708,7 @@ class MOZ_STACK_CLASS AutoResetInShow {
     nsFrameLoader* mFrameLoader;
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
   public:
-    AutoResetInShow(nsFrameLoader* aFrameLoader MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit AutoResetInShow(nsFrameLoader* aFrameLoader MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : mFrameLoader(aFrameLoader)
     {
       MOZ_GUARD_OBJECT_NOTIFIER_INIT;
@@ -1020,7 +901,7 @@ nsFrameLoader::ShowRemoteFrame(const nsIntSize& size,
       mRemoteBrowserInitialized = true;
     }
   } else {
-    nsRect dimensions;
+    nsIntRect dimensions;
     NS_ENSURE_SUCCESS(GetWindowDimensions(dimensions), false);
 
     // Don't show remote iframe if we are waiting for the completion of reflow.
@@ -1170,6 +1051,9 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
   nsCOMPtr<EventTarget> otherChromeEventHandler =
     do_QueryInterface(otherWindow->GetChromeEventHandler());
 
+  nsCOMPtr<EventTarget> ourEventTarget = ourWindow->GetParentTarget();
+  nsCOMPtr<EventTarget> otherEventTarget = otherWindow->GetParentTarget();
+
   NS_ASSERTION(SameCOMIdentity(ourFrameElement, ourContent) &&
                SameCOMIdentity(otherFrameElement, otherContent) &&
                SameCOMIdentity(ourChromeEventHandler, ourContent) &&
@@ -1219,25 +1103,25 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
   // Fire pageshow events on still-loading pages, and then fire pagehide
   // events.  Note that we do NOT fire these in the normal way, but just fire
   // them on the chrome event handlers.
-  FirePageShowEvent(ourDocshell, ourChromeEventHandler, false);
-  FirePageShowEvent(otherDocshell, otherChromeEventHandler, false);
-  FirePageHideEvent(ourDocshell, ourChromeEventHandler);
-  FirePageHideEvent(otherDocshell, otherChromeEventHandler);
+  FirePageShowEvent(ourDocshell, ourEventTarget, false);
+  FirePageShowEvent(otherDocshell, otherEventTarget, false);
+  FirePageHideEvent(ourDocshell, ourEventTarget);
+  FirePageHideEvent(otherDocshell, otherEventTarget);
   
   nsIFrame* ourFrame = ourContent->GetPrimaryFrame();
   nsIFrame* otherFrame = otherContent->GetPrimaryFrame();
   if (!ourFrame || !otherFrame) {
     mInSwap = aOther->mInSwap = false;
-    FirePageShowEvent(ourDocshell, ourChromeEventHandler, true);
-    FirePageShowEvent(otherDocshell, otherChromeEventHandler, true);
+    FirePageShowEvent(ourDocshell, ourEventTarget, true);
+    FirePageShowEvent(otherDocshell, otherEventTarget, true);
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
   nsSubDocumentFrame* ourFrameFrame = do_QueryFrame(ourFrame);
   if (!ourFrameFrame) {
     mInSwap = aOther->mInSwap = false;
-    FirePageShowEvent(ourDocshell, ourChromeEventHandler, true);
-    FirePageShowEvent(otherDocshell, otherChromeEventHandler, true);
+    FirePageShowEvent(ourDocshell, ourEventTarget, true);
+    FirePageShowEvent(otherDocshell, otherEventTarget, true);
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
@@ -1245,8 +1129,8 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
   rv = ourFrameFrame->BeginSwapDocShells(otherFrame);
   if (NS_FAILED(rv)) {
     mInSwap = aOther->mInSwap = false;
-    FirePageShowEvent(ourDocshell, ourChromeEventHandler, true);
-    FirePageShowEvent(otherDocshell, otherChromeEventHandler, true);
+    FirePageShowEvent(ourDocshell, ourEventTarget, true);
+    FirePageShowEvent(otherDocshell, otherEventTarget, true);
     return rv;
   }
 
@@ -1349,8 +1233,8 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
   ourParentDocument->FlushPendingNotifications(Flush_Layout);
   otherParentDocument->FlushPendingNotifications(Flush_Layout);
 
-  FirePageShowEvent(ourDocshell, otherChromeEventHandler, true);
-  FirePageShowEvent(otherDocshell, ourChromeEventHandler, true);
+  FirePageShowEvent(ourDocshell, ourEventTarget, true);
+  FirePageShowEvent(otherDocshell, otherEventTarget, true);
 
   mInSwap = aOther->mInSwap = false;
   return NS_OK;
@@ -1474,6 +1358,22 @@ nsFrameLoader::GetOwnerIsBrowserOrAppFrame(bool* aResult)
 }
 
 bool
+nsFrameLoader::OwnerIsWidget()
+{
+  nsCOMPtr<nsIMozBrowserFrame> browserFrame = do_QueryInterface(mOwnerContent);
+  return browserFrame ? browserFrame->GetReallyIsWidget() : false;
+}
+
+
+// The xpcom getter version
+NS_IMETHODIMP
+nsFrameLoader::GetOwnerIsWidget(bool* aResult)
+{
+  *aResult = OwnerIsWidget();
+  return NS_OK;
+}
+
+bool
 nsFrameLoader::OwnerIsAppFrame()
 {
   nsCOMPtr<nsIMozBrowserFrame> browserFrame = do_QueryInterface(mOwnerContent);
@@ -1543,9 +1443,16 @@ nsFrameLoader::ShouldUseRemoteProcess()
     return false;
   }
 
-  // If we're inside a content process, don't use a remote process for this
-  // frame; it won't work properly until bug 761935 is fixed.
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  // Don't try to launch nested children if we don't have OMTC.
+  // They won't render!
+  if (XRE_GetProcessType() == GeckoProcessType_Content &&
+      !CompositorChild::ChildProcessHasCompositor()) {
+    return false;
+  }
+
+  if (XRE_GetProcessType() == GeckoProcessType_Content &&
+      !(PR_GetEnv("MOZ_NESTED_OOP_TABS") ||
+        Preferences::GetBool("dom.ipc.tabs.nested.enabled", false))) {
     return false;
   }
 
@@ -1869,10 +1776,10 @@ nsFrameLoader::CheckForRecursiveLoad(nsIURI* aURI)
 }
 
 nsresult
-nsFrameLoader::GetWindowDimensions(nsRect& aRect)
+nsFrameLoader::GetWindowDimensions(nsIntRect& aRect)
 {
   // Need to get outer window position here
-  nsIDocument* doc = mOwnerContent->GetDocument();
+  nsIDocument* doc = mOwnerContent->GetComposedDoc();
   if (!doc) {
     return NS_ERROR_FAILURE;
   }
@@ -1909,7 +1816,7 @@ nsFrameLoader::UpdatePositionAndSize(nsSubDocumentFrame *aIFrame)
   if (mRemoteFrame) {
     if (mRemoteBrowser) {
       nsIntSize size = aIFrame->GetSubdocumentSize();
-      nsRect dimensions;
+      nsIntRect dimensions;
       NS_ENSURE_SUCCESS(GetWindowDimensions(dimensions), NS_ERROR_FAILURE);
       mRemoteBrowser->UpdateDimensions(dimensions, size);
     }
@@ -2046,7 +1953,10 @@ nsFrameLoader::TryRemoteBrowser()
 {
   NS_ASSERTION(!mRemoteBrowser, "TryRemoteBrowser called with a remote browser already?");
 
-  nsIDocument* doc = mOwnerContent->GetDocument();
+  //XXXsmaug Per spec (2014/08/21) frameloader should not work in case the
+  //         element isn't in document, only in shadow dom, but that will change
+  //         https://www.w3.org/Bugs/Public/show_bug.cgi?id=26365#c0
+  nsIDocument* doc = mOwnerContent->GetComposedDoc();
   if (!doc) {
     return false;
   }
@@ -2061,14 +1971,23 @@ nsFrameLoader::TryRemoteBrowser()
     return false;
   }
 
-  nsCOMPtr<nsIDocShellTreeItem> parentAsItem(parentWin->GetDocShell());
-  if (!parentAsItem) {
+  nsCOMPtr<nsIDocShell> parentDocShell = parentWin->GetDocShell();
+  if (!parentDocShell) {
     return false;
+  }
+
+  TabParent* openingTab = static_cast<TabParent*>(parentDocShell->GetOpener());
+  ContentParent* openerContentParent = nullptr;
+
+  if (openingTab &&
+      openingTab->Manager() &&
+      openingTab->Manager()->IsContentParent()) {
+    openerContentParent = openingTab->Manager()->AsContentParent();
   }
 
   // <iframe mozbrowser> gets to skip these checks.
   if (!OwnerIsBrowserOrAppFrame()) {
-    if (parentAsItem->ItemType() != nsIDocShellTreeItem::typeChrome) {
+    if (parentDocShell->ItemType() != nsIDocShellTreeItem::typeChrome) {
       return false;
     }
 
@@ -2088,15 +2007,12 @@ nsFrameLoader::TryRemoteBrowser()
 
   uint32_t chromeFlags = 0;
   nsCOMPtr<nsIDocShellTreeOwner> parentOwner;
-  if (NS_FAILED(parentAsItem->GetTreeOwner(getter_AddRefs(parentOwner))) ||
+  if (NS_FAILED(parentDocShell->GetTreeOwner(getter_AddRefs(parentOwner))) ||
       !parentOwner) {
     return false;
   }
   nsCOMPtr<nsIXULWindow> window(do_GetInterface(parentOwner));
-  if (!window) {
-    return false;
-  }
-  if (NS_FAILED(window->GetChromeFlags(&chromeFlags))) {
+  if (window && NS_FAILED(window->GetChromeFlags(&chromeFlags))) {
     return false;
   }
 
@@ -2128,18 +2044,19 @@ nsFrameLoader::TryRemoteBrowser()
   NS_ENSURE_TRUE(rv, false);
 
   nsCOMPtr<Element> ownerElement = mOwnerContent;
-  mRemoteBrowser = ContentParent::CreateBrowserOrApp(context, ownerElement);
+  mRemoteBrowser = ContentParent::CreateBrowserOrApp(context, ownerElement, openerContentParent);
   if (mRemoteBrowser) {
     mChildID = mRemoteBrowser->Manager()->ChildID();
     nsCOMPtr<nsIDocShellTreeItem> rootItem;
-    parentAsItem->GetRootTreeItem(getter_AddRefs(rootItem));
+    parentDocShell->GetRootTreeItem(getter_AddRefs(rootItem));
     nsCOMPtr<nsIDOMWindow> rootWin = rootItem->GetWindow();
     nsCOMPtr<nsIDOMChromeWindow> rootChromeWin = do_QueryInterface(rootWin);
-    NS_ABORT_IF_FALSE(rootChromeWin, "How did we not get a chrome window here?");
 
-    nsCOMPtr<nsIBrowserDOMWindow> browserDOMWin;
-    rootChromeWin->GetBrowserDOMWindow(getter_AddRefs(browserDOMWin));
-    mRemoteBrowser->SetBrowserDOMWindow(browserDOMWin);
+    if (rootChromeWin) {
+      nsCOMPtr<nsIBrowserDOMWindow> browserDOMWin;
+      rootChromeWin->GetBrowserDOMWindow(getter_AddRefs(browserDOMWin));
+      mRemoteBrowser->SetBrowserDOMWindow(browserDOMWin);
+    }
 
     mContentParent = mRemoteBrowser->Manager();
 
@@ -2149,6 +2066,7 @@ nsFrameLoader::TryRemoteBrowser()
                                    eCaseMatters)) {
       unused << mRemoteBrowser->SendSetUpdateHitRegion(true);
     }
+    parentDocShell->SetOpenedRemote(mRemoteBrowser);
   }
   return true;
 }
@@ -2301,7 +2219,7 @@ nsFrameLoader::DoSendAsyncMessage(JSContext* aCx,
   TabParent* tabParent = mRemoteBrowser;
   if (tabParent) {
     ClonedMessageData data;
-    ContentParent* cp = tabParent->Manager();
+    nsIContentParent* cp = tabParent->Manager();
     if (!BuildClonedMessageDataForParent(cp, aData, data)) {
       return false;
     }
@@ -2310,7 +2228,7 @@ nsFrameLoader::DoSendAsyncMessage(JSContext* aCx,
       return false;
     }
     return tabParent->SendAsyncMessage(nsString(aMessage), data, cpows,
-                                       aPrincipal);
+                                       IPC::Principal(aPrincipal));
   }
 
   if (mChildMessageManager) {
@@ -2356,60 +2274,6 @@ nsFrameLoader::GetMessageManager(nsIMessageSender** aManager)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsFrameLoader::GetContentViewsIn(float aXPx, float aYPx,
-                                 float aTopSize, float aRightSize,
-                                 float aBottomSize, float aLeftSize,
-                                 uint32_t* aLength,
-                                 nsIContentView*** aResult)
-{
-  nscoord x = nsPresContext::CSSPixelsToAppUnits(aXPx - aLeftSize);
-  nscoord y = nsPresContext::CSSPixelsToAppUnits(aYPx - aTopSize);
-  nscoord w = nsPresContext::CSSPixelsToAppUnits(aLeftSize + aRightSize) + 1;
-  nscoord h = nsPresContext::CSSPixelsToAppUnits(aTopSize + aBottomSize) + 1;
-  nsRect target(x, y, w, h);
-
-  nsIFrame* frame = GetPrimaryFrameOfOwningContent();
-
-  nsTArray<ViewID> ids;
-  nsLayoutUtils::GetRemoteContentIds(frame, target, ids, true);
-  if (ids.Length() == 0 || !GetCurrentRemoteFrame()) {
-    *aResult = nullptr;
-    *aLength = 0;
-    return NS_OK;
-  }
-
-  nsIContentView** result = reinterpret_cast<nsIContentView**>(
-    NS_Alloc(ids.Length() * sizeof(nsIContentView*)));
-
-  for (uint32_t i = 0; i < ids.Length(); i++) {
-    nsIContentView* view = GetCurrentRemoteFrame()->GetContentView(ids[i]);
-    NS_ABORT_IF_FALSE(view, "Retrieved ID from RenderFrameParent, it should be valid!");
-    nsRefPtr<nsIContentView>(view).forget(&result[i]);
-  }
-
-  *aResult = result;
-  *aLength = ids.Length();
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsFrameLoader::GetRootContentView(nsIContentView** aContentView)
-{
-  RenderFrameParent* rfp = GetCurrentRemoteFrame();
-  if (!rfp) {
-    *aContentView = nullptr;
-    return NS_OK;
-  }
-
-  nsContentView* view = rfp->GetRootContentView();
-  NS_ABORT_IF_FALSE(view, "Should always be able to create root scrollable!");
-  nsRefPtr<nsIContentView>(view).forget(aContentView);
-
-  return NS_OK;
-}
-
 nsresult
 nsFrameLoader::EnsureMessageManager()
 {
@@ -2424,8 +2288,9 @@ nsFrameLoader::EnsureMessageManager()
     return NS_OK;
   }
 
+  bool useRemoteProcess = ShouldUseRemoteProcess();
   if (mMessageManager) {
-    if (ShouldUseRemoteProcess() && mRemoteBrowserShown) {
+    if (useRemoteProcess && mRemoteBrowserShown) {
       mMessageManager->InitWithCallback(this);
     }
     return NS_OK;
@@ -2449,7 +2314,7 @@ nsFrameLoader::EnsureMessageManager()
     }
   }
 
-  if (ShouldUseRemoteProcess()) {
+  if (useRemoteProcess) {
     mMessageManager = new nsFrameMessageManager(mRemoteBrowserShown ? this : nullptr,
                                                 static_cast<nsFrameMessageManager*>(parentManager.get()),
                                                 MM_CHROME);
@@ -2655,6 +2520,29 @@ nsFrameLoader::ResetPermissionManagerStatus()
     mAppIdSentToPermissionManager = appId;
     permMgr->AddrefAppId(mAppIdSentToPermissionManager);
   }
+}
+
+/**
+ * Send the RequestNotifyAfterRemotePaint message to the current Tab.
+ */
+NS_IMETHODIMP
+nsFrameLoader::RequestNotifyAfterRemotePaint()
+{
+  // If remote browsing (e10s), handle this with the TabParent.
+  if (mRemoteBrowser) {
+    unused << mRemoteBrowser->SendRequestNotifyAfterRemotePaint();
+    return NS_OK;
+  }
+
+  // If not remote browsing, directly use the document's window.
+  nsCOMPtr<nsPIDOMWindow> window = do_GetInterface(mDocShell);
+  if (!window) {
+    NS_WARNING("Unable to get window for synchronous MozAfterRemotePaint event.");
+    return NS_OK;
+  }
+
+  window->SetRequestNotifyAfterRemotePaint();
+  return NS_OK;
 }
 
 /* [infallible] */ NS_IMETHODIMP

@@ -13,9 +13,13 @@ using namespace js;
 using namespace js::jit;
 
 void
-MacroAssembler::PushRegsInMask(RegisterSet set)
+MacroAssembler::PushRegsInMask(RegisterSet set, FloatRegisterSet simdSet)
 {
-    int32_t diffF = set.fpus().size() * sizeof(double);
+    FloatRegisterSet doubleSet(FloatRegisterSet::Subtract(set.fpus(), simdSet));
+    JS_ASSERT_IF(simdSet.empty(), doubleSet == set.fpus());
+    unsigned numSimd = simdSet.size();
+    unsigned numDouble = doubleSet.size();
+    int32_t diffF = numDouble * sizeof(double) + numSimd * Simd128DataSize;
     int32_t diffG = set.gprs().size() * sizeof(intptr_t);
 
     // On x86, always use push to push the integer registers, as it's fast
@@ -27,27 +31,50 @@ MacroAssembler::PushRegsInMask(RegisterSet set)
     JS_ASSERT(diffG == 0);
 
     reserveStack(diffF);
-    for (FloatRegisterBackwardIterator iter(set.fpus()); iter.more(); iter++) {
+    for (FloatRegisterBackwardIterator iter(doubleSet); iter.more(); iter++) {
         diffF -= sizeof(double);
+        numDouble -= 1;
         storeDouble(*iter, Address(StackPointer, diffF));
     }
+    JS_ASSERT(numDouble == 0);
+    for (FloatRegisterBackwardIterator iter(simdSet); iter.more(); iter++) {
+        diffF -= Simd128DataSize;
+        numSimd -= 1;
+        // XXX how to choose the right move type?
+        storeUnalignedInt32x4(*iter, Address(StackPointer, diffF));
+    }
+    JS_ASSERT(numSimd == 0);
     JS_ASSERT(diffF == 0);
 }
 
 void
-MacroAssembler::PopRegsInMaskIgnore(RegisterSet set, RegisterSet ignore)
+MacroAssembler::PopRegsInMaskIgnore(RegisterSet set, RegisterSet ignore, FloatRegisterSet simdSet)
 {
+    FloatRegisterSet doubleSet(FloatRegisterSet::Subtract(set.fpus(), simdSet));
+    JS_ASSERT_IF(simdSet.empty(), doubleSet == set.fpus());
+    unsigned numSimd = simdSet.size();
+    unsigned numDouble = doubleSet.size();
     int32_t diffG = set.gprs().size() * sizeof(intptr_t);
-    int32_t diffF = set.fpus().size() * sizeof(double);
+    int32_t diffF = numDouble * sizeof(double) + numSimd * Simd128DataSize;
     const int32_t reservedG = diffG;
     const int32_t reservedF = diffF;
 
-    for (FloatRegisterBackwardIterator iter(set.fpus()); iter.more(); iter++) {
+    for (FloatRegisterBackwardIterator iter(simdSet); iter.more(); iter++) {
+        diffF -= Simd128DataSize;
+        numSimd -= 1;
+        if (!ignore.has(*iter))
+            // XXX how to choose the right move type?
+            loadUnalignedInt32x4(Address(StackPointer, diffF), *iter);
+    }
+    JS_ASSERT(numSimd == 0);
+    for (FloatRegisterBackwardIterator iter(doubleSet); iter.more(); iter++) {
         diffF -= sizeof(double);
+        numDouble -= 1;
         if (!ignore.has(*iter))
             loadDouble(Address(StackPointer, diffF), *iter);
     }
     freeStack(reservedF);
+    JS_ASSERT(numDouble == 0);
     JS_ASSERT(diffF == 0);
 
     // On x86, use pop to pop the integer registers, if we're not going to
@@ -73,12 +100,12 @@ MacroAssembler::PopRegsInMaskIgnore(RegisterSet set, RegisterSet ignore)
 void
 MacroAssembler::clampDoubleToUint8(FloatRegister input, Register output)
 {
-    JS_ASSERT(input != ScratchFloatReg);
+    JS_ASSERT(input != ScratchDoubleReg);
     Label positive, done;
 
     // <= 0 or NaN --> 0
-    zeroDouble(ScratchFloatReg);
-    branchDouble(DoubleGreaterThan, input, ScratchFloatReg, &positive);
+    zeroDouble(ScratchDoubleReg);
+    branchDouble(DoubleGreaterThan, input, ScratchDoubleReg, &positive);
     {
         move32(Imm32(0), output);
         jump(&done);
@@ -87,8 +114,8 @@ MacroAssembler::clampDoubleToUint8(FloatRegister input, Register output)
     bind(&positive);
 
     // Add 0.5 and truncate.
-    loadConstantDouble(0.5, ScratchFloatReg);
-    addDouble(ScratchFloatReg, input);
+    loadConstantDouble(0.5, ScratchDoubleReg);
+    addDouble(ScratchDoubleReg, input);
 
     Label outOfRange;
 
@@ -99,8 +126,8 @@ MacroAssembler::clampDoubleToUint8(FloatRegister input, Register output)
     branch32(Assembler::Above, output, Imm32(255), &outOfRange);
     {
         // Check if we had a tie.
-        convertInt32ToDouble(output, ScratchFloatReg);
-        branchDouble(DoubleNotEqual, input, ScratchFloatReg, &done);
+        convertInt32ToDouble(output, ScratchDoubleReg);
+        branchDouble(DoubleNotEqual, input, ScratchDoubleReg, &done);
 
         // It was a tie. Mask out the ones bit to get an even value.
         // See also js_TypedArray_uint8_clamp_double.
@@ -146,6 +173,18 @@ MacroAssemblerX86Shared::callWithExitFrame(JitCode *target)
     call(target);
 }
 
+void
+MacroAssembler::alignFrameForICArguments(AfterICSaveLive &aic)
+{
+    // Exists for MIPS compatibility.
+}
+
+void
+MacroAssembler::restoreFrameAlignmentForICArguments(AfterICSaveLive &aic)
+{
+    // Exists for MIPS compatibility.
+}
+
 bool
 MacroAssemblerX86Shared::buildOOLFakeExitFrame(void *fakeReturnAddr)
 {
@@ -167,10 +206,10 @@ MacroAssemblerX86Shared::branchNegativeZero(FloatRegister reg,
     Label nonZero;
 
     // Compare to zero. Lets through {0, -0}.
-    xorpd(ScratchFloatReg, ScratchFloatReg);
+    xorpd(ScratchDoubleReg, ScratchDoubleReg);
 
     // If reg is non-zero, jump to nonZero.
-    branchDouble(DoubleNotEqual, reg, ScratchFloatReg, &nonZero);
+    branchDouble(DoubleNotEqual, reg, ScratchDoubleReg, &nonZero);
 
     // Input register is either zero or negative zero. Retrieve sign of input.
     movmskpd(reg, scratch);

@@ -8,43 +8,44 @@
  *
  */
 
-[Pref="dom.serviceWorkers.enabled"]
-interface ServiceWorkerContainer {
+[Pref="dom.serviceWorkers.enabled",
+ Exposed=Window]
+interface ServiceWorkerContainer : EventTarget {
   // FIXME(nsm):
   // https://github.com/slightlyoff/ServiceWorker/issues/198
   // and discussion at https://etherpad.mozilla.org/serviceworker07apr
-  [Unforgeable] readonly attribute ServiceWorker? installing;
-  [Unforgeable] readonly attribute ServiceWorker? waiting;
-  [Unforgeable] readonly attribute ServiceWorker? current;
+  [Unforgeable] readonly attribute ServiceWorker? controller;
 
   [Throws]
-  Promise getAll();
+  readonly attribute Promise<ServiceWorkerRegistration> ready;
 
   [Throws]
-  Promise register(DOMString url, optional RegistrationOptionList options);
+  Promise<ServiceWorkerRegistration> register(ScalarValueString scriptURL,
+                                              optional RegistrationOptionList options);
 
   [Throws]
-  Promise unregister(DOMString? scope);
+  Promise<ServiceWorkerRegistration> getRegistration(optional ScalarValueString documentURL = "");
 
-  // Promise<ServiceWorker>
   [Throws]
-  Promise whenReady();
+   Promise<sequence<ServiceWorkerRegistration>> getRegistrations();
 
-  attribute EventHandler onupdatefound;
-  attribute EventHandler oncurrentchange;
+  attribute EventHandler oncontrollerchange;
   attribute EventHandler onreloadpage;
   attribute EventHandler onerror;
 };
 
 // Testing only.
-[ChromeOnly, Pref="dom.serviceWorkers.testing.enabled"]
 partial interface ServiceWorkerContainer {
-  [Throws]
-  Promise clearAllServiceWorkerData();
-  [Throws]
+  [Throws,Pref="dom.serviceWorkers.testing.enabled"]
+  Promise<any> clearAllServiceWorkerData();
+
+  [Throws,Pref="dom.serviceWorkers.testing.enabled"]
+  DOMString getScopeForUrl(DOMString url);
+
+  [Throws,Pref="dom.serviceWorkers.testing.enabled"]
   DOMString getControllingWorkerScriptURLForPath(DOMString path);
 };
 
 dictionary RegistrationOptionList {
-  DOMString scope = "*";
+  ScalarValueString scope = "/";
 };

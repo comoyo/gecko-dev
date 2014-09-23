@@ -38,7 +38,7 @@
 
     <commandset id="editMenuCommands"/>
 
-    <command id="View:PageSource" oncommand="BrowserViewSourceOfDocument(content.document);" observes="isImage"/>
+    <command id="View:PageSource" oncommand="BrowserViewSourceOfDocument(window.gBrowser.selectedBrowser.contentDocumentAsCPOW);" observes="isImage"/>
     <command id="View:PageInfo" oncommand="BrowserPageInfo();"/>
     <command id="View:FullScreen" oncommand="BrowserFullScreen();"/>
     <command id="cmd_find"
@@ -98,6 +98,7 @@
     <command id="Tools:DevToolbar" oncommand="DeveloperToolbar.toggle();" disabled="true" hidden="true"/>
     <command id="Tools:DevToolbarFocus" oncommand="DeveloperToolbar.focusToggle();" disabled="true"/>
     <command id="Tools:DevAppMgr" oncommand="gDevToolsBrowser.openAppManager(gBrowser);" disabled="true" hidden="true"/>
+    <command id="Tools:WebIDE" oncommand="gDevToolsBrowser.openWebIDE();" disabled="true" hidden="true"/>
     <command id="Tools:BrowserToolbox" oncommand="BrowserToolboxProcess.init();" disabled="true" hidden="true"/>
     <command id="Tools:BrowserConsole" oncommand="HUDService.toggleBrowserConsole();"/>
     <command id="Tools:Scratchpad" oncommand="Scratchpad.openScratchpad();"/>
@@ -198,6 +199,10 @@
     <broadcaster id="devtoolsMenuBroadcaster_DevAppMgr"
                  label="&devAppMgrMenu.label;"
                  command="Tools:DevAppMgr"/>
+    <broadcaster id="devtoolsMenuBroadcaster_webide"
+                 label="&webide.label;"
+                 command="Tools:WebIDE"
+                 key="key_webide"/>
     <broadcaster id="devtoolsMenuBroadcaster_BrowserToolbox"
                  label="&browserToolboxMenu.label;"
                  command="Tools:BrowserToolbox"/>
@@ -288,7 +293,8 @@
         modifiers="accel,shift"
 #endif
     />
-
+    <key id="key_webide" keycode="&webide.keycode;" command="Tools:WebIDE"
+         modifiers="shift" keytext="&webide.keytext;"/>
     <key id="key_devToolboxMenuItem" keytext="&devToolboxMenuItem.keytext;"
          command="Tools:DevToolbox" key="&devToolboxMenuItem.keytext;"
 #ifdef XP_MACOSX
@@ -340,11 +346,11 @@
 #endif
     <key id="goHome" keycode="VK_HOME" command="Browser:Home" modifiers="alt"/>
     <key keycode="VK_F5" command="Browser:Reload"/>
+    <key keycode="VK_F6" command="Browser:FocusNextFrame"/>
+    <key keycode="VK_F6" command="Browser:FocusNextFrame" modifiers="shift"/>
 #ifndef XP_MACOSX
     <key id="showAllHistoryKb" key="&showAllHistoryCmd.commandkey;" command="Browser:ShowAllHistory" modifiers="accel,shift"/>
     <key keycode="VK_F5" command="Browser:ReloadSkipCache" modifiers="accel"/>
-    <key keycode="VK_F6" command="Browser:FocusNextFrame"/>
-    <key keycode="VK_F6" command="Browser:FocusNextFrame" modifiers="shift"/>
     <key id="key_fullScreen" keycode="VK_F11" command="View:FullScreen"/>
 #else
     <key id="key_fullScreen" key="&fullScreenCmd.macCommandKey;" command="View:FullScreen" modifiers="accel,control"/>

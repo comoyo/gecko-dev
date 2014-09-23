@@ -8,6 +8,7 @@
 #define jsnum_h
 
 #include "mozilla/FloatingPoint.h"
+#include "mozilla/Range.h"
 
 #include "NamespaceImports.h"
 
@@ -117,8 +118,9 @@ const double DOUBLE_INTEGRAL_PRECISION_LIMIT = uint64_t(1) << 53;
  * the double type -- that is, the number will be smaller than
  * DOUBLE_INTEGRAL_PRECISION_LIMIT
  */
+template <typename CharT>
 extern double
-ParseDecimalNumber(const JS::TwoByteChars chars);
+ParseDecimalNumber(const mozilla::Range<const CharT> chars);
 
 /*
  * Compute the positive integer of the given base described immediately at the
@@ -139,11 +141,11 @@ GetPrefixInteger(ThreadSafeContext *cx, const CharT *start, const CharT *end, in
 
 /*
  * This is like GetPrefixInteger, but only deals with base 10, and doesn't have
- * and |endp| outparam.  It should only be used when the jschars are known to
+ * and |endp| outparam.  It should only be used when the characters are known to
  * only contain digits.
  */
 extern bool
-GetDecimalInteger(ExclusiveContext *cx, const jschar *start, const jschar *end, double *dp);
+GetDecimalInteger(ExclusiveContext *cx, const char16_t *start, const char16_t *end, double *dp);
 
 extern bool
 StringToNumber(ThreadSafeContext *cx, JSString *str, double *result);
@@ -248,6 +250,15 @@ ToInteger(JSContext *cx, HandleValue v, double *dp)
     return true;
 }
 
+/* ES6 7.1.15 ToLength, but clamped to the [0,2^32-2] range.  If the
+ * return value is false then *overflow will be true iff the value was
+ * not clampable to uint32_t range.
+ *
+ * For JSContext and ExclusiveContext.
+ */
+template<typename T>
+bool ToLengthClamped(T *cx, HandleValue v, uint32_t *out, bool *overflow);
+
 inline bool
 SafeAdd(int32_t one, int32_t two, int32_t *res)
 {
@@ -331,6 +342,8 @@ NonObjectToUint32(ThreadSafeContext *cx, const Value &v, uint32_t *out)
     }
     return NonObjectToUint32Slow(cx, v, out);
 }
+
+void FIX_FPU();
 
 } /* namespace js */
 

@@ -33,6 +33,7 @@
 #include "nsLayoutUtils.h"
 #include "nsViewManager.h"
 #include "RestyleManager.h"
+#include "SurfaceCache.h"
 #include "nsCSSRuleProcessor.h"
 #include "nsRuleNode.h"
 #include "gfxPlatform.h"
@@ -43,6 +44,7 @@
 #include "nsObjectFrame.h"
 #include "nsTransitionManager.h"
 #include "nsAnimationManager.h"
+#include "CounterStyleManager.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/Element.h"
 #include "nsIMessageManager.h"
@@ -60,7 +62,6 @@
 #include "nsFrameLoader.h"
 
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
 #include "nsPIWindowRoot.h"
 #include "mozilla/Preferences.h"
 
@@ -238,6 +239,8 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
   NS_ASSERTION(mDocument, "Null document");
   mUserFontSet = nullptr;
   mUserFontSetDirty = true;
+
+  mCounterStylesDirty = true;
 
   // if text perf logging enabled, init stats struct
   PRLogModuleInfo *log = gfxPlatform::GetLog(eGfxLog_textperf);
@@ -964,8 +967,10 @@ nsPresContext::Init(nsDeviceContext* aDeviceContext)
 
   mAnimationManager = new nsAnimationManager(this);
 
-  // FIXME: Why is mozilla:: needed?
-  mRestyleManager = new mozilla::RestyleManager(this);
+  // Since CounterStyleManager is also the name of a method of
+  // nsPresContext, it is necessary to prefix the class with the mozilla
+  // namespace here.
+  mCounterStyleManager = new mozilla::CounterStyleManager(this);
 
   if (mDocument->GetDisplayDocument()) {
     NS_ASSERTION(mDocument->GetDisplayDocument()->GetShell() &&
@@ -1010,9 +1015,13 @@ nsPresContext::Init(nsDeviceContext* aDeviceContext)
   }
 
   // Initialise refresh tick counters for OMTA
-  mLastStyleUpdateForAllAnimations =
-    mLastUpdateThrottledAnimationStyle =
-    mLastUpdateThrottledTransitionStyle = mRefreshDriver->MostRecentRefresh();
+  mLastStyleUpdateForAllAnimations = mRefreshDriver->MostRecentRefresh();
+
+  // Initialize restyle manager after initializing the refresh driver.
+  // Since RestyleManager is also the name of a method of nsPresContext,
+  // it is necessary to prefix the class with the mozilla namespace
+  // here.
+  mRestyleManager = new mozilla::RestyleManager(this);
 
   mLangService = do_GetService(NS_LANGUAGEATOMSERVICE_CONTRACTID);
 
@@ -1141,6 +1150,10 @@ nsPresContext::SetShell(nsIPresShell* aShell)
     if (mRestyleManager) {
       mRestyleManager->Disconnect();
       mRestyleManager = nullptr;
+    }
+    if (mCounterStyleManager) {
+      mCounterStyleManager->Disconnect();
+      mCounterStyleManager = nullptr;
     }
 
     if (IsRoot()) {
@@ -1502,7 +1515,7 @@ void
 nsPresContext::SetContainer(nsIDocShell* aDocShell)
 {
   if (aDocShell) {
-    mContainer = static_cast<nsDocShell*>(aDocShell)->asWeakPtr();
+    mContainer = static_cast<nsDocShell*>(aDocShell);
   } else {
     mContainer = WeakPtr<nsDocShell>();
   }
@@ -1538,32 +1551,6 @@ nsPresContext::Detach()
   if (mShell) {
     mShell->CancelInvalidatePresShellIfHidden();
   }
-}
-
-bool
-nsPresContext::ThrottledTransitionStyleIsUpToDate() const
-{
-  return
-    mLastUpdateThrottledTransitionStyle == mRefreshDriver->MostRecentRefresh();
-}
-
-void
-nsPresContext::TickLastUpdateThrottledTransitionStyle()
-{
-  mLastUpdateThrottledTransitionStyle = mRefreshDriver->MostRecentRefresh();
-}
-
-bool
-nsPresContext::ThrottledAnimationStyleIsUpToDate() const
-{
-  return
-    mLastUpdateThrottledAnimationStyle == mRefreshDriver->MostRecentRefresh();
-}
-
-void
-nsPresContext::TickLastUpdateThrottledAnimationStyle()
-{
-  mLastUpdateThrottledAnimationStyle = mRefreshDriver->MostRecentRefresh();
 }
 
 bool
@@ -1700,10 +1687,15 @@ nsPresContext::ThemeChangedInternal()
     sThemeChanged = false;
   }
 
-  // Clear all cached LookAndFeel colors.
   if (sLookAndFeelChanged) {
+    // Clear all cached LookAndFeel colors.
     LookAndFeel::Refresh();
     sLookAndFeelChanged = false;
+
+    // Vector images (SVG) may be using theme colors so we discard all cached
+    // surfaces. (We could add a vector image only version of DiscardAll, but
+    // in bug 940625 we decided theme changes are rare enough not to bother.)
+    mozilla::image::SurfaceCache::DiscardAll();
   }
 
   // This will force the system metrics to be generated the next time they're used
@@ -1867,6 +1859,7 @@ nsPresContext::RebuildAllStyleData(nsChangeHint aExtraHint)
   mUsesRootEMUnits = false;
   mUsesViewportUnits = false;
   RebuildUserFontSet();
+  RebuildCounterStyles();
 
   RestyleManager()->RebuildAllStyleData(aExtraHint);
 }
@@ -1902,12 +1895,12 @@ nsPresContext::MediaFeatureValuesChanged(StyleRebuildType aShouldRebuild,
 
   mPendingViewportChange = false;
 
-  if (!nsContentUtils::IsSafeToRunScript()) {
-    NS_ABORT_IF_FALSE(mDocument->IsBeingUsedAsImage(),
-                      "How did we get here?  Are we failing to notify "
-                      "listeners that we should notify?");
+  if (mDocument->IsBeingUsedAsImage()) {
+    MOZ_ASSERT(PR_CLIST_IS_EMPTY(&mDOMMediaQueryLists));
     return;
   }
+
+  MOZ_ASSERT(nsContentUtils::IsSafeToRunScript());
 
   // Media query list listeners should be notified from a queued task
   // (in HTML5 terms), although we also want to notify them on certain
@@ -1937,17 +1930,11 @@ nsPresContext::MediaFeatureValuesChanged(StyleRebuildType aShouldRebuild,
     }
 
     if (!notifyList.IsEmpty()) {
-      nsPIDOMWindow *win = mDocument->GetInnerWindow();
-      nsCOMPtr<EventTarget> et = do_QueryInterface(win);
-      nsCxPusher pusher;
-
       for (uint32_t i = 0, i_end = notifyList.Length(); i != i_end; ++i) {
-        if (pusher.RePush(et)) {
-          nsAutoMicroTask mt;
-          MediaQueryList::HandleChangeData &d = notifyList[i];
-          ErrorResult result;
-          d.callback->Call(*d.mql, result);
-        }
+        nsAutoMicroTask mt;
+        MediaQueryList::HandleChangeData &d = notifyList[i];
+        ErrorResult result;
+        d.callback->Call(*d.mql, result);
       }
     }
 
@@ -2202,16 +2189,56 @@ nsPresContext::UserFontSetUpdated()
 }
 
 void
+nsPresContext::FlushCounterStyles()
+{
+  if (!mShell) {
+    return; // we've been torn down
+  }
+  if (mCounterStyleManager->IsInitial()) {
+    // Still in its initial state, no need to clean.
+    return;
+  }
+
+  if (mCounterStylesDirty) {
+    bool changed = mCounterStyleManager->NotifyRuleChanged();
+    if (changed) {
+      PresShell()->NotifyCounterStylesAreDirty();
+      PostRebuildAllStyleDataEvent(NS_STYLE_HINT_REFLOW);
+    }
+    mCounterStylesDirty = false;
+  }
+}
+
+void
+nsPresContext::RebuildCounterStyles()
+{
+  if (mCounterStyleManager->IsInitial()) {
+    // Still in its initial state, no need to reset.
+    return;
+  }
+
+  mCounterStylesDirty = true;
+  mDocument->SetNeedStyleFlush();
+  if (!mPostedFlushCounterStyles) {
+    nsCOMPtr<nsIRunnable> ev =
+      NS_NewRunnableMethod(this, &nsPresContext::HandleRebuildCounterStyles);
+    if (NS_SUCCEEDED(NS_DispatchToCurrentThread(ev))) {
+      mPostedFlushCounterStyles = true;
+    }
+  }
+}
+
+void
 nsPresContext::EnsureSafeToHandOutCSSRules()
 {
-  nsCSSStyleSheet::EnsureUniqueInnerResult res =
+  CSSStyleSheet::EnsureUniqueInnerResult res =
     mShell->StyleSet()->EnsureUniqueInnerOnCSSSheets();
-  if (res == nsCSSStyleSheet::eUniqueInner_AlreadyUnique) {
+  if (res == CSSStyleSheet::eUniqueInner_AlreadyUnique) {
     // Nothing to do.
     return;
   }
 
-  MOZ_ASSERT(res == nsCSSStyleSheet::eUniqueInner_ClonedInner);
+  MOZ_ASSERT(res == CSSStyleSheet::eUniqueInner_ClonedInner);
   RebuildAllStyleData(nsChangeHint(0));
 }
 
@@ -2687,7 +2714,7 @@ nsPresContext::GetPrimaryFrameFor(nsIContent* aContent)
 {
   NS_PRECONDITION(aContent, "Don't do that");
   if (GetPresShell() &&
-      GetPresShell()->GetDocument() == aContent->GetCurrentDoc()) {
+      GetPresShell()->GetDocument() == aContent->GetComposedDoc()) {
     return aContent->GetPrimaryFrame();
   }
   return nullptr;

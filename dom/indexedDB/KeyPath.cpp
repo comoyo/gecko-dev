@@ -103,7 +103,7 @@ GetJSValFromKeyPathString(JSContext* aCx,
 
     NS_ASSERTION(!token.IsEmpty(), "Should be a valid keypath");
 
-    const jschar* keyPathChars = token.BeginReading();
+    const char16_t* keyPathChars = token.BeginReading();
     const size_t keyPathLen = token.Length();
 
     bool hasProp;
@@ -285,7 +285,7 @@ KeyPath::Parse(JSContext* aCx, const JS::Value& aValue_, KeyPath* aKeyPath)
     for (uint32_t index = 0; index < length; index++) {
       JS::Rooted<JS::Value> val(aCx);
       JSString* jsstr;
-      nsDependentJSString str;
+      nsAutoJSString str;
       if (!JS_GetElement(aCx, obj, index, &val) ||
           !(jsstr = JS::ToString(aCx, val)) ||
           !str.init(aCx, jsstr)) {
@@ -300,7 +300,7 @@ KeyPath::Parse(JSContext* aCx, const JS::Value& aValue_, KeyPath* aKeyPath)
   // Otherwise convert it to a string.
   else if (!aValue.isNull() && !aValue.isUndefined()) {
     JSString* jsstr;
-    nsDependentJSString str;
+    nsAutoJSString str;
     if (!(jsstr = JS::ToString(aCx, aValue)) ||
         !str.init(aCx, jsstr)) {
       return NS_ERROR_FAILURE;

@@ -19,15 +19,12 @@ class nsIDOMKeyEvent;
 
 /** editor Implementation of the DragListener interface
  */
-class nsMenuBarListener : public nsIDOMEventListener
+class nsMenuBarListener MOZ_FINAL : public nsIDOMEventListener
 {
 public:
   /** default constructor
    */
-  nsMenuBarListener(nsMenuBarFrame* aMenuBar);
-  /** default destructor
-   */
-  virtual ~nsMenuBarListener();
+  explicit nsMenuBarListener(nsMenuBarFrame* aMenuBar);
 
   static void InitializeStatics();
    
@@ -46,6 +43,10 @@ public:
   static bool IsAccessKeyPressed(nsIDOMKeyEvent* event);
 
 protected:
+  /** default destructor
+   */
+  virtual ~nsMenuBarListener();
+
   static void InitAccessKey();
 
   static mozilla::Modifiers GetModifiersForAccessKey(nsIDOMKeyEvent* event);

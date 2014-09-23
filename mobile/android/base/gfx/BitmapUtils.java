@@ -14,7 +14,7 @@ import java.net.URL;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.util.GeckoJarReader;
 import org.mozilla.gecko.util.ThreadUtils;
-import org.mozilla.gecko.util.UiAsyncTask;
+import org.mozilla.gecko.util.UIAsyncTask;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.ThumbnailHelper;
@@ -80,9 +80,9 @@ public final class BitmapUtils {
         }
 
         if (data.startsWith("jar:") || data.startsWith("file://")) {
-            (new UiAsyncTask<Void, Void, Drawable>(ThreadUtils.getBackgroundHandler()) {
+            (new UIAsyncTask.WithoutParams<Drawable>(ThreadUtils.getBackgroundHandler()) {
                 @Override
-                public Drawable doInBackground(Void... params) {
+                public Drawable doInBackground() {
                     try {
                         if (data.startsWith("jar:jar")) {
                             return GeckoJarReader.getBitmapDrawable(context.getResources(), data);
@@ -122,7 +122,7 @@ public final class BitmapUtils {
             try {
                 final Drawable d = context.getPackageManager().getApplicationIcon(resource);
                 runOnBitmapFoundOnUiThread(loader, d);
-            } catch(Exception ex) { }
+            } catch (Exception ex) { }
 
             return;
         }

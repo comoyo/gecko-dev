@@ -38,7 +38,6 @@ ThebesLayerComposite::ThebesLayerComposite(LayerManagerComposite *aManager)
   : ThebesLayer(aManager, nullptr)
   , LayerComposite(aManager)
   , mBuffer(nullptr)
-  , mRequiresTiledProperties(false)
 {
   MOZ_COUNT_CTOR(ThebesLayerComposite);
   mImplData = static_cast<LayerComposite*>(this);
@@ -118,6 +117,7 @@ ThebesLayerComposite::RenderLayer(const nsIntRect& aClipRect)
              mBuffer->GetLayer() == this,
              "buffer is corrupted");
 
+  const nsIntRegion& visibleRegion = GetEffectiveVisibleRegion();
   gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
 
 #ifdef MOZ_DUMP_PAINTING
@@ -133,30 +133,15 @@ ThebesLayerComposite::RenderLayer(const nsIntRect& aClipRect)
   LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(mMaskLayer, effectChain);
   AddBlendModeEffect(effectChain);
 
-  nsIntRegion visibleRegion = GetEffectiveVisibleRegion();
-
-  TiledLayerProperties tiledLayerProps;
-  if (mRequiresTiledProperties) {
-    tiledLayerProps.mVisibleRegion = visibleRegion;
-    tiledLayerProps.mEffectiveResolution = GetEffectiveResolution();
-    tiledLayerProps.mValidRegion = mValidRegion;
-  }
-
   mBuffer->SetPaintWillResample(MayResample());
 
   mBuffer->Composite(effectChain,
                      GetEffectiveOpacity(),
                      GetEffectiveTransform(),
-                     gfx::Filter::LINEAR,
+                     GetEffectFilter(),
                      clipRect,
-                     &visibleRegion,
-                     mRequiresTiledProperties ? &tiledLayerProps
-                                              : nullptr);
+                     &visibleRegion);
   mBuffer->BumpFlashCounter();
-
-  if (mRequiresTiledProperties) {
-    mValidRegion = tiledLayerProps.mValidRegion;
-  }
 
   mCompositeManager->GetCompositor()->MakeCurrent();
 }
@@ -180,30 +165,23 @@ ThebesLayerComposite::CleanupResources()
   mBuffer = nullptr;
 }
 
-CSSToScreenScale
-ThebesLayerComposite::GetEffectiveResolution()
+void
+ThebesLayerComposite::GenEffectChain(EffectChain& aEffect)
 {
-  for (ContainerLayer* parent = GetParent(); parent; parent = parent->GetParent()) {
-    const FrameMetrics& metrics = parent->GetFrameMetrics();
-    if (metrics.GetScrollId() != FrameMetrics::NULL_SCROLL_ID) {
-      return metrics.GetZoom();
-    }
-  }
-
-  return CSSToScreenScale(1.0);
+  aEffect.mLayerRef = this;
+  aEffect.mPrimaryEffect = mBuffer->GenEffect(GetEffectFilter());
 }
 
-nsACString&
-ThebesLayerComposite::PrintInfo(nsACString& aTo, const char* aPrefix)
+void
+ThebesLayerComposite::PrintInfo(std::stringstream& aStream, const char* aPrefix)
 {
-  ThebesLayer::PrintInfo(aTo, aPrefix);
+  ThebesLayer::PrintInfo(aStream, aPrefix);
   if (mBuffer && mBuffer->IsAttached()) {
-    aTo += "\n";
+    aStream << "\n";
     nsAutoCString pfx(aPrefix);
     pfx += "  ";
-    mBuffer->PrintInfo(aTo, pfx.get());
+    mBuffer->PrintInfo(aStream, pfx.get());
   }
-  return aTo;
 }
 
 } /* layers */

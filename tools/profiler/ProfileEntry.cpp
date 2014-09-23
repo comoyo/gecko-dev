@@ -143,34 +143,33 @@ std::ostream& operator<<(std::ostream& stream, const ProfileEntry& entry)
 
 #define DYNAMIC_MAX_STRING 512
 
-ThreadProfile::ThreadProfile(const char* aName, int aEntrySize,
-                             PseudoStack *aStack, Thread::tid_t aThreadId,
-                             PlatformData* aPlatform,
-                             bool aIsMainThread, void *aStackTop)
-  : mWritePos(0)
+ThreadProfile::ThreadProfile(ThreadInfo* aInfo, int aEntrySize)
+  : mThreadInfo(aInfo)
+  , mWritePos(0)
   , mLastFlushPos(0)
   , mReadPos(0)
   , mEntrySize(aEntrySize)
-  , mPseudoStack(aStack)
+  , mPseudoStack(aInfo->Stack())
   , mMutex("ThreadProfile::mMutex")
-  , mName(strdup(aName))
-  , mThreadId(aThreadId)
-  , mIsMainThread(aIsMainThread)
-  , mPlatformData(aPlatform)
+  , mThreadId(aInfo->ThreadId())
+  , mIsMainThread(aInfo->IsMainThread())
+  , mPlatformData(aInfo->GetPlatformData())
   , mGeneration(0)
   , mPendingGenerationFlush(0)
-  , mStackTop(aStackTop)
+  , mStackTop(aInfo->StackTop())
+  , mRespInfo(MOZ_THIS_IN_INITIALIZER_LIST())
 #ifdef XP_LINUX
   , mRssMemory(0)
   , mUssMemory(0)
 #endif
 {
+  MOZ_COUNT_CTOR(ThreadProfile);
   mEntries = new ProfileEntry[mEntrySize];
 }
 
 ThreadProfile::~ThreadProfile()
 {
-  free(mName);
+  MOZ_COUNT_DTOR(ThreadProfile);
   delete[] mEntries;
 }
 
@@ -325,7 +324,7 @@ void ThreadProfile::StreamJSObject(JSStreamWriter& b)
       // TODO Add the proper plugin name
       b.NameValue("name", "Plugin");
     } else {
-      b.NameValue("name", mName);
+      b.NameValue("name", Name());
     }
     b.NameValue("tid", static_cast<int>(mThreadId));
 
@@ -481,10 +480,15 @@ JSObject* ThreadProfile::ToJSObject(JSContext *aCx)
 {
   JS::RootedValue val(aCx);
   std::stringstream ss;
-  JSStreamWriter b(ss);
-  StreamJSObject(b);
-  NS_ConvertUTF8toUTF16 js_string(nsDependentCString(ss.str().c_str()));
-  JS_ParseJSON(aCx, static_cast<const jschar*>(js_string.get()), js_string.Length(), &val);
+  {
+    // Define a scope to prevent a moving GC during ~JSStreamWriter from
+    // trashing the return value.
+    JSStreamWriter b(ss);
+    StreamJSObject(b);
+    NS_ConvertUTF8toUTF16 js_string(nsDependentCString(ss.str().c_str()));
+    JS_ParseJSON(aCx, static_cast<const char16_t*>(js_string.get()),
+                 js_string.Length(), &val);
+  }
   return &val.toObject();
 }
 

@@ -16,7 +16,7 @@
   });
 
 var test;
-runTest(function () {
+runNetworkTest(function () {
   test = new PeerConnectionTest();
   test.setMediaConstraints([{audio: true}], [{audio: true}]);
   // first example generates an error
@@ -70,8 +70,8 @@ runTest(function () {
     [
       'ONLY_REMOTE_SDP_INCLUDES_IDENTITY_ASSERTION',
       function(test) {
-        ok(!test.pcLocal._last_offer.sdp.contains('a=identity'), 'a=identity not contained in the offer SDP');
-        ok(test.pcRemote._last_answer.sdp.contains('a=identity'), 'a=identity is contained in the answer SDP');
+        ok(!test.originalOffer.sdp.contains('a=identity'), 'a=identity not contained in the offer SDP');
+        ok(test.originalAnswer.sdp.contains('a=identity'), 'a=identity is contained in the answer SDP');
         test.next();
       }
     ]

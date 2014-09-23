@@ -1,4 +1,4 @@
-/* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ts=2 sw=2 sts=2 et: */
 
 /*
@@ -479,7 +479,8 @@ var gFlexboxTestcases =
      ]
  },
 
- // Trying "flex: auto" (== "1 1 auto") w/ a mix of flex-grow/flex-basis values
+ // Trying "flex: auto" (== "1 1 main-size") on one flex item, w/ a mix of
+ // flex-grow/flex-basis values on the other flex items.
  {
    items:
      [
@@ -710,7 +711,7 @@ var gFlexboxTestcases =
          "_main-size": [ null,  "20px" ]
        },
        {
-         "flex": "9 auto",
+         "flex": "9 main-size",
          "_min-main-size": "150px",
          "_main-size": [ "50px",  "180px" ]
        },

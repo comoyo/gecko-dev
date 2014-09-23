@@ -3,6 +3,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+# NB: IF YOU ADD ITEMS TO THIS FILE, PLEASE UPDATE THE WHITELIST IN
+# BrowserUITelemetry.jsm. SEE BUG 991757 FOR DETAILS.
+
       <menugroup id="context-navigation">
         <menuitem id="context-back"
                   class="menuitem-iconic"
@@ -365,7 +368,7 @@
       <menuitem id="context-viewsource"
                 label="&viewPageSourceCmd.label;"
                 accesskey="&viewPageSourceCmd.accesskey;"
-                oncommand="BrowserViewSourceOfDocument(gContextMenu.browser.contentDocument);"
+                oncommand="BrowserViewSourceOfDocument(gContextMenu.browser.contentDocumentAsCPOW);"
                 observes="isImage"/>
       <menuitem id="context-viewinfo"
                 label="&viewPageInfoCmd.label;"
@@ -376,7 +379,7 @@
                 label="&spellCheckToggle.label;"
                 type="checkbox"
                 accesskey="&spellCheckToggle.accesskey;"
-                oncommand="InlineSpellCheckerUI.toggleEnabled();"/>
+                oncommand="InlineSpellCheckerUI.toggleEnabled(window);"/>
       <menuitem id="spell-add-dictionaries-main"
                 label="&spellAddDictionaries.label;"
                 accesskey="&spellAddDictionaries.accesskey;"

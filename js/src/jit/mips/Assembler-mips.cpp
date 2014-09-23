@@ -12,8 +12,8 @@
 #include "jscompartment.h"
 #include "jsutil.h"
 
-#include "assembler/jit/ExecutableAllocator.h"
 #include "gc/Marking.h"
+#include "jit/ExecutableAllocator.h"
 #include "jit/JitCompartment.h"
 
 using mozilla::DebugOnly;
@@ -30,6 +30,7 @@ ABIArgGenerator::ABIArgGenerator()
 ABIArg
 ABIArgGenerator::next(MIRType type)
 {
+    FloatRegister::RegType regType;
     switch (type) {
       case MIRType_Int32:
       case MIRType_Pointer:
@@ -42,15 +43,16 @@ ABIArgGenerator::next(MIRType type)
         break;
       case MIRType_Float32:
       case MIRType_Double:
+        regType = (type == MIRType_Double ? FloatRegister::Double : FloatRegister::Single);
         if (!usedArgSlots_) {
-            current_ = ABIArg(f12);
+            current_ = ABIArg(FloatRegister(FloatRegisters::f12, regType));
             usedArgSlots_ += 2;
             firstArgFloat = true;
         } else if (usedArgSlots_ <= 2) {
             // NOTE: We will use f14 always. This is not compatible with
             // system ABI. We will have to introduce some infrastructure
             // changes if we have to use system ABI here.
-            current_ = ABIArg(f14);
+            current_ = ABIArg(FloatRegister(FloatRegisters::f14, regType));
             usedArgSlots_ = 4;
         } else {
             usedArgSlots_ += usedArgSlots_ % 2;
@@ -59,13 +61,16 @@ ABIArgGenerator::next(MIRType type)
         }
         break;
       default:
-        MOZ_ASSUME_UNREACHABLE("Unexpected argument type");
+        MOZ_CRASH("Unexpected argument type");
     }
     return current_;
 
 }
-const Register ABIArgGenerator::NonArgReturnVolatileReg0 = t0;
-const Register ABIArgGenerator::NonArgReturnVolatileReg1 = t1;
+const Register ABIArgGenerator::NonArgReturnReg0 = t0;
+const Register ABIArgGenerator::NonArgReturnReg1 = t1;
+const Register ABIArgGenerator::NonArg_VolatileReg = v0;
+const Register ABIArgGenerator::NonReturn_VolatileReg0 = a0;
+const Register ABIArgGenerator::NonReturn_VolatileReg1 = a1;
 
 // Encode a standard register when it is being used as rd, the rs, and
 // an extra register(rt). These should never be called with an InvalidReg.
@@ -86,8 +91,8 @@ js::jit::RT(Register r)
 uint32_t
 js::jit::RT(FloatRegister r)
 {
-    MOZ_ASSERT(r.code() < FloatRegisters::Total);
-    return r.code() << RTShift;
+    MOZ_ASSERT(r.id() < FloatRegisters::TotalSingle);
+    return r.id() << RTShift;
 }
 
 uint32_t
@@ -100,8 +105,8 @@ js::jit::RD(Register r)
 uint32_t
 js::jit::RD(FloatRegister r)
 {
-    MOZ_ASSERT(r.code() < FloatRegisters::Total);
-    return r.code() << RDShift;
+    MOZ_ASSERT(r.id() < FloatRegisters::TotalSingle);
+    return r.id() << RDShift;
 }
 
 uint32_t
@@ -114,8 +119,8 @@ js::jit::SA(uint32_t value)
 uint32_t
 js::jit::SA(FloatRegister r)
 {
-    MOZ_ASSERT(r.code() < FloatRegisters::Total);
-    return r.code() << SAShift;
+    MOZ_ASSERT(r.id() < FloatRegisters::TotalSingle);
+    return r.id() << SAShift;
 }
 
 Register
@@ -155,9 +160,37 @@ jit::PatchJump(CodeLocationJump &jump_, CodeLocationLabel label)
     Instruction *inst1 = (Instruction *)jump_.raw();
     Instruction *inst2 = inst1->next();
 
-    Assembler::updateLuiOriValue(inst1, inst2, (uint32_t)label.raw());
+    Assembler::UpdateLuiOriValue(inst1, inst2, (uint32_t)label.raw());
 
     AutoFlushICache::flush(uintptr_t(inst1), 8);
+}
+
+// For more infromation about backedges look at comment in
+// MacroAssemblerMIPSCompat::backedgeJump()
+void
+jit::PatchBackedge(CodeLocationJump &jump, CodeLocationLabel label,
+                   JitRuntime::BackedgeTarget target)
+{
+    uint32_t sourceAddr = (uint32_t)jump.raw();
+    uint32_t targetAddr = (uint32_t)label.raw();
+    InstImm *branch = (InstImm *)jump.raw();
+
+    MOZ_ASSERT(branch->extractOpcode() == (uint32_t(op_beq) >> OpcodeShift));
+
+    if (BOffImm16::IsInRange(targetAddr - sourceAddr)) {
+        branch->setBOffImm16(BOffImm16(targetAddr - sourceAddr));
+    } else {
+        if (target == JitRuntime::BackedgeLoopHeader) {
+            Instruction *lui = &branch[1];
+            Assembler::UpdateLuiOriValue(lui, lui->next(), targetAddr);
+            // Jump to ori. The lui will be executed in delay slot.
+            branch->setBOffImm16(BOffImm16(2 * sizeof(uint32_t)));
+        } else {
+            Instruction *lui = &branch[4];
+            Assembler::UpdateLuiOriValue(lui, lui->next(), targetAddr);
+            branch->setBOffImm16(BOffImm16(4 * sizeof(uint32_t)));
+        }
+    }
 }
 
 void
@@ -177,8 +210,8 @@ Assembler::executableCopy(uint8_t *buffer)
     for (size_t i = 0; i < longJumps_.length(); i++) {
         Instruction *inst1 = (Instruction *) ((uint32_t)buffer + longJumps_[i]);
 
-        uint32_t value = extractLuiOriValue(inst1, inst1->next());
-        updateLuiOriValue(inst1, inst1->next(), (uint32_t)buffer + value);
+        uint32_t value = ExtractLuiOriValue(inst1, inst1->next());
+        UpdateLuiOriValue(inst1, inst1->next(), (uint32_t)buffer + value);
     }
 
     AutoFlushICache::setRange(uintptr_t(buffer), m_buffer.size());
@@ -226,16 +259,16 @@ class RelocationIterator
 };
 
 uintptr_t
-Assembler::getPointer(uint8_t *instPtr)
+Assembler::GetPointer(uint8_t *instPtr)
 {
     Instruction *inst = (Instruction*)instPtr;
-    return Assembler::extractLuiOriValue(inst, inst->next());
+    return Assembler::ExtractLuiOriValue(inst, inst->next());
 }
 
 static JitCode *
 CodeFromJump(Instruction *jump)
 {
-    uint8_t *target = (uint8_t *)Assembler::extractLuiOriValue(jump, jump->next());
+    uint8_t *target = (uint8_t *)Assembler::ExtractLuiOriValue(jump, jump->next());
     return JitCode::FromExecutable(target);
 }
 
@@ -250,15 +283,26 @@ Assembler::TraceJumpRelocations(JSTracer *trc, JitCode *code, CompactBufferReade
 }
 
 static void
+TraceOneDataRelocation(JSTracer *trc, Instruction *inst)
+{
+    void *ptr = (void *)Assembler::ExtractLuiOriValue(inst, inst->next());
+    void *prior = ptr;
+
+    // No barrier needed since these are constants.
+    gc::MarkGCThingUnbarriered(trc, reinterpret_cast<void **>(&ptr), "ion-masm-ptr");
+    if (ptr != prior) {
+        Assembler::UpdateLuiOriValue(inst, inst->next(), uint32_t(ptr));
+        AutoFlushICache::flush(uintptr_t(inst), 8);
+    }
+}
+
+static void
 TraceDataRelocations(JSTracer *trc, uint8_t *buffer, CompactBufferReader &reader)
 {
     while (reader.more()) {
         size_t offset = reader.readUnsigned();
         Instruction *inst = (Instruction*)(buffer + offset);
-        void *ptr = (void *)Assembler::extractLuiOriValue(inst, inst->next());
-
-        // No barrier needed since these are constants.
-        gc::MarkGCThingUnbarriered(trc, reinterpret_cast<void **>(&ptr), "ion-masm-ptr");
+        TraceOneDataRelocation(trc, inst);
     }
 }
 
@@ -268,11 +312,7 @@ TraceDataRelocations(JSTracer *trc, MIPSBuffer *buffer, CompactBufferReader &rea
     while (reader.more()) {
         BufferOffset bo (reader.readUnsigned());
         MIPSBuffer::AssemblerBufferInstIterator iter(bo, buffer);
-
-        void *ptr = (void *)Assembler::extractLuiOriValue(iter.cur(), iter.next());
-
-        // No barrier needed since these are constants.
-        gc::MarkGCThingUnbarriered(trc, reinterpret_cast<void **>(&ptr), "ion-masm-ptr");
+        TraceOneDataRelocation(trc, iter.cur());
     }
 }
 
@@ -330,9 +370,9 @@ Assembler::processCodeLabels(uint8_t *rawCode)
 }
 
 int32_t
-Assembler::extractCodeLabelOffset(uint8_t *code) {
+Assembler::ExtractCodeLabelOffset(uint8_t *code) {
     InstImm *inst = (InstImm *)code;
-    return Assembler::extractLuiOriValue(inst, inst->next());
+    return Assembler::ExtractLuiOriValue(inst, inst->next());
 }
 
 void
@@ -342,8 +382,8 @@ Assembler::Bind(uint8_t *rawCode, AbsoluteLabel *label, const void *address)
         int32_t src = label->offset();
         do {
             Instruction *inst = (Instruction *) (rawCode + src);
-            uint32_t next = Assembler::extractLuiOriValue(inst, inst->next());
-            Assembler::updateLuiOriValue(inst, inst->next(), (uint32_t)address);
+            uint32_t next = Assembler::ExtractLuiOriValue(inst, inst->next());
+            Assembler::UpdateLuiOriValue(inst, inst->next(), (uint32_t)address);
             src = next;
         } while (src != AbsoluteLabel::INVALID_OFFSET);
     }
@@ -383,8 +423,7 @@ Assembler::InvertCondition(Condition cond)
       case NotSigned:
         return Signed;
       default:
-        MOZ_ASSUME_UNREACHABLE("unexpected condition");
-        return Equal;
+        MOZ_CRASH("unexpected condition");
     }
 }
 
@@ -421,8 +460,7 @@ Assembler::InvertCondition(DoubleCondition cond)
       case DoubleLessThanOrEqualOrUnordered:
         return DoubleGreaterThan;
       default:
-        MOZ_ASSUME_UNREACHABLE("unexpected condition");
-        return DoubleEqual;
+        MOZ_CRASH("unexpected condition");
     }
 }
 
@@ -490,12 +528,12 @@ Assembler::writeInst(uint32_t x, uint32_t *dest)
     if (dest == nullptr)
         return m_buffer.putInt(x);
 
-    writeInstStatic(x, dest);
+    WriteInstStatic(x, dest);
     return BufferOffset();
 }
 
 void
-Assembler::writeInstStatic(uint32_t x, uint32_t *dest)
+Assembler::WriteInstStatic(uint32_t x, uint32_t *dest)
 {
     MOZ_ASSERT(dest != nullptr);
     *dest = x;
@@ -557,21 +595,21 @@ Assembler::as_nor(Register rd, Register rs, Register rt)
 BufferOffset
 Assembler::as_andi(Register rd, Register rs, int32_t j)
 {
-    MOZ_ASSERT(Imm16::isInUnsignedRange(j));
+    MOZ_ASSERT(Imm16::IsInUnsignedRange(j));
     return writeInst(InstImm(op_andi, rs, rd, Imm16(j)).encode());
 }
 
 BufferOffset
 Assembler::as_ori(Register rd, Register rs, int32_t j)
 {
-    MOZ_ASSERT(Imm16::isInUnsignedRange(j));
+    MOZ_ASSERT(Imm16::IsInUnsignedRange(j));
     return writeInst(InstImm(op_ori, rs, rd, Imm16(j)).encode());
 }
 
 BufferOffset
 Assembler::as_xori(Register rd, Register rs, int32_t j)
 {
-    MOZ_ASSERT(Imm16::isInUnsignedRange(j));
+    MOZ_ASSERT(Imm16::IsInUnsignedRange(j));
     return writeInst(InstImm(op_xori, rs, rd, Imm16(j)).encode());
 }
 
@@ -580,6 +618,13 @@ BufferOffset
 Assembler::as_bal(BOffImm16 off)
 {
     BufferOffset bo = writeInst(InstImm(op_regimm, zero, rt_bgezal, off).encode());
+    return bo;
+}
+
+BufferOffset
+Assembler::as_b(BOffImm16 off)
+{
+    BufferOffset bo = writeInst(InstImm(op_beq, zero, zero, off).encode());
     return bo;
 }
 
@@ -622,7 +667,7 @@ Assembler::getBranchCode(Register s, Condition c)
       case Assembler::LessThanOrEqual:
         return InstImm(op_blez, s, zero, BOffImm16(0));
       default:
-        MOZ_ASSUME_UNREACHABLE("Condition not supported.");
+        MOZ_CRASH("Condition not supported.");
     }
 }
 
@@ -672,7 +717,7 @@ Assembler::as_addu(Register rd, Register rs, Register rt)
 BufferOffset
 Assembler::as_addiu(Register rd, Register rs, int32_t j)
 {
-    MOZ_ASSERT(Imm16::isInSignedRange(j));
+    MOZ_ASSERT(Imm16::IsInSignedRange(j));
     return writeInst(InstImm(op_addiu, rs, rd, Imm16(j)).encode());
 }
 
@@ -715,7 +760,7 @@ Assembler::as_mul(Register rd, Register rs, Register rt)
 BufferOffset
 Assembler::as_lui(Register rd, int32_t j)
 {
-    MOZ_ASSERT(Imm16::isInUnsignedRange(j));
+    MOZ_ASSERT(Imm16::IsInUnsignedRange(j));
     return writeInst(InstImm(op_lui, zero, rd, Imm16(j)).encode());
 }
 
@@ -874,14 +919,14 @@ Assembler::as_sltu(Register rd, Register rs, Register rt)
 BufferOffset
 Assembler::as_slti(Register rd, Register rs, int32_t j)
 {
-    MOZ_ASSERT(Imm16::isInSignedRange(j));
+    MOZ_ASSERT(Imm16::IsInSignedRange(j));
     return writeInst(InstImm(op_slti, rs, rd, Imm16(j)).encode());
 }
 
 BufferOffset
 Assembler::as_sltiu(Register rd, Register rs, uint32_t j)
 {
-    MOZ_ASSERT(Imm16::isInUnsignedRange(j));
+    MOZ_ASSERT(Imm16::IsInUnsignedRange(j));
     return writeInst(InstImm(op_sltiu, rs, rd, Imm16(j)).encode());
 }
 
@@ -916,9 +961,9 @@ Assembler::as_movf(Register rd, Register rs, uint16_t cc)
 
 // Bit twiddling.
 BufferOffset
-Assembler::as_clz(Register rd, Register rs, Register rt)
+Assembler::as_clz(Register rd, Register rs)
 {
-    return writeInst(InstReg(op_special2, rs, rt, rd, ff_clz).encode());
+    return writeInst(InstReg(op_special2, rs, rd, rd, ff_clz).encode());
 }
 
 BufferOffset
@@ -943,28 +988,28 @@ Assembler::as_ext(Register rt, Register rs, uint16_t pos, uint16_t size)
 BufferOffset
 Assembler::as_ld(FloatRegister fd, Register base, int32_t off)
 {
-    MOZ_ASSERT(Imm16::isInSignedRange(off));
+    MOZ_ASSERT(Imm16::IsInSignedRange(off));
     return writeInst(InstImm(op_ldc1, base, fd, Imm16(off)).encode());
 }
 
 BufferOffset
 Assembler::as_sd(FloatRegister fd, Register base, int32_t off)
 {
-    MOZ_ASSERT(Imm16::isInSignedRange(off));
+    MOZ_ASSERT(Imm16::IsInSignedRange(off));
     return writeInst(InstImm(op_sdc1, base, fd, Imm16(off)).encode());
 }
 
 BufferOffset
 Assembler::as_ls(FloatRegister fd, Register base, int32_t off)
 {
-    MOZ_ASSERT(Imm16::isInSignedRange(off));
+    MOZ_ASSERT(Imm16::IsInSignedRange(off));
     return writeInst(InstImm(op_lwc1, base, fd, Imm16(off)).encode());
 }
 
 BufferOffset
 Assembler::as_ss(FloatRegister fd, Register base, int32_t off)
 {
-    MOZ_ASSERT(Imm16::isInSignedRange(off));
+    MOZ_ASSERT(Imm16::IsInSignedRange(off));
     return writeInst(InstImm(op_swc1, base, fd, Imm16(off)).encode());
 }
 
@@ -1253,7 +1298,7 @@ Assembler::bind(InstImm *inst, uint32_t branch, uint32_t target)
 
     // If encoded offset is 4, then the jump must be short
     if (BOffImm16(inst[0]).decode() == 4) {
-        MOZ_ASSERT(BOffImm16::isInRange(offset));
+        MOZ_ASSERT(BOffImm16::IsInRange(offset));
         inst[0].setBOffImm16(BOffImm16(offset));
         inst[1].makeNop();
         return;
@@ -1263,13 +1308,13 @@ Assembler::bind(InstImm *inst, uint32_t branch, uint32_t target)
     // address after the reserved block.
     if (inst[0].encode() == inst_bgezal.encode()) {
         addLongJump(BufferOffset(branch));
-        writeLuiOriInstructions(inst, &inst[1], ScratchRegister, target);
+        WriteLuiOriInstructions(inst, &inst[1], ScratchRegister, target);
         inst[2] = InstReg(op_special, ScratchRegister, zero, ra, ff_jalr).encode();
         // There is 1 nop after this.
         return;
     }
 
-    if (BOffImm16::isInRange(offset)) {
+    if (BOffImm16::IsInRange(offset)) {
         bool conditional = (inst[0].encode() != inst_bgezal.encode() &&
                             inst[0].encode() != inst_beq.encode());
 
@@ -1287,7 +1332,7 @@ Assembler::bind(InstImm *inst, uint32_t branch, uint32_t target)
     if (inst[0].encode() == inst_beq.encode()) {
         // Handle long unconditional jump.
         addLongJump(BufferOffset(branch));
-        writeLuiOriInstructions(inst, &inst[1], ScratchRegister, target);
+        WriteLuiOriInstructions(inst, &inst[1], ScratchRegister, target);
         inst[2] = InstReg(op_special, ScratchRegister, zero, zero, ff_jr).encode();
         // There is 1 nop after this.
     } else {
@@ -1295,7 +1340,7 @@ Assembler::bind(InstImm *inst, uint32_t branch, uint32_t target)
         inst[0] = invertBranch(inst[0], BOffImm16(5 * sizeof(void *)));
         // No need for a "nop" here because we can clobber scratch.
         addLongJump(BufferOffset(branch + sizeof(void *)));
-        writeLuiOriInstructions(&inst[1], &inst[2], ScratchRegister, target);
+        WriteLuiOriInstructions(&inst[1], &inst[2], ScratchRegister, target);
         inst[3] = InstReg(op_special, ScratchRegister, zero, zero, ff_jr).encode();
         // There is 1 nop after this.
     }
@@ -1309,10 +1354,19 @@ Assembler::bind(RepatchLabel *label)
         // If the label has a use, then change this use to refer to
         // the bound label;
         BufferOffset b(label->offset());
-        Instruction *inst1 = editSrc(b);
-        Instruction *inst2 = inst1->next();
+        InstImm *inst1 = (InstImm *)editSrc(b);
 
-        updateLuiOriValue(inst1, inst2, dest.getOffset());
+        // If first instruction is branch, then this is a loop backedge.
+        if (inst1->extractOpcode() == ((uint32_t)op_beq >> OpcodeShift)) {
+            // Backedges are short jumps when bound, but can become long
+            // when patched.
+            uint32_t offset = dest.getOffset() - label->offset();
+            MOZ_ASSERT(BOffImm16::IsInRange(offset));
+            inst1->setBOffImm16(BOffImm16(offset));
+        } else {
+            UpdateLuiOriValue(inst1, inst1->next(), dest.getOffset());
+        }
+
     }
     label->bind(dest.getOffset());
 }
@@ -1354,7 +1408,6 @@ Assembler::retarget(Label *label, Label *target)
 }
 
 void dbg_break() {}
-static int stopBKPT = -1;
 void
 Assembler::as_break(uint32_t code)
 {
@@ -1363,32 +1416,32 @@ Assembler::as_break(uint32_t code)
 }
 
 uint32_t
-Assembler::patchWrite_NearCallSize()
+Assembler::PatchWrite_NearCallSize()
 {
     return 4 * sizeof(uint32_t);
 }
 
 void
-Assembler::patchWrite_NearCall(CodeLocationLabel start, CodeLocationLabel toCall)
+Assembler::PatchWrite_NearCall(CodeLocationLabel start, CodeLocationLabel toCall)
 {
     Instruction *inst = (Instruction *) start.raw();
     uint8_t *dest = toCall.raw();
 
     // Overwrite whatever instruction used to be here with a call.
     // Always use long jump for two reasons:
-    // - Jump has to be the same size because of patchWrite_NearCallSize.
+    // - Jump has to be the same size because of PatchWrite_NearCallSize.
     // - Return address has to be at the end of replaced block.
     // Short jump wouldn't be more efficient.
-    writeLuiOriInstructions(inst, &inst[1], ScratchRegister, (uint32_t)dest);
+    WriteLuiOriInstructions(inst, &inst[1], ScratchRegister, (uint32_t)dest);
     inst[2] = InstReg(op_special, ScratchRegister, zero, ra, ff_jalr);
     inst[3] = InstNOP();
 
     // Ensure everyone sees the code that was just written into memory.
-    AutoFlushICache::flush(uintptr_t(inst), patchWrite_NearCallSize());
+    AutoFlushICache::flush(uintptr_t(inst), PatchWrite_NearCallSize());
 }
 
 uint32_t
-Assembler::extractLuiOriValue(Instruction *inst0, Instruction *inst1)
+Assembler::ExtractLuiOriValue(Instruction *inst0, Instruction *inst1)
 {
     InstImm *i0 = (InstImm *) inst0;
     InstImm *i1 = (InstImm *) inst1;
@@ -1401,43 +1454,43 @@ Assembler::extractLuiOriValue(Instruction *inst0, Instruction *inst1)
 }
 
 void
-Assembler::updateLuiOriValue(Instruction *inst0, Instruction *inst1, uint32_t value)
+Assembler::UpdateLuiOriValue(Instruction *inst0, Instruction *inst1, uint32_t value)
 {
     MOZ_ASSERT(inst0->extractOpcode() == ((uint32_t)op_lui >> OpcodeShift));
     MOZ_ASSERT(inst1->extractOpcode() == ((uint32_t)op_ori >> OpcodeShift));
 
-    ((InstImm *) inst0)->setImm16(Imm16::upper(Imm32(value)));
-    ((InstImm *) inst1)->setImm16(Imm16::lower(Imm32(value)));
+    ((InstImm *) inst0)->setImm16(Imm16::Upper(Imm32(value)));
+    ((InstImm *) inst1)->setImm16(Imm16::Lower(Imm32(value)));
 }
 
 void
-Assembler::writeLuiOriInstructions(Instruction *inst0, Instruction *inst1,
+Assembler::WriteLuiOriInstructions(Instruction *inst0, Instruction *inst1,
                                    Register reg, uint32_t value)
 {
-    *inst0 = InstImm(op_lui, zero, reg, Imm16::upper(Imm32(value)));
-    *inst1 = InstImm(op_ori, reg, reg, Imm16::lower(Imm32(value)));
+    *inst0 = InstImm(op_lui, zero, reg, Imm16::Upper(Imm32(value)));
+    *inst1 = InstImm(op_ori, reg, reg, Imm16::Lower(Imm32(value)));
 }
 
 void
-Assembler::patchDataWithValueCheck(CodeLocationLabel label, PatchedImmPtr newValue,
+Assembler::PatchDataWithValueCheck(CodeLocationLabel label, PatchedImmPtr newValue,
                                    PatchedImmPtr expectedValue)
 {
     Instruction *inst = (Instruction *) label.raw();
 
     // Extract old Value
-    DebugOnly<uint32_t> value = Assembler::extractLuiOriValue(&inst[0], &inst[1]);
+    DebugOnly<uint32_t> value = Assembler::ExtractLuiOriValue(&inst[0], &inst[1]);
     MOZ_ASSERT(value == uint32_t(expectedValue.value));
 
     // Replace with new value
-    Assembler::updateLuiOriValue(inst, inst->next(), uint32_t(newValue.value));
+    Assembler::UpdateLuiOriValue(inst, inst->next(), uint32_t(newValue.value));
 
     AutoFlushICache::flush(uintptr_t(inst), 8);
 }
 
 void
-Assembler::patchDataWithValueCheck(CodeLocationLabel label, ImmPtr newValue, ImmPtr expectedValue)
+Assembler::PatchDataWithValueCheck(CodeLocationLabel label, ImmPtr newValue, ImmPtr expectedValue)
 {
-    patchDataWithValueCheck(label, PatchedImmPtr(newValue.value),
+    PatchDataWithValueCheck(label, PatchedImmPtr(newValue.value),
                             PatchedImmPtr(expectedValue.value));
 }
 
@@ -1447,7 +1500,7 @@ Assembler::patchDataWithValueCheck(CodeLocationLabel label, ImmPtr newValue, Imm
 // be totally safe. Since that instruction will never be executed again, a
 // ICache flush should not be necessary
 void
-Assembler::patchWrite_Imm32(CodeLocationLabel label, Imm32 imm)
+Assembler::PatchWrite_Imm32(CodeLocationLabel label, Imm32 imm)
 {
     // Raw is going to be the return address.
     uint32_t *raw = (uint32_t*)label.raw();
@@ -1457,14 +1510,14 @@ Assembler::patchWrite_Imm32(CodeLocationLabel label, Imm32 imm)
 }
 
 void
-Assembler::patchInstructionImmediate(uint8_t *code, PatchedImmPtr imm)
+Assembler::PatchInstructionImmediate(uint8_t *code, PatchedImmPtr imm)
 {
     InstImm *inst = (InstImm *)code;
-    Assembler::updateLuiOriValue(inst, inst->next(), (uint32_t)imm.value);
+    Assembler::UpdateLuiOriValue(inst, inst->next(), (uint32_t)imm.value);
 }
 
 uint8_t *
-Assembler::nextInstruction(uint8_t *inst_, uint32_t *count)
+Assembler::NextInstruction(uint8_t *inst_, uint32_t *count)
 {
     Instruction *inst = reinterpret_cast<Instruction*>(inst_);
     if (count != nullptr)
@@ -1512,8 +1565,7 @@ InstImm Assembler::invertBranch(InstImm branch, BOffImm16 skipOffset)
             return branch;
         }
 
-        MOZ_ASSUME_UNREACHABLE("Error creating long branch.");
-        return branch;
+        MOZ_CRASH("Error creating long branch.");
 
       case op_cop1:
         MOZ_ASSERT(branch.extractRS() == rs_bc1 >> RSShift);
@@ -1525,10 +1577,9 @@ InstImm Assembler::invertBranch(InstImm branch, BOffImm16 skipOffset)
         else
             branch.setRT((RTField) ((rt | 0x1) << RTShift));
         return branch;
+      default:
+        MOZ_CRASH("Error creating long branch.");
     }
-
-    MOZ_ASSUME_UNREACHABLE("Error creating long branch.");
-    return branch;
 }
 
 void
@@ -1578,11 +1629,11 @@ Assembler::ToggleCall(CodeLocationLabel inst_, bool enabled)
     AutoFlushICache::flush(uintptr_t(i2), 4);
 }
 
-void Assembler::updateBoundsCheck(uint32_t heapSize, Instruction *inst)
+void Assembler::UpdateBoundsCheck(uint32_t heapSize, Instruction *inst)
 {
     InstImm *i0 = (InstImm *) inst;
     InstImm *i1 = (InstImm *) i0->next();
 
     // Replace with new value
-    Assembler::updateLuiOriValue(i0, i1, heapSize);
+    Assembler::UpdateLuiOriValue(i0, i1, heapSize);
 }

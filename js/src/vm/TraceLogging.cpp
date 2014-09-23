@@ -7,10 +7,8 @@
 #include "vm/TraceLogging.h"
 
 #include "mozilla/DebugOnly.h"
+#include "mozilla/Endian.h"
 
-#if defined XP_MACOSX
-#include <libkern/OSByteOrder.h>
-#endif
 #include <string.h>
 
 #include "jsapi.h"
@@ -19,7 +17,11 @@
 #include "jit/CompileWrappers.h"
 #include "vm/Runtime.h"
 
+#include "jit/IonFrames-inl.h"
+
 using namespace js;
+using namespace js::jit;
+using mozilla::NativeEndian;
 
 #ifndef TRACE_LOG_DIR
 # if defined(_WIN32)
@@ -29,15 +31,14 @@ using namespace js;
 # endif
 #endif
 
-#if defined XP_MACOSX
-#define htobe32(x) OSSwapHostToBigInt32(x)
-#define be32toh(x) OSSwapBigToHostInt32(x)
-
-#define htobe64(x) OSSwapHostToBigInt64(x)
-#define be64toh(x) OSSwapBigToHostInt64(x)
-#endif
-
-#if defined(__i386__)
+#if defined(_WIN32)
+#include <intrin.h>
+static __inline uint64_t
+rdtsc(void)
+{
+    return __rdtsc();
+}
+#elif defined(__i386__)
 static __inline__ uint64_t
 rdtsc(void)
 {
@@ -87,8 +88,7 @@ static const char* const text[] =
 };
 
 TraceLogger::TraceLogger()
- : enabled(false),
-   enabledTimes(0),
+ : enabled(0),
    failed(false),
    nextTextId(0),
    treeOffset(0),
@@ -159,80 +159,88 @@ TraceLogger::init(uint32_t loggerId)
         MOZ_ASSERT(textId == i);
     }
 
-    enabled = true;
-    enabledTimes = 1;
+    enabled = 1;
     return true;
 }
 
 bool
 TraceLogger::enable()
 {
-    if (enabled) {
-        enabledTimes++;
+    if (enabled > 0) {
+        enabled++;
         return true;
     }
 
     if (failed)
         return false;
 
-    if (!tree.ensureSpaceBeforeAdd(stack.size())) {
-        if (!flush()) {
-            fprintf(stderr, "TraceLogging: Couldn't write the data to disk.\n");
+    enabled = 1;
+    return true;
+}
+
+bool
+TraceLogger::enable(JSContext *cx)
+{
+    if (!enable())
+        return false;
+
+    if (enabled == 1) {
+        // Get the top Activation to log the top script/pc (No inlined frames).
+        Activation *act = cx->mainThread().activation();
+        while (act && (act->cx() != cx || (act->isJit() && !act->asJit()->isActive())))
+            act = act->prev();
+
+        if (!act) {
             failed = true;
+            enabled = 0;
             return false;
         }
-        if (!tree.ensureSpaceBeforeAdd(stack.size())) {
-            fprintf(stderr, "TraceLogging: Couldn't reserve enough space.\n");
-            failed = true;
-            return false;
-        }
-    }
 
-    uint64_t start = rdtsc() - traceLoggers.startupTime;
-    StackEntry *parent = &stack[0];
-    for (uint32_t i = 1; i < stack.size(); i++) {
-        if (!traceLoggers.isTextIdEnabled(stack[i].textId()))
-            continue;
-#ifdef DEBUG
-        TreeEntry entry;
-        if (!getTreeEntry(parent->treeId(), &entry))
-            return false;
-#endif
+        JSScript *script = nullptr;
+        int32_t engine = 0;
 
-        if (parent->lastChildId() == 0) {
-            MOZ_ASSERT(!entry.hasChildren());
-            MOZ_ASSERT(parent->treeId() == tree.currentId() + treeOffset);
-            if (!updateHasChildren(parent->treeId())) {
-                fprintf(stderr, "TraceLogging: Couldn't update an entry.\n");
-                failed = true;
-                return false;
+        if (act->isJit()) {
+            JSRuntime *rt = cx->runtime();
+
+            JitFrameIterator it(rt->mainThread.jitTop, SequentialExecution);
+
+            JS_ASSERT(it.type() == JitFrame_Exit);
+            ++it;
+
+            if (it.type() == JitFrame_Rectifier ||
+                it.type() == JitFrame_Unwound_Rectifier)
+            {
+                ++it;
+                JS_ASSERT(it.type() == JitFrame_BaselineStub ||
+                          it.type() == JitFrame_BaselineJS ||
+                          it.type() == JitFrame_IonJS);
             }
+            if (it.type() == JitFrame_BaselineStub ||
+                it.type() == JitFrame_Unwound_BaselineStub)
+            {
+                ++it;
+                JS_ASSERT(it.type() == JitFrame_BaselineJS);
+            }
+
+            script = it.script();
+            engine = it.isIonJS() ? IonMonkey : Baseline;
         } else {
-            MOZ_ASSERT(entry.hasChildren() == 1);
-            if (!updateNextId(parent->lastChildId(), tree.nextId() + treeOffset)) {
-                fprintf(stderr, "TraceLogging: Couldn't update an entry.\n");
+            JS_ASSERT(act->isInterpreter());
+            InterpreterFrame *fp = act->asInterpreter()->current();
+            JS_ASSERT(!fp->runningInJit());
+
+            script = fp->script();
+            engine = Interpreter;
+            if (script->compartment() != cx->compartment()) {
                 failed = true;
+                enabled = 0;
                 return false;
             }
         }
 
-        TreeEntry &treeEntry = tree.pushUninitialized();
-        treeEntry.setStart(start);
-        treeEntry.setStop(0);
-        treeEntry.setTextId(stack[i].textId());
-        treeEntry.setHasChildren(false);
-        treeEntry.setNextId(0);
-
-        stack[i].setActive(true);
-        stack[i].setTreeId(tree.currentId() + treeOffset);
-
-        parent->setLastChildId(tree.currentId() + treeOffset);
-
-        parent = &stack[i];
+        startEvent(createTextId(script));
+        startEvent(engine);
     }
-
-    enabled = true;
-    enabledTimes = 1;
 
     return true;
 }
@@ -243,32 +251,19 @@ TraceLogger::disable()
     if (failed)
         return false;
 
-    if (!enabled)
+    if (enabled == 0)
         return true;
 
-    if (enabledTimes > 1) {
-        enabledTimes--;
+    if (enabled > 1) {
+        enabled--;
         return true;
     }
 
-    uint64_t stop = rdtsc() - traceLoggers.startupTime;
-    for (uint32_t i = 1; i < stack.size(); i++) {
-        if (!stack[i].active())
-            continue;
+    JS_ASSERT(enabled == 1);
+    while (stack.size() > 1)
+        stopEvent();
 
-        if (!updateStop(stack[i].treeId(), stop)) {
-            fprintf(stderr, "TraceLogging: Failed to stop an event.\n");
-            failed = true;
-            enabled = false;
-            return false;
-        }
-
-        stack[i].setActive(false);
-    }
-
-
-    enabled = false;
-    enabledTimes = 0;
+    enabled = 0;
 
     return true;
 }
@@ -291,15 +286,15 @@ TraceLogger::flush()
         if (bytesWritten < tree.size())
             return false;
 
-        treeOffset += tree.currentId();
+        treeOffset += tree.lastEntryId();
         tree.clear();
     }
 
     if (eventFile) {
         // Format data in big endian
         for (size_t i = 0; i < events.size(); i++) {
-            events[i].time = htobe64(events[i].time);
-            events[i].textId = htobe64(events[i].textId);
+            events[i].time = NativeEndian::swapToBigEndian(events[i].time);
+            events[i].textId = NativeEndian::swapToBigEndian(events[i].textId);
         }
 
         size_t bytesWritten = fwrite(events.data(), sizeof(EventEntry), events.size(), eventFile);
@@ -327,15 +322,15 @@ TraceLogger::~TraceLogger()
         // Make sure every start entry has a corresponding stop value.
         // We temporary enable logging for this. Stop doesn't need any extra data,
         // so is safe to do, even when we encountered OOM.
-        enabled = true;
-        while (stack.size() > 0)
+        enabled = 1;
+        while (stack.size() > 1)
             stopEvent();
-        enabled = false;
+        enabled = 0;
     }
 
     if (!failed && !flush()) {
         fprintf(stderr, "TraceLogging: Couldn't write the data to disk.\n");
-        enabled = false;
+        enabled = 0;
         failed = true;
     }
 
@@ -378,6 +373,9 @@ TraceLogger::createTextId(const char *text)
 uint32_t
 TraceLogger::createTextId(JSScript *script)
 {
+    if (!script->filename())
+        return createTextId("");
+
     assertNoQuotes(script->filename());
 
     PointerHashMap::AddPtr p = pointerMap.lookupForAdd(script);
@@ -406,6 +404,9 @@ TraceLogger::createTextId(JSScript *script)
 uint32_t
 TraceLogger::createTextId(const JS::ReadOnlyCompileOptions &compileOptions)
 {
+    if (!compileOptions.filename())
+        return createTextId("");
+
     assertNoQuotes(compileOptions.filename());
 
     PointerHashMap::AddPtr p = pointerMap.lookupForAdd(&compileOptions);
@@ -434,12 +435,12 @@ TraceLogger::createTextId(const JS::ReadOnlyCompileOptions &compileOptions)
 void
 TraceLogger::logTimestamp(uint32_t id)
 {
-    if (!enabled)
+    if (enabled == 0)
         return;
 
     if (!events.ensureSpaceBeforeAdd()) {
         fprintf(stderr, "TraceLogging: Disabled a tracelogger due to OOM.\n");
-        enabled = false;
+        enabled = 0;
         return;
     }
 
@@ -453,23 +454,24 @@ TraceLogger::logTimestamp(uint32_t id)
 void
 TraceLogger::entryToBigEndian(TreeEntry *entry)
 {
-    entry->start_ = htobe64(entry->start_);
-    entry->stop_ = htobe64(entry->stop_);
-    entry->u.value_ = htobe32((entry->u.s.textId_ << 1) + entry->u.s.hasChildren_);
-    entry->nextId_ = htobe32(entry->nextId_);
+    entry->start_ = NativeEndian::swapToBigEndian(entry->start_);
+    entry->stop_ = NativeEndian::swapToBigEndian(entry->stop_);
+    uint32_t data = (entry->u.s.textId_ << 1) + entry->u.s.hasChildren_;
+    entry->u.value_ = NativeEndian::swapToBigEndian(data);
+    entry->nextId_ = NativeEndian::swapToBigEndian(entry->nextId_);
 }
 
 void
 TraceLogger::entryToSystemEndian(TreeEntry *entry)
 {
-    entry->start_ = be64toh(entry->start_);
-    entry->stop_ = be64toh(entry->stop_);
+    entry->start_ = NativeEndian::swapFromBigEndian(entry->start_);
+    entry->stop_ = NativeEndian::swapFromBigEndian(entry->stop_);
 
-    uint32_t data = be32toh(entry->u.value_);
+    uint32_t data = NativeEndian::swapFromBigEndian(entry->u.value_);
     entry->u.s.textId_ = data >> 1;
     entry->u.s.hasChildren_ = data & 0x1;
 
-    entry->nextId_ = be32toh(entry->nextId_);
+    entry->nextId_ = NativeEndian::swapFromBigEndian(entry->nextId_);
 }
 
 bool
@@ -563,31 +565,15 @@ TraceLogger::updateStop(uint32_t treeId, uint64_t timestamp)
 void
 TraceLogger::startEvent(uint32_t id)
 {
-    if (failed)
+    if (failed || enabled == 0)
         return;
-
-    if (!stack.ensureSpaceBeforeAdd()) {
-        fprintf(stderr, "TraceLogging: Failed to allocate space to keep track of the stack.\n");
-        enabled = false;
-        failed = true;
-        return;
-    }
-
-    if (!enabled) {
-        StackEntry &stackEntry = stack.pushUninitialized();
-        stackEntry.setTreeId(tree.currentId() + treeOffset);
-        stackEntry.setLastChildId(0);
-        stackEntry.setTextId(id);
-        stackEntry.setActive(false);
-        return;
-    }
 
     if (!tree.hasSpaceForAdd()){
         uint64_t start = rdtsc() - traceLoggers.startupTime;
         if (!tree.ensureSpaceBeforeAdd()) {
             if (!flush()) {
                 fprintf(stderr, "TraceLogging: Couldn't write the data to disk.\n");
-                enabled = false;
+                enabled = 0;
                 failed = true;
                 return;
             }
@@ -597,7 +583,7 @@ TraceLogger::startEvent(uint32_t id)
         // Tracelogger.
         if (!startEvent(TraceLogger::TL, start)) {
             fprintf(stderr, "TraceLogging: Failed to start an event.\n");
-            enabled = false;
+            enabled = 0;
             failed = true;
             return;
         }
@@ -607,7 +593,7 @@ TraceLogger::startEvent(uint32_t id)
     uint64_t start = rdtsc() - traceLoggers.startupTime;
     if (!startEvent(id, start)) {
         fprintf(stderr, "TraceLogging: Failed to start an event.\n");
-        enabled = false;
+        enabled = 0;
         failed = true;
         return;
     }
@@ -616,7 +602,7 @@ TraceLogger::startEvent(uint32_t id)
 TraceLogger::StackEntry &
 TraceLogger::getActiveAncestor()
 {
-    uint32_t parentId = stack.currentId();
+    uint32_t parentId = stack.lastEntryId();
     while (!stack[parentId].active())
         parentId--;
     return stack[parentId];
@@ -625,6 +611,9 @@ TraceLogger::getActiveAncestor()
 bool
 TraceLogger::startEvent(uint32_t id, uint64_t timestamp)
 {
+    if (!stack.ensureSpaceBeforeAdd())
+        return false;
+
     // When a textId is disabled, a stack entry still needs to be pushed,
     // together with an annotation that nothing needs to get done when receiving
     // the stop event.
@@ -647,14 +636,14 @@ TraceLogger::startEvent(uint32_t id, uint64_t timestamp)
 
     if (parent.lastChildId() == 0) {
         MOZ_ASSERT(!entry.hasChildren());
-        MOZ_ASSERT(parent.treeId() == tree.currentId() + treeOffset);
+        MOZ_ASSERT(parent.treeId() == tree.lastEntryId() + treeOffset);
 
         if (!updateHasChildren(parent.treeId()))
             return false;
     } else {
         MOZ_ASSERT(entry.hasChildren());
 
-        if (!updateNextId(parent.lastChildId(), tree.nextId() + treeOffset))
+        if (!updateNextId(parent.lastChildId(), tree.size() + treeOffset))
             return false;
     }
 
@@ -668,12 +657,12 @@ TraceLogger::startEvent(uint32_t id, uint64_t timestamp)
 
     // Add a new stack entry.
     StackEntry &stackEntry = stack.pushUninitialized();
-    stackEntry.setTreeId(tree.currentId() + treeOffset);
+    stackEntry.setTreeId(tree.lastEntryId() + treeOffset);
     stackEntry.setLastChildId(0);
     stackEntry.setActive(true);
 
     // Set the last child of the parent to this newly added entry.
-    parent.setLastChildId(tree.currentId() + treeOffset);
+    parent.setLastChildId(tree.lastEntryId() + treeOffset);
 
     return true;
 }
@@ -682,9 +671,11 @@ void
 TraceLogger::stopEvent(uint32_t id)
 {
 #ifdef DEBUG
-    TreeEntry entry;
-    MOZ_ASSERT_IF(stack.current().active(), getTreeEntry(stack.current().treeId(), &entry));
-    MOZ_ASSERT_IF(stack.current().active(), entry.textId() == id);
+    if (stack.size() > 1) {
+        TreeEntry entry;
+        MOZ_ASSERT_IF(stack.lastEntry().active(), getTreeEntry(stack.lastEntry().treeId(), &entry));
+        MOZ_ASSERT_IF(stack.lastEntry().active(), entry.textId() == id);
+    }
 #endif
     stopEvent();
 }
@@ -692,14 +683,23 @@ TraceLogger::stopEvent(uint32_t id)
 void
 TraceLogger::stopEvent()
 {
-    if (enabled && stack.current().active()) {
+    if (enabled > 0 && stack.lastEntry().active()) {
         uint64_t stop = rdtsc() - traceLoggers.startupTime;
-        if (!updateStop(stack.current().treeId(), stop)) {
+        if (!updateStop(stack.lastEntry().treeId(), stop)) {
             fprintf(stderr, "TraceLogging: Failed to stop an event.\n");
-            enabled = false;
+            enabled = 0;
             failed = true;
             return;
         }
+    }
+    if (stack.size() == 1) {
+        if (enabled == 0)
+            return;
+
+        // Forcefully disable logging. We have no stack information anymore.
+        enabled = 1;
+        disable();
+        return;
     }
     stack.pop();
 }
@@ -707,16 +707,14 @@ TraceLogger::stopEvent()
 TraceLogging::TraceLogging()
 {
     initialized = false;
-    enabled = false;
+    enabled = 0;
     mainThreadEnabled = true;
     offThreadEnabled = true;
     loggerId = 0;
 
-#ifdef JS_THREADSAFE
     lock = PR_NewLock();
     if (!lock)
         MOZ_CRASH();
-#endif // JS_THREADSAFE
 }
 
 TraceLogging::~TraceLogging()
@@ -732,7 +730,6 @@ TraceLogging::~TraceLogging()
 
     mainThreadLoggers.clear();
 
-#ifdef JS_THREADSAFE
     if (threadLoggers.initialized()) {
         for (ThreadLoggerHashMap::Range r = threadLoggers.all(); !r.empty(); r.popFront())
             delete r.front().value();
@@ -744,9 +741,8 @@ TraceLogging::~TraceLogging()
         PR_DestroyLock(lock);
         lock = nullptr;
     }
-#endif // JS_THREADSAFE
 
-    enabled = false;
+    enabled = 0;
 }
 
 static bool
@@ -766,7 +762,7 @@ bool
 TraceLogging::lazyInit()
 {
     if (initialized)
-        return enabled;
+        return enabled > 0;
 
     initialized = true;
 
@@ -775,10 +771,8 @@ TraceLogging::lazyInit()
         return false;
     fprintf(out, "[");
 
-#ifdef JS_THREADSAFE
     if (!threadLoggers.init())
         return false;
-#endif // JS_THREADSAFE
 
     const char *env = getenv("TLLOG");
     if (!env)
@@ -825,19 +819,14 @@ TraceLogging::lazyInit()
         enabledTextIds[TraceLogger::ParserCompileFunction] = true;
         enabledTextIds[TraceLogger::ParserCompileLazy] = true;
         enabledTextIds[TraceLogger::ParserCompileScript] = true;
-#ifdef JS_YARR
-        enabledTextIds[TraceLogger::YarrCompile] = true;
-        enabledTextIds[TraceLogger::YarrInterpret] = true;
-        enabledTextIds[TraceLogger::YarrJIT] = true;
-#else
         enabledTextIds[TraceLogger::IrregexpCompile] = true;
         enabledTextIds[TraceLogger::IrregexpExecute] = true;
-#endif
     }
 
     if (ContainsFlag(env, "IonCompiler") || strlen(env) == 0) {
         enabledTextIds[TraceLogger::IonCompilation] = true;
         enabledTextIds[TraceLogger::IonLinking] = true;
+        enabledTextIds[TraceLogger::FoldTests] = true;
         enabledTextIds[TraceLogger::SplitCriticalEdges] = true;
         enabledTextIds[TraceLogger::RenumberBlocks] = true;
         enabledTextIds[TraceLogger::DominatorTree] = true;
@@ -846,9 +835,9 @@ TraceLogging::lazyInit()
         enabledTextIds[TraceLogger::ParallelSafetyAnalysis] = true;
         enabledTextIds[TraceLogger::AliasAnalysis] = true;
         enabledTextIds[TraceLogger::GVN] = true;
-        enabledTextIds[TraceLogger::UCE] = true;
         enabledTextIds[TraceLogger::LICM] = true;
         enabledTextIds[TraceLogger::RangeAnalysis] = true;
+        enabledTextIds[TraceLogger::LoopUnrolling] = true;
         enabledTextIds[TraceLogger::EffectiveAddressAnalysis] = true;
         enabledTextIds[TraceLogger::EliminateDeadCode] = true;
         enabledTextIds[TraceLogger::EdgeCaseAnalysis] = true;
@@ -881,18 +870,18 @@ TraceLogging::lazyInit()
     }
 
     startupTime = rdtsc();
-    enabled = true;
+    enabled = 1;
     return true;
 }
 
 TraceLogger *
-js::TraceLoggerForMainThread(jit::CompileRuntime *runtime)
+js::TraceLoggerForMainThread(CompileRuntime *runtime)
 {
     return traceLoggers.forMainThread(runtime);
 }
 
 TraceLogger *
-TraceLogging::forMainThread(jit::CompileRuntime *runtime)
+TraceLogging::forMainThread(CompileRuntime *runtime)
 {
     return forMainThread(runtime->mainThread());
 }
@@ -934,15 +923,10 @@ TraceLogging::forMainThread(PerThreadData *mainThread)
 TraceLogger *
 js::TraceLoggerForCurrentThread()
 {
-#ifdef JS_THREADSAFE
     PRThread *thread = PR_GetCurrentThread();
     return traceLoggers.forThread(thread);
-#else
-    MOZ_ASSUME_UNREACHABLE("No threads supported. Use TraceLoggerForMainThread for the main thread.");
-#endif // JS_THREADSAFE
 }
 
-#ifdef JS_THREADSAFE
 TraceLogger *
 TraceLogging::forThread(PRThread *thread)
 {
@@ -969,7 +953,6 @@ TraceLogging::forThread(PRThread *thread)
 
     return logger;
 }
-#endif // JS_THREADSAFE
 
 TraceLogger *
 TraceLogging::create()

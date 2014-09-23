@@ -1,4 +1,4 @@
-/* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -72,6 +72,7 @@ let touchIds = {};
 let multiLast = {};
 let lastCoordinates = null;
 let isTap = false;
+let scrolling = false;
 // whether to send mouse event
 let mouseEventsOnly = false;
 
@@ -104,10 +105,6 @@ function registerSelf() {
     // check if we're the main process
     if (register[0][1] == true) {
       addMessageListener("MarionetteMainListener:emitTouchEvent", emitTouchEventForIFrame);
-      let height = getStatusbarHeight();
-      if (height) {
-        sendSyncMessage("Marionette:setStatusbarHeight", { height: height });
-      }
     }
     importedScripts = FileUtils.getDir('TmpD', [], false);
     importedScripts.append('marionetteContentScripts');
@@ -116,7 +113,7 @@ function registerSelf() {
 }
 
 function emitTouchEventForIFrame(message) {
-  let message = message.json;
+  message = message.json;
   let frames = curFrame.document.getElementsByTagName("iframe");
   let iframe = frames[message.index];
   let identifier = nextTouchId;
@@ -126,14 +123,6 @@ function emitTouchEventForIFrame(message) {
                              [message.radiusX], [message.radiusY],
                              [message.rotationAngle], [message.force],
                              1, 0);
-}
-
-function getStatusbarHeight(message) {
-  let statusbar = curFrame.document.getElementById("statusbar");
-  if (statusbar) {
-    //Yes, clientHeight. This statusbar affects screens where it isn't even visible, like FTU
-    return statusbar.clientHeight;
-  }
 }
 
 /**
@@ -179,10 +168,11 @@ function startListeners() {
   addMessageListenerId("Marionette:getElementValueOfCssProperty", getElementValueOfCssProperty);
   addMessageListenerId("Marionette:submitElement", submitElement);
   addMessageListenerId("Marionette:getElementSize", getElementSize);
+  addMessageListenerId("Marionette:getElementRect", getElementRect);
   addMessageListenerId("Marionette:isElementEnabled", isElementEnabled);
   addMessageListenerId("Marionette:isElementSelected", isElementSelected);
   addMessageListenerId("Marionette:sendKeysToElement", sendKeysToElement);
-  addMessageListenerId("Marionette:getElementLocation", getElementLocation);
+  addMessageListenerId("Marionette:getElementLocation", getElementLocation); //deprecated
   addMessageListenerId("Marionette:clearElement", clearElement);
   addMessageListenerId("Marionette:switchToFrame", switchToFrame);
   addMessageListenerId("Marionette:deleteSession", deleteSession);
@@ -278,7 +268,8 @@ function deleteSession(msg) {
   removeMessageListenerId("Marionette:isElementDisplayed", isElementDisplayed);
   removeMessageListenerId("Marionette:getElementValueOfCssProperty", getElementValueOfCssProperty);
   removeMessageListenerId("Marionette:submitElement", submitElement);
-  removeMessageListenerId("Marionette:getElementSize", getElementSize);
+  removeMessageListenerId("Marionette:getElementSize", getElementSize);  //deprecated
+  removeMessageListenerId("Marionette:getElementRect", getElementRect);
   removeMessageListenerId("Marionette:isElementEnabled", isElementEnabled);
   removeMessageListenerId("Marionette:isElementSelected", isElementSelected);
   removeMessageListenerId("Marionette:sendKeysToElement", sendKeysToElement);
@@ -411,9 +402,16 @@ function createExecuteContentSandbox(aWindow, timeout) {
     }
   });
 
-  XPCOMUtils.defineLazyGetter(sandbox, 'SpecialPowers', function() {
-    return new SpecialPowers(aWindow);
-  });
+  if (aWindow.wrappedJSObject.SpecialPowers != undefined) {
+    XPCOMUtils.defineLazyGetter(sandbox, 'SpecialPowers', function() {
+      return aWindow.wrappedJSObject.SpecialPowers;
+    });
+  }
+  else {
+    XPCOMUtils.defineLazyGetter(sandbox, 'SpecialPowers', function() {
+      return new SpecialPowers(aWindow);
+    });
+  }
 
   sandbox.asyncComplete = function sandbox_asyncComplete(value, status, stack, commandId) {
     if (commandId == asyncTestCommandId) {
@@ -506,6 +504,7 @@ function executeScript(msg, directInject) {
                       createInstance(Components.interfaces.nsIFileInputStream);
         stream.init(importedScripts, -1, 0, 0);
         let data = NetUtil.readInputStreamToString(stream, stream.available());
+        stream.close();
         script = data + script;
       }
       let res = Cu.evalInSandbox(script, sandbox, "1.8", "dummy file" ,0);
@@ -522,8 +521,8 @@ function executeScript(msg, directInject) {
     }
     else {
       try {
-        sandbox.__marionetteParams = elementManager.convertWrappedArguments(
-          msg.json.args, curFrame);
+        sandbox.__marionetteParams = Cu.cloneInto(elementManager.convertWrappedArguments(
+          msg.json.args, curFrame), sandbox, { wrapReflectors: true });
       }
       catch(e) {
         sendError(e.message, e.code, e.stack, asyncTestCommandId);
@@ -537,6 +536,7 @@ function executeScript(msg, directInject) {
                       createInstance(Components.interfaces.nsIFileInputStream);
         stream.init(importedScripts, -1, 0, 0);
         let data = NetUtil.readInputStreamToString(stream, stream.available());
+        stream.close();
         script = data + script;
       }
       let res = Cu.evalInSandbox(script, sandbox, "1.8", "dummy file", 0);
@@ -653,8 +653,8 @@ function executeWithCallback(msg, useFinish) {
   }
   else {
     try {
-      sandbox.__marionetteParams = elementManager.convertWrappedArguments(
-        msg.json.args, curFrame);
+      sandbox.__marionetteParams = Cu.cloneInto(elementManager.convertWrappedArguments(
+        msg.json.args, curFrame), sandbox, { wrapReflectors: true });
     }
     catch(e) {
       sendError(e.message, e.code, e.stack, asyncTestCommandId);
@@ -673,6 +673,7 @@ function executeWithCallback(msg, useFinish) {
                       createInstance(Ci.nsIFileInputStream);
       stream.init(importedScripts, -1, 0, 0);
       let data = NetUtil.readInputStreamToString(stream, stream.available());
+      stream.close();
       scriptSrc = data + scriptSrc;
     }
     Cu.evalInSandbox(scriptSrc, sandbox, "1.8", "dummy file", 0);
@@ -690,31 +691,24 @@ function executeWithCallback(msg, useFinish) {
 /**
  * This function creates a touch event given a touch type and a touch
  */
-function emitTouchEvent(type, target, x, y, touchId) {
+function emitTouchEvent(type, touch) {
   if (!wasInterrupted()) {
+    let loggingInfo = "emitting Touch event of type " + type + " to element with id: " + touch.target.id + " and tag name: " + touch.target.tagName + " at coordinates (" + touch.clientX + ", " + touch.clientY + ") relative to the viewport";
+    dumpLog(loggingInfo);
     var docShell = curFrame.document.defaultView.
                    QueryInterface(Components.interfaces.nsIInterfaceRequestor).
                    getInterface(Components.interfaces.nsIWebNavigation).
                    QueryInterface(Components.interfaces.nsIDocShell);
-    if (docShell.asyncPanZoomEnabled) {
+    if (docShell.asyncPanZoomEnabled && scrolling) {
       // if we're in APZ and we're scrolling, we must use injectTouchEvent to dispatch our touchmove events
-      // NOTE: This is an internal frame, below the statusbar. The coordinates we get here must be offset by
-      // the coordinates of the statusbar
-      let statusbarHeight = sendSyncMessage("Marionette:getStatusbarHeight");
-      if (statusbarHeight) {
-        y += parseInt(statusbarHeight, 10);
-      }
-      let touch = createATouch(target, x, y, touchId);
       let index = sendSyncMessage("MarionetteFrame:getCurrentFrameId");
       // only call emitTouchEventForIFrame if we're inside an iframe.
       if (index != null) {
-        let loggingInfo = "emitting Touch event of type " + type + " to element with id: " + touch.target.id + " and tag name: " + touch.target.tagName + " at coordinates (" + touch.clientX + ", " + touch.clientY + ") relative to the viewport";
-        dumpLog(loggingInfo);
         sendSyncMessage("Marionette:emitTouchEvent", {index: index, type: type, id: touch.identifier,
                                                       clientX: touch.clientX, clientY: touch.clientY,
                                                       radiusX: touch.radiusX, radiusY: touch.radiusY,
                                                       rotation: touch.rotationAngle, force: touch.force});
-        return touch;
+        return;
       }
     }
     // we get here if we're not in asyncPacZoomEnabled land, or if we're the main process
@@ -725,12 +719,8 @@ function emitTouchEvent(type, target, x, y, touchId) {
                     {log: elementManager.wrapValue(marionetteLogObj.getLogs())});
     marionetteLogObj.clearLogs();
     */
-    let touch = createATouch(target, x, y, touchId);
-    let loggingInfo = "emitting Touch event of type " + type + " to element with id: " + touch.target.id + " and tag name: " + touch.target.tagName + " at coordinates (" + touch.clientX + ", " + touch.clientY + ") relative to the viewport";
-    dumpLog(loggingInfo);
     let domWindowUtils = curFrame.QueryInterface(Components.interfaces.nsIInterfaceRequestor).getInterface(Components.interfaces.nsIDOMWindowUtils);
     domWindowUtils.sendTouchEvent(type, [touch.identifier], [touch.clientX], [touch.clientY], [touch.radiusX], [touch.radiusY], [touch.rotationAngle], [touch.force], 1, 0);
-    return touch;
   }
 }
 
@@ -841,8 +831,9 @@ function generateEvents(type, x, y, touchId, target) {
       }
       else {
         let touchId = nextTouchId++;
-        emitTouchEvent('touchstart', target, x, y, touchId);
-        emitTouchEvent('touchend', target, x, y, touchId);
+        let touch = createATouch(target, x, y, touchId);
+        emitTouchEvent('touchstart', touch);
+        emitTouchEvent('touchend', touch);
         mousetap(target.ownerDocument, x, y);
       }
       lastCoordinates = null;
@@ -855,7 +846,9 @@ function generateEvents(type, x, y, touchId, target) {
       }
       else {
         let touchId = nextTouchId++;
-        touchIds[touchId] = emitTouchEvent('touchstart', target, x, y, touchId);
+        let touch = createATouch(target, x, y, touchId);
+        emitTouchEvent('touchstart', touch);
+        touchIds[touchId] = touch;
         return touchId;
       }
       break;
@@ -865,7 +858,8 @@ function generateEvents(type, x, y, touchId, target) {
       }
       else {
         let touch = touchIds[touchId];
-        emitTouchEvent('touchend', touch.target, lastCoordinates[0], lastCoordinates[1], touchId);
+        touch = createATouch(touch.target, lastCoordinates[0], lastCoordinates[1], touchId);
+        emitTouchEvent('touchend', touch);
         if (isTap) {
           mousetap(touch.target.ownerDocument, touch.clientX, touch.clientY);
         }
@@ -880,8 +874,7 @@ function generateEvents(type, x, y, touchId, target) {
         emitMouseEvent(doc, 'mouseup', lastCoordinates[0], lastCoordinates[1]);
       }
       else {
-        let touch = touchIds[touchId];
-        emitTouchEvent('touchcancel', touch.target, x, y, touchId);
+        emitTouchEvent('touchcancel', touchIds[touchId]);
         delete touchIds[touchId];
       }
       lastCoordinates = null;
@@ -892,7 +885,9 @@ function generateEvents(type, x, y, touchId, target) {
         emitMouseEvent(doc, 'mousemove', x, y);
       }
       else {
-        touchIds[touchId] = emitTouchEvent('touchmove', touchIds[touchId].target, x, y, touchId);
+        touch = createATouch(touchIds[touchId].target, x, y, touchId);
+        touchIds[touchId] = touch;
+        emitTouchEvent('touchmove', touch);
       }
       break;
     case 'contextmenu':
@@ -983,7 +978,7 @@ function actions(chain, touchId, command_id, i) {
   let el;
   let c;
   i++;
-  if (command != 'press') {
+  if (command != 'press' && command != 'wait') {
     //if mouseEventsOnly, then touchIds isn't used
     if (!(touchId in touchIds) && !mouseEventsOnly) {
       sendError("Element has not been pressed", 500, null, command_id);
@@ -998,6 +993,9 @@ function actions(chain, touchId, command_id, i) {
         return;
       }
       // look ahead to check if we're scrolling. Needed for APZ touch dispatching.
+      if ((i != chain.length) && (chain[i][0].indexOf('move') !== -1)) {
+        scrolling = true;
+      }
       el = elementManager.getKnownElement(pack[1], curFrame);
       c = coordinates(el, pack[2], pack[3]);
       touchId = generateEvents('press', c.x, c.y, null, el);
@@ -1006,6 +1004,7 @@ function actions(chain, touchId, command_id, i) {
     case 'release':
       generateEvents('release', lastCoordinates[0], lastCoordinates[1], touchId);
       actions(chain, null, command_id, i);
+      scrolling =  false;
       break;
     case 'move':
       el = elementManager.getKnownElement(pack[1], curFrame);
@@ -1039,6 +1038,7 @@ function actions(chain, touchId, command_id, i) {
     case 'cancel':
       generateEvents('cancel', lastCoordinates[0], lastCoordinates[1], touchId);
       actions(chain, touchId, command_id, i);
+      scrolling = false;
       break;
     case 'longPress':
       generateEvents('contextmenu', lastCoordinates[0], lastCoordinates[1], touchId);
@@ -1537,6 +1537,25 @@ function getElementSize(msg){
 }
 
 /**
+ * Get the size of the element and return it
+ */
+function getElementRect(msg){
+  let command_id = msg.json.command_id;
+  try {
+    let el = elementManager.getKnownElement(msg.json.id, curFrame);
+    let clientRect = el.getBoundingClientRect();
+    sendResponse({value: {x: clientRect.x + curFrame.pageXOffset,
+                          y: clientRect.y  + curFrame.pageYOffset,
+                          width: clientRect.width,
+                          height: clientRect.height}},
+                 command_id);
+  }
+  catch (e) {
+    sendError(e.message, e.code, e.stack, command_id);
+  }
+}
+
+/**
  * Check if element is enabled
  */
 function isElementEnabled(msg) {
@@ -1571,193 +1590,9 @@ function sendKeysToElement(msg) {
   let command_id = msg.json.command_id;
 
   let el = elementManager.getKnownElement(msg.json.id, curFrame);
-  if (checkVisible(el)) {
-    el.focus();
-    var value = msg.json.value.join("");
-    let hasShift = null;
-    let hasCtrl = null;
-    let hasAlt = null;
-    let hasMeta = null;
-    for (var i = 0; i < value.length; i++) {
-      let upper = value.charAt(i).toUpperCase();
-      var keyCode = null;
-      var c = value.charAt(i);
-      switch (c) {
-        case '\uE001':
-          keyCode = "VK_CANCEL";
-          break;
-        case '\uE002':
-          keyCode = "VK_HELP";
-          break;
-        case '\uE003':
-          keyCode = "VK_BACK_SPACE";
-          break;
-        case '\uE004':
-          keyCode = "VK_TAB";
-          break;
-        case '\uE005':
-          keyCode = "VK_CLEAR";
-          break;
-        case '\uE006':
-        case '\uE007':
-          keyCode = "VK_RETURN";
-          break;
-        case '\uE008':
-          keyCode = "VK_SHIFT";
-          hasShift = !hasShift;
-          break;
-        case '\uE009':
-          keyCode = "VK_CONTROL";
-          controlKey = !controlKey;
-          break;
-        case '\uE00A':
-          keyCode = "VK_ALT";
-          altKey = !altKey;
-          break;
-        case '\uE03D':
-          keyCode = "VK_META";
-          metaKey = !metaKey;
-          break;
-        case '\uE00B':
-          keyCode = "VK_PAUSE";
-          break;
-        case '\uE00C':
-          keyCode = "VK_ESCAPE";
-          break;
-        case '\uE00D':
-          keyCode = "VK_Space";  // printable
-          break;
-        case '\uE00E':
-          keyCode = "VK_PAGE_UP";
-          break;
-        case '\uE00F':
-          keyCode = "VK_PAGE_DOWN";
-          break;
-        case '\uE010':
-          keyCode = "VK_END";
-          break;
-        case '\uE011':
-          keyCode = "VK_HOME";
-          break;
-        case '\uE012':
-          keyCode = "VK_LEFT";
-          break;
-        case '\uE013':
-          keyCode = "VK_UP";
-          break;
-        case '\uE014':
-          keyCode = "VK_RIGHT";
-          break;
-        case '\uE015':
-          keyCode = "VK_DOWN";
-          break;
-        case '\uE016':
-          keyCode = "VK_INSERT";
-          break;
-        case '\uE017':
-          keyCode = "VK_DELETE";
-          break;
-        case '\uE018':
-          keyCode = "VK_SEMICOLON";
-          break;
-        case '\uE019':
-          keyCode = "VK_EQUALS";
-          break;
-        case '\uE01A':
-          keyCode = "VK_NUMPAD0";
-          break;
-        case '\uE01B':
-          keyCode = "VK_NUMPAD1";
-          break;
-        case '\uE01C':
-          keyCode = "VK_NUMPAD2";
-          break;
-        case '\uE01D':
-          keyCode = "VK_NUMPAD3";
-          break;
-        case '\uE01E':
-          keyCode = "VK_NUMPAD4";
-          break;
-        case '\uE01F':
-          keyCode = "VK_NUMPAD5";
-          break;
-        case '\uE020':
-          keyCode = "VK_NUMPAD6";
-          break;
-        case '\uE021':
-          keyCode = "VK_NUMPAD7";
-          break;
-        case '\uE022':
-          keyCode = "VK_NUMPAD8";
-          break;
-        case '\uE023':
-          keyCode = "VK_NUMPAD9";
-          break;
-        case '\uE024':
-          keyCode = "VK_MULTIPLY";
-          break;
-        case '\uE025':
-          keyCode = "VK_ADD";
-          break;
-        case '\uE026':
-          keyCode = "VK_SEPARATOR";
-          break;
-        case '\uE027':
-          keyCode = "VK_SUBTRACT";
-          break;
-        case '\uE028':
-          keyCode = "VK_DECIMAL";
-          break;
-        case '\uE029':
-          keyCode = "VK_DIVIDE";
-          break;
-        case '\uE031':
-          keyCode = "VK_F1";
-          break;
-        case '\uE032':
-          keyCode = "VK_F2";
-          break;
-        case '\uE033':
-          keyCode = "VK_F3";
-          break;
-        case '\uE034':
-          keyCode = "VK_F4";
-          break;
-        case '\uE035':
-          keyCode = "VK_F5";
-          break;
-        case '\uE036':
-          keyCode = "VK_F6";
-          break;
-        case '\uE037':
-          keyCode = "VK_F7";
-          break;
-        case '\uE038':
-          keyCode = "VK_F8";
-          break;
-        case '\uE039':
-          keyCode = "VK_F9";
-          break;
-        case '\uE03A':
-          keyCode = "VK_F10";
-          break;
-        case '\uE03B':
-          keyCode = "VK_F11";
-          break;
-        case '\uE03C':
-          keyCode = "VK_F12";
-          break;
-      }
-      hasShift = value.charAt(i) == upper;
-      utils.synthesizeKey(keyCode || value[i],
-                          { shiftKey: hasShift, ctrlKey: hasCtrl, altKey: hasAlt, metaKey: hasMeta },
-                          curFrame);
-    };
-    sendOk(command_id);
-  }
-  else {
-    sendError("Element is not visible", 11, null, command_id)
-  }
+  let keysToSend = msg.json.value;
+
+  utils.sendKeysToElement(curFrame, el, keysToSend, sendOk, sendError, command_id);
 }
 
 /**

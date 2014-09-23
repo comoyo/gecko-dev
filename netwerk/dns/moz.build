@@ -25,6 +25,7 @@ EXPORTS.mozilla.net += [
 ]
 
 SOURCES += [
+    'GetAddrInfo.cpp',           # Excluded from UNIFIED_SOURCES due to NSPR forced logging.
     'nsEffectiveTLDService.cpp', # Excluded from UNIFIED_SOURCES due to special build flags.
     'nsHostResolver.cpp',        # Excluded from UNIFIED_SOURCES due to NSPR forced logging.
 ]
@@ -53,7 +54,7 @@ MSVC_ENABLE_PGO = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
-FINAL_LIBRARY = 'necko'
+FINAL_LIBRARY = 'xul'
 
 GENERATED_FILES = [
     'etld_data.inc',

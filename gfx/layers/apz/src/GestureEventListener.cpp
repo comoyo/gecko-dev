@@ -13,6 +13,9 @@
 #include "nsDebug.h"                    // for NS_WARNING
 #include "nsMathUtils.h"                // for NS_hypot
 
+#define GEL_LOG(...)
+// #define GEL_LOG(...) printf_stderr("GEL: " __VA_ARGS__)
+
 namespace mozilla {
 namespace layers {
 
@@ -51,7 +54,9 @@ GestureEventListener::GestureEventListener(AsyncPanZoomController* aAsyncPanZoom
     mState(GESTURE_NONE),
     mSpanChange(0.0f),
     mPreviousSpan(0.0f),
-    mLastTouchInput(MultiTouchInput::MULTITOUCH_START, 0, TimeStamp(), 0)
+    mLastTouchInput(MultiTouchInput::MULTITOUCH_START, 0, TimeStamp(), 0),
+    mLongTapTimeoutTask(nullptr),
+    mMaxTapTimeoutTask(nullptr)
 {
 }
 
@@ -61,6 +66,8 @@ GestureEventListener::~GestureEventListener()
 
 nsEventStatus GestureEventListener::HandleInputEvent(const MultiTouchInput& aEvent)
 {
+  GEL_LOG("Receiving event type %d with %d touches in state %d\n", aEvent.mType, aEvent.mTouches.Length(), mState);
+
   nsEventStatus rv = nsEventStatus_eIgnore;
 
   // Cache the current event since it may become the single or long tap that we
@@ -69,7 +76,6 @@ nsEventStatus GestureEventListener::HandleInputEvent(const MultiTouchInput& aEve
 
   switch (aEvent.mType) {
   case MultiTouchInput::MULTITOUCH_START:
-  case MultiTouchInput::MULTITOUCH_ENTER:
     mTouches.Clear();
     for (size_t i = 0; i < aEvent.mTouches.Length(); i++) {
       mTouches.AppendElement(aEvent.mTouches[i]);
@@ -85,7 +91,6 @@ nsEventStatus GestureEventListener::HandleInputEvent(const MultiTouchInput& aEve
     rv = HandleInputTouchMove();
     break;
   case MultiTouchInput::MULTITOUCH_END:
-  case MultiTouchInput::MULTITOUCH_LEAVE:
     for (size_t i = 0; i < aEvent.mTouches.Length(); i++) {
       for (size_t j = 0; j < mTouches.Length(); j++) {
         if (aEvent.mTouches[i].mIdentifier == mTouches[j].mIdentifier) {
@@ -105,6 +110,16 @@ nsEventStatus GestureEventListener::HandleInputEvent(const MultiTouchInput& aEve
 
   return rv;
 }
+
+int32_t GestureEventListener::GetLastTouchIdentifier() const
+{
+  if (mTouches.Length() != 1) {
+    NS_WARNING("GetLastTouchIdentifier() called when last touch event "
+               "did not have one touch");
+  }
+  return mTouches.IsEmpty() ? -1 : mTouches[0].mIdentifier;
+}
+
 
 nsEventStatus GestureEventListener::HandleInputTouchSingleStart()
 {
@@ -182,8 +197,10 @@ nsEventStatus GestureEventListener::HandleInputTouchMultiStart()
 
 bool GestureEventListener::MoveDistanceIsLarge()
 {
-  ScreenIntPoint delta = mLastTouchInput.mTouches[0].mScreenPoint - mTouchStartPosition;
-  return (NS_hypot(delta.x, delta.y) > AsyncPanZoomController::GetTouchStartTolerance());
+  const ScreenPoint start = mLastTouchInput.mTouches[0].mScreenPoint;
+  ScreenPoint delta = start - mTouchStartPosition;
+  mAsyncPanZoomController->ToGlobalScreenCoordinates(&delta, start);
+  return (delta.Length() > AsyncPanZoomController::GetTouchStartTolerance());
 }
 
 nsEventStatus GestureEventListener::HandleInputTouchMove()
@@ -370,11 +387,15 @@ nsEventStatus GestureEventListener::HandleInputTouchEnd()
 nsEventStatus GestureEventListener::HandleInputTouchCancel()
 {
   SetState(GESTURE_NONE);
+  CancelMaxTapTimeoutTask();
+  CancelLongTapTimeoutTask();
   return nsEventStatus_eIgnore;
 }
 
 void GestureEventListener::HandleInputTimeoutLongTap()
 {
+  GEL_LOG("Running long-tap timeout task in state %d\n", mState);
+
   mLongTapTimeoutTask = nullptr;
 
   switch (mState) {
@@ -401,6 +422,8 @@ void GestureEventListener::HandleInputTimeoutLongTap()
 
 void GestureEventListener::HandleInputTimeoutMaxTap()
 {
+  GEL_LOG("Running max-tap timeout task in state %d\n", mState);
+
   mMaxTapTimeoutTask = nullptr;
 
   if (mState == GESTURE_FIRST_SINGLE_TOUCH_DOWN) {

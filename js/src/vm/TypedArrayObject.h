@@ -9,7 +9,6 @@
 
 #include "jsobj.h"
 
-#include "builtin/TypedObject.h"
 #include "gc/Barrier.h"
 #include "js/Class.h"
 #include "vm/ArrayBufferObject.h"
@@ -26,21 +25,67 @@ namespace js {
  * the subclasses.
  */
 
+/*
+ * TypedArrayObject and SharedTypedArrayObject are unrelated types in
+ * both C++ and JS, and that is deliberate to avoid one substituting
+ * for the other.  However, they share a fixed representation and have
+ * some variable attributes, all of which are encapsulated in the
+ * TypedArrayLayout class.  The sharing avoids a lot of pointless
+ * duplication in the JITs: one code path can be used, with occasional
+ * decision points based on the attributes.
+ */
+
+class TypedArrayLayout
+{
+    const bool isShared_;
+    const bool isNeuterable_;
+    const Class *firstClass_;
+    const Class *maxClass_;
+
+  public:
+    TypedArrayLayout(bool isShared, bool isNeuterable, const Class *firstClass, const Class *maxClass);
+
+    // Slot containing length of the view in number of typed elements.
+    static const size_t LENGTH_SLOT = JS_BUFVIEW_SLOT_LENGTH;
+
+    // Underlying (Shared)ArrayBufferObject.
+    static const size_t BUFFER_SLOT = JS_BUFVIEW_SLOT_OWNER;
+
+    // Offset of view within underlying (Shared)ArrayBufferObject.
+    static const size_t BYTEOFFSET_SLOT = JS_BUFVIEW_SLOT_BYTEOFFSET;
+
+    static const size_t RESERVED_SLOTS = JS_TYPEDARR_SLOTS;
+
+    // The raw pointer to the buffer memory, the "private" value.
+    //
+    // This offset is exposed for performance reasons - so that it
+    // need not be looked up on accesses.
+    static const size_t DATA_SLOT = JS_TYPEDARR_SLOT_DATA;
+
+    static int lengthOffset();
+    static int dataOffset();
+
+    bool isSharedMemory() const { return isShared_; }
+    bool isNeuterable() const { return isNeuterable_; }
+    const Class *addressOfFirstClass() const { return firstClass_; }
+    const Class *addressOfMaxClass() const { return maxClass_; }
+};
+
 class TypedArrayObject : public ArrayBufferViewObject
 {
   protected:
     // Typed array properties stored in slots, beyond those shared by all
     // ArrayBufferViews.
-    static const size_t TYPE_SLOT      = JS_TYPEDARR_SLOT_TYPE;
-    static const size_t RESERVED_SLOTS = JS_TYPEDARR_SLOTS;
-    static const size_t DATA_SLOT      = JS_TYPEDARR_SLOT_DATA;
+    static const size_t DATA_SLOT      = TypedArrayLayout::DATA_SLOT;
+
+    static const size_t RESERVED_SLOTS = TypedArrayLayout::RESERVED_SLOTS;
 
     static_assert(js::detail::TypedArrayLengthSlot == LENGTH_SLOT,
                   "bad inlined constant in jsfriendapi.h");
 
   public:
-    static const Class classes[ScalarTypeDescr::TYPE_MAX];
-    static const Class protoClasses[ScalarTypeDescr::TYPE_MAX];
+    static const Class classes[Scalar::TypeMax];
+    static const Class protoClasses[Scalar::TypeMax];
 
     static const size_t FIXED_DATA_START = DATA_SLOT + 1;
 
@@ -59,9 +104,7 @@ class TypedArrayObject : public ArrayBufferViewObject
         return gc::GetGCObjectKind(FIXED_DATA_START + dataSlots);
     }
 
-    ScalarTypeDescr::Type type() const {
-        return (ScalarTypeDescr::Type) getFixedSlot(TYPE_SLOT).toInt32();
-    }
+    inline Scalar::Type type() const;
 
     static Value bufferValue(TypedArrayObject *tarr) {
         return tarr->getFixedSlot(BUFFER_SLOT);
@@ -70,7 +113,7 @@ class TypedArrayObject : public ArrayBufferViewObject
         return tarr->getFixedSlot(BYTEOFFSET_SLOT);
     }
     static Value byteLengthValue(TypedArrayObject *tarr) {
-        int32_t size = ScalarTypeDescr::size(tarr->type());
+        int32_t size = Scalar::byteSize(tarr->type());
         return Int32Value(tarr->getFixedSlot(LENGTH_SLOT).toInt32() * size);
     }
     static Value lengthValue(TypedArrayObject *tarr) {
@@ -80,14 +123,14 @@ class TypedArrayObject : public ArrayBufferViewObject
     static bool
     ensureHasBuffer(JSContext *cx, Handle<TypedArrayObject *> tarray);
 
-    ArrayBufferObject *sharedBuffer() const;
+    bool hasBuffer() const {
+        return bufferValue(const_cast<TypedArrayObject*>(this)).isObject();
+    }
     ArrayBufferObject *buffer() const {
         JSObject *obj = bufferValue(const_cast<TypedArrayObject*>(this)).toObjectOrNull();
         if (!obj)
             return nullptr;
-        if (obj->is<ArrayBufferObject>())
-            return &obj->as<ArrayBufferObject>();
-        return sharedBuffer();
+        return &obj->as<ArrayBufferObject>();
     }
     uint32_t byteOffset() const {
         return byteOffsetValue(const_cast<TypedArrayObject*>(this)).toInt32();
@@ -109,28 +152,8 @@ class TypedArrayObject : public ArrayBufferViewObject
 
     void neuter(void *newData);
 
-    static uint32_t slotWidth(int atype) {
-        switch (atype) {
-          case ScalarTypeDescr::TYPE_INT8:
-          case ScalarTypeDescr::TYPE_UINT8:
-          case ScalarTypeDescr::TYPE_UINT8_CLAMPED:
-            return 1;
-          case ScalarTypeDescr::TYPE_INT16:
-          case ScalarTypeDescr::TYPE_UINT16:
-            return 2;
-          case ScalarTypeDescr::TYPE_INT32:
-          case ScalarTypeDescr::TYPE_UINT32:
-          case ScalarTypeDescr::TYPE_FLOAT32:
-            return 4;
-          case ScalarTypeDescr::TYPE_FLOAT64:
-            return 8;
-          default:
-            MOZ_ASSUME_UNREACHABLE("invalid typed array type");
-        }
-    }
-
     int slotWidth() {
-        return slotWidth(type());
+        return Scalar::byteSize(type());
     }
 
     /*
@@ -139,34 +162,42 @@ class TypedArrayObject : public ArrayBufferViewObject
      */
     static const uint32_t SINGLETON_TYPE_BYTE_LENGTH = 1024 * 1024 * 10;
 
-    static int lengthOffset();
-    static int dataOffset();
+    static bool isOriginalLengthGetter(Scalar::Type type, Native native);
 
-    static bool isOriginalLengthGetter(ScalarTypeDescr::Type type, Native native);
+  private:
+    static TypedArrayLayout layout_;
+
+  public:
+    static const TypedArrayLayout &layout() {
+        return layout_;
+    }
+
+    static void ObjectMoved(JSObject *obj, const JSObject *old);
 };
 
 inline bool
 IsTypedArrayClass(const Class *clasp)
 {
     return &TypedArrayObject::classes[0] <= clasp &&
-           clasp < &TypedArrayObject::classes[ScalarTypeDescr::TYPE_MAX];
+           clasp < &TypedArrayObject::classes[Scalar::TypeMax];
 }
 
 inline bool
 IsTypedArrayProtoClass(const Class *clasp)
 {
     return &TypedArrayObject::protoClasses[0] <= clasp &&
-           clasp < &TypedArrayObject::protoClasses[ScalarTypeDescr::TYPE_MAX];
+           clasp < &TypedArrayObject::protoClasses[Scalar::TypeMax];
 }
 
 bool
 IsTypedArrayConstructor(HandleValue v, uint32_t type);
 
-bool
-IsTypedArrayBuffer(HandleValue v);
-
-ArrayBufferObject &
-AsTypedArrayBuffer(HandleValue v);
+inline Scalar::Type
+TypedArrayObject::type() const
+{
+    JS_ASSERT(IsTypedArrayClass(getClass()));
+    return static_cast<Scalar::Type>(getClass() - &classes[0]);
+}
 
 // Return value is whether the string is some integer. If the string is an
 // integer which is not representable as a uint64_t, the return value is true
@@ -199,32 +230,32 @@ IsTypedArrayIndex(jsid id, uint64_t *indexp)
         return StringIsTypedArrayIndex(s, length, indexp);
     }
 
-    const jschar *s = atom->twoByteChars(nogc);
+    const char16_t *s = atom->twoByteChars(nogc);
     if (!JS7_ISDEC(*s) && *s != '-')
         return false;
     return StringIsTypedArrayIndex(s, length, indexp);
 }
 
 static inline unsigned
-TypedArrayShift(ArrayBufferView::ViewType viewType)
+TypedArrayShift(Scalar::Type viewType)
 {
     switch (viewType) {
-      case ArrayBufferView::TYPE_INT8:
-      case ArrayBufferView::TYPE_UINT8:
-      case ArrayBufferView::TYPE_UINT8_CLAMPED:
+      case Scalar::Int8:
+      case Scalar::Uint8:
+      case Scalar::Uint8Clamped:
         return 0;
-      case ArrayBufferView::TYPE_INT16:
-      case ArrayBufferView::TYPE_UINT16:
+      case Scalar::Int16:
+      case Scalar::Uint16:
         return 1;
-      case ArrayBufferView::TYPE_INT32:
-      case ArrayBufferView::TYPE_UINT32:
-      case ArrayBufferView::TYPE_FLOAT32:
+      case Scalar::Int32:
+      case Scalar::Uint32:
+      case Scalar::Float32:
         return 2;
-      case ArrayBufferView::TYPE_FLOAT64:
+      case Scalar::Float64:
         return 3;
       default:;
     }
-    MOZ_ASSUME_UNREACHABLE("Unexpected array type");
+    MOZ_CRASH("Unexpected array type");
 }
 
 class DataViewObject : public ArrayBufferViewObject
@@ -379,13 +410,6 @@ inline bool
 JSObject::is<js::TypedArrayObject>() const
 {
     return js::IsTypedArrayClass(getClass());
-}
-
-template <>
-inline bool
-JSObject::is<js::ArrayBufferViewObject>() const
-{
-    return is<js::DataViewObject>() || is<js::TypedArrayObject>();
 }
 
 #endif /* vm_TypedArrayObject_h */

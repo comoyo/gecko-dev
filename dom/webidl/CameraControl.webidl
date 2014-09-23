@@ -218,16 +218,13 @@ interface CameraControl : MediaStream
   [Throws]
   readonly attribute unrestricted double focusDistanceFar;
 
-  /* 'compensation' is optional, and if missing, will
-     set the camera to use automatic exposure compensation.
-
-     acceptable values must range from minExposureCompensation
-     to maxExposureCompensation in steps of stepExposureCompensation;
-     invalid values will be rounded to the nearest valid value. */
+  /* over- or under-expose the image; acceptable values must range from
+     minExposureCompensation to maxExposureCompensation in steps of
+     stepExposureCompensation. Invalid values will be rounded to the nearest
+     valid value; out-of-bounds values will be limited to the range
+     supported by the camera. */
   [Throws]
-  void setExposureCompensation(optional double compensation);
-  [Throws]
-  readonly attribute unrestricted double exposureCompensation;
+  attribute double          exposureCompensation;
 
   /* one of the values chosen from capabilities.isoModes; default
      value is "auto" if supported. */
@@ -259,6 +256,16 @@ interface CameraControl : MediaStream
   CameraSize getPictureSize();
   [Throws]
   void setPictureSize(optional CameraSize size);
+
+  /* if the image blob to be returned by takePicture() supports lossy
+     compression, this setting controls the quality-size trade-off;
+     valid values range from 0.0 for smallest size/worst quality to 1.0
+     for largest size/best quality. Note that depending on the range of
+     values supported by the underlying platform, this attribute may not
+     'get' the exact value that was previously 'set'. If this setting is
+     not supported, it is ignored. */
+  [Throws]
+  attribute double           pictureQuality;
 
   /* the size of the thumbnail to be included in the picture returned
      by a call to takePicture(), assuming the chosen fileFormat supports

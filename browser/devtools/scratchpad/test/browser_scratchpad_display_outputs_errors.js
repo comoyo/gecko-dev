@@ -37,13 +37,13 @@ function runTests()
     method: "display",
     code: error,
     result: error + openComment + "Exception: Ouch!\n@" +
-            scratchpad.uniqueName + ":1:1" + closeComment,
+            scratchpad.uniqueName + ":1:7" + closeComment,
     label: "error display output",
   },
   {
     method: "display",
     code: syntaxError,
-    result: syntaxError + openComment + "Exception: syntax error\n@" +
+    result: syntaxError + openComment + "Exception: expected expression, got end of script\n@" +
             scratchpad.uniqueName + ":1" + closeComment,
     label: "syntaxError display output",
   },
@@ -57,13 +57,13 @@ function runTests()
     method: "run",
     code: error,
     result: error + openComment + "Exception: Ouch!\n@" +
-            scratchpad.uniqueName + ":1:1" + closeComment,
+            scratchpad.uniqueName + ":1:7" + closeComment,
     label: "error run output",
   },
   {
     method: "run",
     code: syntaxError,
-    result: syntaxError + openComment + "Exception: syntax error\n@" +
+    result: syntaxError + openComment + "Exception: expected expression, got end of script\n@" +
             scratchpad.uniqueName + ":1" + closeComment,
     label: "syntaxError run output",
   }];

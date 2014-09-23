@@ -615,30 +615,25 @@
      */ \
     macro(JSOP_ITER,      75, "iter",       NULL,         2,  1,  1,  JOF_UINT8) \
     /*
-     * Stores the next iterated value into 'cx->iterValue' and pushes 'true'
-     * onto the stack if another value is available, and 'false' otherwise.
-     * It is followed immediately by JSOP_IFNE.
+     * Pushes the next iterated value onto the stack. If no value is available,
+     * MagicValue(JS_NO_ITER_VALUE) is pushed.
      *
-     * This opcode increments iterator cursor if current iteration has
-     * JSITER_FOREACH flag.
-     *   Category: Statements
-     *   Type: For-In Statement
-     *   Operands:
-     *   Stack: iter => iter, cond
-     */ \
-    macro(JSOP_MOREITER,  76, "moreiter",   NULL,         1,  1,  2,  JOF_BYTE) \
-    /*
-     * Pushes the value produced by the preceding JSOP_MOREITER operation
-     * ('cx->iterValue') onto the stack
-     *
-     * This opcode increments iterator cursor if current iteration does not have
-     * JSITER_FOREACH flag.
      *   Category: Statements
      *   Type: For-In Statement
      *   Operands:
      *   Stack: iter => iter, val
      */ \
-    macro(JSOP_ITERNEXT,  77, "iternext",   "<next>",     1,  0,  1,  JOF_BYTE) \
+    macro(JSOP_MOREITER,  76, "moreiter",   NULL,         1,  1,  2,  JOF_BYTE) \
+    /*
+     * Pushes a boolean indicating whether the value on top of the stack is
+     * MagicValue(JS_NO_ITER_VALUE).
+     *
+     *   Category: Statements
+     *   Type: For-In Statement
+     *   Operands:
+     *   Stack: val => val, res
+     */ \
+    macro(JSOP_ISNOITER,  77, "isnoiter",   NULL,         1,  1,  2,  JOF_BYTE) \
     /*
      * Exits a for-in loop by popping the iterator object from the stack and
      * closing it.
@@ -690,20 +685,8 @@
      *   nuses: (argc+2)
      */ \
     macro(JSOP_NEW,       82, js_new_str,   NULL,         3, -1,  1,  JOF_UINT16|JOF_INVOKE|JOF_TYPESET) \
-    /*
-     * Pops the top three values on the stack as 'iterator', 'index' and 'obj',
-     * iterates over 'iterator' and stores the iteration values as 'index + i'
-     * elements of 'obj', pushes 'obj' and 'index + iteration count' onto the
-     * stack.
-     *
-     * This opcode is used in Array literals with spread and spreadcall
-     * arguments as well as in destructing assignment with rest element.
-     *   Category: Literals
-     *   Type: Array
-     *   Operands:
-     *   Stack: obj, index, iterator => obj, (index + iteration count)
-     */ \
-    macro(JSOP_SPREAD,    83, "spread",     NULL,         1,  3,  2,  JOF_BYTE|JOF_ELEM|JOF_SET) \
+    \
+    macro(JSOP_UNUSED83,  83, "unused83",   NULL,         1,  0,  0,  JOF_BYTE) \
     \
     /*
      * Fast get op for function arguments and local variables.
@@ -894,9 +877,28 @@
      *   Stack: obj, id, val => obj
      */ \
     macro(JSOP_INITELEM_SETTER, 100, "initelem_setter",   NULL, 1,  3,  1, JOF_BYTE|JOF_ELEM|JOF_SET|JOF_DETECTING) \
+    /*
+     * Pushes the call site object specified by objectIndex onto the stack. Defines the raw
+     * property specified by objectIndex + 1 on the call site object and freezes both the call site
+     * object as well as its raw property.
+     *   Category: Literals
+     *   Type: Object
+     *   Operands: uint32_t objectIndex
+     *   Stack: => obj
+     */ \
+    macro(JSOP_CALLSITEOBJ,     101, "callsiteobj",     NULL,         5,  0,  1,  JOF_OBJECT) \
     \
-    macro(JSOP_UNUSED101,  101, "unused101",   NULL,         1,  0,  0,  JOF_BYTE) \
-    macro(JSOP_UNUSED102,  102, "unused102",   NULL,         1,  0,  0,  JOF_BYTE) \
+    /*
+     * Pushes a newly created array onto the stack, whose elements are the same
+     * as that of a template object's copy on write elements.
+     *
+     *   Category: Literals
+     *   Type: Array
+     *   Operands: uint32_t objectIndex
+     *   Stack: => obj
+     */ \
+    macro(JSOP_NEWARRAY_COPYONWRITE, 102, "newarray_copyonwrite", NULL, 5, 0, 1, JOF_OBJECT) \
+    \
     macro(JSOP_UNUSED103,  103, "unused103",   NULL,         1,  0,  0,  JOF_BYTE) \
     macro(JSOP_UNUSED104,  104, "unused104",   NULL,         1,  0,  0,  JOF_BYTE) \
     macro(JSOP_UNUSED105,  105, "unused105",   NULL,         1,  0,  0,  JOF_BYTE) \
@@ -1138,8 +1140,9 @@
     macro(JSOP_DEFFUN,    127,"deffun",     NULL,         5,  0,  0,  JOF_OBJECT) \
     /*
      * Defines the new binding on the frame's current variables-object (the
-     * scope object on the scope chain designated to receive new variables)
-     * with 'READONLY' attribute.
+     * scope object on the scope chain designated to receive new variables) with
+     * 'READONLY' attribute. The binding is *not* JSPROP_PERMANENT. See bug
+     * 1019181 for the reason.
      *
      * This is used for global scripts and also in some cases for function
      * scripts where use of dynamic scoping inhibits optimization.
@@ -1252,14 +1255,54 @@
      */ \
     macro(JSOP_SETALIASEDVAR, 137,"setaliasedvar",NULL,      5,  1,  1,  JOF_SCOPECOORD|JOF_NAME|JOF_SET|JOF_DETECTING) \
     \
-    macro(JSOP_UNUSED138,  138, "unused138",   NULL,         1,  0,  0,  JOF_BYTE) \
-    macro(JSOP_UNUSED139,  139, "unused139",   NULL,         1,  0,  0,  JOF_BYTE) \
-    macro(JSOP_UNUSED140,  140, "unused140",   NULL,         1,  0,  0,  JOF_BYTE) \
-    macro(JSOP_UNUSED141,  141, "unused141",   NULL,         1,  0,  0,  JOF_BYTE) \
-    macro(JSOP_UNUSED142,  142, "unused142",   NULL,         1,  0,  0,  JOF_BYTE) \
-    \
     /*
-     * Pushes the value of the intrinsic onto the stack.
+     * Checks if the value of the local variable is the
+     * JS_UNINITIALIZED_LEXICAL magic, throwing an error if so.
+     *   Category: Variables and Scopes
+     *   Type: Local Variables
+     *   Operands: uint32_t localno
+     *   Stack: =>
+     */ \
+    macro(JSOP_CHECKLEXICAL,  138, "checklexical", NULL,     4,  0,  0, JOF_LOCAL|JOF_NAME) \
+    /*
+     * Initializes an uninitialized local lexical binding with the top of stack
+     * value.
+     *   Category: Variables and Scopes
+     *   Type: Local Variables
+     *   Operands: uint32_t localno
+     *   Stack: v => v
+     */ \
+    macro(JSOP_INITLEXICAL,   139, "initlexical",  NULL,      4,  1,  1, JOF_LOCAL|JOF_NAME|JOF_SET|JOF_DETECTING) \
+    /*
+     * Checks if the value of the aliased variable is the
+     * JS_UNINITIALIZED_LEXICAL magic, throwing an error if so.
+     *   Category: Variables and Scopes
+     *   Type: Aliased Variables
+     *   Operands: uint8_t hops, uint24_t slot
+     *   Stack: =>
+     */ \
+    macro(JSOP_CHECKALIASEDLEXICAL, 140, "checkaliasedlexical", NULL, 5,  0,  0, JOF_SCOPECOORD|JOF_NAME) \
+    /*
+     * Initializes an uninitialized aliased lexical binding with the top of
+     * stack value.
+     *   Category: Variables and Scopes
+     *   Type: Aliased Variables
+     *   Operands: uint8_t hops, uint24_t slot
+     *   Stack: v => v
+     */ \
+    macro(JSOP_INITALIASEDLEXICAL,  141, "initaliasedlexical",  NULL, 5,  1,  1, JOF_SCOPECOORD|JOF_NAME|JOF_SET|JOF_DETECTING) \
+    /*
+     * Pushes a JS_UNINITIALIZED_LEXICAL value onto the stack, representing an
+     * uninitialized lexical binding.
+     *
+     * This opcode is used with the JSOP_INITLET opcode.
+     *   Category: Literals
+     *   Type: Constants
+     *   Operands:
+     *   Stack: => uninitialized
+     */ \
+    macro(JSOP_UNINITIALIZED, 142, "uninitialized", NULL, 1,  0,  1, JOF_BYTE) \
+    /* Pushes the value of the intrinsic onto the stack.
      *
      * Intrinsic names are emitted instead of JSOP_*NAME ops when the
      * 'CompileOptions' flag 'selfHostingMode' is set.
@@ -1649,14 +1692,20 @@
      *   Operands: uint8_t BITFIELD
      *   Stack: =>
      */ \
-    macro(JSOP_LOOPENTRY,     227, "loopentry",    NULL,  2,  0,  0,  JOF_UINT8)
+    macro(JSOP_LOOPENTRY,     227, "loopentry",    NULL,  2,  0,  0,  JOF_UINT8) \
+    /*
+     * Converts the value on the top of the stack to a String
+     *   Category: Other
+     *   Operands:
+     *   Stack: val => ToString(val)
+     */ \
+    macro(JSOP_TOSTRING,    228, "tostring",       NULL,  1,  1,  1,  JOF_BYTE)
 
 /*
  * In certain circumstances it may be useful to "pad out" the opcode space to
  * a power of two.  Use this macro to do so.
  */
 #define FOR_EACH_TRAILING_UNUSED_OPCODE(macro) \
-    macro(228) \
     macro(229) \
     macro(230) \
     macro(231) \

@@ -20,22 +20,14 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(PromiseCallback)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(PromiseCallback)
-
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(PromiseCallback)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(PromiseCallback)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_0(PromiseCallback)
 
 PromiseCallback::PromiseCallback()
 {
-  MOZ_COUNT_CTOR(PromiseCallback);
 }
 
 PromiseCallback::~PromiseCallback()
 {
-  MOZ_COUNT_DTOR(PromiseCallback);
 }
 
 // ResolvePromiseCallback
@@ -71,13 +63,11 @@ ResolvePromiseCallback::ResolvePromiseCallback(Promise* aPromise,
 {
   MOZ_ASSERT(aPromise);
   MOZ_ASSERT(aGlobal);
-  MOZ_COUNT_CTOR(ResolvePromiseCallback);
   HoldJSObjects(this);
 }
 
 ResolvePromiseCallback::~ResolvePromiseCallback()
 {
-  MOZ_COUNT_DTOR(ResolvePromiseCallback);
   DropJSObjects(this);
 }
 
@@ -131,13 +121,11 @@ RejectPromiseCallback::RejectPromiseCallback(Promise* aPromise,
 {
   MOZ_ASSERT(aPromise);
   MOZ_ASSERT(mGlobal);
-  MOZ_COUNT_CTOR(RejectPromiseCallback);
   HoldJSObjects(this);
 }
 
 RejectPromiseCallback::~RejectPromiseCallback()
 {
-  MOZ_COUNT_DTOR(RejectPromiseCallback);
   DropJSObjects(this);
 }
 
@@ -194,13 +182,11 @@ WrapperPromiseCallback::WrapperPromiseCallback(Promise* aNextPromise,
 {
   MOZ_ASSERT(aNextPromise);
   MOZ_ASSERT(aGlobal);
-  MOZ_COUNT_CTOR(WrapperPromiseCallback);
   HoldJSObjects(this);
 }
 
 WrapperPromiseCallback::~WrapperPromiseCallback()
 {
-  MOZ_COUNT_DTOR(WrapperPromiseCallback);
   DropJSObjects(this);
 }
 
@@ -219,8 +205,8 @@ WrapperPromiseCallback::Call(JSContext* aCx,
 
   // If invoking callback threw an exception, run resolver's reject with the
   // thrown exception as argument and the synchronous flag set.
-  JS::Rooted<JS::Value> retValue(aCx,
-    mCallback->Call(value, rv, CallbackObject::eRethrowExceptions));
+  JS::Rooted<JS::Value> retValue(aCx);
+  mCallback->Call(value, &retValue, rv, CallbackObject::eRethrowExceptions);
 
   rv.WouldReportJSException();
 
@@ -286,8 +272,8 @@ WrapperPromiseCallback::Call(JSContext* aCx,
       }
 
       JS::Rooted<JS::Value> typeError(aCx);
-      if (!JS::CreateTypeError(aCx, stack, fn, lineNumber, 0,
-                               nullptr, message, &typeError)) {
+      if (!JS::CreateError(aCx, JSEXN_TYPEERR, stack, fn, lineNumber, 0,
+                           nullptr, message, &typeError)) {
         // Out of memory. Promise will stay unresolved.
         JS_ClearPendingException(aCx);
         return;
@@ -325,12 +311,10 @@ NativePromiseCallback::NativePromiseCallback(PromiseNativeHandler* aHandler,
   , mState(aState)
 {
   MOZ_ASSERT(aHandler);
-  MOZ_COUNT_CTOR(NativePromiseCallback);
 }
 
 NativePromiseCallback::~NativePromiseCallback()
 {
-  MOZ_COUNT_DTOR(NativePromiseCallback);
 }
 
 void

@@ -24,7 +24,6 @@
 class nsIEditor;
 class nsIParser;
 class nsIURI;
-class nsIMarkupDocumentViewer;
 class nsIDocShell;
 class nsICachingChannel;
 class nsIWyciwygChannel;
@@ -45,7 +44,6 @@ public:
   using nsDocument::GetPlugins;
 
   nsHTMLDocument();
-  ~nsHTMLDocument();
   virtual nsresult Init() MOZ_OVERRIDE;
 
   NS_DECL_ISUPPORTS_INHERITED
@@ -153,7 +151,7 @@ public:
 
   virtual nsresult SetEditingState(EditingState aState) MOZ_OVERRIDE;
 
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
 
   virtual void RemovedFromDocShell() MOZ_OVERRIDE;
 
@@ -174,8 +172,9 @@ public:
   void SetDomain(const nsAString& aDomain, mozilla::ErrorResult& rv);
   void GetCookie(nsAString& aCookie, mozilla::ErrorResult& rv);
   void SetCookie(const nsAString& aCookie, mozilla::ErrorResult& rv);
-  JSObject* NamedGetter(JSContext* cx, const nsAString& aName, bool& aFound,
-                        mozilla::ErrorResult& rv);
+  void NamedGetter(JSContext* cx, const nsAString& aName, bool& aFound,
+                   JS::MutableHandle<JSObject*> aRetval,
+                   mozilla::ErrorResult& rv);
   bool NameIsEnumerable(const nsAString& aName);
   void GetSupportedNames(unsigned, nsTArray<nsString>& aNames);
   nsGenericHTMLElement *GetBody();
@@ -240,13 +239,15 @@ public:
   // The XPCOM CaptureEvents works fine for us.
   // The XPCOM ReleaseEvents works fine for us.
   // We're picking up GetLocation from Document
-  already_AddRefed<nsIDOMLocation> GetLocation() const {
+  already_AddRefed<nsLocation> GetLocation() const {
     return nsIDocument::GetLocation();
   }
 
   virtual nsHTMLDocument* AsHTMLDocument() MOZ_OVERRIDE { return this; }
 
 protected:
+  ~nsHTMLDocument();
+
   nsresult GetBodySize(int32_t* aWidth,
                        int32_t* aHeight);
 
@@ -298,10 +299,10 @@ protected:
 
   static uint32_t gWyciwygSessionCnt;
 
-  static void TryHintCharset(nsIMarkupDocumentViewer* aMarkupDV,
+  static void TryHintCharset(nsIContentViewer* aContentViewer,
                              int32_t& aCharsetSource,
                              nsACString& aCharset);
-  void TryUserForcedCharset(nsIMarkupDocumentViewer* aMarkupDV,
+  void TryUserForcedCharset(nsIContentViewer* aCv,
                             nsIDocShell*  aDocShell,
                             int32_t& aCharsetSource,
                             nsACString& aCharset);

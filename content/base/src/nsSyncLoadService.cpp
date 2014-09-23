@@ -37,7 +37,6 @@ class nsSyncLoader : public nsIStreamListener,
 {
 public:
     nsSyncLoader() : mLoading(false) {}
-    virtual ~nsSyncLoader();
 
     NS_DECL_ISUPPORTS
 
@@ -53,6 +52,8 @@ public:
     NS_DECL_NSIINTERFACEREQUESTOR
 
 private:
+    virtual ~nsSyncLoader();
+
     nsresult PushAsyncStream(nsIStreamListener* aListener);
     nsresult PushSyncStream(nsIStreamListener* aListener);
 
@@ -64,9 +65,10 @@ private:
 
 class nsForceXMLListener : public nsIStreamListener
 {
-public:
-    nsForceXMLListener(nsIStreamListener* aListener);
     virtual ~nsForceXMLListener();
+
+public:
+    explicit nsForceXMLListener(nsIStreamListener* aListener);
 
     NS_DECL_ISUPPORTS
     NS_FORWARD_NSISTREAMLISTENER(mListener->)
@@ -308,7 +310,12 @@ nsSyncLoadService::LoadDocument(nsIURI *aURI, nsIPrincipal *aLoaderPrincipal,
                                 nsIDOMDocument** aResult)
 {
     nsCOMPtr<nsIChannel> channel;
-    nsresult rv = NS_NewChannel(getter_AddRefs(channel), aURI, nullptr,
+    nsresult rv = NS_NewChannel(getter_AddRefs(channel),
+                                aURI,
+                                aLoaderPrincipal,
+                                nsILoadInfo::SEC_NORMAL,
+                                nsIContentPolicy::TYPE_OTHER,
+                                nullptr,   // aChannelPolicy
                                 aLoadGroup);
     NS_ENSURE_SUCCESS(rv, rv);
 

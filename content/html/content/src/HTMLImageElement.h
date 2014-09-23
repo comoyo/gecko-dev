@@ -12,19 +12,22 @@
 #include "nsIDOMHTMLImageElement.h"
 #include "imgRequestProxy.h"
 #include "Units.h"
-#include "mozilla/dom/ResponsiveImageSelector.h"
+
+// Only needed for IsPictureEnabled()
+#include "mozilla/dom/HTMLPictureElement.h"
 
 namespace mozilla {
 class EventChainPreVisitor;
 namespace dom {
 
+class ResponsiveImageSelector;
 class HTMLImageElement MOZ_FINAL : public nsGenericHTMLElement,
                                    public nsImageLoadingContent,
                                    public nsIDOMHTMLImageElement
 {
+  friend class HTMLSourceElement;
 public:
-  explicit HTMLImageElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
-  virtual ~HTMLImageElement();
+  explicit HTMLImageElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   static already_AddRefed<HTMLImageElement>
     Image(const GlobalObject& aGlobal,
@@ -74,7 +77,7 @@ public:
   virtual void UnbindFromTree(bool aDeep, bool aNullParent) MOZ_OVERRIDE;
 
   virtual EventStates IntrinsicState() const MOZ_OVERRIDE;
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
 
   nsresult CopyInnerTo(Element* aDest);
 
@@ -139,9 +142,16 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::srcset, aSrcset, aError);
   }
+  void GetCrossOrigin(nsAString& aResult)
+  {
+    // Null for both missing and invalid defaults is ok, since we
+    // always parse to an enum value, so we don't need an invalid
+    // default, and we _want_ the missing default to be null.
+    GetEnumAttr(nsGkAtoms::crossorigin, nullptr, aResult);
+  }
   void SetCrossOrigin(const nsAString& aCrossOrigin, ErrorResult& aError)
   {
-    SetHTMLAttr(nsGkAtoms::crossorigin, aCrossOrigin, aError);
+    SetOrRemoveNullableStringAttr(nsGkAtoms::crossorigin, aCrossOrigin, aError);
   }
   void SetUseMap(const nsAString& aUseMap, ErrorResult& aError)
   {
@@ -158,6 +168,10 @@ public:
   void SetLongDesc(const nsAString& aLongDesc, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::longdesc, aLongDesc, aError);
+  }
+  void SetSizes(const nsAString& aSizes, ErrorResult& aError)
+  {
+    SetHTMLAttr(nsGkAtoms::sizes, aSizes, aError);
   }
   void SetBorder(const nsAString& aBorder, ErrorResult& aError)
   {
@@ -181,12 +195,34 @@ public:
   virtual void DestroyContent() MOZ_OVERRIDE;
 
 protected:
+  virtual ~HTMLImageElement();
+
   // Resolve and load the current mResponsiveSelector (responsive mode) or src
   // attr image.
   nsresult LoadSelectedImage(bool aForce, bool aNotify);
 
   // Update/create/destroy mResponsiveSelector
-  void UpdateSourceSet(const nsAString & aSrcset);
+  void PictureSourceSrcsetChanged(nsIContent *aSourceNode,
+                                  const nsAString& aNewValue, bool aNotify);
+  void PictureSourceSizesChanged(nsIContent *aSourceNode,
+                                 const nsAString& aNewValue, bool aNotify);
+
+  void PictureSourceAdded(nsIContent *aSourceNode);
+  // This should be called prior to the unbind, such that nextsibling works
+  void PictureSourceRemoved(nsIContent *aSourceNode);
+
+  bool MaybeUpdateResponsiveSelector(nsIContent *aCurrentSource = nullptr,
+                                     bool aSourceRemoved = false);
+
+  // Given a <source> node that is a previous sibling *or* ourselves, try to
+  // create a ResponsiveSelector.
+
+  // If the node's srcset/sizes make for an invalid selector, returns
+  // false. This does not guarantee the resulting selector matches an image,
+  // only that it is valid.
+  bool TryCreateResponsiveSelector(nsIContent *aSourceNode,
+                                   const nsAString *aSrcset = nullptr,
+                                   const nsAString *aSizes = nullptr);
 
   CSSIntPoint GetXY();
   virtual void GetItemValueText(nsAString& text) MOZ_OVERRIDE;

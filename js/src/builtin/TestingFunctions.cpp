@@ -6,6 +6,9 @@
 
 #include "builtin/TestingFunctions.h"
 
+#include "mozilla/Move.h"
+#include "mozilla/UniquePtr.h"
+
 #include "jsapi.h"
 #include "jscntxt.h"
 #include "jsfriendapi.h"
@@ -16,9 +19,13 @@
 #endif
 #include "jswrapper.h"
 
-#include "jit/AsmJS.h"
-#include "jit/AsmJSLink.h"
+#include "asmjs/AsmJSLink.h"
+#include "asmjs/AsmJSValidate.h"
+#include "js/HashTable.h"
 #include "js/StructuredClone.h"
+#include "js/UbiNode.h"
+#include "js/UbiNodeTraverse.h"
+#include "js/Vector.h"
 #include "vm/ForkJoin.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
@@ -33,6 +40,8 @@ using namespace js;
 using namespace JS;
 
 using mozilla::ArrayLength;
+using mozilla::Move;
+using mozilla::UniquePtr;
 
 // If fuzzingSafe is set, remove functionality that could cause problems with
 // fuzzers. Set this via the environment variable MOZ_FUZZING_SAFE.
@@ -46,18 +55,13 @@ GetBuildConfiguration(JSContext *cx, unsigned argc, jsval *vp)
     if (!info)
         return false;
 
-    RootedValue value(cx, BooleanValue(false));
-    if (!JS_SetProperty(cx, info, "rooting-analysis", value))
+    if (!JS_SetProperty(cx, info, "rooting-analysis", FalseHandleValue))
         return false;
 
-#ifdef JSGC_USE_EXACT_ROOTING
-    value = BooleanValue(true);
-#else
-    value = BooleanValue(false);
-#endif
-    if (!JS_SetProperty(cx, info, "exact-rooting", value))
+    if (!JS_SetProperty(cx, info, "exact-rooting", TrueHandleValue))
         return false;
 
+    RootedValue value(cx);
 #ifdef DEBUG
     value = BooleanValue(true);
 #else
@@ -112,14 +116,6 @@ GetBuildConfiguration(JSContext *cx, unsigned argc, jsval *vp)
     value = BooleanValue(false);
 #endif
     if (!JS_SetProperty(cx, info, "has-gczeal", value))
-        return false;
-
-#ifdef JS_THREADSAFE
-    value = BooleanValue(true);
-#else
-    value = BooleanValue(false);
-#endif
-    if (!JS_SetProperty(cx, info, "threadsafe", value))
         return false;
 
 #ifdef JS_MORE_DETERMINISTIC
@@ -226,7 +222,7 @@ GC(JSContext *cx, unsigned argc, jsval *vp)
      * scheduled for GC). Otherwise, we collect all compartments.
      */
     bool compartment = false;
-    if (args.length() == 1) {
+    if (args.length() >= 1) {
         Value arg = args[0];
         if (arg.isString()) {
             if (!JS_StringEqualsAscii(cx, arg.toString(), "compartment", &compartment))
@@ -237,20 +233,33 @@ GC(JSContext *cx, unsigned argc, jsval *vp)
         }
     }
 
+    bool shrinking = false;
+    if (args.length() >= 2) {
+        Value arg = args[1];
+        if (arg.isString()) {
+            if (!JS_StringEqualsAscii(cx, arg.toString(), "shrinking", &shrinking))
+                return false;
+        }
+    }
+
 #ifndef JS_MORE_DETERMINISTIC
-    size_t preBytes = cx->runtime()->gc.bytes;
+    size_t preBytes = cx->runtime()->gc.usage.gcBytes();
 #endif
 
     if (compartment)
         PrepareForDebugGC(cx->runtime());
     else
         PrepareForFullGC(cx->runtime());
-    GCForReason(cx->runtime(), gcreason::API);
+
+    if (shrinking)
+        ShrinkingGC(cx->runtime(), gcreason::API);
+    else
+        GCForReason(cx->runtime(), gcreason::API);
 
     char buf[256] = { '\0' };
 #ifndef JS_MORE_DETERMINISTIC
     JS_snprintf(buf, sizeof(buf), "before %lu, after %lu\n",
-                (unsigned long)preBytes, (unsigned long)cx->runtime()->gc.bytes);
+                (unsigned long)preBytes, (unsigned long)cx->runtime()->gc.usage.gcBytes());
 #endif
     JSString *str = JS_NewStringCopyZ(cx, buf);
     if (!str)
@@ -267,7 +276,7 @@ MinorGC(JSContext *cx, unsigned argc, jsval *vp)
     if (args.get(0) == BooleanValue(true))
         cx->runtime()->gc.storeBuffer.setAboutToOverflow();
 
-    MinorGC(cx, gcreason::API);
+    cx->minorGC(gcreason::API);
 #endif
     args.rval().setUndefined();
     return true;
@@ -282,7 +291,9 @@ static const struct ParamPair {
     {"gcBytes",             JSGC_BYTES},
     {"gcNumber",            JSGC_NUMBER},
     {"sliceTimeBudget",     JSGC_SLICE_TIME_BUDGET},
-    {"markStackLimit",      JSGC_MARK_STACK_LIMIT}
+    {"markStackLimit",      JSGC_MARK_STACK_LIMIT},
+    {"minEmptyChunkCount",  JSGC_MIN_EMPTY_CHUNK_COUNT},
+    {"maxEmptyChunkCount",  JSGC_MAX_EMPTY_CHUNK_COUNT}
 };
 
 // Keep this in sync with above params.
@@ -516,7 +527,7 @@ SelectForGC(JSContext *cx, unsigned argc, Value *vp)
      * to be in the set, so evict the nursery before adding items.
      */
     JSRuntime *rt = cx->runtime();
-    MinorGC(rt, JS::gcreason::EVICT_NURSERY);
+    rt->gc.evictNursery();
 
     for (unsigned i = 0; i < args.length(); i++) {
         if (args[i].isObject()) {
@@ -571,7 +582,7 @@ GCState(JSContext *cx, unsigned argc, jsval *vp)
     }
 
     const char *state;
-    gc::State globalState = cx->runtime()->gc.incrementalState;
+    gc::State globalState = cx->runtime()->gc.state();
     if (globalState == gc::NO_INCREMENTAL)
         state = "none";
     else if (globalState == gc::MARK)
@@ -579,7 +590,7 @@ GCState(JSContext *cx, unsigned argc, jsval *vp)
     else if (globalState == gc::SWEEP)
         state = "sweep";
     else
-        MOZ_ASSUME_UNREACHABLE("Unobserveable global GC state");
+        MOZ_CRASH("Unobserveable global GC state");
 
     JSString *str = JS_NewStringCopyZ(cx, state);
     if (!str)
@@ -625,7 +636,7 @@ GCSlice(JSContext *cx, unsigned argc, Value *vp)
         limit = false;
     }
 
-    GCDebugSlice(cx->runtime(), limit, budget);
+    cx->runtime()->gc.gcDebugSlice(limit, budget);
     args.rval().setUndefined();
     return true;
 }
@@ -755,6 +766,7 @@ static const struct TraceKindPair {
     { "all",        -1                  },
     { "object",     JSTRACE_OBJECT      },
     { "string",     JSTRACE_STRING      },
+    { "symbol",     JSTRACE_SYMBOL      },
 };
 
 static bool
@@ -825,7 +837,7 @@ CountHeap(JSContext *cx, unsigned argc, jsval *vp)
     if (startValue.isUndefined()) {
         JS_TraceRuntime(&countTracer.base);
     } else {
-        JS_CallValueTracer(&countTracer.base, startValue.address(), "root");
+        JS_CallUnbarrieredValueTracer(&countTracer.base, startValue.address(), "root");
     }
 
     JSCountHeapNode *node;
@@ -870,10 +882,25 @@ static bool
 SaveStack(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    Rooted<SavedFrame*> frame(cx);
-    if (!cx->compartment()->savedStacks().saveCurrentStack(cx, &frame))
+
+    unsigned maxFrameCount = 0;
+    if (args.length() >= 1) {
+        double d;
+        if (!ToNumber(cx, args[0], &d))
+            return false;
+        if (d < 0) {
+            js_ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
+                                     JSDVG_SEARCH_STACK, args[0], JS::NullPtr(),
+                                     "not a valid maximum frame count", NULL);
+            return false;
+        }
+        maxFrameCount = d;
+    }
+
+    Rooted<JSObject*> stack(cx);
+    if (!JS::CaptureCurrentStack(cx, &stack, maxFrameCount))
         return false;
-    args.rval().setObject(*frame.get());
+    args.rval().setObjectOrNull(stack);
     return true;
 }
 
@@ -1088,7 +1115,7 @@ static bool
 EnableOsiPointRegisterChecks(JSContext *, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-#if defined(JS_ION) && defined(CHECK_OSIPOINT_REGISTERS)
+#ifdef CHECK_OSIPOINT_REGISTERS
     jit::js_JitOptions.checkOsiPointRegisters = true;
 #endif
     args.rval().setUndefined();
@@ -1271,6 +1298,18 @@ SetJitCompilerOption(JSContext *cx, unsigned argc, jsval *vp)
     if (number < 0)
         number = -1;
 
+    // Throw if disabling the JITs and there's JIT code on the stack, to avoid
+    // assertion failures.
+    if ((opt == JSJITCOMPILER_BASELINE_ENABLE || opt == JSJITCOMPILER_ION_ENABLE) &&
+        number == 0)
+    {
+        js::jit::JitActivationIterator iter(cx->runtime());
+        if (!iter.done()) {
+            JS_ReportError(cx, "Can't turn off JITs with JIT code on the stack.");
+            return false;
+        }
+    }
+
     JS_SetGlobalJitCompilerOption(cx->runtime(), opt, uint32_t(number));
 
     args.rval().setUndefined();
@@ -1306,9 +1345,7 @@ static bool
 SetIonCheckGraphCoherency(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-#ifdef JS_ION
     jit::js_JitOptions.checkGraphConsistency = ToBoolean(args.get(0));
-#endif
     args.rval().setUndefined();
     return true;
 }
@@ -1578,10 +1615,14 @@ static bool
 HelperThreadCount(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-#ifdef JS_THREADSAFE
-    args.rval().setInt32(HelperThreadState().threadCount);
-#else
+#ifdef JS_MORE_DETERMINISTIC
+    // Always return 0 to get consistent output with and without --no-threads.
     args.rval().setInt32(0);
+#else
+    if (CanUseExtraThreads())
+        args.rval().setInt32(HelperThreadState().threadCount);
+    else
+        args.rval().setInt32(0);
 #endif
     return true;
 }
@@ -1600,7 +1641,7 @@ EnableTraceLogger(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     TraceLogger *logger = TraceLoggerForMainThread(cx->runtime());
-    args.rval().setBoolean(TraceLoggerEnable(logger));
+    args.rval().setBoolean(TraceLoggerEnable(logger, cx));
 
     return true;
 }
@@ -1632,6 +1673,59 @@ DumpObject(JSContext *cx, unsigned argc, jsval *vp)
 #endif
 
 static bool
+DumpBacktrace(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    js_DumpBacktrace(cx);
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+GetBacktrace(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    bool showArgs = false;
+    bool showLocals = false;
+    bool showThisProps = false;
+
+    if (args.length() > 1) {
+        RootedObject callee(cx, &args.callee());
+        ReportUsageError(cx, callee, "Too many arguments");
+        return false;
+    }
+
+    if (args.length() == 1) {
+        RootedObject cfg(cx, ToObject(cx, args[0]));
+        if (!cfg)
+            return false;
+        RootedValue v(cx);
+
+        if (!JS_GetProperty(cx, cfg, "args", &v))
+            return false;
+        showArgs = ToBoolean(v);
+
+        if (!JS_GetProperty(cx, cfg, "locals", &v))
+            return false;
+        showLocals = ToBoolean(v);
+
+        if (!JS_GetProperty(cx, cfg, "thisprops", &v))
+            return false;
+        showThisProps = ToBoolean(v);
+    }
+
+    char *buf = JS::FormatStackDump(cx, nullptr, showArgs, showLocals, showThisProps);
+    RootedString str(cx);
+    if (!(str = JS_NewStringCopyZ(cx, buf)))
+        return false;
+    JS_smprintf_free(buf);
+
+    args.rval().setString(str);
+    return true;
+}
+
+static bool
 ReportOutOfMemory(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -1651,12 +1745,294 @@ ReportLargeAllocationFailure(JSContext *cx, unsigned argc, jsval *vp)
     return true;
 }
 
+namespace heaptools {
+
+typedef UniquePtr<char16_t[], JS::FreePolicy> EdgeName;
+
+// An edge to a node from its predecessor in a path through the graph.
+class BackEdge {
+    // The node from which this edge starts.
+    JS::ubi::Node predecessor_;
+
+    // The name of this edge.
+    EdgeName name_;
+
+  public:
+    BackEdge() : name_(nullptr) { }
+    // Construct an initialized back edge, taking ownership of |name|.
+    BackEdge(JS::ubi::Node predecessor, EdgeName name)
+        : predecessor_(predecessor), name_(Move(name)) { }
+    BackEdge(BackEdge &&rhs) : predecessor_(rhs.predecessor_), name_(Move(rhs.name_)) { }
+    BackEdge &operator=(BackEdge &&rhs) {
+        MOZ_ASSERT(&rhs != this);
+        this->~BackEdge();
+        new(this) BackEdge(Move(rhs));
+        return *this;
+    }
+
+    EdgeName forgetName() { return Move(name_); }
+    JS::ubi::Node predecessor() const { return predecessor_; }
+
+  private:
+    // No copy constructor or copying assignment.
+    BackEdge(const BackEdge &) MOZ_DELETE;
+    BackEdge &operator=(const BackEdge &) MOZ_DELETE;
+};
+
+// A path-finding handler class for use with JS::ubi::BreadthFirst.
+struct FindPathHandler {
+    typedef BackEdge NodeData;
+    typedef JS::ubi::BreadthFirst<FindPathHandler> Traversal;
+
+    FindPathHandler(JS::ubi::Node start, JS::ubi::Node target,
+                    AutoValueVector &nodes, Vector<EdgeName> &edges)
+      : start(start), target(target), foundPath(false),
+        nodes(nodes), edges(edges) { }
+
+    bool
+    operator()(Traversal &traversal, JS::ubi::Node origin, const JS::ubi::Edge &edge,
+               BackEdge *backEdge, bool first)
+    {
+        // We take care of each node the first time we visit it, so there's
+        // nothing to be done on subsequent visits.
+        if (!first)
+            return true;
+
+        // Record how we reached this node. This is the last edge on a
+        // shortest path to this node.
+        EdgeName edgeName = DuplicateString(traversal.cx, edge.name);
+        if (!edgeName)
+            return false;
+        *backEdge = mozilla::Move(BackEdge(origin, Move(edgeName)));
+
+        // Have we reached our final target node?
+        if (edge.referent == target) {
+            // Record the path that got us here, which must be a shortest path.
+            if (!recordPath(traversal))
+                return false;
+            foundPath = true;
+            traversal.stop();
+        }
+
+        return true;
+    }
+
+    // We've found a path to our target. Walk the backlinks to produce the
+    // (reversed) path, saving the path in |nodes| and |edges|. |nodes| is
+    // rooted, so it can hold the path's nodes as we leave the scope of
+    // the AutoCheckCannotGC.
+    bool recordPath(Traversal &traversal) {
+        JS::ubi::Node here = target;
+
+        do {
+            Traversal::NodeMap::Ptr p = traversal.visited.lookup(here);
+            MOZ_ASSERT(p);
+            JS::ubi::Node predecessor = p->value().predecessor();
+            if (!nodes.append(predecessor.exposeToJS()) ||
+                !edges.append(p->value().forgetName()))
+                return false;
+            here = predecessor;
+        } while (here != start);
+
+        return true;
+    }
+
+    // The node we're starting from.
+    JS::ubi::Node start;
+
+    // The node we're looking for.
+    JS::ubi::Node target;
+
+    // True if we found a path to target, false if we didn't.
+    bool foundPath;
+
+    // The nodes and edges of the path --- should we find one. The path is
+    // stored in reverse order, because that's how it's easiest for us to
+    // construct it:
+    // - edges[i] is the name of the edge from nodes[i] to nodes[i-1].
+    // - edges[0] is the name of the edge from nodes[0] to the target.
+    // - The last node, nodes[n-1], is the start node.
+    AutoValueVector &nodes;
+    Vector<EdgeName> &edges;
+};
+
+} // namespace heaptools
+
+static bool
+FindPath(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (argc < 2) {
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_MORE_ARGS_NEEDED,
+                             "findPath", "1", "");
+        return false;
+    }
+
+    // We don't ToString non-objects given as 'start' or 'target', because this
+    // test is all about object identity, and ToString doesn't preserve that.
+    // Non-GCThing endpoints don't make much sense.
+    if (!args[0].isObject() && !args[0].isString() && !args[0].isSymbol()) {
+        js_ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
+                                 JSDVG_SEARCH_STACK, args[0], JS::NullPtr(),
+                                 "not an object, string, or symbol", NULL);
+        return false;
+    }
+
+    if (!args[1].isObject() && !args[1].isString() && !args[1].isSymbol()) {
+        js_ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
+                                 JSDVG_SEARCH_STACK, args[0], JS::NullPtr(),
+                                 "not an object, string, or symbol", NULL);
+        return false;
+    }
+
+    AutoValueVector nodes(cx);
+    Vector<heaptools::EdgeName> edges(cx);
+
+    {
+        // We can't tolerate the GC moving things around while we're searching
+        // the heap. Check that nothing we do causes a GC.
+        JS::AutoCheckCannotGC autoCannotGC;
+
+        JS::ubi::Node start(args[0]), target(args[1]);
+
+        heaptools::FindPathHandler handler(start, target, nodes, edges);
+        heaptools::FindPathHandler::Traversal traversal(cx, handler, autoCannotGC);
+        if (!traversal.init() || !traversal.addStart(start))
+            return false;
+
+        if (!traversal.traverse())
+            return false;
+
+        if (!handler.foundPath) {
+            // We didn't find any paths from the start to the target.
+            args.rval().setUndefined();
+            return true;
+        }
+    }
+
+    // |nodes| and |edges| contain the path from |start| to |target|, reversed.
+    // Construct a JavaScript array describing the path from the start to the
+    // target. Each element has the form:
+    //
+    //   {
+    //     node: <object or string or symbol>,
+    //     edge: <string describing outgoing edge from node>
+    //   }
+    //
+    // or, if the node is some internal thing that isn't a proper JavaScript
+    // value:
+    //
+    //   { node: undefined, edge: <string> }
+    size_t length = nodes.length();
+    RootedObject result(cx, NewDenseFullyAllocatedArray(cx, length));
+    if (!result)
+        return false;
+    result->ensureDenseInitializedLength(cx, 0, length);
+
+    // Walk |nodes| and |edges| in the stored order, and construct the result
+    // array in start-to-target order.
+    for (size_t i = 0; i < length; i++) {
+        // Build an object describing the node and edge.
+        RootedObject obj(cx, NewBuiltinClassInstance<JSObject>(cx));
+        if (!obj)
+            return false;
+
+        if (!JS_DefineProperty(cx, obj, "node", nodes[i],
+                               JSPROP_ENUMERATE, nullptr, nullptr))
+            return false;
+
+        heaptools::EdgeName edgeName = Move(edges[i]);
+
+        RootedString edgeStr(cx, NewString<CanGC>(cx, edgeName.get(), js_strlen(edgeName.get())));
+        if (!edgeStr)
+            return false;
+        edgeName.release(); // edgeStr acquired ownership
+
+        if (!JS_DefineProperty(cx, obj, "edge", edgeStr, JSPROP_ENUMERATE, nullptr, nullptr))
+            return false;
+
+        result->setDenseElement(length - i - 1, ObjectValue(*obj));
+    }
+
+    args.rval().setObject(*result);
+    return true;
+}
+
+static bool
+EvalReturningScope(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    RootedString str(cx);
+    if (!JS_ConvertArguments(cx, args, "S", str.address()))
+        return false;
+
+    AutoStableStringChars strChars(cx);
+    if (!strChars.initTwoByte(cx, str))
+        return false;
+
+    mozilla::Range<const char16_t> chars = strChars.twoByteRange();
+    size_t srclen = chars.length();
+    const char16_t *src = chars.start().get();
+
+    JS::AutoFilename filename;
+    unsigned lineno;
+
+    DescribeScriptedCaller(cx, &filename, &lineno);
+
+    JS::CompileOptions options(cx);
+    options.setFileAndLine(filename.get(), lineno);
+    options.setNoScriptRval(true);
+    options.setCompileAndGo(false);
+
+    JS::SourceBufferHolder srcBuf(src, srclen, JS::SourceBufferHolder::NoOwnership);
+    RootedScript script(cx);
+    if (!JS::Compile(cx, JS::NullPtr(), options, srcBuf, &script))
+        return false;
+
+    RootedObject global(cx, JS::CurrentGlobalOrNull(cx));
+    RootedObject scope(cx);
+    if (!js::ExecuteInGlobalAndReturnScope(cx, global, script, &scope))
+        return false;
+
+    args.rval().setObject(*scope);
+    return true;
+}
+
+static bool
+IsSimdAvailable(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+#ifdef JS_CODEGEN_NONE
+    bool available = false;
+#else
+    bool available = cx->jitSupportsSimd();
+#endif
+    args.rval().set(BooleanValue(available));
+    return true;
+}
+
+static bool
+ByteSize(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    mozilla::MallocSizeOf mallocSizeOf = cx->runtime()->debuggerMallocSizeOf;
+    JS::ubi::Node node = args.get(0);
+    if (node)
+        args.rval().set(NumberValue(node.size(mallocSizeOf)));
+    else
+        args.rval().setUndefined();
+    return true;
+}
+
 static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gc", ::GC, 0, 0,
-"gc([obj] | 'compartment')",
+"gc([obj] | 'compartment' [, 'shrinking'])",
 "  Run the garbage collector. When obj is given, GC only its compartment.\n"
 "  If 'compartment' is given, GC any compartments that were scheduled for\n"
-"  GC via schedulegc."),
+"  GC via schedulegc.\n"
+"  If 'shrinking' is passes as the optional second argument, perform a\n"
+"  shrinking GC rather than a normal GC."),
 
     JS_FN_HELP("minorgc", ::MinorGC, 0, 0,
 "minorgc([aboutToOverflow])",
@@ -1739,6 +2115,7 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
 "   11: Verify post write barriers between instructions\n"
 "   12: Verify post write barriers between paints\n"
 "   13: Check internal hashtables on minor GC\n"
+"   14: Always compact arenas after GC\n"
 "  Period specifies that collection happens every n allocations.\n"),
 
     JS_FN_HELP("schedulegc", ScheduleGC, 1, 0,
@@ -1832,6 +2209,10 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
 "isAsmJSCompilationAvailable",
 "  Returns whether asm.js compilation is currently available or whether it is disabled\n"
 "  (e.g., by the debugger)."),
+
+    JS_FN_HELP("isSimdAvailable", IsSimdAvailable, 0, 0,
+"isSimdAvailable",
+"  Returns true if SIMD extensions are supported on this platform."),
 
     JS_FN_HELP("getJitCompilerOptions", GetJitCompilerOptions, 0, 0,
 "getCompilerOptions()",
@@ -1931,11 +2312,45 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
 "  then return undefined. In Gecko, this sends a memory pressure notification, which\n"
 "  can free up some memory."),
 
+    JS_FN_HELP("findPath", FindPath, 2, 0,
+"findPath(start, target)",
+"  Return an array describing one of the shortest paths of GC heap edges from\n"
+"  |start| to |target|, or |undefined| if |target| is unreachable from |start|.\n"
+"  Each element of the array is either of the form:\n"
+"    { node: <object or string>, edge: <string describing edge from node> }\n"
+"  if the node is a JavaScript object or value; or of the form:\n"
+"    { type: <string describing node>, edge: <string describing edge> }\n"
+"  if the node is some internal thing that is not a proper JavaScript value\n"
+"  (like a shape or a scope chain element). The destination of the i'th array\n"
+"  element's edge is the node of the i+1'th array element; the destination of\n"
+"  the last array element is implicitly |target|.\n"),
+
 #ifdef DEBUG
     JS_FN_HELP("dumpObject", DumpObject, 1, 0,
 "dumpObject()",
 "  Dump an internal representation of an object."),
 #endif
+
+    JS_FN_HELP("evalReturningScope", EvalReturningScope, 1, 0,
+"evalReturningScope(scriptStr)",
+"  Evaluate the script in a new scope and return the scope."),
+
+    JS_FN_HELP("backtrace", DumpBacktrace, 1, 0,
+"backtrace()",
+"  Dump out a brief backtrace."),
+
+    JS_FN_HELP("getBacktrace", GetBacktrace, 1, 0,
+"getBacktrace([options])",
+"  Return the current stack as a string. Takes an optional options object,\n"
+"  which may contain any or all of the boolean properties\n"
+"    options.args - show arguments to each function\n"
+"    options.locals - show local variables in each frame\n"
+"    options.thisprops - show the properties of the 'this' object of each frame\n"),
+
+    JS_FN_HELP("byteSize", ByteSize, 1, 0,
+"byteSize(value)",
+"  Return the size in bytes occupied by |value|, or |undefined| if value\n"
+"  is not allocated in memory.\n"),
 
     JS_FS_HELP_END
 };

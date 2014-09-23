@@ -26,10 +26,10 @@ COMPILER icc __INTEL_COMPILER
 #endif
 EOF
 read dummy compiler CC_VERSION <<EOF
-$($CC -E conftest.c 2>/dev/null | grep COMPILER)
+$($CC -E $CPPFLAGS $CFLAGS conftest.c 2>/dev/null | grep COMPILER)
 EOF
 read dummy cxxcompiler CXX_VERSION <<EOF
-$($CXX -E conftest.c 2>/dev/null | grep COMPILER)
+$($CXX -E $CPPFLAGS $CXXFLAGS conftest.c 2>/dev/null | grep COMPILER)
 EOF
 if test "$compiler" != "$cxxcompiler"; then
     AC_MSG_ERROR([Your C and C++ compilers are different.  You need to use the same compiler.])
@@ -55,12 +55,6 @@ rm -f conftest.out
 if test "`echo | $LD -v 2>&1 | grep -c GNU`" != "0"; then
     GNU_LD=1
 fi
-if test "$GNU_CC"; then
-    if `$CC -print-prog-name=ld` -v 2>&1 | grep -c GNU >/dev/null; then
-        GCC_USE_GNU_LD=1
-    fi
-fi
-
 INTEL_CC=
 INTEL_CXX=
 if test "$compiler" = "icc"; then
@@ -79,6 +73,12 @@ if test "$compiler" = "clang"; then
 fi
 if test "$compiler" = "clang-cl"; then
     CLANG_CL=1
+fi
+
+if test "$GNU_CC"; then
+    if `$CC -print-prog-name=ld` -v 2>&1 | grep -c GNU >/dev/null; then
+        GCC_USE_GNU_LD=1
+    fi
 fi
 
 AC_SUBST(CLANG_CXX)

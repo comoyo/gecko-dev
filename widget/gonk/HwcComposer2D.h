@@ -29,6 +29,10 @@
 
 namespace mozilla {
 
+namespace gl {
+    class GLContext;
+}
+
 namespace layers {
 class ContainerLayer;
 class Layer;
@@ -69,7 +73,7 @@ public:
     HwcComposer2D();
     virtual ~HwcComposer2D();
 
-    int Init(hwc_display_t aDisplay, hwc_surface_t aSurface);
+    int Init(hwc_display_t aDisplay, hwc_surface_t aSurface, gl::GLContext* aGLContext);
 
     bool Initialized() const { return mHwc; }
 
@@ -78,10 +82,16 @@ public:
     // Returns TRUE if the container has been succesfully rendered
     // Returns FALSE if the container cannot be fully rendered
     // by this composer so nothing was rendered at all
-    bool TryRender(layers::Layer* aRoot, const gfx::Matrix& aGLWorldTransform,
+    bool TryRender(layers::Layer* aRoot,
                    bool aGeometryChanged) MOZ_OVERRIDE;
 
     bool Render(EGLDisplay dpy, EGLSurface sur);
+
+    void EnableVsync(bool aEnable);
+#if ANDROID_VERSION >= 17
+    bool RegisterHwcEventCallback();
+    void Vsync(int aDisplay, int64_t aTimestamp);
+#endif
 
 private:
     void Reset();
@@ -90,14 +100,20 @@ private:
     bool TryHwComposition();
     bool ReallocLayerList();
     bool PrepareLayerList(layers::Layer* aContainer, const nsIntRect& aClip,
-          const gfxMatrix& aParentTransform, const gfxMatrix& aGLWorldTransform);
+          const gfx::Matrix& aParentTransform);
     void setCrop(HwcLayer* layer, hwc_rect_t srcCrop);
     void setHwcGeometry(bool aGeometryChanged);
+    void SendtoLayerScope();
+
+#if ANDROID_VERSION >= 17
+    void RunVsyncEventControl(bool aEnable);
+#endif
 
     HwcDevice*              mHwc;
     HwcList*                mList;
     hwc_display_t           mDpy;
     hwc_surface_t           mSur;
+    gl::GLContext*          mGLContext;
     nsIntRect               mScreenRect;
     int                     mMaxLayerCount;
     bool                    mColorFill;
@@ -111,6 +127,7 @@ private:
 #endif
     nsTArray<layers::LayerComposite*> mHwcLayerMap;
     bool                    mPrepared;
+    bool                    mHasHWVsync;
 };
 
 } // namespace mozilla

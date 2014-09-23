@@ -8,22 +8,13 @@
 
 #include "AudioSampleFormat.h"
 #include "nsAutoPtr.h"
-#include "nsAutoRef.h"
 #include "nsCOMPtr.h"
 #include "nsThreadUtils.h"
 #include "Latency.h"
 #include "mozilla/dom/AudioChannelBinding.h"
-#include "mozilla/StaticMutex.h"
 #include "mozilla/RefPtr.h"
-
-#include "cubeb/cubeb.h"
-
-template <>
-class nsAutoRefTraits<cubeb_stream> : public nsPointerRefTraits<cubeb_stream>
-{
-public:
-  static void Release(cubeb_stream* aStream) { cubeb_stream_destroy(aStream); }
-};
+#include "mozilla/UniquePtr.h"
+#include "CubebUtils.h"
 
 namespace soundtouch {
 class SoundTouch;
@@ -31,26 +22,36 @@ class SoundTouch;
 
 namespace mozilla {
 
+template<>
+struct DefaultDelete<cubeb_stream>
+{
+  void operator()(cubeb_stream* aStream) const
+  {
+    cubeb_stream_destroy(aStream);
+  }
+};
+
 class AudioStream;
+class FrameHistory;
 
 class AudioClock
 {
 public:
-  AudioClock(AudioStream* aStream);
+  explicit AudioClock(AudioStream* aStream);
   // Initialize the clock with the current AudioStream. Need to be called
   // before querying the clock. Called on the audio thread.
   void Init();
   // Update the number of samples that has been written in the audio backend.
   // Called on the state machine thread.
-  void UpdateWritePosition(uint32_t aCount);
+  void UpdateFrameHistory(uint32_t aServiced, uint32_t aUnderrun);
   // Get the read position of the stream, in microseconds.
   // Called on the state machine thead.
   // Assumes the AudioStream lock is held and thus calls Unlocked versions
   // of AudioStream funcs.
-  uint64_t GetPositionUnlocked();
+  int64_t GetPositionUnlocked() const;
   // Get the read position of the stream, in frames.
   // Called on the state machine thead.
-  uint64_t GetPositionInFrames();
+  int64_t GetPositionInFrames() const;
   // Set the playback rate.
   // Called on the audio thread.
   // Assumes the AudioStream lock is held and thus calls Unlocked versions
@@ -58,46 +59,25 @@ public:
   void SetPlaybackRateUnlocked(double aPlaybackRate);
   // Get the current playback rate.
   // Called on the audio thread.
-  double GetPlaybackRate();
+  double GetPlaybackRate() const;
   // Set if we are preserving the pitch.
   // Called on the audio thread.
   void SetPreservesPitch(bool aPreservesPitch);
   // Get the current pitch preservation state.
   // Called on the audio thread.
-  bool GetPreservesPitch();
+  bool GetPreservesPitch() const;
 private:
   // This AudioStream holds a strong reference to this AudioClock. This
   // pointer is garanteed to always be valid.
-  AudioStream* mAudioStream;
-  // The old output rate, to compensate audio latency for the period inbetween
-  // the moment resampled buffers are pushed to the hardware and the moment the
-  // clock should take the new rate into account for A/V sync.
-  int mOldOutRate;
-  // Position at which the last playback rate change occured
-  int64_t mBasePosition;
-  // Offset, in frames, at which the last playback rate change occured
-  int64_t mBaseOffset;
-  // Old base offset (number of samples), used when changing rate to compute the
-  // position in the stream.
-  int64_t mOldBaseOffset;
-  // Old base position (number of microseconds), when changing rate. This is the
-  // time in the media, not wall clock position.
-  int64_t mOldBasePosition;
-  // Write position at which the playbackRate change occured.
-  int64_t mPlaybackRateChangeOffset;
-  // The previous position reached in the media, used when compensating
-  // latency, to have the position at which the playbackRate change occured.
-  int64_t mPreviousPosition;
-  // Number of samples effectivelly written in backend, i.e. write position.
-  int64_t mWritten;
+  AudioStream* const mAudioStream;
   // Output rate in Hz (characteristic of the playback rate)
   int mOutRate;
   // Input rate in Hz (characteristic of the media being played)
   int mInRate;
   // True if the we are timestretching, false if we are resampling.
   bool mPreservesPitch;
-  // True if we are playing at the old playbackRate after it has been changed.
-  bool mCompensatingLatency;
+  // The history of frames sent to the audio engine in each Datacallback.
+  const nsAutoPtr<FrameHistory> mFrameHistory;
 };
 
 class CircularByteBuffer
@@ -178,6 +158,14 @@ public:
     return amount;
   }
 
+  void Reset()
+  {
+    mBuffer = nullptr;
+    mCapacity = 0;
+    mStart = 0;
+    mCount = 0;
+  }
+
 private:
   nsAutoArrayPtr<uint8_t> mBuffer;
   uint32_t mCapacity;
@@ -189,32 +177,15 @@ class AudioInitTask;
 
 // Access to a single instance of this class must be synchronized by
 // callers, or made from a single thread.  One exception is that access to
-// GetPosition, GetPositionInFrames, SetVolume, and Get{Rate,Channels}
-// is thread-safe without external synchronization.
+// GetPosition, GetPositionInFrames, SetVolume, and Get{Rate,Channels},
+// SetMicrophoneActive is thread-safe without external synchronization.
 class AudioStream MOZ_FINAL
 {
+  virtual ~AudioStream();
+
 public:
-  // Initialize Audio Library. Some Audio backends require initializing the
-  // library before using it.
-  static void InitLibrary();
-
-  // Shutdown Audio Library. Some Audio backends require shutting down the
-  // library after using it.
-  static void ShutdownLibrary();
-
-  // Returns the maximum number of channels supported by the audio hardware.
-  static int MaxNumberOfChannels();
-
-  // Queries the samplerate the hardware/mixer runs at, and stores it.
-  // Can be called on any thread. When this returns, it is safe to call
-  // PreferredSampleRate without locking.
-  static void InitPreferredSampleRate();
-  // Get the aformentionned sample rate. Does not lock.
-  static int PreferredSampleRate();
-
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(AudioStream)
   AudioStream();
-  virtual ~AudioStream();
 
   enum LatencyRequest {
     HighLatency,
@@ -231,6 +202,8 @@ public:
   // Closes the stream. All future use of the stream is an error.
   void Shutdown();
 
+  void Reset();
+
   // Write audio data to the audio hardware.  aBuf is an array of AudioDataValues
   // AudioDataValue of length aFrames*mChannels.  If aFrames is larger
   // than the result of Available(), the write will block until sufficient
@@ -245,8 +218,17 @@ public:
   // 0 (meaning muted) to 1 (meaning full volume).  Thread-safe.
   void SetVolume(double aVolume);
 
+  // Informs the AudioStream that a microphone is being used by someone in the
+  // application.
+  void SetMicrophoneActive(bool aActive);
+  void PanOutputIfNeeded(bool aMicrophoneActive);
+  void ResetStreamIfNeeded();
+
   // Block until buffered audio data has been consumed.
   void Drain();
+
+  // Break any blocking operation and set the stream to shutdown.
+  void Cancel();
 
   // Start the stream.
   void Start();
@@ -269,11 +251,6 @@ public:
   // was opened, of the audio hardware.  Thread-safe.
   int64_t GetPositionInFrames();
 
-  // Return the position, measured in audio framed played since the stream was
-  // opened, of the audio hardware, not adjusted for the changes of playback
-  // rate.
-  int64_t GetPositionInFramesInternal();
-
   // Returns true when the audio stream is paused.
   bool IsPaused();
 
@@ -292,7 +269,9 @@ public:
 protected:
   friend class AudioClock;
 
-  // Shared implementation of underflow adjusted position calculation.
+  // Return the position, measured in audio frames played since the stream was
+  // opened, of the audio hardware, not adjusted for the changes of playback
+  // rate or underrun frames.
   // Caller must own the monitor.
   int64_t GetPositionInFramesUnlocked();
 
@@ -302,16 +281,9 @@ private:
   // So we can call it asynchronously from AudioInitTask
   nsresult OpenCubeb(cubeb_stream_params &aParams,
                      LatencyRequest aLatencyRequest);
+  void AudioInitTaskFinished();
 
   void CheckForStart();
-
-  static void PrefChanged(const char* aPref, void* aClosure);
-  static double GetVolumeScale();
-  static bool GetFirstStream();
-  static cubeb* GetCubebContext();
-  static cubeb* GetCubebContextUnlocked();
-  static uint32_t GetCubebLatency();
-  static bool CubebLatencyPrefSet();
 
   static long DataCallback_S(cubeb_stream*, void* aThis, void* aBuffer, long aFrames)
   {
@@ -323,8 +295,14 @@ private:
     static_cast<AudioStream*>(aThis)->StateCallback(aState);
   }
 
+
+  static void DeviceChangedCallback_s(void * aThis) {
+    static_cast<AudioStream*>(aThis)->DeviceChangedCallback();
+  }
+
   long DataCallback(void* aBuffer, long aFrames);
   void StateCallback(cubeb_state aState);
+  void DeviceChangedCallback();
 
   nsresult EnsureTimeStretcherInitializedUnlocked();
 
@@ -350,6 +328,9 @@ private:
   int mOutRate;
   int mChannels;
   int mOutChannels;
+#if defined(__ANDROID__)
+  dom::AudioChannel mAudioChannel;
+#endif
   // Number of frames written to the buffers.
   int64_t mWritten;
   AudioClock mAudioClock;
@@ -371,15 +352,6 @@ private:
   };
   nsAutoTArray<Inserts, 8> mInserts;
 
-  // Suppose we have received DataCallback for N times, |mWrittenFramesPast|
-  // and |mLostFramesPast| are the sum of frames written to the backend from
-  // 1st to |N-1|th DataCallbacks.
-  uint64_t mWrittenFramesPast; // non-silent frames
-  uint64_t mLostFramesPast;    // silent frames
-  // Frames written to the backend in Nth DataCallback.
-  uint64_t mWrittenFramesLast; // non-silent frames
-  uint64_t mLostFramesLast;    // silent frames
-
   // Output file for dumping audio
   FILE* mDumpFile;
 
@@ -389,12 +361,8 @@ private:
   // frames.
   CircularByteBuffer mBuffer;
 
-  // Software volume level.  Applied during the servicing of DataCallback().
-  double mVolume;
-
-  // Owning reference to a cubeb_stream.  cubeb_stream_destroy is called by
-  // nsAutoRef's destructor.
-  nsAutoRef<cubeb_stream> mCubebStream;
+  // Owning reference to a cubeb_stream.
+  UniquePtr<cubeb_stream> mCubebStream;
 
   uint32_t mBytesPerFrame;
 
@@ -425,18 +393,15 @@ private:
   StreamState mState;
   bool mNeedsStart; // needed in case Start() is called before cubeb is open
   bool mIsFirst;
-
-  // This mutex protects the static members below.
-  static StaticMutex sMutex;
-  static cubeb* sCubebContext;
-
-  // Prefered samplerate, in Hz (characteristic of the
-  // hardware/mixer/platform/API used).
-  static uint32_t sPreferredSampleRate;
-
-  static double sVolumeScale;
-  static uint32_t sCubebLatency;
-  static bool sCubebLatencyPrefSet;
+  // True if a microphone is active.
+  bool mMicrophoneActive;
+  // When we are in the process of changing the output device, and the callback
+  // is not going to be called for a little while, simply drop incoming frames.
+  // This is only on OSX for now, because other systems handle this gracefully.
+  bool mShouldDropFrames;
+  // True if there is a pending AudioInitTask. Shutdown() will wait until the
+  // pending AudioInitTask is finished.
+  bool mPendingAudioInitTask;
 };
 
 class AudioInitTask : public nsRunnable

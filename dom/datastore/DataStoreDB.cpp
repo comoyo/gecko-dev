@@ -10,6 +10,7 @@
 #include "mozilla/dom/IDBDatabaseBinding.h"
 #include "mozilla/dom/IDBFactoryBinding.h"
 #include "mozilla/dom/indexedDB/IDBDatabase.h"
+#include "mozilla/dom/indexedDB/IDBEvents.h"
 #include "mozilla/dom/indexedDB/IDBFactory.h"
 #include "mozilla/dom/indexedDB/IDBIndex.h"
 #include "mozilla/dom/indexedDB/IDBObjectStore.h"
@@ -25,13 +26,62 @@ using namespace mozilla::dom::indexedDB;
 namespace mozilla {
 namespace dom {
 
+class VersionChangeListener MOZ_FINAL : public nsIDOMEventListener
+{
+public:
+  NS_DECL_ISUPPORTS
+
+  explicit VersionChangeListener(IDBDatabase* aDatabase)
+    : mDatabase(aDatabase)
+  {}
+
+  // nsIDOMEventListener
+  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent)
+  {
+    nsString type;
+    nsresult rv = aEvent->GetType(type);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+    if (!type.EqualsASCII("versionchange")) {
+      MOZ_ASSERT_UNREACHABLE("Expected a versionchange event");
+      return NS_ERROR_FAILURE;
+    }
+
+    rv = mDatabase->RemoveEventListener(NS_LITERAL_STRING("versionchange"),
+                                        this, false);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+#ifdef DEBUG
+    nsCOMPtr<IDBVersionChangeEvent> event = do_QueryInterface(aEvent);
+    MOZ_ASSERT(event);
+
+    Nullable<uint64_t> version = event->GetNewVersion();
+    MOZ_ASSERT(version.IsNull());
+#endif
+
+    return mDatabase->Close();
+  }
+
+private:
+  IDBDatabase* mDatabase;
+
+  ~VersionChangeListener() {}
+};
+
+NS_IMPL_ISUPPORTS(VersionChangeListener, nsIDOMEventListener)
+
 NS_IMPL_ISUPPORTS(DataStoreDB, nsIDOMEventListener)
 
 DataStoreDB::DataStoreDB(const nsAString& aManifestURL, const nsAString& aName)
   : mState(Inactive)
+  , mCreatedSchema(false)
 {
   mDatabaseName.Assign(aName);
-  mDatabaseName.AppendASCII("|");
+  mDatabaseName.Append('|');
   mDatabaseName.Append(aManifestURL);
 }
 
@@ -96,9 +146,11 @@ DataStoreDB::HandleEvent(nsIDOMEvent* aEvent)
 
     rv = DatabaseOpened();
     if (NS_WARN_IF(NS_FAILED(rv))) {
-      mCallback->Run(this, false);
+      mCallback->Run(this, DataStoreDBCallback::Error);
     } else {
-      mCallback->Run(this, true);
+      mCallback->Run(this, mCreatedSchema
+                      ? DataStoreDBCallback::CreatedSchema :
+                        DataStoreDBCallback::Success);
     }
 
     mRequest = nullptr;
@@ -106,30 +158,43 @@ DataStoreDB::HandleEvent(nsIDOMEvent* aEvent)
   }
 
   if (type.EqualsASCII("upgradeneeded")) {
-    return UpgradeSchema();
+    return UpgradeSchema(aEvent);
   }
 
   if (type.EqualsASCII("error") || type.EqualsASCII("blocked")) {
     RemoveEventListeners();
     mState = Inactive;
-    mCallback->Run(this, false);
+    mCallback->Run(this, DataStoreDBCallback::Error);
     mRequest = nullptr;
     return NS_OK;
   }
 
-  MOZ_ASSUME_UNREACHABLE("This should not happen");
-  return NS_OK;
+  MOZ_CRASH("This should not happen");
 }
 
 nsresult
-DataStoreDB::UpgradeSchema()
+DataStoreDB::UpgradeSchema(nsIDOMEvent* aEvent)
 {
   MOZ_ASSERT(NS_IsMainThread());
+
+  // This DB has been just created and we have to inform the callback about
+  // this.
+  mCreatedSchema = true;
+
+#ifdef DEBUG
+  nsCOMPtr<IDBVersionChangeEvent> event = do_QueryInterface(aEvent);
+  MOZ_ASSERT(event);
+
+  Nullable<uint64_t> version = event->GetNewVersion();
+  MOZ_ASSERT(!version.IsNull());
+  MOZ_ASSERT(version.Value() == DATASTOREDB_VERSION);
+#endif
 
   AutoSafeJSContext cx;
 
   ErrorResult error;
-  JS::Rooted<JS::Value> result(cx, mRequest->GetResult(error));
+  JS::Rooted<JS::Value> result(cx);
+  mRequest->GetResult(&result, error);
   if (NS_WARN_IF(error.Failed())) {
     return error.ErrorCode();
   }
@@ -190,7 +255,8 @@ DataStoreDB::DatabaseOpened()
   AutoSafeJSContext cx;
 
   ErrorResult error;
-  JS::Rooted<JS::Value> result(cx, mRequest->GetResult(error));
+  JS::Rooted<JS::Value> result(cx);
+  mRequest->GetResult(&result, error);
   if (NS_WARN_IF(error.Failed())) {
     return error.ErrorCode();
   }
@@ -200,6 +266,14 @@ DataStoreDB::DatabaseOpened()
   nsresult rv = UNWRAP_OBJECT(IDBDatabase, &result.toObject(), mDatabase);
   if (NS_FAILED(rv)) {
     NS_WARNING("Didn't get the object we expected!");
+    return rv;
+  }
+
+  nsRefPtr<VersionChangeListener> listener =
+    new VersionChangeListener(mDatabase);
+  rv = mDatabase->EventTarget::AddEventListener(
+    NS_LITERAL_STRING("versionchange"), listener, false);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 

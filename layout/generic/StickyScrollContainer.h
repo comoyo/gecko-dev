@@ -16,7 +16,7 @@
 #include "nsTArray.h"
 #include "nsIScrollPositionListener.h"
 
-class nsRect;
+struct nsRect;
 class nsIFrame;
 class nsIScrollableFrame;
 
@@ -87,7 +87,7 @@ public:
   virtual void ScrollPositionDidChange(nscoord aX, nscoord aY) MOZ_OVERRIDE;
 
 private:
-  StickyScrollContainer(nsIScrollableFrame* aScrollFrame);
+  explicit StickyScrollContainer(nsIScrollableFrame* aScrollFrame);
   ~StickyScrollContainer();
 
   /**

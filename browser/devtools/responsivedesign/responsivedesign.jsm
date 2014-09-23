@@ -1,4 +1,4 @@
-/* -*- Mode: Javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -12,6 +12,8 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource:///modules/devtools/gDevTools.jsm");
 Cu.import("resource:///modules/devtools/FloatingScrollbars.jsm");
 Cu.import("resource://gre/modules/devtools/event-emitter.js");
+XPCOMUtils.defineLazyModuleGetter(this, "SystemAppProxy",
+                                  "resource://gre/modules/SystemAppProxy.jsm");
 
 var require = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools.require;
 let Telemetry = require("devtools/shared/telemetry");
@@ -27,6 +29,8 @@ const MAX_HEIGHT = 10000;
 
 const SLOW_RATIO = 6;
 const ROUND_RATIO = 10;
+
+const INPUT_PARSER = /(\d+)[^\d]+(\d+)/;
 
 this.ResponsiveUIManager = {
   /**
@@ -118,7 +122,6 @@ function ResponsiveUI(aWindow, aTab)
   this._telemetry = new Telemetry();
   this._floatingScrollbars = !this.mainWindow.matchMedia("(-moz-overlay-scrollbars)").matches;
 
-
   // Try to load presets from prefs
   if (Services.prefs.prefHasUserValue("devtools.responsiveUI.presets")) {
     try {
@@ -162,6 +165,7 @@ function ResponsiveUI(aWindow, aTab)
   this.bound_onPageLoad = this.onPageLoad.bind(this);
   this.bound_onPageUnload = this.onPageUnload.bind(this);
   this.bound_presetSelected = this.presetSelected.bind(this);
+  this.bound_handleManualInput = this.handleManualInput.bind(this);
   this.bound_addPreset = this.addPreset.bind(this);
   this.bound_removePreset = this.removePreset.bind(this);
   this.bound_rotate = this.rotate.bind(this);
@@ -171,12 +175,10 @@ function ResponsiveUI(aWindow, aTab)
   this.bound_startResizing = this.startResizing.bind(this);
   this.bound_stopResizing = this.stopResizing.bind(this);
   this.bound_onDrag = this.onDrag.bind(this);
-  this.bound_onKeypress = this.onKeypress.bind(this);
 
   // Events
   this.tab.addEventListener("TabClose", this);
   this.tabContainer.addEventListener("TabSelect", this);
-  this.mainWindow.document.addEventListener("keypress", this.bound_onKeypress, false);
 
   this.buildUI();
   this.checkMenus();
@@ -213,7 +215,8 @@ function ResponsiveUI(aWindow, aTab)
     this.onPageLoad();
   }
 
-  ResponsiveUIManager.emit("on", this.tab, this);
+  // E10S: We should be using target here. See bug 1028234
+  ResponsiveUIManager.emit("on", { tab: this.tab });
 }
 
 ResponsiveUI.prototype = {
@@ -279,8 +282,8 @@ ResponsiveUI.prototype = {
       this.stopResizing();
 
     // Remove listeners.
-    this.mainWindow.document.removeEventListener("keypress", this.bound_onKeypress, false);
     this.menulist.removeEventListener("select", this.bound_presetSelected, true);
+    this.menulist.removeEventListener("change", this.bound_handleManualInput, true);
     this.tab.removeEventListener("TabClose", this);
     this.tabContainer.removeEventListener("TabSelect", this);
     this.rotatebutton.removeEventListener("command", this.bound_rotate, true);
@@ -292,9 +295,15 @@ ResponsiveUI.prototype = {
 
     // Removed elements.
     this.container.removeChild(this.toolbar);
+    if (this.bottomToolbar) {
+      this.bottomToolbar.remove();
+      delete this.bottomToolbar;
+    }
     this.stack.removeChild(this.resizer);
     this.stack.removeChild(this.resizeBarV);
     this.stack.removeChild(this.resizeBarH);
+
+    this.stack.classList.remove("fxos-mode");
 
     // Unset the responsive mode.
     this.container.removeAttribute("responsivemode");
@@ -305,22 +314,8 @@ ResponsiveUI.prototype = {
     if (this.touchEventHandler)
       this.touchEventHandler.stop();
     this._telemetry.toolClosed("responsive");
-    ResponsiveUIManager.emit("off", this.tab, this);
-  },
-
-  /**
-   * Handle keypressed.
-   *
-   * @param aEvent
-   */
-  onKeypress: function RUI_onKeypress(aEvent) {
-    if (aEvent.keyCode == this.mainWindow.KeyEvent.DOM_VK_ESCAPE &&
-        this.mainWindow.gBrowser.selectedBrowser == this.browser) {
-
-      aEvent.preventDefault();
-      aEvent.stopPropagation();
-      this.close();
-    }
+    // E10S: We should be using target here. See bug 1028234
+    ResponsiveUIManager.emit("off", { tab: this.tab });
   },
 
   /**
@@ -370,7 +365,16 @@ ResponsiveUI.prototype = {
    *    <box class="devtools-responsiveui-resizehandle" bottom="0" right="0"/>
    *    <box class="devtools-responsiveui-resizebarV" top="0" right="0"/>
    *    <box class="devtools-responsiveui-resizebarH" bottom="0" left="0"/>
+   *    // Additional button in FxOS mode:
+   *    <button class="devtools-responsiveui-sleep-button" />
+   *    <vbox class="devtools-responsiveui-volume-buttons">
+   *      <button class="devtools-responsiveui-volume-up-button" />
+   *      <button class="devtools-responsiveui-volume-down-button" />
+   *    </vbox>
    *  </stack>
+   *  <toolbar class="devtools-responsiveui-hardware-button">
+   *    <toolbarbutton class="devtools-responsiveui-home-button" />
+   *  </toolbar>
    * </vbox>
    */
   buildUI: function RUI_buildUI() {
@@ -380,8 +384,10 @@ ResponsiveUI.prototype = {
 
     this.menulist = this.chromeDoc.createElement("menulist");
     this.menulist.className = "devtools-responsiveui-menulist";
+    this.menulist.setAttribute("editable", "true");
 
     this.menulist.addEventListener("select", this.bound_presetSelected, true);
+    this.menulist.addEventListener("change", this.bound_handleManualInput, true);
 
     this.menuitems = new Map();
 
@@ -460,6 +466,96 @@ ResponsiveUI.prototype = {
     this.stack.appendChild(this.resizeBarH);
   },
 
+  // FxOS custom controls
+  buildPhoneUI: function () {
+    this.stack.classList.add("fxos-mode");
+
+    let sleepButton = this.chromeDoc.createElement("button");
+    sleepButton.className = "devtools-responsiveui-sleep-button";
+    sleepButton.setAttribute("top", 0);
+    sleepButton.setAttribute("right", 0);
+    sleepButton.addEventListener("mousedown", function() {
+      SystemAppProxy.dispatchEvent({type: "sleep-button-press"});
+    });
+    sleepButton.addEventListener("mouseup", function() {
+      SystemAppProxy.dispatchEvent({type: "sleep-button-release"});
+    });
+    this.stack.appendChild(sleepButton);
+
+    let volumeButtons = this.chromeDoc.createElement("vbox");
+    volumeButtons.className = "devtools-responsiveui-volume-buttons";
+    volumeButtons.setAttribute("top", 0);
+    volumeButtons.setAttribute("left", 0);
+
+    let volumeUp = this.chromeDoc.createElement("button");
+    volumeUp.className = "devtools-responsiveui-volume-up-button";
+    volumeUp.addEventListener("mousedown", function() {
+      SystemAppProxy.dispatchEvent({type: "volume-up-button-press"});
+    });
+    volumeUp.addEventListener("mouseup", function() {
+      SystemAppProxy.dispatchEvent({type: "volume-up-button-release"});
+    });
+
+    let volumeDown = this.chromeDoc.createElement("button");
+    volumeDown.className = "devtools-responsiveui-volume-down-button";
+    volumeDown.addEventListener("mousedown", function() {
+      SystemAppProxy.dispatchEvent({type: "volume-down-button-press"});
+    });
+    volumeDown.addEventListener("mouseup", function() {
+      SystemAppProxy.dispatchEvent({type: "volume-down-button-release"});
+    });
+
+    volumeButtons.appendChild(volumeUp);
+    volumeButtons.appendChild(volumeDown);
+    this.stack.appendChild(volumeButtons);
+
+    let bottomToolbar = this.chromeDoc.createElement("toolbar");
+    bottomToolbar.className = "devtools-responsiveui-hardware-buttons";
+    bottomToolbar.setAttribute("align", "center");
+    bottomToolbar.setAttribute("pack", "center");
+
+    let homeButton = this.chromeDoc.createElement("toolbarbutton");
+    homeButton.className = "devtools-responsiveui-toolbarbutton devtools-responsiveui-home-button";
+    homeButton.addEventListener("mousedown", function() {
+      SystemAppProxy.dispatchEvent({type: "home-button-press"});
+    });
+    homeButton.addEventListener("mouseup", function() {
+      SystemAppProxy.dispatchEvent({type: "home-button-release"});
+    });
+    bottomToolbar.appendChild(homeButton);
+    this.bottomToolbar = bottomToolbar;
+    this.container.appendChild(bottomToolbar);
+  },
+
+  /**
+   * Validate and apply any user input on the editable menulist
+   */
+  handleManualInput: function RUI_handleManualInput() {
+    let userInput = this.menulist.inputField.value;
+    let value = INPUT_PARSER.exec(userInput);
+    let selectedPreset = this.menuitems.get(this.selectedItem);
+
+    // In case of an invalide value, we show back the last preset
+    if (!value || value.length < 3) {
+      this.setMenuLabel(this.selectedItem, selectedPreset);
+      return;
+    }
+
+    this.rotateValue = false;
+
+    if (!selectedPreset.custom) {
+      let menuitem = this.customMenuitem;
+      this.currentPresetKey = this.customPreset.key;
+      this.menulist.selectedItem = menuitem;
+    }
+
+    let w = this.customPreset.width = parseInt(value[1],10);
+    let h = this.customPreset.height = parseInt(value[2],10);
+
+    this.saveCustomSize();
+    this.setSize(w, h);
+  },
+
   /**
    * Build the presets list and append it to the menupopup.
    *
@@ -496,15 +592,19 @@ ResponsiveUI.prototype = {
    */
   setMenuLabel: function RUI_setMenuLabel(aMenuitem, aPreset) {
     let size = Math.round(aPreset.width) + "x" + Math.round(aPreset.height);
-    if (aPreset.custom) {
-      let str = this.strings.formatStringFromName("responsiveUI.customResolution", [size], 1);
-      aMenuitem.setAttribute("label", str);
-    } else if (aPreset.name != null && aPreset.name !== "") {
-      let str = this.strings.formatStringFromName("responsiveUI.namedResolution", [size, aPreset.name], 2);
-      aMenuitem.setAttribute("label", str);
-    } else {
-      aMenuitem.setAttribute("label", size);
+
+    // .inputField might be not reachable yet (async XBL loading)
+    if (this.menulist.inputField) {
+      this.menulist.inputField.value = size;
     }
+
+    if (aPreset.custom) {
+      size = this.strings.formatStringFromName("responsiveUI.customResolution", [size], 1);
+    } else if (aPreset.name != null && aPreset.name !== "") {
+      size = this.strings.formatStringFromName("responsiveUI.namedResolution", [size, aPreset.name], 2);
+    }
+
+    aMenuitem.setAttribute("label", size);
   },
 
   /**
@@ -672,7 +772,7 @@ ResponsiveUI.prototype = {
     if (!filename) {
       let date = new Date();
       let month = ("0" + (date.getMonth() + 1)).substr(-2, 2);
-      let day = ("0" + (date.getDay() + 1)).substr(-2, 2);
+      let day = ("0" + date.getDate()).substr(-2, 2);
       let dateString = [date.getFullYear(), month, day].join("-");
       let timeString = date.toTimeString().replace(/:/g, ".").split(" ")[0];
       filename = this.strings.formatStringFromName("responsiveUI.screenshotGeneratedFilename", [dateString, timeString], 2);
@@ -777,7 +877,7 @@ ResponsiveUI.prototype = {
 
     let selectedPreset = this.menuitems.get(this.selectedItem);
 
-    // We uptate the custom menuitem if we are using it
+    // We update the custom menuitem if we are using it
     if (selectedPreset.custom) {
       selectedPreset.width = aWidth;
       selectedPreset.height = aHeight;

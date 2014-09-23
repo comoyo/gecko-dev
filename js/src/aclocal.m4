@@ -12,6 +12,7 @@ builtin(include, ../../build/autoconf/ccache.m4)dnl
 builtin(include, ../../build/autoconf/wrapper.m4)dnl
 builtin(include, ../../build/autoconf/pkg.m4)dnl
 builtin(include, ../../build/autoconf/nspr.m4)dnl
+builtin(include, ../../build/autoconf/nspr-build.m4)dnl
 builtin(include, ../../build/autoconf/codeset.m4)dnl
 builtin(include, ../../build/autoconf/altoptions.m4)dnl
 builtin(include, ../../build/autoconf/mozprog.m4)dnl
@@ -32,6 +33,7 @@ builtin(include, ../../build/autoconf/python-virtualenv.m4)dnl
 builtin(include, ../../build/autoconf/winsdk.m4)dnl
 builtin(include, ../../build/autoconf/icu.m4)dnl
 builtin(include, ../../build/autoconf/ffi.m4)dnl
+builtin(include, ../../build/autoconf/clang-plugin.m4)dnl
 
 define([__MOZ_AC_INIT_PREPARE], defn([AC_INIT_PREPARE]))
 define([AC_INIT_PREPARE],

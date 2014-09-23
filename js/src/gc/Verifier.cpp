@@ -22,7 +22,6 @@
 
 using namespace js;
 using namespace js::gc;
-using namespace mozilla;
 
 #ifdef JS_GC_ZEAL
 
@@ -103,7 +102,7 @@ struct VerifyPreTracer : JSTracer
     NodeMap nodemap;
 
     VerifyPreTracer(JSRuntime *rt, JSTraceCallback callback)
-      : JSTracer(rt, callback), noggc(rt), number(rt->gc.number), count(0), root(nullptr)
+      : JSTracer(rt, callback), noggc(rt), number(rt->gc.gcNumber()), count(0), root(nullptr)
     {}
 
     ~VerifyPreTracer() {
@@ -183,7 +182,7 @@ gc::GCRuntime::startVerifyPreBarriers()
     if (verifyPostData)
         return;
 
-    MinorGC(rt, JS::gcreason::EVICT_NURSERY);
+    evictNursery();
 
     AutoPrepareForTracing prep(rt, WithAtoms);
 
@@ -249,10 +248,10 @@ gc::GCRuntime::startVerifyPreBarriers()
     incrementalState = MARK;
     marker.start();
 
-    rt->setNeedsBarrier(true);
+    rt->setNeedsIncrementalBarrier(true);
     for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next()) {
         PurgeJITCaches(zone);
-        zone->setNeedsBarrier(true, Zone::UpdateIon);
+        zone->setNeedsIncrementalBarrier(true, Zone::UpdateJit);
         zone->allocator.arenas.purge();
     }
 
@@ -265,7 +264,7 @@ oom:
 }
 
 static bool
-IsMarkedOrAllocated(Cell *cell)
+IsMarkedOrAllocated(TenuredCell *cell)
 {
     return cell->isMarked() || cell->arenaHeader()->allocatedDuringIncremental;
 }
@@ -301,11 +300,13 @@ CheckEdge(JSTracer *jstrc, void **thingp, JSGCTraceKind kind)
 static void
 AssertMarkedOrAllocated(const EdgeValue &edge)
 {
-    if (!edge.thing || IsMarkedOrAllocated(static_cast<Cell *>(edge.thing)))
+    if (!edge.thing || IsMarkedOrAllocated(TenuredCell::fromPointer(edge.thing)))
         return;
 
-    // Permanent atoms aren't marked during graph traversal.
+    // Permanent atoms and well-known symbols aren't marked during graph traversal.
     if (edge.kind == JSTRACE_STRING && static_cast<JSString *>(edge.thing)->isPermanentAtom())
+        return;
+    if (edge.kind == JSTRACE_SYMBOL && static_cast<JS::Symbol *>(edge.thing)->isWellKnownSymbol())
         return;
 
     char msgbuf[1024];
@@ -332,13 +333,13 @@ gc::GCRuntime::endVerifyPreBarriers()
 
     /* We need to disable barriers before tracing, which may invoke barriers. */
     for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next()) {
-        if (!zone->needsBarrier())
+        if (!zone->needsIncrementalBarrier())
             compartmentCreated = true;
 
-        zone->setNeedsBarrier(false, Zone::UpdateIon);
+        zone->setNeedsIncrementalBarrier(false, Zone::UpdateJit);
         PurgeJITCaches(zone);
     }
-    rt->setNeedsBarrier(false);
+    rt->setNeedsIncrementalBarrier(false);
 
     /*
      * We need to bump gcNumber so that the methodjit knows that jitcode has
@@ -390,7 +391,7 @@ struct VerifyPostTracer : JSTracer
     EdgeSet *edges;
 
     VerifyPostTracer(JSRuntime *rt, JSTraceCallback callback)
-      : JSTracer(rt, callback), number(rt->gc.number), count(0)
+      : JSTracer(rt, callback), number(rt->gc.gcNumber()), count(0)
     {}
 };
 
@@ -409,7 +410,7 @@ gc::GCRuntime::startVerifyPostBarriers()
         return;
     }
 
-    MinorGC(rt, JS::gcreason::EVICT_NURSERY);
+    evictNursery();
 
     number++;
 

@@ -9,6 +9,7 @@
 #include <stddef.h>                     // for size_t
 #include <stdint.h>                     // for uint32_t, uint64_t
 #include "CompositableTransactionParent.h"
+#include "CompositorParent.h"
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT_HELPER2
 #include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
 #include "mozilla/ipc/ProtocolUtils.h"
@@ -36,8 +37,8 @@ namespace layers {
  * It's purpose is mainly to setup the IPDL connection. Most of the
  * interesting stuff is in ImageContainerParent.
  */
-class ImageBridgeParent : public PImageBridgeParent,
-                          public CompositableParentManager
+class ImageBridgeParent MOZ_FINAL : public PImageBridgeParent,
+                                    public CompositableParentManager
 {
 public:
   typedef InfallibleTArray<CompositableOperation> EditArray;
@@ -88,7 +89,7 @@ public:
   // Shutdown step 2
   virtual bool RecvStop() MOZ_OVERRIDE;
 
-  MessageLoop * GetMessageLoop();
+  virtual MessageLoop* GetMessageLoop() const MOZ_OVERRIDE;
 
 
   // ISurfaceAllocator
@@ -97,14 +98,14 @@ public:
                   ipc::SharedMemory::SharedMemoryType aType,
                   ipc::Shmem* aShmem) MOZ_OVERRIDE
   {
-    return AllocShmem(aSize, aType, aShmem);
+    return PImageBridgeParent::AllocShmem(aSize, aType, aShmem);
   }
 
   bool AllocUnsafeShmem(size_t aSize,
                         ipc::SharedMemory::SharedMemoryType aType,
                         ipc::Shmem* aShmem) MOZ_OVERRIDE
   {
-    return AllocUnsafeShmem(aSize, aType, aShmem);
+    return PImageBridgeParent::AllocUnsafeShmem(aSize, aType, aShmem);
   }
 
   void DeallocShmem(ipc::Shmem& aShmem) MOZ_OVERRIDE
@@ -151,6 +152,10 @@ private:
    * Map of all living ImageBridgeParent instances
    */
   static std::map<base::ProcessId, ImageBridgeParent*> sImageBridges;
+
+  static MessageLoop* sMainLoop;
+
+  nsRefPtr<CompositorThreadHolder> mCompositorThreadHolder;
 };
 
 } // layers

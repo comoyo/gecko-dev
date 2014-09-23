@@ -1,3 +1,4 @@
+/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim:set ts=4 sw=4 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -942,6 +943,15 @@ nsSocketTransport::InitWithConnectedSocket(PRFileDesc *fd, const NetAddr *addr)
 }
 
 nsresult
+nsSocketTransport::InitWithConnectedSocket(PRFileDesc* aFD,
+                                           const NetAddr* aAddr,
+                                           nsISupports* aSecInfo)
+{
+    mSecInfo = aSecInfo;
+    return InitWithConnectedSocket(aFD, aAddr);
+}
+
+nsresult
 nsSocketTransport::PostEvent(uint32_t type, nsresult status, nsISupports *param)
 {
     SOCKET_LOG(("nsSocketTransport::PostEvent [this=%p type=%u status=%x param=%p]\n",
@@ -998,8 +1008,12 @@ nsSocketTransport::ResolveHost()
 #endif
             // When not resolving mHost locally, we still want to ensure that
             // it only contains valid characters.  See bug 304904 for details.
-            if (!net_IsValidHostName(mHost))
+            // Sometimes the end host is not yet known and mHost is *
+            if (!net_IsValidHostName(mHost) &&
+                !mHost.Equals(NS_LITERAL_CSTRING("*"))) {
+                SOCKET_LOG(("  invalid hostname %s\n", mHost.get()));
                 return NS_ERROR_UNKNOWN_HOST;
+            }
         }
         if (mProxyTransparentResolvesHost) {
             // Name resolution is done on the server side.  Just pretend
@@ -1163,7 +1177,6 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
         }
     }
 
-    CleanupTypes();
     return rv;
 }
 
@@ -1172,14 +1185,31 @@ nsSocketTransport::InitiateSocket()
 {
     SOCKET_LOG(("nsSocketTransport::InitiateSocket [this=%p]\n", this));
 
+    static bool crashOnNonLocalConnections = !!getenv("MOZ_DISABLE_NONLOCAL_CONNECTIONS");
+
     nsresult rv;
+    bool isLocal;
+    IsLocal(&isLocal);
 
     if (gIOService->IsOffline()) {
-        bool isLocal;
-
-        IsLocal(&isLocal);
         if (!isLocal)
             return NS_ERROR_OFFLINE;
+    } else if (!isLocal) {
+        if (NS_SUCCEEDED(mCondition) &&
+            crashOnNonLocalConnections &&
+            !(IsIPAddrAny(&mNetAddr) || IsIPAddrLocal(&mNetAddr))) {
+            nsAutoCString ipaddr;
+            nsRefPtr<nsNetAddr> netaddr = new nsNetAddr(&mNetAddr);
+            netaddr->GetAddress(ipaddr);
+            fprintf_stderr(stderr,
+                           "FATAL ERROR: Non-local network connections are disabled and a connection "
+                           "attempt to %s (%s) was made.\nYou should only access hostnames "
+                           "available via the test networking proxy (if running mochitests) "
+                           "or from a test-specific httpd.js server (if running xpcshell tests). "
+                           "Browser services should be disabled or redirected to a local server.\n",
+                           mHost.get(), ipaddr.get());
+            MOZ_CRASH("Attempting to connect to non-local address!");
+        }
     }
 
     // Hosts/Proxy Hosts that are Local IP Literals should not be speculatively
@@ -1587,7 +1617,7 @@ nsSocketTransport::GetFD_Locked()
 class ThunkPRClose : public nsRunnable
 {
 public:
-  ThunkPRClose(PRFileDesc *fd) : mFD(fd) {}
+  explicit ThunkPRClose(PRFileDesc *fd) : mFD(fd) {}
 
   NS_IMETHOD Run()
   {

@@ -16,7 +16,7 @@ namespace mozilla {
 class AppleMP3Reader : public MediaDecoderReader
 {
 public:
-  AppleMP3Reader(AbstractMediaDecoder *aDecoder);
+  explicit AppleMP3Reader(AbstractMediaDecoder *aDecoder);
   virtual ~AppleMP3Reader() MOZ_OVERRIDE;
 
   virtual nsresult Init(MediaDecoderReader* aCloneDonor) MOZ_OVERRIDE;
@@ -50,6 +50,8 @@ public:
   virtual void NotifyDataArrived(const char* aBuffer,
                                  uint32_t aLength,
                                  int64_t aOffset) MOZ_OVERRIDE;
+
+  virtual bool IsMediaSeekable() MOZ_OVERRIDE;
 
 private:
   void SetupDecoder();

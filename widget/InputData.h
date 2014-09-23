@@ -13,8 +13,14 @@
 #include "mozilla/EventForwards.h"
 #include "mozilla/TimeStamp.h"
 
+template<class E> struct already_AddRefed;
+class nsIWidget;
+
 namespace mozilla {
 
+namespace dom {
+class Touch;
+}
 
 enum InputType
 {
@@ -38,6 +44,11 @@ class TapGestureInput;
   { \
     NS_ABORT_IF_FALSE(mInputType == enumID, "Invalid cast of InputData."); \
     return (const type&) *this; \
+  } \
+  type& As##type() \
+  { \
+    NS_ABORT_IF_FALSE(mInputType == enumID, "Invalid cast of InputData."); \
+    return (type&) *this; \
   }
 
 /** Base input data class. Should never be instantiated. */
@@ -108,13 +119,13 @@ public:
       mRotationAngle(aRotationAngle),
       mForce(aForce)
   {
-
-
   }
 
   SingleTouchData()
   {
   }
+
+  already_AddRefed<dom::Touch> ToNewDOMTouch() const;
 
   // A unique number assigned to each SingleTouchData within a MultiTouchInput so
   // that they can be easily distinguished when handling a touch start/move/end.
@@ -155,8 +166,6 @@ public:
     MULTITOUCH_START,
     MULTITOUCH_MOVE,
     MULTITOUCH_END,
-    MULTITOUCH_ENTER,
-    MULTITOUCH_LEAVE,
     MULTITOUCH_CANCEL
   };
 
@@ -165,15 +174,22 @@ public:
     : InputData(MULTITOUCH_INPUT, aTime, aTimeStamp, aModifiers),
       mType(aType)
   {
-
-
   }
 
   MultiTouchInput()
   {
   }
 
-  MultiTouchInput(const WidgetTouchEvent& aTouchEvent);
+  MultiTouchInput(const MultiTouchInput& aOther)
+    : InputData(MULTITOUCH_INPUT, aOther.mTime,
+                aOther.mTimeStamp, aOther.modifiers)
+    , mType(aOther.mType)
+  {
+    mTouches.AppendElements(aOther.mTouches);
+  }
+
+  explicit MultiTouchInput(const WidgetTouchEvent& aTouchEvent);
+  WidgetTouchEvent ToWidgetTouchEvent(nsIWidget* aWidget) const;
 
   // This conversion from WidgetMouseEvent to MultiTouchInput is needed because
   // on the B2G emulator we can only receive mouse events, but we need to be
@@ -181,7 +197,7 @@ public:
   // the panning code can handle. This code is very limited and only supports
   // SingleTouchData. It also sends garbage for the identifier, radius, force
   // and rotation angle.
-  MultiTouchInput(const WidgetMouseEvent& aMouseEvent);
+  explicit MultiTouchInput(const WidgetMouseEvent& aMouseEvent);
 
   MultiTouchType mType;
   nsTArray<SingleTouchData> mTouches;

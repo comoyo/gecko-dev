@@ -27,14 +27,15 @@ class ErrorResult;
 namespace dom {
 
 class OwningNodeOrHTMLCollection;
-template<typename> class Nullable;
+template<typename> struct Nullable;
 
 class HTMLAllCollection MOZ_FINAL : public nsISupports
                                   , public nsWrapperCache
 {
-public:
-  HTMLAllCollection(nsHTMLDocument* aDocument);
   ~HTMLAllCollection();
+
+public:
+  explicit HTMLAllCollection(nsHTMLDocument* aDocument);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(HTMLAllCollection)

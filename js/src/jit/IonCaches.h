@@ -14,13 +14,11 @@
 #endif
 #include "jit/Registers.h"
 #include "jit/shared/Assembler-shared.h"
+#include "vm/TypedArrayCommon.h"
 
 namespace js {
 
 class LockedJSContext;
-class TypedArrayObject;
-
-typedef Handle<TypedArrayObject *> HandleTypedArrayObject;
 
 namespace jit {
 
@@ -47,7 +45,7 @@ class IonCacheVisitor
   public:
 #define VISIT_INS(op)                                               \
     virtual bool visit##op##IC(CodeGenerator *codegen) {            \
-        MOZ_ASSUME_UNREACHABLE("NYI: " #op "IC");                   \
+        MOZ_CRASH("NYI: " #op "IC");                                \
     }
 
     IONCACHE_KIND_LIST(VISIT_INS)
@@ -213,6 +211,9 @@ class IonCache
         profilerLeavePc_ = pc;
     }
 
+    // Get the address at which IC rejoins the mainline jitcode.
+    virtual void *rejoinAddress() = 0;
+
     virtual void emitInitialJump(MacroAssembler &masm, AddCacheState &addState) = 0;
     virtual void bindInitialJump(MacroAssembler &masm, AddCacheState &addState) = 0;
     virtual void updateBaseAddress(JitCode *code, MacroAssembler &masm);
@@ -375,7 +376,7 @@ class RepatchIonCache : public IonCache
 #if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
         uint32_t i = 0;
         while (i < REJOIN_LABEL_OFFSET)
-            ptr = Assembler::nextInstruction(ptr, &i);
+            ptr = Assembler::NextInstruction(ptr, &i);
 #endif
         return CodeLocationLabel(ptr);
     }
@@ -398,6 +399,10 @@ class RepatchIonCache : public IonCache
 
     // Update the labels once the code is finalized.
     void updateBaseAddress(JitCode *code, MacroAssembler &masm);
+
+    virtual void *rejoinAddress() MOZ_OVERRIDE {
+        return rejoinLabel().raw();
+    }
 };
 
 //
@@ -496,6 +501,10 @@ class DispatchIonCache : public IonCache
 
     // Fix up the first stub pointer once the code is finalized.
     void updateBaseAddress(JitCode *code, MacroAssembler &masm);
+
+    virtual void *rejoinAddress() MOZ_OVERRIDE {
+        return rejoinLabel_.raw();
+    }
 };
 
 // Define the cache kind and pre-declare data structures used for calling inline
@@ -549,6 +558,7 @@ class GetPropertyIC : public RepatchIonCache
 
     bool monitoredResult_ : 1;
     bool hasTypedArrayLengthStub_ : 1;
+    bool hasSharedTypedArrayLengthStub_ : 1;
     bool hasStrictArgumentsLengthStub_ : 1;
     bool hasNormalArgumentsLengthStub_ : 1;
     bool hasGenericProxyStub_ : 1;
@@ -566,6 +576,7 @@ class GetPropertyIC : public RepatchIonCache
         numLocations_(0),
         monitoredResult_(monitoredResult),
         hasTypedArrayLengthStub_(false),
+        hasSharedTypedArrayLengthStub_(false),
         hasStrictArgumentsLengthStub_(false),
         hasNormalArgumentsLengthStub_(false),
         hasGenericProxyStub_(false)
@@ -588,14 +599,24 @@ class GetPropertyIC : public RepatchIonCache
     bool monitoredResult() const {
         return monitoredResult_;
     }
-    bool hasTypedArrayLengthStub() const {
-        return hasTypedArrayLengthStub_;
+    bool hasAnyTypedArrayLengthStub(HandleObject obj) const {
+        return obj->is<TypedArrayObject>() ? hasTypedArrayLengthStub_ : hasSharedTypedArrayLengthStub_;
     }
     bool hasArgumentsLengthStub(bool strict) const {
         return strict ? hasStrictArgumentsLengthStub_ : hasNormalArgumentsLengthStub_;
     }
     bool hasGenericProxyStub() const {
         return hasGenericProxyStub_;
+    }
+
+    void setHasTypedArrayLengthStub(HandleObject obj) {
+        if (obj->is<TypedArrayObject>()) {
+            JS_ASSERT(!hasTypedArrayLengthStub_);
+            hasTypedArrayLengthStub_ = true;
+        } else {
+            JS_ASSERT(!hasSharedTypedArrayLengthStub_);
+            hasSharedTypedArrayLengthStub_ = true;
+        }
     }
 
     void setLocationInfo(size_t locationsIndex, size_t numLocations) {
@@ -724,7 +745,8 @@ class SetPropertyIC : public RepatchIonCache
                           void *returnAddr);
 
     bool attachAddSlot(JSContext *cx, HandleScript outerScript, IonScript *ion,
-                       HandleObject obj, HandleShape oldShape, bool checkTypeset);
+                       HandleObject obj, HandleShape oldShape, HandleTypeObject oldType,
+                       bool checkTypeset);
 
     bool attachGenericProxy(JSContext *cx, HandleScript outerScript, IonScript *ion,
                             void *returnAddr);
@@ -824,7 +846,7 @@ class GetElementIC : public RepatchIonCache
                             HandleObject obj, const Value &idval);
 
     bool attachTypedArrayElement(JSContext *cx, HandleScript outerScript, IonScript *ion,
-                                 HandleTypedArrayObject tarr, const Value &idval);
+                                 HandleObject tarr, const Value &idval);
 
     bool attachArgumentsElement(JSContext *cx, HandleScript outerScript, IonScript *ion,
                                 HandleObject obj);
@@ -851,7 +873,8 @@ class SetElementIC : public RepatchIonCache
     Register object_;
     Register tempToUnboxIndex_;
     Register temp_;
-    FloatRegister tempFloat_;
+    FloatRegister tempDouble_;
+    FloatRegister tempFloat32_;
     ValueOperand index_;
     ConstantOrRegister value_;
     bool strict_;
@@ -861,12 +884,14 @@ class SetElementIC : public RepatchIonCache
 
   public:
     SetElementIC(Register object, Register tempToUnboxIndex, Register temp,
-                 FloatRegister tempFloat, ValueOperand index, ConstantOrRegister value,
+                 FloatRegister tempDouble, FloatRegister tempFloat32,
+                 ValueOperand index, ConstantOrRegister value,
                  bool strict, bool guardHoles)
       : object_(object),
         tempToUnboxIndex_(tempToUnboxIndex),
         temp_(temp),
-        tempFloat_(tempFloat),
+        tempDouble_(tempDouble),
+        tempFloat32_(tempFloat32),
         index_(index),
         value_(value),
         strict_(strict),
@@ -888,8 +913,11 @@ class SetElementIC : public RepatchIonCache
     Register temp() const {
         return temp_;
     }
-    FloatRegister tempFloat() const {
-        return tempFloat_;
+    FloatRegister tempDouble() const {
+        return tempDouble_;
+    }
+    FloatRegister tempFloat32() const {
+        return tempFloat32_;
     }
     ValueOperand index() const {
         return index_;
@@ -916,7 +944,7 @@ class SetElementIC : public RepatchIonCache
                             HandleObject obj, const Value &idval);
 
     bool attachTypedArrayElement(JSContext *cx, HandleScript outerScript, IonScript *ion,
-                                 HandleTypedArrayObject tarr);
+                                 HandleObject tarr);
 
     static bool
     update(JSContext *cx, size_t cacheIndex, HandleObject obj, HandleValue idval,
@@ -1004,8 +1032,8 @@ class NameIC : public RepatchIonCache
                         HandleObject holder, HandleShape shape);
 
     bool attachCallGetter(JSContext *cx, HandleScript outerScript, IonScript *ion,
-                          HandleObject obj, HandleObject holder, HandleShape shape,
-                          void *returnAddr);
+                          HandleObject scopeChain, HandleObject obj, HandleObject holder,
+                          HandleShape shape, void *returnAddr);
 
     static bool
     update(JSContext *cx, size_t cacheIndex, HandleObject scopeChain, MutableHandleValue vp);
@@ -1077,13 +1105,15 @@ class GetPropertyParIC : public ParallelIonCache
     PropertyName *name_;
     TypedOrValueRegister output_;
     bool hasTypedArrayLengthStub_ : 1;
+    bool hasSharedTypedArrayLengthStub_ : 1;
 
    public:
     GetPropertyParIC(Register object, PropertyName *name, TypedOrValueRegister output)
       : object_(object),
         name_(name),
         output_(output),
-        hasTypedArrayLengthStub_(false)
+        hasTypedArrayLengthStub_(false),
+        hasSharedTypedArrayLengthStub_(false)
     {
     }
 
@@ -1106,8 +1136,18 @@ class GetPropertyParIC : public ParallelIonCache
     TypedOrValueRegister output() const {
         return output_;
     }
-    bool hasTypedArrayLengthStub() const {
-        return hasTypedArrayLengthStub_;
+    bool hasAnyTypedArrayLengthStub(HandleObject obj) const {
+        return obj->is<TypedArrayObject>() ? hasTypedArrayLengthStub_ : hasSharedTypedArrayLengthStub_;
+    }
+
+    void setHasTypedArrayLengthStub(HandleObject obj) {
+        if (obj->is<TypedArrayObject>()) {
+            JS_ASSERT(!hasTypedArrayLengthStub_);
+            hasTypedArrayLengthStub_ = true;
+        } else {
+            JS_ASSERT(!hasSharedTypedArrayLengthStub_);
+            hasSharedTypedArrayLengthStub_ = true;
+        }
     }
 
     // CanAttachNativeGetProp Helpers
@@ -1180,7 +1220,7 @@ class GetElementParIC : public ParallelIonCache
                         HandlePropertyName name, HandleObject holder, HandleShape shape);
     bool attachDenseElement(LockedJSContext &cx, IonScript *ion, HandleObject obj,
                             const Value &idval);
-    bool attachTypedArrayElement(LockedJSContext &cx, IonScript *ion, HandleTypedArrayObject tarr,
+    bool attachTypedArrayElement(LockedJSContext &cx, IonScript *ion, HandleObject tarr,
                                  const Value &idval);
 
     static bool update(ForkJoinContext *cx, size_t cacheIndex, HandleObject obj, HandleValue idval,
@@ -1234,8 +1274,8 @@ class SetPropertyParIC : public ParallelIonCache
 
     bool attachSetSlot(LockedJSContext &cx, IonScript *ion, HandleObject obj, HandleShape shape,
                        bool checkTypeset);
-    bool attachAddSlot(LockedJSContext &cx, IonScript *ion, HandleObject obj, HandleShape oldShape,
-                       bool checkTypeset);
+    bool attachAddSlot(LockedJSContext &cx, IonScript *ion, HandleObject obj,
+                       HandleShape oldShape, HandleTypeObject oldType, bool checkTypeset);
 
     static bool update(ForkJoinContext *cx, size_t cacheIndex, HandleObject obj,
                        HandleValue value);
@@ -1247,7 +1287,8 @@ class SetElementParIC : public ParallelIonCache
     Register object_;
     Register tempToUnboxIndex_;
     Register temp_;
-    FloatRegister tempFloat_;
+    FloatRegister tempDouble_;
+    FloatRegister tempFloat32_;
     ValueOperand index_;
     ConstantOrRegister value_;
     bool strict_;
@@ -1255,12 +1296,13 @@ class SetElementParIC : public ParallelIonCache
 
   public:
     SetElementParIC(Register object, Register tempToUnboxIndex, Register temp,
-                    FloatRegister tempFloat, ValueOperand index, ConstantOrRegister value,
+                    FloatRegister tempDouble, FloatRegister tempFloat32, ValueOperand index, ConstantOrRegister value,
                     bool strict, bool guardHoles)
       : object_(object),
         tempToUnboxIndex_(tempToUnboxIndex),
         temp_(temp),
-        tempFloat_(tempFloat),
+        tempDouble_(tempDouble),
+        tempFloat32_(tempFloat32),
         index_(index),
         value_(value),
         strict_(strict),
@@ -1285,8 +1327,11 @@ class SetElementParIC : public ParallelIonCache
     Register temp() const {
         return temp_;
     }
-    FloatRegister tempFloat() const {
-        return tempFloat_;
+    FloatRegister tempDouble() const {
+        return tempDouble_;
+    }
+    FloatRegister tempFloat32() const {
+        return tempFloat32_;
     }
     ValueOperand index() const {
         return index_;
@@ -1303,7 +1348,7 @@ class SetElementParIC : public ParallelIonCache
 
     bool attachDenseElement(LockedJSContext &cx, IonScript *ion, HandleObject obj,
                             const Value &idval);
-    bool attachTypedArrayElement(LockedJSContext &cx, IonScript *ion, HandleTypedArrayObject tarr);
+    bool attachTypedArrayElement(LockedJSContext &cx, IonScript *ion, HandleObject tarr);
 
     static bool update(ForkJoinContext *cx, size_t cacheIndex, HandleObject obj,
                        HandleValue idval, HandleValue value);

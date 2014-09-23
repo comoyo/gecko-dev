@@ -88,7 +88,7 @@ public:
   {
     // Pretend like someone passed null, so we can pick up the default values
     MozXMLHttpRequestParameters params;
-    if (!params.Init(aGlobal.GetContext(), JS::NullHandleValue)) {
+    if (!params.Init(aGlobal.Context(), JS::NullHandleValue)) {
       aRv.Throw(NS_ERROR_UNEXPECTED);
       return nullptr;
     }
@@ -213,29 +213,18 @@ public:
   void
   SetResponseType(XMLHttpRequestResponseType aResponseType, ErrorResult& aRv);
 
-  jsval
-  GetResponse(JSContext* /* unused */, ErrorResult& aRv);
+  void
+  GetResponse(JSContext* /* unused */, JS::MutableHandle<JS::Value> aResponse,
+              ErrorResult& aRv);
 
   void
   GetResponseText(nsAString& aResponseText, ErrorResult& aRv);
 
-  JSObject*
-  GetResponseXML() const
-  {
-    return nullptr;
-  }
-
-  JSObject*
-  GetChannel() const
-  {
-    return nullptr;
-  }
-
-  JS::Value
-  GetInterface(JSContext* cx, JS::Handle<JSObject*> aIID, ErrorResult& aRv)
+  void
+  GetInterface(JSContext* cx, JS::Handle<JSObject*> aIID,
+               JS::MutableHandle<JS::Value> aRetval, ErrorResult& aRv)
   {
     aRv.Throw(NS_ERROR_FAILURE);
-    return JSVAL_NULL;
   }
 
   XMLHttpRequestUpload*
@@ -271,7 +260,7 @@ public:
   }
 
 private:
-  XMLHttpRequest(WorkerPrivate* aWorkerPrivate);
+  explicit XMLHttpRequest(WorkerPrivate* aWorkerPrivate);
   ~XMLHttpRequest();
 
   enum ReleaseType { Default, XHRIsGoingAway, WorkerIsGoingAway };

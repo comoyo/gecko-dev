@@ -226,6 +226,12 @@ BaselineInspector::expectedCompareType(jsbytecode *pc)
     if (!first && !dimorphicStub(pc, &first, &second))
         return MCompare::Compare_Unknown;
 
+    if (ICStub *fallback = second ? second->next() : first->next()) {
+        JS_ASSERT(fallback->isFallback());
+        if (fallback->toCompare_Fallback()->hadUnoptimizableAccess())
+            return MCompare::Compare_Unknown;
+    }
+
     if (CanUseInt32Compare(first->kind()) && (!second || CanUseInt32Compare(second->kind()))) {
         ICCompare_Int32WithBoolean *coerce =
             first->isCompare_Int32WithBoolean()
@@ -375,9 +381,9 @@ BaselineInspector::hasSeenAccessedGetter(jsbytecode *pc)
 }
 
 bool
-BaselineInspector::hasSeenNonStringIterNext(jsbytecode *pc)
+BaselineInspector::hasSeenNonStringIterMore(jsbytecode *pc)
 {
-    JS_ASSERT(JSOp(*pc) == JSOP_ITERNEXT);
+    JS_ASSERT(JSOp(*pc) == JSOP_MOREITER);
 
     if (!hasBaselineScript())
         return false;
@@ -385,7 +391,7 @@ BaselineInspector::hasSeenNonStringIterNext(jsbytecode *pc)
     const ICEntry &entry = icEntryFromPC(pc);
     ICStub *stub = entry.fallbackStub();
 
-    return stub->toIteratorNext_Fallback()->hasNonStringResult();
+    return stub->toIteratorMore_Fallback()->hasNonStringResult();
 }
 
 bool

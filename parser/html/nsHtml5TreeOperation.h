@@ -16,9 +16,7 @@ class nsHtml5StateSnapshot;
 class nsHtml5DocumentBuilder;
 
 enum eHtml5TreeOperation {
-#ifdef DEBUG
   eTreeOpUninitialized,
-#endif
   // main HTML5 ops
   eTreeOpAppend,
   eTreeOpDetach,
@@ -44,7 +42,6 @@ enum eHtml5TreeOperation {
   eTreeOpPreventScriptExecution,
   eTreeOpDoneAddingChildren,
   eTreeOpDoneCreatingElement,
-  eTreeOpFlushPendingAppendNotifications,
   eTreeOpSetDocumentCharset,
   eTreeOpNeedsCharsetSwitchTo,
   eTreeOpUpdateStyleSheet,
@@ -182,8 +179,7 @@ class nsHtml5TreeOperation {
 
     static void PreventScriptExecution(nsIContent* aNode);
 
-    static void DoneAddingChildren(nsIContent* aNode,
-                                   nsHtml5DocumentBuilder* aBuilder);
+    static void DoneAddingChildren(nsIContent* aNode);
 
     static void DoneCreatingElement(nsIContent* aNode);
 

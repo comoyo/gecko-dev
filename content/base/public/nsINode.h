@@ -10,7 +10,7 @@
 #include "nsCOMPtr.h"               // for member, local
 #include "nsGkAtoms.h"              // for nsGkAtoms::baseURIProperty
 #include "nsIDOMNode.h"
-#include "nsINodeInfo.h"            // member (in nsCOMPtr)
+#include "mozilla/dom/NodeInfo.h"            // member (in nsCOMPtr)
 #include "nsIVariant.h"             // for use in GetUserData()
 #include "nsNodeInfoManager.h"      // for use in NodePrincipal()
 #include "nsPropertyTable.h"        // for typedefs
@@ -31,13 +31,12 @@
 
 class nsAttrAndChildArray;
 class nsChildContentList;
-class nsCSSSelectorList;
+struct nsCSSSelectorList;
 class nsDOMAttributeMap;
 class nsIContent;
 class nsIDocument;
 class nsIDOMElement;
 class nsIDOMNodeList;
-class nsIDOMUserDataHandler;
 class nsIEditor;
 class nsIFrame;
 class nsIMutationObserver;
@@ -74,12 +73,14 @@ class Element;
 class EventHandlerNonNull;
 class OnErrorEventHandlerNonNull;
 template<typename T> class Optional;
+class Text;
 class TextOrElementOrDocument;
 struct DOMPointInit;
 } // namespace dom
 } // namespace mozilla
 
-#define NODE_FLAG_BIT(n_) (1U << (WRAPPER_CACHE_FLAGS_BITS_USED + (n_)))
+#define NODE_FLAG_BIT(n_) \
+  (nsWrapperCache::FlagsType(1U) << (WRAPPER_CACHE_FLAGS_BITS_USED + (n_)))
 
 enum {
   // This bit will be set if the node has a listener manager.
@@ -150,40 +151,39 @@ enum {
                                           NODE_HAS_EDGE_CHILD_SELECTOR |
                                           NODE_HAS_SLOW_SELECTOR_LATER_SIBLINGS,
 
-  NODE_ATTACH_BINDING_ON_POSTCREATE =     NODE_FLAG_BIT(14),
-
   // This node needs to go through frame construction to get a frame (or
   // undisplayed entry).
-  NODE_NEEDS_FRAME =                      NODE_FLAG_BIT(15),
+  NODE_NEEDS_FRAME =                      NODE_FLAG_BIT(14),
 
   // At least one descendant in the flattened tree has NODE_NEEDS_FRAME set.
   // This should be set on every node on the flattened tree path between the
   // node(s) with NODE_NEEDS_FRAME and the root content.
-  NODE_DESCENDANTS_NEED_FRAMES =          NODE_FLAG_BIT(16),
+  NODE_DESCENDANTS_NEED_FRAMES =          NODE_FLAG_BIT(15),
 
   // Set if the node has the accesskey attribute set.
-  NODE_HAS_ACCESSKEY =                    NODE_FLAG_BIT(17),
+  NODE_HAS_ACCESSKEY =                    NODE_FLAG_BIT(16),
 
   // Set if the node has right-to-left directionality
-  NODE_HAS_DIRECTION_RTL =                NODE_FLAG_BIT(18),
+  NODE_HAS_DIRECTION_RTL =                NODE_FLAG_BIT(17),
 
   // Set if the node has left-to-right directionality
-  NODE_HAS_DIRECTION_LTR =                NODE_FLAG_BIT(19),
+  NODE_HAS_DIRECTION_LTR =                NODE_FLAG_BIT(18),
 
   NODE_ALL_DIRECTION_FLAGS =              NODE_HAS_DIRECTION_LTR |
                                           NODE_HAS_DIRECTION_RTL,
 
-  NODE_CHROME_ONLY_ACCESS =               NODE_FLAG_BIT(20),
+  NODE_CHROME_ONLY_ACCESS =               NODE_FLAG_BIT(19),
 
-  NODE_IS_ROOT_OF_CHROME_ONLY_ACCESS =    NODE_FLAG_BIT(21),
+  NODE_IS_ROOT_OF_CHROME_ONLY_ACCESS =    NODE_FLAG_BIT(20),
 
   // Remaining bits are node type specific.
-  NODE_TYPE_SPECIFIC_BITS_OFFSET =        22
+  NODE_TYPE_SPECIFIC_BITS_OFFSET =        21
 };
 
 // Make sure we have space for our bits
 #define ASSERT_NODE_FLAGS_SPACE(n) \
-  static_assert(WRAPPER_CACHE_FLAGS_BITS_USED + (n) <= 32, \
+  static_assert(WRAPPER_CACHE_FLAGS_BITS_USED + (n) <=                          \
+                  sizeof(nsWrapperCache::FlagsType) * 8,                        \
                 "Not enough space for our bits")
 ASSERT_NODE_FLAGS_SPACE(NODE_TYPE_SPECIFIC_BITS_OFFSET);
 
@@ -192,44 +192,29 @@ ASSERT_NODE_FLAGS_SPACE(NODE_TYPE_SPECIFIC_BITS_OFFSET);
  * nsMutationGuard on the stack before unexpected mutations could occur.
  * You can then at any time call Mutated to check if any unexpected mutations
  * have occurred.
- *
- * When a guard is instantiated sMutationCount is set to 300. It is then
- * decremented by every mutation (capped at 0). This means that we can only
- * detect 300 mutations during the lifetime of a single guard, however that
- * should be more then we ever care about as we usually only care if more then
- * one mutation has occurred.
- *
- * When the guard goes out of scope it will adjust sMutationCount so that over
- * the lifetime of the guard the guard itself has not affected sMutationCount,
- * while mutations that happened while the guard was alive still will. This
- * allows a guard to be instantiated even if there is another guard higher up
- * on the callstack watching for mutations.
- *
- * The only thing that has to be avoided is for an outer guard to be used
- * while an inner guard is alive. This can be avoided by only ever
- * instantiating a single guard per scope and only using the guard in the
- * current scope.
  */
 class nsMutationGuard {
 public:
   nsMutationGuard()
   {
-    mDelta = eMaxMutations - sMutationCount;
-    sMutationCount = eMaxMutations;
-  }
-  ~nsMutationGuard()
-  {
-    sMutationCount =
-      mDelta > sMutationCount ? 0 : sMutationCount - mDelta;
+    mStartingGeneration = sGeneration;
   }
 
   /**
    * Returns true if any unexpected mutations have occurred. You can pass in
    * an 8-bit ignore count to ignore a number of expected mutations.
+   *
+   * We don't need to care about overflow because subtraction of uint64_t's is
+   * finding the difference between two elements of the group Z < 2^64.  Once
+   * we know the difference between two elements we only need to check that is
+   * less than the given number of mutations to know less than that many
+   * mutations occured.  Assuming constant 1ns mutations it would take 584
+   * years for sGeneration to fully wrap around so we can ignore a guard living
+   * through a full wrap around.
    */
   bool Mutated(uint8_t aIgnoreCount)
   {
-    return sMutationCount < static_cast<uint32_t>(eMaxMutations - aIgnoreCount);
+    return (sGeneration - mStartingGeneration) > aIgnoreCount;
   }
 
   // This function should be called whenever a mutation that we want to keep
@@ -237,26 +222,15 @@ public:
   // removed, but we might do it for attribute changes too in the future.
   static void DidMutate()
   {
-    if (sMutationCount) {
-      --sMutationCount;
-    }
+    sGeneration++;
   }
 
 private:
-  // mDelta is the amount sMutationCount was adjusted when the guard was
-  // initialized. It is needed so that we can undo that adjustment once
-  // the guard dies.
-  uint32_t mDelta;
+  // This is the value sGeneration had when the guard was constructed.
+  uint64_t mStartingGeneration;
 
-  // The value 300 is not important, as long as it is bigger then anything
-  // ever passed to Mutated().
-  enum { eMaxMutations = 300 };
-
-
-  // sMutationCount is a global mutation counter which is decreased by one at
-  // every mutation. It is capped at 0 to avoid wrapping.
-  // Its value is always between 0 and 300, inclusive.
-  static uint32_t sMutationCount;
+  // This value is incremented on every mutation, for the life of the process.
+  static uint64_t sGeneration;
 };
 
 // This should be used for any nsINode sub-class that has fields of its own
@@ -270,13 +244,12 @@ private:
 // Categories of node properties
 // 0 is global.
 #define DOM_USER_DATA         1
-#define DOM_USER_DATA_HANDLER 2
-#define SMIL_MAPPED_ATTR_ANIMVAL 3
+#define SMIL_MAPPED_ATTR_ANIMVAL 2
 
 // IID for the nsINode interface
 #define NS_INODE_IID \
-{ 0x77a62cd0, 0xb34f, 0x42cb, \
-  { 0x94, 0x52, 0xae, 0xb2, 0x4d, 0x93, 0x2c, 0xb4 } }
+{ 0x3a60353e, 0x04e5, 0x49ca, \
+  { 0x84, 0x1c, 0x59, 0xc6, 0xde, 0xe6, 0x36, 0xcc } }
 
 /**
  * An internal interface that abstracts some DOMNode-related parts that both
@@ -337,7 +310,7 @@ public:
   friend class nsAttrAndChildArray;
 
 #ifdef MOZILLA_INTERNAL_API
-  nsINode(already_AddRefed<nsINodeInfo>& aNodeInfo)
+  explicit nsINode(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : mNodeInfo(aNodeInfo),
     mParent(nullptr),
     mBoolFlags(0),
@@ -396,6 +369,12 @@ public:
 
   virtual JSObject* WrapObject(JSContext *aCx) MOZ_OVERRIDE;
 
+  /**
+   * returns true if we are in priviliged code or
+   * layout.css.getBoxQuads.enabled == true.
+   */
+  static bool HasBoxQuadsSupport(JSContext* aCx, JSObject* /* unused */);
+
 protected:
   /**
    * WrapNode is called from WrapObject to actually wrap this node, WrapObject
@@ -445,6 +424,13 @@ public:
   {
     return const_cast<nsINode*>(this)->AsContent();
   }
+
+  /**
+   * Return this node as Text if it is one, otherwise null.  This is defined
+   * inline in Text.h.
+   */
+  mozilla::dom::Text* GetAsText();
+  const mozilla::dom::Text* GetAsText() const;
 
   virtual nsIDOMNode* AsDOMNode() = 0;
 
@@ -509,9 +495,17 @@ public:
    *
    * @return whether this content is in a document tree
    */
-  bool IsInDoc() const
+  bool IsInUncomposedDoc() const
   {
     return GetBoolFlag(IsInDocument);
+  }
+
+  /**
+   * @deprecated
+   */
+  bool IsInDoc() const
+  {
+    return IsInUncomposedDoc();
   }
 
   /**
@@ -520,9 +514,18 @@ public:
    *
    * @return the current document
    */
+
+  nsIDocument* GetUncomposedDoc() const
+  {
+    return IsInUncomposedDoc() ? OwnerDoc() : nullptr;
+  }
+
+  /**
+   * @deprecated
+   */
   nsIDocument *GetCurrentDoc() const
   {
-    return IsInDoc() ? OwnerDoc() : nullptr;
+    return GetUncomposedDoc();
   }
 
   /**
@@ -532,10 +535,26 @@ public:
    * that is located in the root of the "tree of trees" (see Shadow DOM
    * spec) and returns the current doc for that host.
    */
+  nsIDocument* GetComposedDoc() const
+  {
+    return IsInShadowTree() ?
+      GetComposedDocInternal() : GetUncomposedDoc();
+  }
+
+  /**
+   * @deprecated
+   */
   nsIDocument* GetCrossShadowCurrentDoc() const
   {
-    return HasFlag(NODE_IS_IN_SHADOW_TREE) ?
-      GetCrossShadowCurrentDocInternal() : GetCurrentDoc();
+    return GetComposedDoc();
+  }
+
+  /**
+   * Returns true if GetComposedDoc() would return a non-null value.
+   */
+  bool IsInComposedDoc() const
+  {
+    return IsInUncomposedDoc() || (IsInShadowTree() && GetComposedDocInternal());
   }
 
   /**
@@ -817,6 +836,12 @@ public:
   }
 
   /**
+   * Get the parent Element of this node, traversing over a ShadowRoot
+   * to its host if necessary.
+   */
+  mozilla::dom::Element* GetParentElementCrossingShadowRoot() const;
+
+  /**
    * Get the root of the subtree this node belongs to.  This never returns
    * null.  It may return 'this' (e.g. for document nodes, and nodes that
    * are the roots of disconnected subtrees).
@@ -892,7 +917,7 @@ public:
    * @param aNodeInfo the nodeinfo to use for the clone
    * @param aResult the clone
    */
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const = 0;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const = 0;
 
   // This class can be extended by subclasses that wish to store more
   // information in the slots.
@@ -942,12 +967,11 @@ public:
   }
 #endif
 
-  void SetFlags(uint32_t aFlagsToSet)
+  void SetFlags(FlagsType aFlagsToSet)
   {
     NS_ASSERTION(!(aFlagsToSet & (NODE_IS_ANONYMOUS_ROOT |
                                   NODE_IS_NATIVE_ANONYMOUS_ROOT |
                                   NODE_IS_IN_NATIVE_ANONYMOUS_SUBTREE |
-                                  NODE_ATTACH_BINDING_ON_POSTCREATE |
                                   NODE_DESCENDANTS_NEED_FRAMES |
                                   NODE_NEEDS_FRAME |
                                   NODE_CHROME_ONLY_ACCESS)) ||
@@ -956,7 +980,7 @@ public:
     nsWrapperCache::SetFlags(aFlagsToSet);
   }
 
-  void UnsetFlags(uint32_t aFlagsToUnset)
+  void UnsetFlags(FlagsType aFlagsToUnset)
   {
     NS_ASSERTION(!(aFlagsToUnset &
                    (NODE_IS_ANONYMOUS_ROOT |
@@ -1011,6 +1035,11 @@ public:
   bool ChromeOnlyAccess() const
   {
     return HasFlag(NODE_IS_IN_NATIVE_ANONYMOUS_SUBTREE | NODE_CHROME_ONLY_ACCESS);
+  }
+
+  bool IsInShadowTree() const
+  {
+    return HasFlag(NODE_IS_IN_SHADOW_TREE);
   }
 
   /**
@@ -1087,9 +1116,10 @@ protected:
   }
   
 public:
-  void GetTextContent(nsAString& aTextContent)
+  void GetTextContent(nsAString& aTextContent,
+                      mozilla::ErrorResult& aError)
   {
-    GetTextContentInternal(aTextContent);
+    GetTextContentInternal(aTextContent, aError);
   }
   void SetTextContent(const nsAString& aTextContent,
                       mozilla::ErrorResult& aError)
@@ -1113,20 +1143,18 @@ protected:
 public:
   /**
    * Associate an object aData to aKey on this node. If aData is null any
-   * previously registered object and UserDataHandler associated to aKey on
-   * this node will be removed.
+   * previously registered object associated to aKey on this node will
+   * be removed.
    * Should only be used to implement the DOM Level 3 UserData API.
    *
    * @param aKey the key to associate the object to
    * @param aData the object to associate to aKey on this node (may be null)
-   * @param aHandler the UserDataHandler to call when the node is
-   *                 cloned/deleted/imported/renamed (may be null)
    * @param aResult [out] the previously registered object for aKey on this
    *                      node, if any
-   * @return whether adding the object and UserDataHandler succeeded
+   * @return whether adding the object succeeded
    */
   nsresult SetUserData(const nsAString& aKey, nsIVariant* aData,
-                       nsIDOMUserDataHandler* aHandler, nsIVariant** aResult);
+                       nsIVariant** aResult);
 
   /**
    * Get the UserData object registered for a Key on this node, if any.
@@ -1196,7 +1224,7 @@ public:
 
 private:
 
-  nsIDocument* GetCrossShadowCurrentDocInternal() const;
+  nsIDocument* GetComposedDocInternal() const;
 
   nsIContent* GetNextNodeImpl(const nsINode* aRoot,
                               const bool aSkipChildren) const
@@ -1344,6 +1372,8 @@ private:
     // Set if the element has a parser insertion mode other than "in body",
     // per the HTML5 "Parse state" section.
     ElementHasWeirdParserInsertionMode,
+    // Parser sets this flag if it has notified about the node.
+    ParserHasNotified,
     // Guard value
     BooleanFlagCount
   };
@@ -1484,6 +1514,8 @@ public:
   bool IsScopedStyleRoot() { return GetBoolFlag(ElementIsScopedStyleRoot); }
   bool HasRelevantHoverRules() const { return GetBoolFlag(NodeHasRelevantHoverRules); }
   void SetHasRelevantHoverRules() { SetBoolFlag(NodeHasRelevantHoverRules); }
+  void SetParserHasNotified() { SetBoolFlag(ParserHasNotified); };
+  bool HasParserNotified() { return GetBoolFlag(ParserHasNotified); }
 protected:
   void SetParentIsContent(bool aValue) { SetBoolFlag(ParentIsContent, aValue); }
   void SetInDocument() { SetBoolFlag(IsInDocument); }
@@ -1514,7 +1546,7 @@ protected:
   {
     NS_ASSERTION(aSubtreeRoot, "aSubtreeRoot can never be null!");
     NS_ASSERTION(!(IsNodeOfType(eCONTENT) && IsInDoc()) &&
-                 !HasFlag(NODE_IS_IN_SHADOW_TREE), "Shouldn't be here!");
+                 !IsInShadowTree(), "Shouldn't be here!");
     mSubtreeRoot = aSubtreeRoot;
   }
 
@@ -1611,12 +1643,13 @@ public:
   // HasAttributes is defined inline in Element.h.
   bool HasAttributes() const;
   nsDOMAttributeMap* GetAttributes();
-  JS::Value SetUserData(JSContext* aCx, const nsAString& aKey,
-                        JS::Handle<JS::Value> aData,
-                        nsIDOMUserDataHandler* aHandler,
-                        mozilla::ErrorResult& aError);
-  JS::Value GetUserData(JSContext* aCx, const nsAString& aKey,
-                        mozilla::ErrorResult& aError);
+  void SetUserData(JSContext* aCx, const nsAString& aKey,
+                   JS::Handle<JS::Value> aData,
+                   JS::MutableHandle<JS::Value> aRetval,
+                   mozilla::ErrorResult& aError);
+  void GetUserData(JSContext* aCx, const nsAString& aKey,
+                   JS::MutableHandle<JS::Value> aRetval,
+                   mozilla::ErrorResult& aError);
 
   // Helper method to remove this node from its parent. This is not exposed
   // through WebIDL.
@@ -1694,7 +1727,8 @@ protected:
     return IsEditableInternal();
   }
 
-  virtual void GetTextContentInternal(nsAString& aTextContent);
+  virtual void GetTextContentInternal(nsAString& aTextContent,
+                                      mozilla::ErrorResult& aError);
   virtual void SetTextContentInternal(const nsAString& aTextContent,
                                       mozilla::ErrorResult& aError)
   {
@@ -1795,7 +1829,7 @@ protected:
   static bool Traverse(nsINode *tmp, nsCycleCollectionTraversalCallback &cb);
   static void Unlink(nsINode *tmp);
 
-  nsCOMPtr<nsINodeInfo> mNodeInfo;
+  nsRefPtr<mozilla::dom::NodeInfo> mNodeInfo;
 
   nsINode* mParent;
 
@@ -1977,8 +2011,9 @@ ToCanonicalSupports(nsINode* aPointer)
   } \
   NS_IMETHOD GetTextContent(nsAString& aTextContent) __VA_ARGS__ \
   { \
-    nsINode::GetTextContent(aTextContent); \
-    return NS_OK; \
+    mozilla::ErrorResult rv; \
+    nsINode::GetTextContent(aTextContent, rv); \
+    return rv.ErrorCode(); \
   } \
   NS_IMETHOD SetTextContent(const nsAString& aTextContent) __VA_ARGS__ \
   { \
@@ -2005,9 +2040,9 @@ ToCanonicalSupports(nsINode* aPointer)
   { \
     return nsINode::IsEqualNode(aArg, aResult); \
   } \
-  NS_IMETHOD SetUserData(const nsAString& aKey, nsIVariant* aData, nsIDOMUserDataHandler* aHandler, nsIVariant** aResult) __VA_ARGS__ \
+  NS_IMETHOD SetUserData(const nsAString& aKey, nsIVariant* aData, nsIVariant** aResult) __VA_ARGS__ \
   { \
-    return nsINode::SetUserData(aKey, aData, aHandler, aResult); \
+    return nsINode::SetUserData(aKey, aData, aResult); \
   } \
   NS_IMETHOD GetUserData(const nsAString& aKey, nsIVariant** aResult) __VA_ARGS__ \
   { \

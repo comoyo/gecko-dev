@@ -83,8 +83,10 @@ public:
     return mDiscoverableTimeout;
   }
 
-  JS::Value GetDevices(JSContext* aContext, ErrorResult& aRv);
-  JS::Value GetUuids(JSContext* aContext, ErrorResult& aRv);
+  void GetDevices(JSContext* aContext, JS::MutableHandle<JS::Value> aDevices,
+                  ErrorResult& aRv);
+  void GetUuids(JSContext* aContext, JS::MutableHandle<JS::Value> aUuids,
+                ErrorResult& aRv);
 
   already_AddRefed<mozilla::dom::DOMRequest>
     SetName(const nsAString& aName, ErrorResult& aRv);
@@ -117,11 +119,16 @@ public:
 
   already_AddRefed<DOMRequest>
     Connect(BluetoothDevice& aDevice,
-            const Optional<short unsigned int>& aServiceUuid, ErrorResult& aRv);
+            const Optional<uint16_t>& aServiceUuid, ErrorResult& aRv);
   already_AddRefed<DOMRequest>
     Disconnect(BluetoothDevice& aDevice,
-               const Optional<short unsigned int>& aServiceUuid,
+               const Optional<uint16_t>& aServiceUuid,
                ErrorResult& aRv);
+
+  already_AddRefed<DOMRequest>
+    IsConnected(const uint16_t aServiceUuid,
+                ErrorResult& aRv);
+
   already_AddRefed<DOMRequest>
     GetConnectedDevices(uint16_t aServiceUuid, ErrorResult& aRv);
 

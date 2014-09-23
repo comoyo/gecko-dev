@@ -18,6 +18,7 @@
 #include "nsThreadUtils.h"
 #include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "mozilla/dom/BluetoothManagerBinding.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/Services.h"
 
 using namespace mozilla;
@@ -67,20 +68,14 @@ public:
     nsRefPtr<BluetoothAdapter> adapter =
       BluetoothAdapter::Create(mManagerPtr->GetOwner(), values);
 
-    nsresult rv;
-    nsIScriptContext* sc = mManagerPtr->GetContextForEventHandlers(&rv);
-    if (!sc) {
-      BT_WARNING("Cannot create script context!");
-      SetError(NS_LITERAL_STRING("BluetoothScriptContextError"));
+    dom::AutoJSAPI jsapi;
+    if (!jsapi.Init(mManagerPtr->GetOwner())) {
+      BT_WARNING("Failed to initialise AutoJSAPI!");
+      SetError(NS_LITERAL_STRING("BluetoothAutoJSAPIInitError"));
       return false;
     }
-
-    AutoPushJSContext cx(sc->GetNativeContext());
-
-    JS::Rooted<JSObject*> scope(cx, sc->GetWindowProxy());
-    JSAutoCompartment ac(cx, scope);
-    rv = nsContentUtils::WrapNative(cx, adapter, aValue);
-    if (NS_FAILED(rv)) {
+    JSContext* cx = jsapi.cx();
+    if (NS_FAILED(nsContentUtils::WrapNative(cx, adapter, aValue))) {
       BT_WARNING("Cannot create native object!");
       SetError(NS_LITERAL_STRING("BluetoothNativeObjectError"));
       return false;
@@ -213,18 +208,6 @@ BluetoothManager::Notify(const BluetoothSignal& aData)
     BT_WARNING(warningMsg.get());
 #endif
   }
-}
-
-bool
-BluetoothManager::IsConnected(uint16_t aProfileId, ErrorResult& aRv)
-{
-  BluetoothService* bs = BluetoothService::Get();
-  if (!bs) {
-    aRv.Throw(NS_ERROR_FAILURE);
-    return false;
-  }
-
-  return bs->IsConnected(aProfileId);
 }
 
 JSObject*

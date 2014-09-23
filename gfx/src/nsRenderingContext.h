@@ -11,7 +11,6 @@
 #include "gfxContext.h"                 // for gfxContext
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT_HELPER2
 #include "mozilla/gfx/2D.h"
-#include "mozilla/gfx/UserData.h"       // for UserData, UserDataKey
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsBoundingMetrics.h"          // for nsBoundingMetrics
 #include "nsColor.h"                    // for nscolor
@@ -22,7 +21,6 @@
 #include "nsString.h"               // for nsString
 #include "nscore.h"                     // for char16_t
 
-class gfxASurface;
 class nsIntRegion;
 struct nsPoint;
 struct nsRect;
@@ -36,8 +34,6 @@ typedef enum {
 
 class nsRenderingContext MOZ_FINAL
 {
-    typedef mozilla::gfx::UserData UserData;
-    typedef mozilla::gfx::UserDataKey UserDataKey;
     typedef mozilla::gfx::DrawTarget DrawTarget;
 
 public:
@@ -45,7 +41,6 @@ public:
 
     NS_INLINE_DECL_REFCOUNTING(nsRenderingContext)
 
-    void Init(nsDeviceContext* aContext, gfxASurface* aThebesSurface);
     void Init(nsDeviceContext* aContext, gfxContext* aThebesContext);
     void Init(nsDeviceContext* aContext, DrawTarget* aDrawTarget);
 
@@ -53,31 +48,13 @@ public:
     gfxContext *ThebesContext() { return mThebes; }
     DrawTarget *GetDrawTarget() { return mThebes->GetDrawTarget(); }
     nsDeviceContext *DeviceContext() { return mDeviceContext; }
-    int32_t AppUnitsPerDevPixel() { return NSToIntRound(mP2A); }
 
     // Graphics state
 
-    void PushState(void);
-    void PopState(void);
     void IntersectClip(const nsRect& aRect);
     void SetClip(const nsIntRegion& aRegion);
     void SetLineStyle(nsLineStyle aLineStyle);
     void SetColor(nscolor aColor);
-    void Translate(const nsPoint& aPt);
-    void Scale(float aSx, float aSy);
-
-    class AutoPushTranslation {
-        nsRenderingContext* mCtx;
-    public:
-        AutoPushTranslation(nsRenderingContext* aCtx, const nsPoint& aPt)
-            : mCtx(aCtx) {
-            mCtx->PushState();
-            mCtx->Translate(aPt);
-        }
-        ~AutoPushTranslation() {
-            mCtx->PopState();
-        }
-    };
 
     // Shapes
 
@@ -93,8 +70,6 @@ public:
 
     void FillEllipse(const nsRect& aRect);
     void FillEllipse(nscoord aX, nscoord aY, nscoord aWidth, nscoord aHeight);
-
-    void InvertRect(const nsRect& aRect);
 
     // Text
 
@@ -119,16 +94,6 @@ public:
     void DrawString(const char16_t *aString, uint32_t aLength,
                     nscoord aX, nscoord aY);
 
-    void AddUserData(UserDataKey *key, void *userData, void (*destroy)(void*)) {
-      mUserData.Add(key, userData, destroy);
-    }
-    void *GetUserData(UserDataKey *key) {
-      return mUserData.Get(key);
-    }
-    void *RemoveUserData(UserDataKey *key) {
-      return mUserData.Remove(key);
-    }
-
 private:
     // Private destructor, to discourage deletion outside of Release():
     ~nsRenderingContext()
@@ -142,8 +107,6 @@ private:
     nsRefPtr<nsFontMetrics> mFontMetrics;
 
     double mP2A; // cached app units per device pixel value
-
-    UserData mUserData;
 };
 
 #endif  // NSRENDERINGCONTEXT__H__

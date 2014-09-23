@@ -16,6 +16,7 @@
 #include "gfxPangoFonts.h"
 #include "gfxContext.h"
 #include "gfxUserFontSet.h"
+#include "gfxUtils.h"
 #include "gfxFT2FontBase.h"
 
 #include "mozilla/gfx/2D.h"
@@ -92,7 +93,9 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
     // we should try to match
     GdkScreen *gdkScreen = gdk_screen_get_default();
     if (gdkScreen) {
-        if (UseXRender()) {
+        // When forcing Thebes Layers to use image surfaces for content,
+        // force creation of gfxImageSurface surfaces.
+        if (UseXRender() && !UseImageOffscreenSurfaces()) {
             Screen *screen = gdk_x11_screen_get_xscreen(gdkScreen);
             XRenderPictFormat* xrenderFormat =
                 gfxXlibSurface::FindRenderFormat(DisplayOfScreen(screen),
@@ -125,9 +128,7 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
     }
 
     if (newSurface && needsClear) {
-        gfxContext tmpCtx(newSurface);
-        tmpCtx.SetOperator(gfxContext::OPERATOR_CLEAR);
-        tmpCtx.Paint();
+        gfxUtils::ClearThebesSurface(newSurface);
     }
 
     return newSurface.forget();
@@ -163,18 +164,26 @@ gfxPlatformGtk::CreateFontGroup(const FontFamilyList& aFontFamilyList,
 }
 
 gfxFontEntry*
-gfxPlatformGtk::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                const nsAString& aFontName)
+gfxPlatformGtk::LookupLocalFont(const nsAString& aFontName,
+                                uint16_t aWeight,
+                                int16_t aStretch,
+                                bool aItalic)
 {
-    return gfxPangoFontGroup::NewFontEntry(*aProxyEntry, aFontName);
+    return gfxPangoFontGroup::NewFontEntry(aFontName, aWeight,
+                                           aStretch, aItalic);
 }
 
 gfxFontEntry* 
-gfxPlatformGtk::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry, 
-                                 const uint8_t *aFontData, uint32_t aLength)
+gfxPlatformGtk::MakePlatformFont(const nsAString& aFontName,
+                                 uint16_t aWeight,
+                                 int16_t aStretch,
+                                 bool aItalic,
+                                 const uint8_t* aFontData,
+                                 uint32_t aLength)
 {
     // passing ownership of the font data to the new font entry
-    return gfxPangoFontGroup::NewFontEntry(*aProxyEntry,
+    return gfxPangoFontGroup::NewFontEntry(aFontName, aWeight,
+                                           aStretch, aItalic,
                                            aFontData, aLength);
 }
 
@@ -250,18 +259,6 @@ gfxPlatformGtk::GetScreenDepth() const
     }
 
     return sDepth;
-}
-
-bool
-gfxPlatformGtk::SupportsOffMainThreadCompositing()
-{
-  // Nightly builds have OMTC support by default for Electrolysis testing.
-#if defined(MOZ_X11) && !defined(NIGHTLY_BUILD)
-  return (PR_GetEnv("MOZ_USE_OMTC") != nullptr) ||
-         (PR_GetEnv("MOZ_OMTC_ENABLED") != nullptr);
-#else
-  return true;
-#endif
 }
 
 void

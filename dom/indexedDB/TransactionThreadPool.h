@@ -62,7 +62,7 @@ protected:
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSIRUNNABLE
 
-    TransactionQueue(IDBTransaction* aTransaction);
+    explicit TransactionQueue(IDBTransaction* aTransaction);
 
     void Unblock();
 
@@ -71,6 +71,8 @@ protected:
     void Finish(nsIRunnable* aFinishRunnable);
 
   private:
+    ~TransactionQueue() {}
+
     mozilla::Monitor mMonitor;
     IDBTransaction* mTransaction;
     nsAutoTArray<nsCOMPtr<nsIRunnable>, 10> mQueue;
@@ -82,7 +84,7 @@ protected:
 
   struct TransactionInfo
   {
-    TransactionInfo(IDBTransaction* aTransaction)
+    explicit TransactionInfo(IDBTransaction* aTransaction)
     {
       MOZ_COUNT_CTOR(TransactionInfo);
 

@@ -36,7 +36,6 @@
 
 class nsOfflineCacheUpdate;
 
-class nsICacheEntryDescriptor;
 class nsIUTF8StringEnumerator;
 class nsILoadContext;
 
@@ -58,7 +57,6 @@ public:
                              nsIApplicationCache *aApplicationCache,
                              nsIApplicationCache *aPreviousApplicationCache,
                              uint32_t aType);
-    virtual ~nsOfflineCacheUpdateItem();
 
     nsCOMPtr<nsIURI>           mURI;
     nsCOMPtr<nsIURI>           mReferrerURI;
@@ -90,6 +88,8 @@ private:
     uint16_t                       mState;
 
 protected:
+    virtual ~nsOfflineCacheUpdateItem();
+
     int64_t                        mBytesRead;
 };
 
@@ -206,7 +206,6 @@ public:
     NS_DECL_NSIRUNNABLE
 
     nsOfflineCacheUpdate();
-    ~nsOfflineCacheUpdate();
 
     static nsresult GetCacheKey(nsIURI *aURI, nsACString &aKey);
 
@@ -222,10 +221,13 @@ public:
     void SetOwner(nsOfflineCacheUpdateOwner *aOwner);
 
     bool IsForGroupID(const nsCSubstring &groupID);
+    bool IsForProfile(nsIFile* aCustomProfileDir);
 
     virtual nsresult UpdateFinished(nsOfflineCacheUpdate *aUpdate);
 
 protected:
+    ~nsOfflineCacheUpdate();
+
     friend class nsOfflineCacheUpdateItem;
     void OnByteProgress(uint64_t byteIncrement);
 
@@ -328,7 +330,6 @@ public:
     NS_DECL_NSIOBSERVER
 
     nsOfflineCacheUpdateService();
-    ~nsOfflineCacheUpdateService();
 
     nsresult Init();
 
@@ -336,6 +337,7 @@ public:
     nsresult FindUpdate(nsIURI *aManifestURI,
                         uint32_t aAppID,
                         bool aInBrowser,
+                        nsIFile *aCustomProfileDir,
                         nsOfflineCacheUpdate **aUpdate);
 
     nsresult Schedule(nsIURI *aManifestURI,
@@ -365,6 +367,8 @@ public:
     static nsTHashtable<nsCStringHashKey>* AllowedDomains();
 
 private:
+    ~nsOfflineCacheUpdateService();
+
     nsresult ProcessNextUpdate();
 
     nsTArray<nsRefPtr<nsOfflineCacheUpdate> > mUpdates;

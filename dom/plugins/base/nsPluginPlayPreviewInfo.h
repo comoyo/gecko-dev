@@ -11,6 +11,8 @@
 
 class nsPluginPlayPreviewInfo : public nsIPluginPlayPreviewInfo
 {
+  virtual ~nsPluginPlayPreviewInfo();
+
 public:
    NS_DECL_ISUPPORTS
    NS_DECL_NSIPLUGINPLAYPREVIEWINFO
@@ -18,8 +20,7 @@ public:
   nsPluginPlayPreviewInfo(const char* aMimeType,
                           bool aIgnoreCTP,
                           const char* aRedirectURL);
-  nsPluginPlayPreviewInfo(const nsPluginPlayPreviewInfo* aSource);
-  virtual ~nsPluginPlayPreviewInfo();
+  explicit nsPluginPlayPreviewInfo(const nsPluginPlayPreviewInfo* aSource);
 
   nsCString mMimeType;
   bool      mIgnoreCTP;

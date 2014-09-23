@@ -49,10 +49,7 @@ public:
   // Called by the video decoder object, on the main thread,
   // when it has read the metadata containing video dimensions,
   // etc.
-  virtual void MetadataLoaded(int aChannels,
-                              int aRate,
-                              bool aHasAudio,
-                              bool aHasVideo,
+  virtual void MetadataLoaded(const MediaInfo* aInfo,
                               const MetadataTags* aTags) = 0;
 
   // Called by the video decoder object, on the main thread,
@@ -140,6 +137,14 @@ public:
   // Called by the media decoder object, on the main thread,
   // when the connection between Rtsp server and client gets lost.
   virtual void ResetConnectionState() = 0;
+
+#ifdef MOZ_EME
+  // Dispatches a "encrypted" event to the HTMLMediaElement, with the
+  // provided init data.
+  // Main thread only.
+  virtual void DispatchEncrypted(const nsTArray<uint8_t>& aInitData,
+                                 const nsAString& aInitDataType) = 0;
+#endif
 };
 
 }

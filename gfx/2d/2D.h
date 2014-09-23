@@ -37,6 +37,7 @@ typedef _cairo_scaled_font cairo_scaled_font_t;
 
 struct ID3D10Device1;
 struct ID3D10Texture2D;
+struct ID3D11Texture2D;
 struct ID3D11Device;
 struct ID2D1Device;
 struct IDWriteRenderingParams;
@@ -56,6 +57,7 @@ class DataSourceSurface;
 class DrawTarget;
 class DrawEventRecorder;
 class FilterNode;
+class LogForwarder;
 
 struct NativeSurface {
   NativeSurfaceType mType;
@@ -75,9 +77,9 @@ struct NativeFont {
  */
 struct DrawOptions {
   /// For constructor parameter description, see member data documentation.
-  DrawOptions(Float aAlpha = 1.0f,
-              CompositionOp aCompositionOp = CompositionOp::OP_OVER,
-              AntialiasMode aAntialiasMode = AntialiasMode::DEFAULT)
+  explicit DrawOptions(Float aAlpha = 1.0f,
+                       CompositionOp aCompositionOp = CompositionOp::OP_OVER,
+                       AntialiasMode aAntialiasMode = AntialiasMode::DEFAULT)
     : mAlpha(aAlpha)
     , mCompositionOp(aCompositionOp)
     , mAntialiasMode(aAntialiasMode)
@@ -97,13 +99,13 @@ struct DrawOptions {
  */
 struct StrokeOptions {
   /// For constructor parameter description, see member data documentation.
-  StrokeOptions(Float aLineWidth = 1.0f,
-                JoinStyle aLineJoin = JoinStyle::MITER_OR_BEVEL,
-                CapStyle aLineCap = CapStyle::BUTT,
-                Float aMiterLimit = 10.0f,
-                size_t aDashLength = 0,
-                const Float* aDashPattern = 0,
-                Float aDashOffset = 0.f)
+  explicit StrokeOptions(Float aLineWidth = 1.0f,
+                         JoinStyle aLineJoin = JoinStyle::MITER_OR_BEVEL,
+                         CapStyle aLineCap = CapStyle::BUTT,
+                         Float aMiterLimit = 10.0f,
+                         size_t aDashLength = 0,
+                         const Float* aDashPattern = 0,
+                         Float aDashOffset = 0.f)
     : mLineWidth(aLineWidth)
     , mMiterLimit(aMiterLimit)
     , mDashPattern(aDashLength > 0 ? aDashPattern : 0)
@@ -133,8 +135,8 @@ struct StrokeOptions {
  */
 struct DrawSurfaceOptions {
   /// For constructor parameter description, see member data documentation.
-  DrawSurfaceOptions(Filter aFilter = Filter::LINEAR,
-                     SamplingBounds aSamplingBounds = SamplingBounds::UNBOUNDED)
+  explicit DrawSurfaceOptions(Filter aFilter = Filter::LINEAR,
+                              SamplingBounds aSamplingBounds = SamplingBounds::UNBOUNDED)
     : mFilter(aFilter)
     , mSamplingBounds(aSamplingBounds)
   { }
@@ -185,7 +187,7 @@ protected:
 class ColorPattern : public Pattern
 {
 public:
-  ColorPattern(const Color &aColor)
+  explicit ColorPattern(const Color &aColor)
     : mColor(aColor)
   {}
 
@@ -272,11 +274,13 @@ class SurfacePattern : public Pattern
 public:
   /// For constructor parameter description, see member data documentation.
   SurfacePattern(SourceSurface *aSourceSurface, ExtendMode aExtendMode,
-                 const Matrix &aMatrix = Matrix(), Filter aFilter = Filter::GOOD)
+                 const Matrix &aMatrix = Matrix(), Filter aFilter = Filter::GOOD,
+                 const IntRect &aSamplingRect = IntRect())
     : mSurface(aSourceSurface)
     , mExtendMode(aExtendMode)
     , mFilter(aFilter)
     , mMatrix(aMatrix)
+    , mSamplingRect(aSamplingRect)
   {}
 
   virtual PatternType GetType() const { return PatternType::SURFACE; }
@@ -286,7 +290,13 @@ public:
                                        outside the bounds of the image */
   Filter mFilter;                 //!< Resampling filter for resampling the image.
   Matrix mMatrix;                 //!< Transforms the pattern into user space
+
+  IntRect mSamplingRect;          /**< Rect that must not be sampled outside of,
+                                       or an empty rect if none has been specified. */
 };
+
+class StoredPattern;
+class DrawTargetCaptureImpl;
 
 /**
  * This is the base class for source surfaces. These objects are surfaces
@@ -331,6 +341,15 @@ public:
   }
 
 protected:
+  friend class DrawTargetCaptureImpl;
+  friend class StoredPattern;
+
+  // This is for internal use, it ensures the SourceSurface's data remains
+  // valid during the lifetime of the SourceSurface.
+  // @todo XXX - We need something better here :(. But we may be able to get rid
+  // of CreateWrappingDataSourceSurface in the future.
+  virtual void GuaranteePersistance() {}
+
   UserData mUserData;
 };
 
@@ -395,6 +414,7 @@ public:
    */
   virtual TemporaryRef<DataSourceSurface> GetDataSurface();
 
+protected:
   bool mIsMapped;
 };
 
@@ -608,6 +628,8 @@ protected:
   GlyphRenderingOptions() {}
 };
 
+class DrawTargetCapture;
+
 /** This is the main class used for all the drawing. It is created through the
  * factory and accepts drawing commands. The results of drawing to a target
  * may be used either through a Snapshot or by flushing the target and directly
@@ -620,7 +642,9 @@ public:
   DrawTarget() : mTransformDirty(false), mPermitSubpixelAA(false) {}
   virtual ~DrawTarget() {}
 
-  virtual BackendType GetType() const = 0;
+  virtual DrawTargetType GetType() const = 0;
+
+  virtual BackendType GetBackendType() const = 0;
   /**
    * Returns a SourceSurface which is a snapshot of the current contents of the DrawTarget.
    * Multiple calls to Snapshot() without any drawing operations in between will
@@ -643,6 +667,15 @@ public:
    * this draw target outside of GFX 2D code.
    */
   virtual void Flush() = 0;
+
+  /**
+   * Realize a DrawTargetCapture onto the draw target.
+   *
+   * @param aSource Capture DrawTarget to draw
+   * @param aTransform Transform to apply when replaying commands
+   */
+  virtual void DrawCapturedDT(DrawTargetCapture *aCaptureDT,
+                              const Matrix& aTransform);
 
   /**
    * Draw a surface to the draw target. Possibly doing partial drawing or
@@ -880,6 +913,14 @@ public:
     CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFormat) const = 0;
 
   /**
+   * Create a DrawTarget that captures the drawing commands and can be replayed
+   * onto a compatible DrawTarget afterwards.
+   *
+   * @param aSize Size of the area this DT will capture. 
+   */
+  virtual TemporaryRef<DrawTargetCapture> CreateCaptureDT(const IntSize& aSize);
+
+  /**
    * Create a draw target optimized for drawing a shadow.
    *
    * Note that aSigma is the blur radius that must be used when we draw the
@@ -926,14 +967,30 @@ public:
    */
   virtual TemporaryRef<FilterNode> CreateFilter(FilterType aType) = 0;
 
-  const Matrix &GetTransform() const { return mTransform; }
+  Matrix GetTransform() const { return mTransform; }
 
   /**
    * Set a transform on the surface, this transform is applied at drawing time
    * to both the mask and source of the operation.
+   *
+   * Performance note: For some backends it is expensive to change the current
+   * transform (because transforms affect a lot of the parts of the pipeline,
+   * so new transform change can result in a pipeline flush).  To get around
+   * this, DrawTarget implementations buffer transform changes and try to only
+   * set the current transform on the backend when required.  That tracking has
+   * its own performance impact though, and ideally callers would be smart
+   * enough not to require it.  At a future date this method may stop this
+   * doing transform buffering so, if you're a consumer, please try to be smart
+   * about calling this method as little as possible.  For example, instead of
+   * concatenating a translation onto the current transform then calling
+   * FillRect, try to integrate the translation into FillRect's aRect
+   * argument's x/y offset.
    */
   virtual void SetTransform(const Matrix &aTransform)
     { mTransform = aTransform; mTransformDirty = true; }
+
+  inline void ConcatTransform(const Matrix &aTransform)
+    { SetTransform(aTransform * Matrix(GetTransform())); }
 
   SurfaceFormat GetFormat() { return mFormat; }
 
@@ -942,13 +999,17 @@ public:
    */
   virtual void *GetNativeSurface(NativeSurfaceType aType) { return nullptr; }
 
-  virtual bool IsDualDrawTarget() { return false; }
+  virtual bool IsDualDrawTarget() const { return false; }
+  virtual bool IsTiledDrawTarget() const { return false; }
 
   void AddUserData(UserDataKey *key, void *userData, void (*destroy)(void*)) {
     mUserData.Add(key, userData, destroy);
   }
   void *GetUserData(UserDataKey *key) {
     return mUserData.Get(key);
+  }
+  void *RemoveUserData(UserDataKey *key) {
+    return mUserData.Remove(key);
   }
 
   /** Within this rectangle all pixels will be opaque by the time the result of
@@ -991,11 +1052,27 @@ protected:
   SurfaceFormat mFormat;
 };
 
+class DrawTargetCapture : public DrawTarget
+{
+};
+
 class DrawEventRecorder : public RefCounted<DrawEventRecorder>
 {
 public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DrawEventRecorder)
   virtual ~DrawEventRecorder() { }
+};
+
+struct Tile
+{
+  RefPtr<DrawTarget> mDrawTarget;
+  IntPoint mTileOrigin;
+};
+
+struct TileSet
+{
+  Tile* mTiles;
+  size_t mTileCount;
 };
 
 class GFX2D_API Factory
@@ -1046,19 +1123,21 @@ public:
   /**
    * This creates a simple data source surface for a certain size. It allocates
    * new memory for the surface. This memory is freed when the surface is
-   * destroyed.
+   * destroyed.  The caller is responsible for handing the case where nullptr
+   * is returned. The surface is not zeroed unless requested.
    */
   static TemporaryRef<DataSourceSurface>
-    CreateDataSourceSurface(const IntSize &aSize, SurfaceFormat aFormat);
+    CreateDataSourceSurface(const IntSize &aSize, SurfaceFormat aFormat, bool aZero = false);
 
   /**
    * This creates a simple data source surface for a certain size with a
    * specific stride, which must be large enough to fit all pixels.
    * It allocates new memory for the surface. This memory is freed when
-   * the surface is destroyed.
+   * the surface is destroyed.  The caller is responsible for handling the case
+   * where nullptr is returned. The surface is not zeroed unless requested.
    */
   static TemporaryRef<DataSourceSurface>
-    CreateDataSourceSurfaceWithStride(const IntSize &aSize, SurfaceFormat aFormat, int32_t aStride);
+    CreateDataSourceSurfaceWithStride(const IntSize &aSize, SurfaceFormat aFormat, int32_t aStride, bool aZero = false);
 
   /**
    * This creates a simple data source surface for some existing data. It will
@@ -1074,6 +1153,15 @@ public:
     CreateEventRecorderForFile(const char *aFilename);
 
   static void SetGlobalEventRecorder(DrawEventRecorder *aRecorder);
+
+  // This is a little hacky at the moment, but we want to have this data. Bug 1068613.
+  static void SetLogForwarder(LogForwarder* aLogFwd);
+
+  static LogForwarder* GetLogForwarder() { return mLogForwarder; }
+
+private:
+  static LogForwarder* mLogForwarder;
+public:
 
 #ifdef USE_SKIA_GPU
   static TemporaryRef<DrawTarget>
@@ -1091,6 +1179,14 @@ public:
   static TemporaryRef<DrawTarget>
     CreateDualDrawTarget(DrawTarget *targetA, DrawTarget *targetB);
 
+  /*
+   * This creates a new tiled DrawTarget. When a tiled drawtarget is used the
+   * drawing is distributed over number of tiles which may each hold an
+   * individual offset. The tiles in the set must each have the same backend
+   * and format.
+   */
+  static TemporaryRef<DrawTarget> CreateTiledDrawTarget(const TileSet& aTileSet);
+
 #ifdef XP_MACOSX
   static TemporaryRef<DrawTarget> CreateDrawTargetForCairoCGContext(CGContextRef cg, const IntSize& aSize);
 #endif
@@ -1105,9 +1201,12 @@ public:
   static void SetDirect3D10Device(ID3D10Device1 *aDevice);
   static ID3D10Device1 *GetDirect3D10Device();
 #ifdef USE_D2D1_1
+  static TemporaryRef<DrawTarget> CreateDrawTargetForD3D11Texture(ID3D11Texture2D *aTexture, SurfaceFormat aFormat);
+
   static void SetDirect3D11Device(ID3D11Device *aDevice);
   static ID3D11Device *GetDirect3D11Device();
   static ID2D1Device *GetD2D1Device();
+  static bool SupportsD2D1();
 #endif
 
   static TemporaryRef<GlyphRenderingOptions>

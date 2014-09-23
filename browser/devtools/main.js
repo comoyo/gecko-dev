@@ -30,24 +30,29 @@ loader.lazyGetter(this, "StyleEditorPanel", () => require("devtools/styleeditor/
 loader.lazyGetter(this, "ShaderEditorPanel", () => require("devtools/shadereditor/panel").ShaderEditorPanel);
 loader.lazyGetter(this, "CanvasDebuggerPanel", () => require("devtools/canvasdebugger/panel").CanvasDebuggerPanel);
 loader.lazyGetter(this, "WebAudioEditorPanel", () => require("devtools/webaudioeditor/panel").WebAudioEditorPanel);
-loader.lazyGetter(this, "ProfilerPanel", () => require("devtools/profiler/panel"));
+loader.lazyGetter(this, "ProfilerPanel", () => require("devtools/profiler/panel").ProfilerPanel);
+loader.lazyGetter(this, "TimelinePanel", () => require("devtools/timeline/panel").TimelinePanel);
 loader.lazyGetter(this, "NetMonitorPanel", () => require("devtools/netmonitor/panel").NetMonitorPanel);
+loader.lazyGetter(this, "StoragePanel", () => require("devtools/storage/panel").StoragePanel);
 loader.lazyGetter(this, "ScratchpadPanel", () => require("devtools/scratchpad/scratchpad-panel").ScratchpadPanel);
 
 // Strings
 const toolboxProps = "chrome://browser/locale/devtools/toolbox.properties";
 const inspectorProps = "chrome://browser/locale/devtools/inspector.properties";
+const webConsoleProps = "chrome://browser/locale/devtools/webconsole.properties";
 const debuggerProps = "chrome://browser/locale/devtools/debugger.properties";
 const styleEditorProps = "chrome://browser/locale/devtools/styleeditor.properties";
 const shaderEditorProps = "chrome://browser/locale/devtools/shadereditor.properties";
 const canvasDebuggerProps = "chrome://browser/locale/devtools/canvasdebugger.properties";
 const webAudioEditorProps = "chrome://browser/locale/devtools/webaudioeditor.properties";
-
-const webConsoleProps = "chrome://browser/locale/devtools/webconsole.properties";
 const profilerProps = "chrome://browser/locale/devtools/profiler.properties";
+const timelineProps = "chrome://browser/locale/devtools/timeline.properties";
 const netMonitorProps = "chrome://browser/locale/devtools/netmonitor.properties";
+const storageProps = "chrome://browser/locale/devtools/storage.properties";
 const scratchpadProps = "chrome://browser/locale/devtools/scratchpad.properties";
+
 loader.lazyGetter(this, "toolboxStrings", () => Services.strings.createBundle(toolboxProps));
+loader.lazyGetter(this, "profilerStrings",() => Services.strings.createBundle(profilerProps));
 loader.lazyGetter(this, "webConsoleStrings", () => Services.strings.createBundle(webConsoleProps));
 loader.lazyGetter(this, "debuggerStrings", () => Services.strings.createBundle(debuggerProps));
 loader.lazyGetter(this, "styleEditorStrings", () => Services.strings.createBundle(styleEditorProps));
@@ -55,8 +60,9 @@ loader.lazyGetter(this, "shaderEditorStrings", () => Services.strings.createBund
 loader.lazyGetter(this, "canvasDebuggerStrings", () => Services.strings.createBundle(canvasDebuggerProps));
 loader.lazyGetter(this, "webAudioEditorStrings", () => Services.strings.createBundle(webAudioEditorProps));
 loader.lazyGetter(this, "inspectorStrings", () => Services.strings.createBundle(inspectorProps));
-loader.lazyGetter(this, "profilerStrings",() => Services.strings.createBundle(profilerProps));
+loader.lazyGetter(this, "timelineStrings", () => Services.strings.createBundle(timelineProps));
 loader.lazyGetter(this, "netMonitorStrings", () => Services.strings.createBundle(netMonitorProps));
+loader.lazyGetter(this, "storageStrings", () => Services.strings.createBundle(storageProps));
 loader.lazyGetter(this, "scratchpadStrings", () => Services.strings.createBundle(scratchpadProps));
 
 let Tools = {};
@@ -70,48 +76,20 @@ Tools.options = {
   icon: "chrome://browser/skin/devtools/tool-options.svg",
   invertIconForLightTheme: true,
   bgTheme: "theme-body",
+  label: l10n("options.label", toolboxStrings),
+  iconOnly: true,
+  panelLabel: l10n("options.panelLabel", toolboxStrings),
   tooltip: l10n("optionsButton.tooltip", toolboxStrings),
   inMenu: false,
+
   isTargetSupported: function(target) {
     return true;
   },
+
   build: function(iframeWindow, toolbox) {
-    let panel = new OptionsPanel(iframeWindow, toolbox);
-    return panel.open();
+    return new OptionsPanel(iframeWindow, toolbox);
   }
 }
-
-Tools.webConsole = {
-  id: "webconsole",
-  key: l10n("cmd.commandkey", webConsoleStrings),
-  accesskey: l10n("webConsoleCmd.accesskey", webConsoleStrings),
-  modifiers: Services.appinfo.OS == "Darwin" ? "accel,alt" : "accel,shift",
-  ordinal: 2,
-  icon: "chrome://browser/skin/devtools/tool-webconsole.svg",
-  invertIconForLightTheme: true,
-  url: "chrome://browser/content/devtools/webconsole.xul",
-  label: l10n("ToolboxTabWebconsole.label", webConsoleStrings),
-  menuLabel: l10n("MenuWebconsole.label", webConsoleStrings),
-  tooltip: l10n("ToolboxWebconsole.tooltip", webConsoleStrings),
-  inMenu: true,
-  commands: "devtools/webconsole/console-commands",
-
-  preventClosingOnKey: true,
-  onkey: function(panel, toolbox) {
-    if (toolbox.splitConsole)
-      return toolbox.focusConsoleInput();
-
-    panel.focusInput();
-  },
-
-  isTargetSupported: function(target) {
-    return true;
-  },
-  build: function(iframeWindow, toolbox) {
-    let panel = new WebConsolePanel(iframeWindow, toolbox);
-    return panel.open();
-  }
-};
 
 Tools.inspector = {
   id: "inspector",
@@ -123,6 +101,7 @@ Tools.inspector = {
   invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/inspector/inspector.xul",
   label: l10n("inspector.label", inspectorStrings),
+  panelLabel: l10n("inspector.panelLabel", inspectorStrings),
   tooltip: l10n("inspector.tooltip", inspectorStrings),
   inMenu: true,
   commands: [
@@ -141,8 +120,40 @@ Tools.inspector = {
   },
 
   build: function(iframeWindow, toolbox) {
-    let panel = new InspectorPanel(iframeWindow, toolbox);
-    return panel.open();
+    return new InspectorPanel(iframeWindow, toolbox);
+  }
+};
+
+Tools.webConsole = {
+  id: "webconsole",
+  key: l10n("cmd.commandkey", webConsoleStrings),
+  accesskey: l10n("webConsoleCmd.accesskey", webConsoleStrings),
+  modifiers: Services.appinfo.OS == "Darwin" ? "accel,alt" : "accel,shift",
+  ordinal: 2,
+  icon: "chrome://browser/skin/devtools/tool-webconsole.svg",
+  invertIconForLightTheme: true,
+  url: "chrome://browser/content/devtools/webconsole.xul",
+  label: l10n("ToolboxTabWebconsole.label", webConsoleStrings),
+  menuLabel: l10n("MenuWebconsole.label", webConsoleStrings),
+  panelLabel: l10n("ToolboxWebConsole.panelLabel", webConsoleStrings),
+  tooltip: l10n("ToolboxWebconsole.tooltip", webConsoleStrings),
+  inMenu: true,
+  commands: "devtools/webconsole/console-commands",
+
+  preventClosingOnKey: true,
+  onkey: function(panel, toolbox) {
+    if (toolbox.splitConsole)
+      return toolbox.focusConsoleInput();
+
+    panel.focusInput();
+  },
+
+  isTargetSupported: function(target) {
+    return true;
+  },
+
+  build: function(iframeWindow, toolbox) {
+    return new WebConsolePanel(iframeWindow, toolbox);
   }
 };
 
@@ -157,6 +168,7 @@ Tools.jsdebugger = {
   highlightedicon: "chrome://browser/skin/devtools/tool-debugger-paused.svg",
   url: "chrome://browser/content/devtools/debugger.xul",
   label: l10n("ToolboxDebugger.label", debuggerStrings),
+  panelLabel: l10n("ToolboxDebugger.panelLabel", debuggerStrings),
   tooltip: l10n("ToolboxDebugger.tooltip", debuggerStrings),
   inMenu: true,
   commands: "devtools/debugger/debugger-commands",
@@ -166,8 +178,7 @@ Tools.jsdebugger = {
   },
 
   build: function(iframeWindow, toolbox) {
-    let panel = new DebuggerPanel(iframeWindow, toolbox);
-    return panel.open();
+    return new DebuggerPanel(iframeWindow, toolbox);
   }
 };
 
@@ -181,6 +192,7 @@ Tools.styleEditor = {
   invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/styleeditor.xul",
   label: l10n("ToolboxStyleEditor.label", styleEditorStrings),
+  panelLabel: l10n("ToolboxStyleEditor.panelLabel", styleEditorStrings),
   tooltip: l10n("ToolboxStyleEditor.tooltip2", styleEditorStrings),
   inMenu: true,
   commands: "devtools/styleeditor/styleeditor-commands",
@@ -190,8 +202,7 @@ Tools.styleEditor = {
   },
 
   build: function(iframeWindow, toolbox) {
-    let panel = new StyleEditorPanel(iframeWindow, toolbox);
-    return panel.open();
+    return new StyleEditorPanel(iframeWindow, toolbox);
   }
 };
 
@@ -203,6 +214,7 @@ Tools.shaderEditor = {
   invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/shadereditor.xul",
   label: l10n("ToolboxShaderEditor.label", shaderEditorStrings),
+  panelLabel: l10n("ToolboxShaderEditor.panelLabel", shaderEditorStrings),
   tooltip: l10n("ToolboxShaderEditor.tooltip", shaderEditorStrings),
 
   isTargetSupported: function(target) {
@@ -210,8 +222,7 @@ Tools.shaderEditor = {
   },
 
   build: function(iframeWindow, toolbox) {
-    let panel = new ShaderEditorPanel(iframeWindow, toolbox);
-    return panel.open();
+    return new ShaderEditorPanel(iframeWindow, toolbox);
   }
 };
 
@@ -223,55 +234,63 @@ Tools.canvasDebugger = {
   invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/canvasdebugger.xul",
   label: l10n("ToolboxCanvasDebugger.label", canvasDebuggerStrings),
+  panelLabel: l10n("ToolboxCanvasDebugger.panelLabel", canvasDebuggerStrings),
   tooltip: l10n("ToolboxCanvasDebugger.tooltip", canvasDebuggerStrings),
-  isTargetSupported: function(target) {
-    return !target.isAddon;
-  },
-  build: function (iframeWindow, toolbox) {
-    let panel = new CanvasDebuggerPanel(iframeWindow, toolbox);
-    return panel.open();
-  }
-};
 
-Tools.webAudioEditor = {
-  id: "webaudioeditor",
-  ordinal: 10,
-  visibilityswitch: "devtools.webaudioeditor.enabled",
-  icon: "chrome://browser/skin/devtools/tool-webaudio.svg",
-  invertIconForLightTheme: true,
-  url: "chrome://browser/content/devtools/webaudioeditor.xul",
-  label: l10n("ToolboxWebAudioEditor1.label", webAudioEditorStrings),
-  tooltip: l10n("ToolboxWebAudioEditor1.tooltip", webAudioEditorStrings),
+  // Hide the Canvas Debugger in the Add-on Debugger and Browser Toolbox
+  // (bug 1047520).
   isTargetSupported: function(target) {
-    return !target.isAddon;
+    return !target.isAddon && !target.chrome;
   },
-  build: function(iframeWindow, toolbox) {
-    let panel = new WebAudioEditorPanel(iframeWindow, toolbox);
-    return panel.open();
+
+  build: function (iframeWindow, toolbox) {
+    return new CanvasDebuggerPanel(iframeWindow, toolbox);
   }
 };
 
 Tools.jsprofiler = {
   id: "jsprofiler",
   accesskey: l10n("profiler.accesskey", profilerStrings),
-  key: l10n("profiler2.commandkey", profilerStrings),
+  key: l10n("profiler.commandkey2", profilerStrings),
   ordinal: 7,
   modifiers: "shift",
   visibilityswitch: "devtools.profiler.enabled",
   icon: "chrome://browser/skin/devtools/tool-profiler.svg",
   invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/profiler.xul",
-  label: l10n("profiler.label", profilerStrings),
+  label: l10n("profiler.label2", profilerStrings),
+  panelLabel: l10n("profiler.panelLabel2", profilerStrings),
   tooltip: l10n("profiler.tooltip2", profilerStrings),
   inMenu: true,
-  commands: "devtools/profiler/commands",
 
   isTargetSupported: function (target) {
-    return !target.isAddon;
+    // Hide the profiler when debugging devices pre bug 1046394,
+    // that don't expose profiler actor in content processes.
+    return !target.isAddon && (!target.isApp || target.form.profilerActor);
   },
 
   build: function (frame, target) {
-    let panel = new ProfilerPanel(frame, target);
+    return new ProfilerPanel(frame, target);
+  }
+};
+
+Tools.timeline = {
+  id: "timeline",
+  ordinal: 8,
+  visibilityswitch: "devtools.timeline.enabled",
+  icon: "chrome://browser/skin/devtools/tool-network.svg",
+  invertIconForLightTheme: true,
+  url: "chrome://browser/content/devtools/timeline/timeline.xul",
+  label: l10n("timeline.label", timelineStrings),
+  panelLabel: l10n("timeline.panelLabel", timelineStrings),
+  tooltip: l10n("timeline.tooltip", timelineStrings),
+
+  isTargetSupported: function(target) {
+    return !target.isAddon;
+  },
+
+  build: function (iframeWindow, toolbox) {
+    let panel = new TimelinePanel(iframeWindow, toolbox);
     return panel.open();
   }
 };
@@ -280,13 +299,14 @@ Tools.netMonitor = {
   id: "netmonitor",
   accesskey: l10n("netmonitor.accesskey", netMonitorStrings),
   key: l10n("netmonitor.commandkey", netMonitorStrings),
-  ordinal: 8,
+  ordinal: 9,
   modifiers: osString == "Darwin" ? "accel,alt" : "accel,shift",
   visibilityswitch: "devtools.netmonitor.enabled",
   icon: "chrome://browser/skin/devtools/tool-network.svg",
   invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/netmonitor.xul",
   label: l10n("netmonitor.label", netMonitorStrings),
+  panelLabel: l10n("netmonitor.panelLabel", netMonitorStrings),
   tooltip: l10n("netmonitor.tooltip", netMonitorStrings),
   inMenu: true,
 
@@ -296,19 +316,65 @@ Tools.netMonitor = {
   },
 
   build: function(iframeWindow, toolbox) {
-    let panel = new NetMonitorPanel(iframeWindow, toolbox);
-    return panel.open();
+    return new NetMonitorPanel(iframeWindow, toolbox);
+  }
+};
+
+Tools.storage = {
+  id: "storage",
+  key: l10n("storage.commandkey", storageStrings),
+  ordinal: 10,
+  accesskey: l10n("storage.accesskey", storageStrings),
+  modifiers: "shift",
+  visibilityswitch: "devtools.storage.enabled",
+  icon: "chrome://browser/skin/devtools/tool-storage.svg",
+  invertIconForLightTheme: true,
+  url: "chrome://browser/content/devtools/storage.xul",
+  label: l10n("storage.label", storageStrings),
+  menuLabel: l10n("storage.menuLabel", storageStrings),
+  panelLabel: l10n("storage.panelLabel", storageStrings),
+  tooltip: l10n("storage.tooltip2", storageStrings),
+  inMenu: true,
+
+  isTargetSupported: function(target) {
+    return target.isLocalTab ||
+           (target.client.traits.storageInspector && !target.isAddon);
+  },
+
+  build: function(iframeWindow, toolbox) {
+    return new StoragePanel(iframeWindow, toolbox);
+  }
+};
+
+Tools.webAudioEditor = {
+  id: "webaudioeditor",
+  ordinal: 11,
+  visibilityswitch: "devtools.webaudioeditor.enabled",
+  icon: "chrome://browser/skin/devtools/tool-webaudio.svg",
+  invertIconForLightTheme: true,
+  url: "chrome://browser/content/devtools/webaudioeditor.xul",
+  label: l10n("ToolboxWebAudioEditor1.label", webAudioEditorStrings),
+  panelLabel: l10n("ToolboxWebAudioEditor1.panelLabel", webAudioEditorStrings),
+  tooltip: l10n("ToolboxWebAudioEditor1.tooltip", webAudioEditorStrings),
+
+  isTargetSupported: function(target) {
+    return !target.isAddon;
+  },
+
+  build: function(iframeWindow, toolbox) {
+    return new WebAudioEditorPanel(iframeWindow, toolbox);
   }
 };
 
 Tools.scratchpad = {
   id: "scratchpad",
-  ordinal: 9,
+  ordinal: 12,
   visibilityswitch: "devtools.scratchpad.enabled",
   icon: "chrome://browser/skin/devtools/tool-scratchpad.svg",
   invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/scratchpad.xul",
   label: l10n("scratchpad.label", scratchpadStrings),
+  panelLabel: l10n("scratchpad.panelLabel", scratchpadStrings),
   tooltip: l10n("scratchpad.tooltip", scratchpadStrings),
   inMenu: false,
   commands: "devtools/scratchpad/scratchpad-commands",
@@ -318,8 +384,7 @@ Tools.scratchpad = {
   },
 
   build: function(iframeWindow, toolbox) {
-    let panel = new ScratchpadPanel(iframeWindow, toolbox);
-    return panel.open();
+    return new ScratchpadPanel(iframeWindow, toolbox);
   }
 };
 
@@ -333,7 +398,9 @@ let defaultTools = [
   Tools.canvasDebugger,
   Tools.webAudioEditor,
   Tools.jsprofiler,
+  Tools.timeline,
   Tools.netMonitor,
+  Tools.storage,
   Tools.scratchpad
 ];
 
@@ -343,12 +410,40 @@ for (let definition of defaultTools) {
   gDevTools.registerTool(definition);
 }
 
+Tools.darkTheme = {
+  id: "dark",
+  label: l10n("options.darkTheme.label", toolboxStrings),
+  ordinal: 1,
+  stylesheets: ["chrome://browser/skin/devtools/dark-theme.css"],
+  classList: ["theme-dark"],
+};
+
+Tools.lightTheme = {
+  id: "light",
+  label: l10n("options.lightTheme.label", toolboxStrings),
+  ordinal: 2,
+  stylesheets: ["chrome://browser/skin/devtools/light-theme.css"],
+  classList: ["theme-light"],
+};
+
+let defaultThemes = [
+  Tools.darkTheme,
+  Tools.lightTheme,
+];
+
+for (let definition of defaultThemes) {
+  gDevTools.registerTheme(definition);
+}
+
 var unloadObserver = {
   observe: function(subject, topic, data) {
     if (subject.wrappedJSObject === require("@loader/unload")) {
       Services.obs.removeObserver(unloadObserver, "sdk:loader:destroy");
       for (let definition of gDevTools.getToolDefinitionArray()) {
         gDevTools.unregisterTool(definition.id);
+      }
+      for (let definition of gDevTools.getThemeDefinitionArray()) {
+        gDevTools.unregisterTheme(definition.id);
       }
     }
   }

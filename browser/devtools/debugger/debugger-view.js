@@ -1,4 +1,4 @@
-/* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -213,11 +213,17 @@ let DebuggerView = {
     bindKey("_doGlobalSearch", "globalSearchKey", { alt: true });
     bindKey("_doFunctionSearch", "functionSearchKey");
     extraKeys[Editor.keyFor("jumpToLine")] = false;
+    extraKeys["Esc"] = false;
 
     function bindKey(func, key, modifiers = {}) {
-      let key = document.getElementById(key).getAttribute("key");
+      key = document.getElementById(key).getAttribute("key");
       let shortcut = Editor.accel(key, modifiers);
       extraKeys[shortcut] = () => DebuggerView.Filtering[func]();
+    }
+
+    let gutters = ["breakpoints"];
+    if (Services.prefs.getBoolPref("devtools.debugger.tracer")) {
+      gutters.unshift("hit-counts");
     }
 
     this.editor = new Editor({
@@ -225,9 +231,10 @@ let DebuggerView = {
       readOnly: true,
       lineNumbers: true,
       showAnnotationRuler: true,
-      gutters: [ "breakpoints" ],
+      gutters: gutters,
       extraKeys: extraKeys,
-      contextMenu: "sourceEditorContextMenu"
+      contextMenu: "sourceEditorContextMenu",
+      enableCodeFolding: false
     });
 
     this.editor.appendTo(document.getElementById("editor")).then(() => {
@@ -409,6 +416,7 @@ let DebuggerView = {
       // Synchronize any other components with the currently displayed source.
       DebuggerView.Sources.selectedValue = aSource.url;
       DebuggerController.Breakpoints.updateEditorBreakpoints();
+      DebuggerController.HitCounts.updateEditorHitCounts();
 
       histogram.add(Date.now() - startTime);
 

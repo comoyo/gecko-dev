@@ -92,6 +92,7 @@ class StaticScopeIter
     StaticBlockObject &block() const;
     StaticWithObject &staticWith() const;
     JSScript *funScript() const;
+    JSFunction &fun() const;
 };
 
 /*****************************************************************************/
@@ -129,6 +130,10 @@ class ScopeCoordinate
 
     uint32_t hops() const { JS_ASSERT(hops_ < SCOPECOORD_HOPS_LIMIT); return hops_; }
     uint32_t slot() const { JS_ASSERT(slot_ < SCOPECOORD_SLOT_LIMIT); return slot_; }
+
+    bool operator==(const ScopeCoordinate &rhs) const {
+        return hops() == rhs.hops() && slot() == rhs.slot();
+    }
 };
 
 /*
@@ -231,6 +236,8 @@ class CallObject : public ScopeObject
 
     static CallObject *
     create(JSContext *cx, HandleScript script, HandleObject enclosing, HandleFunction callee);
+
+    inline void setAliasedLexicalsToThrowOnTouch(JSScript *script);
 
   public:
     static const Class class_;
@@ -412,6 +419,14 @@ class DynamicWithObject : public NestedScopeObject
     /* Return object for the 'this' class hook. */
     JSObject &withThis() const {
         return getReservedSlot(THIS_SLOT).toObject();
+    }
+
+    static inline size_t objectSlot() {
+        return OBJECT_SLOT;
+    }
+
+    static inline size_t thisSlot() {
+        return THIS_SLOT;
     }
 };
 
@@ -703,6 +718,9 @@ class ScopeIterKey
     JSObject *enclosingScope() const { return cur_; }
     JSObject *&enclosingScope() { return cur_; }
 
+    void updateCur(JSObject *obj) { cur_ = obj; }
+    void updateStaticScope(NestedScopeObject *obj) { staticScope_ = obj; }
+
     /* For use as hash policy */
     typedef ScopeIterKey Lookup;
     static HashNumber hash(ScopeIterKey si);
@@ -728,6 +746,8 @@ class ScopeIterVal
     RelocatablePtrNestedScopeObject staticScope_;
     ScopeIter::Type type_;
     bool hasScopeObject_;
+
+    void sweep();
 
     static void staticAsserts();
 
@@ -900,7 +920,7 @@ JSObject::is<js::DebugScopeObject>() const
     extern bool js_IsDebugScopeSlow(js::ProxyObject *proxy);
 
     // Note: don't use is<ProxyObject>() here -- it also matches subclasses!
-    return hasClass(&js::ProxyObject::uncallableClass_) &&
+    return hasClass(&js::ProxyObject::class_) &&
            js_IsDebugScopeSlow(&const_cast<JSObject*>(this)->as<js::ProxyObject>());
 }
 

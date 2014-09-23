@@ -23,12 +23,10 @@ namespace image {
  */
 class OrientedImage : public ImageWrapper
 {
-  typedef mozilla::gfx::SourceSurface SourceSurface;
+  typedef gfx::SourceSurface SourceSurface;
 
 public:
-  NS_DECL_ISUPPORTS
-
-  virtual ~OrientedImage() { }
+  NS_DECL_ISUPPORTS_INHERITED
 
   virtual nsIntRect FrameRect(uint32_t aWhichFrame) MOZ_OVERRIDE;
 
@@ -36,19 +34,22 @@ public:
   NS_IMETHOD GetHeight(int32_t* aHeight) MOZ_OVERRIDE;
   NS_IMETHOD GetIntrinsicSize(nsSize* aSize) MOZ_OVERRIDE;
   NS_IMETHOD GetIntrinsicRatio(nsSize* aRatio) MOZ_OVERRIDE;
-  NS_IMETHOD_(mozilla::TemporaryRef<SourceSurface>)
+  NS_IMETHOD_(TemporaryRef<SourceSurface>)
     GetFrame(uint32_t aWhichFrame, uint32_t aFlags) MOZ_OVERRIDE;
-  NS_IMETHOD GetImageContainer(mozilla::layers::LayerManager* aManager,
-                               mozilla::layers::ImageContainer** _retval) MOZ_OVERRIDE;
+  NS_IMETHOD GetImageContainer(layers::LayerManager* aManager,
+                               layers::ImageContainer** _retval) MOZ_OVERRIDE;
   NS_IMETHOD Draw(gfxContext* aContext,
-                  GraphicsFilter aFilter,
-                  const gfxMatrix& aUserSpaceToImageSpace,
-                  const gfxRect& aFill,
-                  const nsIntRect& aSubimage,
-                  const nsIntSize& aViewportSize,
-                  const SVGImageContext* aSVGContext,
+                  const nsIntSize& aSize,
+                  const ImageRegion& aRegion,
                   uint32_t aWhichFrame,
+                  GraphicsFilter aFilter,
+                  const Maybe<SVGImageContext>& aSVGContext,
                   uint32_t aFlags) MOZ_OVERRIDE;
+  NS_IMETHOD_(nsIntRect) GetImageSpaceInvalidationRect(const nsIntRect& aRect) MOZ_OVERRIDE;
+  nsIntSize OptimalImageSizeForDest(const gfxSize& aDest,
+                                    uint32_t aWhichFrame,
+                                    GraphicsFilter aFilter,
+                                    uint32_t aFlags) MOZ_OVERRIDE;
  
 protected:
   OrientedImage(Image* aImage, Orientation aOrientation)
@@ -56,7 +57,9 @@ protected:
     , mOrientation(aOrientation)
   { }
 
-  gfxMatrix OrientationMatrix(const nsIntSize& aViewportSize);
+  virtual ~OrientedImage() { }
+
+  gfxMatrix OrientationMatrix(const nsIntSize& aSize, bool aInvert = false);
 
 private:
   Orientation mOrientation;

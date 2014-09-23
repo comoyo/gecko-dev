@@ -11,7 +11,6 @@
 #include "SharedMemoryBasic.h"
 #include "SharedMemorySysV.h"
 
-#include "nsAutoPtr.h"
 #include "mozilla/unused.h"
 
 
@@ -111,10 +110,10 @@ public:
 
 
 #ifdef MOZ_HAVE_SHAREDMEMORYSYSV
-static Shmem::SharedMemory*
+static already_AddRefed<Shmem::SharedMemory>
 CreateSegment(size_t aNBytes, SharedMemorySysV::Handle aHandle)
 {
-  nsAutoPtr<SharedMemory> segment;
+  nsRefPtr<SharedMemory> segment;
 
   if (SharedMemorySysV::IsHandleValid(aHandle)) {
     segment = new SharedMemorySysV(aHandle);
@@ -123,20 +122,19 @@ CreateSegment(size_t aNBytes, SharedMemorySysV::Handle aHandle)
     segment = new SharedMemorySysV();
 
     if (!segment->Create(aNBytes))
-      return 0;
+      return nullptr;
   }
   if (!segment->Map(aNBytes))
-    return 0;
+    return nullptr;
 
-  segment->AddRef();
   return segment.forget();
 }
 #endif
 
-static Shmem::SharedMemory*
+static already_AddRefed<Shmem::SharedMemory>
 CreateSegment(size_t aNBytes, SharedMemoryBasic::Handle aHandle)
 {
-  nsAutoPtr<SharedMemory> segment;
+  nsRefPtr<SharedMemory> segment;
 
   if (SharedMemoryBasic::IsHandleValid(aHandle)) {
     segment = new SharedMemoryBasic(aHandle);
@@ -145,12 +143,11 @@ CreateSegment(size_t aNBytes, SharedMemoryBasic::Handle aHandle)
     segment = new SharedMemoryBasic();
 
     if (!segment->Create(aNBytes))
-      return 0;
+      return nullptr;
   }
   if (!segment->Map(aNBytes))
-    return 0;
+    return nullptr;
 
-  segment->AddRef();
   return segment.forget();
 }
 
@@ -281,7 +278,7 @@ Unprotect(SharedMemory* aSegment)
 Shmem::Shmem(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
              SharedMemory* aSegment, id_t aId) :
     mSegment(aSegment),
-    mData(0),
+    mData(nullptr),
     mSize(0)
 {
   NS_ABORT_IF_FALSE(mSegment, "NULL segment");
@@ -349,7 +346,7 @@ Shmem::RevokeRights(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead)
 }
 
 // static
-Shmem::SharedMemory*
+already_AddRefed<Shmem::SharedMemory>
 Shmem::Alloc(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
              size_t aNBytes,
              SharedMemoryType aType,
@@ -360,7 +357,7 @@ Shmem::Alloc(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   NS_ABORT_IF_FALSE(!aProtect || !aUnsafe, "protect => !unsafe");
 
   size_t pageSize = SharedMemory::SystemPageSize();
-  SharedMemory* segment = nullptr;
+  nsRefPtr<SharedMemory> segment;
   // |2*pageSize| is for the front and back sentinel
   size_t segmentSize = SharedMemory::PageAlignedSize(aNBytes + 2*pageSize);
 
@@ -376,7 +373,7 @@ Shmem::Alloc(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   }
 
   if (!segment)
-    return 0;
+    return nullptr;
 
   Header* header;
   char *frontSentinel;
@@ -398,11 +395,11 @@ Shmem::Alloc(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   if (aProtect)
     Protect(segment);
 
-  return segment;
+  return segment.forget();
 }
 
 // static
-Shmem::SharedMemory*
+already_AddRefed<Shmem::SharedMemory>
 Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
                     const IPC::Message& aDescriptor,
                     id_t* aId,
@@ -413,13 +410,13 @@ Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
     return nullptr;
   }
 
-  void* iter = 0;
+  void* iter = nullptr;
   SharedMemory::SharedMemoryType type;
   size_t size;
   if (!ShmemCreated::ReadInfo(&aDescriptor, &iter, aId, &size, &type))
-    return 0;
+    return nullptr;
 
-  SharedMemory* segment = 0;
+  nsRefPtr<SharedMemory> segment;
   size_t pageSize = SharedMemory::SystemPageSize();
   // |2*pageSize| is for the front and back sentinels
   size_t segmentSize = SharedMemory::PageAlignedSize(size + 2*pageSize);
@@ -427,7 +424,7 @@ Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   if (SharedMemory::TYPE_BASIC == type) {
     SharedMemoryBasic::Handle handle;
     if (!ShmemCreated::ReadHandle(&aDescriptor, &iter, &handle))
-      return 0;
+      return nullptr;
 
     if (!SharedMemoryBasic::IsHandleValid(handle)) {
       NS_ERROR("trying to open invalid handle");
@@ -439,7 +436,7 @@ Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   else if (SharedMemory::TYPE_SYSV == type) {
     SharedMemorySysV::Handle handle;
     if (!ShmemCreated::ReadHandle(&aDescriptor, &iter, &handle))
-      return 0;
+      return nullptr;
 
     if (!SharedMemorySysV::IsHandleValid(handle)) {
       NS_ERROR("trying to open invalid handle");
@@ -454,13 +451,12 @@ Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   }
 
   if (!segment)
-    return 0;
+    return nullptr;
 
   Header* header = GetHeader(segment);
 
   if (size != header->mSize) {
     NS_ERROR("Wrong size for this Shmem!");
-    delete segment;
     return nullptr;
   }
 
@@ -469,7 +465,7 @@ Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   if (!header->mUnsafe && aProtect)
     Protect(segment);
 
-  return segment;
+  return segment.forget();
 }
 
 // static
@@ -499,14 +495,14 @@ Shmem::Dealloc(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
 #else  // !defined(DEBUG)
 
 // static
-Shmem::SharedMemory*
+already_AddRefed<Shmem::SharedMemory>
 Shmem::Alloc(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
-             size_t aNBytes, 
+             size_t aNBytes,
              SharedMemoryType aType,
              bool /*unused*/,
              bool /*unused*/)
 {
-  SharedMemory *segment = nullptr;
+  nsRefPtr<SharedMemory> segment;
 
   if (aType == SharedMemory::TYPE_BASIC)
     segment = CreateSegment(SharedMemory::PageAlignedSize(aNBytes + sizeof(uint32_t)),
@@ -521,15 +517,15 @@ Shmem::Alloc(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   }
 
   if (!segment)
-    return 0;
+    return nullptr;
 
   *PtrToSize(segment) = static_cast<uint32_t>(aNBytes);
 
-  return segment;
+  return segment.forget();
 }
 
 // static
-Shmem::SharedMemory*
+already_AddRefed<Shmem::SharedMemory>
 Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
                     const IPC::Message& aDescriptor,
                     id_t* aId,
@@ -540,18 +536,18 @@ Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   }
 
   SharedMemory::SharedMemoryType type;
-  void* iter = 0;
+  void* iter = nullptr;
   size_t size;
   if (!ShmemCreated::ReadInfo(&aDescriptor, &iter, aId, &size, &type))
-    return 0;
+    return nullptr;
 
-  SharedMemory* segment = 0;
+  nsRefPtr<SharedMemory> segment;
   size_t segmentSize = SharedMemory::PageAlignedSize(size + sizeof(uint32_t));
 
   if (SharedMemory::TYPE_BASIC == type) {
     SharedMemoryBasic::Handle handle;
     if (!ShmemCreated::ReadHandle(&aDescriptor, &iter, &handle))
-      return 0;
+      return nullptr;
 
     if (!SharedMemoryBasic::IsHandleValid(handle)) {
       return nullptr;
@@ -563,7 +559,7 @@ Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   else if (SharedMemory::TYPE_SYSV == type) {
     SharedMemorySysV::Handle handle;
     if (!ShmemCreated::ReadHandle(&aDescriptor, &iter, &handle))
-      return 0;
+      return nullptr;
 
     if (!SharedMemorySysV::IsHandleValid(handle)) {
       return nullptr;
@@ -576,15 +572,14 @@ Shmem::OpenExisting(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
   }
 
   if (!segment)
-    return 0;
+    return nullptr;
 
   // this is the only validity check done in non-DEBUG builds
   if (size != static_cast<size_t>(*PtrToSize(segment))) {
-    delete segment;
     return nullptr;
   }
 
-  return segment;
+  return segment.forget();
 }
 
 // static
@@ -623,11 +618,16 @@ Shmem::ShareTo(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
 {
   AssertInvariants();
 
+  // kInvalidProcessHandle is used to indicate that it's the same process.
+  if (aProcess == kInvalidProcessHandle) {
+    aProcess = base::GetCurrentProcessHandle();
+  }
+
   if (SharedMemory::TYPE_BASIC == mSegment->Type()) {
     SharedMemoryBasic* seg = static_cast<SharedMemoryBasic*>(mSegment);
     SharedMemoryBasic::Handle handle;
     if (!seg->ShareToProcess(aProcess, &handle))
-      return 0;
+      return nullptr;
 
     return new ShmemCreated(routingId, mId, mSize, handle);
   }
@@ -642,7 +642,7 @@ Shmem::ShareTo(IHadBetterBeIPDLCodeCallingThis_OtherwiseIAmADoodyhead,
     return nullptr;
   }
 
-  return 0;
+  return nullptr;
 }
 
 IPC::Message*

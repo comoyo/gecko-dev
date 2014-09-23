@@ -11,11 +11,12 @@
 #include "nsAutoPtr.h"
 #include "gfxPoint.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 
 class gfxContext;
 struct gfxRect;
 struct gfxRGBA;
-class gfxCornerSizes;
+struct gfxCornerSizes;
 class gfxMatrix;
 
 namespace mozilla {
@@ -86,6 +87,8 @@ public:
         return mContext;
     }
 
+    mozilla::TemporaryRef<mozilla::gfx::SourceSurface> DoBlur(mozilla::gfx::DrawTarget* aDT, mozilla::gfx::IntPoint* aTopLeft);
+
     /**
      * Does the actual blurring/spreading and mask applying. Users of this
      * object must have drawn whatever they want to be blurred onto the internal
@@ -129,6 +132,8 @@ public:
                               const gfxRect& aDirtyRect,
                               const gfxRect& aSkipRect);
 
+    static void ShutdownBlurCache();
+
 
 
 protected:
@@ -145,7 +150,7 @@ protected:
      /**
       * The object that actually does the blurring for us.
       */
-    mozilla::gfx::AlphaBoxBlur *mBlur;
+    mozilla::UniquePtr<mozilla::gfx::AlphaBoxBlur> mBlur;
 };
 
 #endif /* GFX_BLUR_H */

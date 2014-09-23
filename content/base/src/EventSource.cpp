@@ -7,6 +7,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/LoadInfo.h"
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/dom/EventSourceBinding.h"
 #include "mozilla/dom/MessageEvent.h"
@@ -369,15 +370,6 @@ EventSource::OnStartRequest(nsIRequest *aRequest,
     return NS_ERROR_ABORT;
   }
 
-  nsCOMPtr<nsIPrincipal> principal = mPrincipal;
-  if (nsContentUtils::IsSystemPrincipal(principal)) {
-    // Don't give this channel the system principal.
-    principal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-  rv = httpChannel->SetOwner(principal);
-  NS_ENSURE_SUCCESS(rv, rv);
-
   nsCOMPtr<nsIRunnable> event =
     NS_NewRunnableMethod(this, &EventSource::AnnounceConnection);
   NS_ENSURE_STATE(event);
@@ -497,7 +489,7 @@ EventSource::OnStopRequest(nsIRequest *aRequest,
 class AsyncVerifyRedirectCallbackFwr MOZ_FINAL : public nsIAsyncVerifyRedirectCallback
 {
 public:
-  AsyncVerifyRedirectCallbackFwr(EventSource* aEventsource)
+  explicit AsyncVerifyRedirectCallbackFwr(EventSource* aEventsource)
     : mEventSource(aEventsource)
   {
   }
@@ -518,6 +510,7 @@ public:
   }
 
 private:
+  ~AsyncVerifyRedirectCallbackFwr() {}
   nsRefPtr<EventSource> mEventSource;
 };
 
@@ -756,9 +749,42 @@ EventSource::InitChannelAndRequestEventSource()
     channelPolicy->SetLoadType(nsIContentPolicy::TYPE_DATAREQUEST);
   }
 
+  nsIScriptContext* sc = GetContextForEventHandlers(&rv);
+  nsCOMPtr<nsIDocument> doc =
+    nsContentUtils::GetDocumentFromScriptContext(sc);
+
+  nsCOMPtr<nsIPrincipal> principal = mPrincipal;
+  if (nsContentUtils::IsSystemPrincipal(principal)) {
+    // Don't give this channel the system principal.
+    principal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
   nsCOMPtr<nsIChannel> channel;
-  rv = NS_NewChannel(getter_AddRefs(channel), mSrc, nullptr, mLoadGroup,
-                     nullptr, loadFlags, channelPolicy);
+  // If we have the document, use it
+  if (doc) {
+    rv = NS_NewChannel(getter_AddRefs(channel),
+                       mSrc,
+                       doc,
+                       nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL,
+                       nsIContentPolicy::TYPE_DATAREQUEST,
+                       channelPolicy,    // aChannelPolicy
+                       mLoadGroup,       // loadGroup
+                       nullptr,          // aCallbacks
+                       loadFlags);       // aLoadFlags
+  } else {
+    // otherwise use the principal
+    rv = NS_NewChannel(getter_AddRefs(channel),
+                       mSrc,
+                       principal,
+                       nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL,
+                       nsIContentPolicy::TYPE_DATAREQUEST,
+                       channelPolicy,    // aChannelPolicy
+                       mLoadGroup,       // loadGroup
+                       nullptr,          // aCallbacks
+                       loadFlags);       // aLoadFlags
+  }
+
   NS_ENSURE_SUCCESS(rv, rv);
 
   mHttpChannel = do_QueryInterface(channel);
@@ -1236,15 +1262,11 @@ EventSource::DispatchAllMessageEvents()
     return;
   }
 
-  // We need a parent object so that we can enter its compartment.
-  nsCOMPtr<nsIGlobalObject> parentObject = do_QueryInterface(GetParentObject());
-  if (NS_WARN_IF(!parentObject)) {
+  AutoJSAPI jsapi;
+  if (NS_WARN_IF(!jsapi.Init(GetOwner()))) {
     return;
   }
-
-  AutoJSAPI jsapi;
   JSContext* cx = jsapi.cx();
-  JSAutoCompartment ac(cx, parentObject->GetGlobalJSObject());
 
   while (mMessagesToDispatch.GetSize() > 0) {
     nsAutoPtr<Message>

@@ -471,7 +471,7 @@ let DocShellCapabilitiesListener = {
  */
 let SessionStorageListener = {
   init: function () {
-    addEventListener("MozStorageChanged", this);
+    addEventListener("MozStorageChanged", this, true);
     Services.obs.addObserver(this, "browser:purge-domain-data", false);
     gFrameTree.addObserver(this);
   },
@@ -716,6 +716,9 @@ addEventListener("unload", () => {
   PageStyleListener.uninit();
   SessionStorageListener.uninit();
   SessionHistoryListener.uninit();
+
+  // Remove progress listeners.
+  gContentRestore.resetRestore();
 
   // We don't need to take care of any gFrameTree observers as the gFrameTree
   // will die with the content script. The same goes for the privacy transition

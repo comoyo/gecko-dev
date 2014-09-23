@@ -31,10 +31,12 @@ class ImageLayerComposite : public ImageLayer,
   typedef gl::TextureImage TextureImage;
 
 public:
-  ImageLayerComposite(LayerManagerComposite* aManager);
+  explicit ImageLayerComposite(LayerManagerComposite* aManager);
 
+protected:
   virtual ~ImageLayerComposite();
 
+public:
   virtual LayerRenderState GetRenderState() MOZ_OVERRIDE;
 
   virtual void Disconnect() MOZ_OVERRIDE;
@@ -51,12 +53,17 @@ public:
 
   CompositableHost* GetCompositableHost() MOZ_OVERRIDE;
 
+  virtual void GenEffectChain(EffectChain& aEffect) MOZ_OVERRIDE;
+
   virtual LayerComposite* AsLayerComposite() MOZ_OVERRIDE { return this; }
 
   virtual const char* Name() const { return "ImageLayerComposite"; }
 
 protected:
-  virtual nsACString& PrintInfo(nsACString& aTo, const char* aPrefix) MOZ_OVERRIDE;
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) MOZ_OVERRIDE;
+
+private:
+  gfx::Filter GetEffectFilter();
 
 private:
   RefPtr<CompositableHost> mImageHost;

@@ -115,6 +115,16 @@
 
 
   /* ======================================================================= */
+  /* 4:  NS_ERROR_MODULE_WIDGET */
+  /* ======================================================================= */
+#define MODULE  NS_ERROR_MODULE_WIDGET
+  /* Used by nsIWidget::NotifyIME(). Returned when the notification is handled
+   * and the notified event is consumed by IME. */
+  ERROR(NS_SUCCESS_EVENT_CONSUMED,                        SUCCESS(1)),
+#undef MODULE
+
+
+  /* ======================================================================= */
   /* 6: NS_ERROR_MODULE_NETWORK */
   /* ======================================================================= */
 #define MODULE NS_ERROR_MODULE_NETWORK
@@ -201,6 +211,8 @@
   ERROR(NS_ERROR_NET_INTERRUPT,             FAILURE(71)),
   /* The connection attempt to a proxy failed. */
   ERROR(NS_ERROR_PROXY_CONNECTION_REFUSED,  FAILURE(72)),
+  /* A transfer was only partially done when it completed. */
+  ERROR(NS_ERROR_NET_PARTIAL_TRANSFER,      FAILURE(76)),
 
   /* XXX really need to better rationalize these error codes.  are consumers of
    * necko really expected to know how to discern the meaning of these?? */
@@ -662,6 +674,7 @@
    * blacklist. */
   ERROR(NS_ERROR_MALWARE_URI,           FAILURE(30)),
   ERROR(NS_ERROR_PHISHING_URI,          FAILURE(31)),
+  ERROR(NS_ERROR_TRACKING_URI,          FAILURE(34)),
   /* Used when "Save Link As..." doesn't see the headers quickly enough to
    * choose a filename.  See nsContextMenu.js. */
   ERROR(NS_ERROR_SAVE_LINK_AS_TIMEOUT,  FAILURE(32)),
@@ -811,7 +824,7 @@
 #define MODULE NS_ERROR_MODULE_DOM_FILEHANDLE
   ERROR(NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR,              FAILURE(1)),
   ERROR(NS_ERROR_DOM_FILEHANDLE_NOT_ALLOWED_ERR,          FAILURE(2)),
-  ERROR(NS_ERROR_DOM_FILEHANDLE_LOCKEDFILE_INACTIVE_ERR,  FAILURE(3)),
+  ERROR(NS_ERROR_DOM_FILEHANDLE_INACTIVE_ERR,             FAILURE(3)),
   ERROR(NS_ERROR_DOM_FILEHANDLE_ABORT_ERR,                FAILURE(4)),
   ERROR(NS_ERROR_DOM_FILEHANDLE_READ_ONLY_ERR,            FAILURE(5)),
   ERROR(NS_ERROR_DOM_FILEHANDLE_QUOTA_ERR,                FAILURE(6)),
@@ -841,6 +854,30 @@
   ERROR(NS_ERROR_DOM_FILESYSTEM_PATH_EXISTS_ERR,           FAILURE(4)),
   ERROR(NS_ERROR_DOM_FILESYSTEM_TYPE_MISMATCH_ERR,         FAILURE(5)),
   ERROR(NS_ERROR_DOM_FILESYSTEM_UNKNOWN_ERR,               FAILURE(6)),
+#undef MODULE
+
+  /* ======================================================================= */
+  /* 37: NS_ERROR_MODULE_DOM_BLUETOOTH */
+  /* ======================================================================= */
+#define MODULE NS_ERROR_MODULE_DOM_BLUETOOTH
+  ERROR(NS_ERROR_DOM_BLUETOOTH_FAIL,                      FAILURE(1)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_NOT_READY,                 FAILURE(2)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_NOMEM,                     FAILURE(3)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_BUSY,                      FAILURE(4)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_DONE,                      FAILURE(5)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_UNSUPPORTED,               FAILURE(6)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_PARM_INVALID,              FAILURE(7)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_UNHANDLED,                 FAILURE(8)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_AUTH_FAILURE,              FAILURE(9)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_RMT_DEV_DOWN,              FAILURE(10)),
+  ERROR(NS_ERROR_DOM_BLUETOOTH_AUTH_REJECTED,             FAILURE(11)),
+#undef MODULE
+
+  /* ======================================================================= */
+  /* 38: NS_ERROR_MODULE_SIGNED_APP */
+  /* ======================================================================= */
+#define MODULE NS_ERROR_MODULE_SIGNED_APP
+  ERROR(NS_ERROR_SIGNED_APP_MANIFEST_INVALID,   FAILURE(1)),
 #undef MODULE
 
   /* ======================================================================= */

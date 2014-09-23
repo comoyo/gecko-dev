@@ -20,8 +20,8 @@ class mock_Link : public mozilla::dom::Link
 public:
   NS_DECL_ISUPPORTS
 
-  mock_Link(void (*aHandlerFunction)(nsLinkState),
-            bool aRunNextTest = true)
+  explicit mock_Link(void (*aHandlerFunction)(nsLinkState),
+                     bool aRunNextTest = true)
   : mozilla::dom::Link(nullptr)
   , mHandler(aHandlerFunction)
   , mRunNextTest(aRunNextTest)
@@ -48,6 +48,7 @@ public:
     return 0;   // the value shouldn't matter
   }
 
+protected:
   ~mock_Link() {
     // Run the next test if we are supposed to.
     if (mRunNextTest) {
@@ -117,7 +118,7 @@ Link::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 }
 
 void
-Link::URLSearchParamsUpdated()
+Link::URLSearchParamsUpdated(URLSearchParams* aSearchParams)
 {
   NS_NOTREACHED("Unexpected call to Link::URLSearchParamsUpdated");
 }

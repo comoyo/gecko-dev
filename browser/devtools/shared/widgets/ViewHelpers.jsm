@@ -1,4 +1,4 @@
-/* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -365,11 +365,21 @@ ViewHelpers.L10N.prototype = {
     if (aNumber == (aNumber | 0)) {
       return aNumber;
     }
+    if (isNaN(aNumber) || aNumber == null) {
+      return "0";
+    }
     // Remove {n} trailing decimals. Can't use toFixed(n) because
     // toLocaleString converts the number to a string. Also can't use
     // toLocaleString(, { maximumFractionDigits: n }) because it's not
     // implemented on OS X (bug 368838). Gross.
     let localized = aNumber.toLocaleString(); // localize
+
+    // If no grouping or decimal separators are available, bail out, because
+    // padding with zeros at the end of the string won't make sense anymore.
+    if (!localized.match(/[^\d]/)) {
+      return localized;
+    }
+
     let padded = localized + new Array(aDecimals).join("0"); // pad with zeros
     let match = padded.match("([^]*?\\d{" + aDecimals + "})\\d*$");
     return match.pop();
@@ -394,7 +404,8 @@ ViewHelpers.L10N.prototype = {
  *        An object containing { accessorName: [prefType, prefName] } keys.
  */
 ViewHelpers.Prefs = function(aPrefsRoot = "", aPrefsObject = {}) {
-  this.root = aPrefsRoot;
+  this._root = aPrefsRoot;
+  this._cache = new Map();
 
   for (let accessorName in aPrefsObject) {
     let [prefType, prefName] = aPrefsObject[accessorName];
@@ -411,10 +422,13 @@ ViewHelpers.Prefs.prototype = {
    * @return any
    */
   _get: function(aType, aPrefName) {
-    if (this[aPrefName] === undefined) {
-      this[aPrefName] = Services.prefs["get" + aType + "Pref"](aPrefName);
+    let cachedPref = this._cache.get(aPrefName);
+    if (cachedPref !== undefined) {
+      return cachedPref;
     }
-    return this[aPrefName];
+    let value = Services.prefs["get" + aType + "Pref"](aPrefName);
+    this._cache.set(aPrefName, value);
+    return value;
   },
 
   /**
@@ -426,7 +440,7 @@ ViewHelpers.Prefs.prototype = {
    */
   _set: function(aType, aPrefName, aValue) {
     Services.prefs["set" + aType + "Pref"](aPrefName, aValue);
-    this[aPrefName] = aValue;
+    this._cache.set(aPrefName, aValue);
   },
 
   /**
@@ -446,9 +460,16 @@ ViewHelpers.Prefs.prototype = {
     }
 
     Object.defineProperty(this, aAccessorName, {
-      get: () => aSerializer.in(this._get(aType, [this.root, aPrefName].join("."))),
-      set: (e) => this._set(aType, [this.root, aPrefName].join("."), aSerializer.out(e))
+      get: () => aSerializer.in(this._get(aType, [this._root, aPrefName].join("."))),
+      set: (e) => this._set(aType, [this._root, aPrefName].join("."), aSerializer.out(e))
     });
+  },
+
+  /**
+   * Clears all the cached preferences' values.
+   */
+  refresh: function() {
+    this._cache.clear();
   }
 };
 
@@ -483,6 +504,7 @@ function Item(aOwnerView, aElement, aValue, aAttachment) {
 Item.prototype = {
   get value() { return this._value; },
   get target() { return this._target; },
+  get prebuiltNode() { return this._prebuiltNode; },
 
   /**
    * Immediately appends a child item to this item.
@@ -774,6 +796,16 @@ this.WidgetMethods = {
   },
 
   /**
+   * Removes the items in this container based on a predicate.
+   */
+  removeForPredicate: function(aPredicate) {
+    let item;
+    while (item = this.getItemForPredicate(aPredicate)) {
+      this.remove(item);
+    }
+  },
+
+  /**
    * Removes all items from this container.
    */
   empty: function() {
@@ -1053,6 +1085,8 @@ this.WidgetMethods = {
       targetElement.focus();
     }
     if (this.maintainSelectionVisible && targetElement) {
+      // Some methods are optional. See the WidgetMethods object documentation
+      // for a comprehensive list.
       if ("ensureElementIsVisible" in this._widget) {
         this._widget.ensureElementIsVisible(targetElement);
       }
@@ -1087,6 +1121,20 @@ this.WidgetMethods = {
    */
   set selectedValue(aValue) {
     this.selectedItem = this._itemsByValue.get(aValue);
+  },
+
+  /**
+   * Deselects and re-selects an item in this container.
+   *
+   * Useful when you want a "select" event to be emitted, even though
+   * the specified item was already selected.
+   *
+   * @param Item | function aItem
+   * @see `set selectedItem`
+   */
+  forceSelect: function(aItem) {
+    this.selectedItem = null;
+    this.selectedItem = aItem;
   },
 
   /**

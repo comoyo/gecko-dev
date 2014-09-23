@@ -11,8 +11,6 @@
 #include "ImageLayers.h"                // for ImageLayer
 #include "Layers.h"                     // for Layer, ContainerLayer, etc
 #include "ShadowLayerParent.h"          // for ShadowLayerParent
-#include "gfx3DMatrix.h"                // for gfx3DMatrix
-#include "gfxPoint3D.h"                 // for gfxPoint3D
 #include "CompositableTransactionParent.h"  // for EditReplyVector
 #include "ShadowLayersManager.h"        // for ShadowLayersManager
 #include "mozilla/gfx/BasePoint3D.h"    // for BasePoint3D
@@ -185,10 +183,13 @@ LayerTransactionParent::RecvUpdateNoSwap(const InfallibleTArray<Edit>& cset,
                                          const TargetConfig& targetConfig,
                                          const bool& isFirstPaint,
                                          const bool& scheduleComposite,
-                                         const uint32_t& paintSequenceNumber)
+                                         const uint32_t& paintSequenceNumber,
+                                         const bool& isRepeatTransaction,
+                                         const mozilla::TimeStamp& aTransactionStart)
 {
   return RecvUpdate(cset, aTransactionId, targetConfig, isFirstPaint,
-                    scheduleComposite, paintSequenceNumber, nullptr);
+      scheduleComposite, paintSequenceNumber, isRepeatTransaction,
+      aTransactionStart, nullptr);
 }
 
 bool
@@ -198,6 +199,8 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
                                    const bool& isFirstPaint,
                                    const bool& scheduleComposite,
                                    const uint32_t& paintSequenceNumber,
+                                   const bool& isRepeatTransaction,
+                                   const mozilla::TimeStamp& aTransactionStart,
                                    InfallibleTArray<EditReply>* reply)
 {
   profiler_tracing("Paint", "Composite", TRACING_INTERVAL_START);
@@ -291,6 +294,7 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       const LayerAttributes& attrs = osla.attrs();
 
       const CommonLayerAttributes& common = attrs.common();
+      layer->SetLayerBounds(common.layerBounds());
       layer->SetVisibleRegion(common.visibleRegion());
       layer->SetEventRegions(common.eventRegions());
       layer->SetContentFlags(common.contentFlags());
@@ -317,6 +321,7 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       }
       layer->SetAnimations(common.animations());
       layer->SetInvalidRegion(common.invalidRegion());
+      layer->SetFrameMetrics(common.metrics());
 
       typedef SpecificLayerAttributes Specific;
       const SpecificLayerAttributes& specific = attrs.specific();
@@ -347,11 +352,8 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
         }
         const ContainerLayerAttributes& attrs =
           specific.get_ContainerLayerAttributes();
-        containerLayer->SetFrameMetrics(attrs.metrics());
-        containerLayer->SetScrollHandoffParentId(attrs.scrollParentId());
         containerLayer->SetPreScale(attrs.preXScale(), attrs.preYScale());
         containerLayer->SetInheritedScale(attrs.inheritedXScale(), attrs.inheritedYScale());
-        containerLayer->SetBackgroundColor(attrs.backgroundColor().value());
         break;
       }
       case Specific::TColorLayerAttributes: {
@@ -539,6 +541,9 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
     }
   }
 
+  mShadowLayersManager->ShadowLayersUpdated(this, aTransactionId, targetConfig,
+      isFirstPaint, scheduleComposite, paintSequenceNumber, isRepeatTransaction);
+
   {
     AutoResolveRefLayers resolve(mShadowLayersManager->GetCompositionManager(this));
     layer_manager()->EndTransaction(nullptr, nullptr, LayerManager::END_NO_IMMEDIATE_REDRAW);
@@ -551,13 +556,12 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
     }
   }
 
-  // Ensure that any pending operations involving back and front
-  // buffers have completed, so that neither process stomps on the
-  // other's buffer contents.
-  LayerManagerComposite::PlatformSyncBeforeReplyUpdate();
-
-  mShadowLayersManager->ShadowLayersUpdated(this, aTransactionId, targetConfig,
-                                            isFirstPaint, scheduleComposite, paintSequenceNumber);
+  if (!IsSameProcess()) {
+    // Ensure that any pending operations involving back and front
+    // buffers have completed, so that neither process stomps on the
+    // other's buffer contents.
+    LayerManagerComposite::PlatformSyncBeforeReplyUpdate();
+  }
 
 #ifdef COMPOSITOR_PERFORMANCE_WARNING
   int compositeTime = (int)(mozilla::TimeStamp::Now() - updateStart).ToMilliseconds();
@@ -565,6 +569,17 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
     printf_stderr("Compositor: Layers update took %i ms (blocking gecko).\n", compositeTime);
   }
 #endif
+
+  TimeDuration latency = TimeStamp::Now() - aTransactionStart;
+  // Theshold is 200ms to trigger, 1000ms to hit red
+  if (latency > TimeDuration::FromMilliseconds(kVisualWarningTrigger)) {
+    float severity = (latency - TimeDuration::FromMilliseconds(kVisualWarningTrigger)).ToMilliseconds() /
+                       (kVisualWarningMax - kVisualWarningTrigger);
+    if (severity > 1.f) {
+      severity = 1.f;
+    }
+    mLayerManager->VisualFrameWarning(severity);
+  }
 
   return true;
 }
@@ -627,8 +642,7 @@ LayerTransactionParent::RecvGetAnimationTransform(PLayerParent* aParent,
   // from the shadow transform by undoing the translations in
   // AsyncCompositionManager::SampleValue.
 
-  gfx3DMatrix transform;
-  gfx::To3DMatrix(layer->AsLayerComposite()->GetShadowTransform(), transform);
+  Matrix4x4 transform = layer->AsLayerComposite()->GetShadowTransform();
   if (ContainerLayer* c = layer->AsContainerLayer()) {
     // Undo the scale transform applied by AsyncCompositionManager::SampleValue
     transform.ScalePost(1.0f/c->GetInheritedXScale(),
@@ -636,16 +650,16 @@ LayerTransactionParent::RecvGetAnimationTransform(PLayerParent* aParent,
                         1.0f);
   }
   float scale = 1;
-  gfxPoint3D scaledOrigin;
-  gfxPoint3D transformOrigin;
+  Point3D scaledOrigin;
+  Point3D transformOrigin;
   for (uint32_t i=0; i < layer->GetAnimations().Length(); i++) {
     if (layer->GetAnimations()[i].data().type() == AnimationData::TTransformData) {
       const TransformData& data = layer->GetAnimations()[i].data().get_TransformData();
       scale = data.appUnitsPerDevPixel();
       scaledOrigin =
-        gfxPoint3D(NS_round(NSAppUnitsToFloatPixels(data.origin().x, scale)),
-                   NS_round(NSAppUnitsToFloatPixels(data.origin().y, scale)),
-                   0.0f);
+        Point3D(NS_round(NSAppUnitsToFloatPixels(data.origin().x, scale)),
+                NS_round(NSAppUnitsToFloatPixels(data.origin().y, scale)),
+                0.0f);
       double cssPerDev =
         double(nsDeviceContext::AppUnitsPerCSSPixel()) / double(scale);
       transformOrigin = data.transformOrigin() * cssPerDev;
@@ -655,12 +669,12 @@ LayerTransactionParent::RecvGetAnimationTransform(PLayerParent* aParent,
 
   // Undo the translation to the origin of the reference frame applied by
   // AsyncCompositionManager::SampleValue
-  transform.Translate(-scaledOrigin);
+  transform.Translate(-scaledOrigin.x, -scaledOrigin.y, -scaledOrigin.z);
 
   // Undo the rebasing applied by
   // nsDisplayTransform::GetResultingTransformMatrixInternal
-  transform = nsLayoutUtils::ChangeMatrixBasis(-scaledOrigin - transformOrigin,
-                                               transform);
+  Point3D basis = -scaledOrigin - transformOrigin;
+  transform.ChangeBasis(basis.x, basis.y, basis.z);
 
   // Convert to CSS pixels (this undoes the operations performed by
   // nsStyleTransformMatrix::ProcessTranslatePart which is called from
@@ -675,23 +689,35 @@ LayerTransactionParent::RecvGetAnimationTransform(PLayerParent* aParent,
   return true;
 }
 
+static AsyncPanZoomController*
+GetAPZCForViewID(Layer* aLayer, FrameMetrics::ViewID aScrollID)
+{
+  for (uint32_t i = 0; i < aLayer->GetFrameMetricsCount(); i++) {
+    if (aLayer->GetFrameMetrics(i).GetScrollId() == aScrollID) {
+      return aLayer->GetAsyncPanZoomController(i);
+    }
+  }
+  ContainerLayer* container = aLayer->AsContainerLayer();
+  if (container) {
+    for (Layer* l = container->GetFirstChild(); l; l = l->GetNextSibling()) {
+      AsyncPanZoomController* c = GetAPZCForViewID(l, aScrollID);
+      if (c) {
+        return c;
+      }
+    }
+  }
+  return nullptr;
+}
+
 bool
-LayerTransactionParent::RecvSetAsyncScrollOffset(PLayerParent* aLayer,
+LayerTransactionParent::RecvSetAsyncScrollOffset(const FrameMetrics::ViewID& aScrollID,
                                                  const int32_t& aX, const int32_t& aY)
 {
   if (mDestroyed || !layer_manager() || layer_manager()->IsDestroyed()) {
     return false;
   }
 
-  Layer* layer = cast(aLayer)->AsLayer();
-  if (!layer) {
-    return false;
-  }
-  ContainerLayer* containerLayer = layer->AsContainerLayer();
-  if (!containerLayer) {
-    return false;
-  }
-  AsyncPanZoomController* controller = containerLayer->GetAsyncPanZoomController();
+  AsyncPanZoomController* controller = GetAPZCForViewID(mRoot, aScrollID);
   if (!controller) {
     return false;
   }
@@ -705,6 +731,20 @@ LayerTransactionParent::RecvGetAPZTestData(APZTestData* aOutData)
   mShadowLayersManager->GetAPZTestData(this, aOutData);
   return true;
 }
+
+bool
+LayerTransactionParent::RecvRequestProperty(const nsString& aProperty, float* aValue)
+{
+  if (aProperty.Equals(NS_LITERAL_STRING("overdraw"))) {
+    *aValue = layer_manager()->GetCompositor()->GetFillRatio();
+  } else if (aProperty.Equals(NS_LITERAL_STRING("missed_hwc"))) {
+    *aValue = layer_manager()->LastFrameMissedHWC() ? 1 : 0;
+  } else {
+    *aValue = -1;
+  }
+  return true;
+}
+
 
 bool
 LayerTransactionParent::Attach(ShadowLayerParent* aLayerParent,

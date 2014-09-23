@@ -38,7 +38,6 @@
 #include "EventTokenBucket.h"
 #include "Tickler.h"
 #include "nsIXULAppInfo.h"
-#include "nsICacheSession.h"
 #include "nsICookieService.h"
 #include "nsIObserverService.h"
 #include "nsISiteSecurityService.h"
@@ -142,7 +141,8 @@ nsHttpHandler::nsHttpHandler()
     , mProxyPipelining(true)
     , mIdleTimeout(PR_SecondsToInterval(10))
     , mSpdyTimeout(PR_SecondsToInterval(180))
-    , mResponseTimeout(PR_SecondsToInterval(600))
+    , mResponseTimeout(PR_SecondsToInterval(300))
+    , mResponseTimeoutEnabled(false)
     , mMaxRequestAttempts(10)
     , mMaxRequestDelay(10)
     , mIdleSynTimeout(250)
@@ -193,7 +193,6 @@ nsHttpHandler::nsHttpHandler()
     , mSpdyPingThreshold(PR_SecondsToInterval(58))
     , mSpdyPingTimeout(PR_SecondsToInterval(8))
     , mConnectTimeout(90000)
-    , mBypassCacheLockThreshold(250.0)
     , mParallelSpeculativeConnectLimit(6)
     , mRequestTokenBucketEnabled(true)
     , mRequestTokenBucketMinParallelism(6)
@@ -347,6 +346,7 @@ nsHttpHandler::Init()
         mObserverService->AddObserver(this, "net:prune-dead-connections", true);
         mObserverService->AddObserver(this, "net:failed-to-process-uri-content", true);
         mObserverService->AddObserver(this, "last-pb-context-exited", true);
+        mObserverService->AddObserver(this, "browser:purge-session-history", true);
     }
 
     MakeNewRequestTokenBucket();
@@ -675,7 +675,11 @@ nsHttpHandler::InitUserAgentComponents()
     "Windows"
 #elif defined(XP_MACOSX)
     "Macintosh"
-#elif defined(MOZ_X11)
+#elif defined(XP_UNIX)
+    // We historically have always had X11 here,
+    // and there seems little a webpage can sensibly do
+    // based on it being something else, so use X11 for
+    // backwards compatibility in all cases.
     "X11"
 #endif
     );
@@ -1236,16 +1240,6 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
             mConnectTimeout = clamped(val, 1, 0xffff) * PR_MSEC_PER_SEC;
     }
 
-    // The maximum amount of time the cache session lock can be held
-    // before a new transaction bypasses the cache. In milliseconds.
-    if (PREF_CHANGED(HTTP_PREF("bypass-cachelock-threshold"))) {
-        rv = prefs->GetIntPref(HTTP_PREF("bypass-cachelock-threshold"), &val);
-        if (NS_SUCCEEDED(rv))
-            // the pref and variable are both in milliseconds
-            mBypassCacheLockThreshold =
-                static_cast<double>(clamped(val, 0, 0x7ffffff));
-    }
-
     // The maximum number of current global half open sockets allowable
     // for starting a new speculative connection.
     if (PREF_CHANGED(HTTP_PREF("speculative-parallel-limit"))) {
@@ -1453,6 +1447,10 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
             mTCPKeepaliveLongLivedIdleTimeS = clamped(val,
                                                       1, kMaxTCPKeepIdle);
     }
+
+    // Enable HTTP response timeout if TCP Keepalives are disabled.
+    mResponseTimeoutEnabled = !mTCPKeepaliveShortLivedEnabled &&
+                              !mTCPKeepaliveLongLivedEnabled;
 
 #undef PREF_CHANGED
 #undef MULTI_PREF_CHANGED
@@ -1764,35 +1762,6 @@ nsHttpHandler::GetMisc(nsACString &value)
     return NS_OK;
 }
 
-/*static*/ void
-nsHttpHandler::GetCacheSessionNameForStoragePolicy(
-        nsCacheStoragePolicy storagePolicy,
-        bool isPrivate,
-        uint32_t appId,
-        bool inBrowser,
-        nsACString& sessionName)
-{
-    MOZ_ASSERT(!isPrivate || storagePolicy == nsICache::STORE_IN_MEMORY);
-
-    switch (storagePolicy) {
-        case nsICache::STORE_IN_MEMORY:
-            sessionName.AssignASCII(isPrivate ? "HTTP-memory-only-PB" : "HTTP-memory-only");
-            break;
-        case nsICache::STORE_OFFLINE:
-            sessionName.AssignLiteral("HTTP-offline");
-            break;
-        default:
-            sessionName.AssignLiteral("HTTP");
-            break;
-    }
-    if (appId != NECKO_NO_APP_ID || inBrowser) {
-        sessionName.Append('~');
-        sessionName.AppendInt(appId);
-        sessionName.Append('~');
-        sessionName.AppendInt(inBrowser);
-    }
-}
-
 //-----------------------------------------------------------------------------
 // nsHttpHandler::nsIObserver
 //-----------------------------------------------------------------------------
@@ -1855,6 +1824,12 @@ nsHttpHandler::Observe(nsISupports *subject,
     }
     else if (strcmp(topic, "last-pb-context-exited") == 0) {
         mPrivateAuthCache.ClearAll();
+    } else if (strcmp(topic, "browser:purge-session-history") == 0) {
+        if (mConnMgr && gSocketTransportService) {
+            nsCOMPtr<nsIRunnable> event = NS_NewRunnableMethod(mConnMgr,
+                &nsHttpConnectionMgr::ClearConnectionHistory);
+            gSocketTransportService->Dispatch(event, NS_DISPATCH_NORMAL);
+        }
     }
 
     return NS_OK;

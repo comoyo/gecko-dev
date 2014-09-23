@@ -7,6 +7,12 @@
 const {Cu, Cc, Ci} = require("chrome");
 const events = require("sdk/event/core");
 const protocol = require("devtools/server/protocol");
+try {
+    const { indexedDB } = require("sdk/indexed-db");
+} catch (e) {
+    // In xpcshell tests, we can't actually have indexedDB, which is OK:
+    // we don't use it there anyway.
+}
 const {async} = require("devtools/async-utils");
 const {Arg, Option, method, RetVal, types} = protocol;
 const {LongStringActor, ShortLongString} = require("devtools/server/actors/string");
@@ -22,20 +28,12 @@ XPCOMUtils.defineLazyModuleGetter(this, "Sqlite",
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
   "resource://gre/modules/osfile.jsm");
 
-exports.register = function(handle) {
-  handle.addTabActor(StorageActor, "storageActor");
-};
-
-exports.unregister = function(handle) {
-  handle.removeTabActor(StorageActor);
-};
-
 // Global required for window less Indexed DB instantiation.
 let global = this;
 
 // Maximum number of cookies/local storage key-value-pairs that can be sent
 // over the wire to the client in one request.
-const MAX_STORE_OBJECT_COUNT = 30;
+const MAX_STORE_OBJECT_COUNT = 50;
 // Interval for the batch job that sends the accumilated update packets to the
 // client.
 const UPDATE_INTERVAL = 500; // ms
@@ -274,6 +272,10 @@ StorageActors.defaults = function(typeName, observationTopic, storeObjectType) {
      *        The window which was removed.
      */
     onWindowDestroyed: function(window) {
+      if (!window.location) {
+        // Nothing can be done if location object is null
+        return;
+      }
       let host = this.getHostName(window.location);
       if (!this.hosts.has(host)) {
         this.hostVsStores.delete(host);
@@ -720,7 +722,7 @@ function getObjectForLocalOrSessionStorage(type) {
   return {
     getNamesForHost: function(host) {
       let storage = this.hostVsStores.get(host);
-      return [key for (key in storage)];
+      return Object.keys(storage);
     },
 
     getValuesForHost: function(host, name) {
@@ -728,7 +730,12 @@ function getObjectForLocalOrSessionStorage(type) {
       if (name) {
         return [{name: name, value: storage.getItem(name)}];
       }
-      return [{name: name, value: storage.getItem(name)} for (name in storage)];
+      return Object.keys(storage).map(name => {
+        return {
+          name: name,
+          value: storage.getItem(name)
+        };
+      });
     },
 
     getHostName: function(location) {
@@ -930,11 +937,6 @@ StorageActors.createActor({
 }, {
   initialize: function(storageActor) {
     protocol.Actor.prototype.initialize.call(this, null);
-    if (!global.indexedDB) {
-      let idbManager = Cc["@mozilla.org/dom/indexeddb/manager;1"]
-                         .getService(Ci.nsIIndexedDatabaseManager);
-      idbManager.initWindowless(global);
-    }
     this.objectsSize = {};
     this.storageActor = storageActor;
     this.onWindowReady = this.onWindowReady.bind(this);
@@ -1183,7 +1185,7 @@ StorageActors.createActor({
       principal = Services.scriptSecurityManager.getCodebasePrincipal(uri);
     }
 
-    return indexedDB.openForPrincipal(principal, name);
+    return require("indexedDB").openForPrincipal(principal, name);
   },
 
   /**
@@ -1701,8 +1703,6 @@ let StorageFront = exports.StorageFront = protocol.FrontClass(StorageActor, {
   initialize: function(client, tabForm) {
     protocol.Front.prototype.initialize.call(this, client);
     this.actorID = tabForm.storageActor;
-
-    client.addActorPool(this);
     this.manage(this);
   }
 });

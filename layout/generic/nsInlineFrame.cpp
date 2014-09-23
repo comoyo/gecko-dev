@@ -18,6 +18,7 @@
 #include "RestyleManager.h"
 #include "nsDisplayList.h"
 #include "mozilla/Likely.h"
+#include "SVGTextFrame.h"
 
 #ifdef DEBUG
 #undef NOISY_PUSHING
@@ -177,6 +178,20 @@ nsInlineFrame::PeekOffsetCharacter(bool aForward, int32_t* aOffset,
 }
 
 void
+nsInlineFrame::DestroyFrom(nsIFrame* aDestructRoot)
+{
+  nsFrameList* overflowFrames = GetOverflowFrames();
+  if (overflowFrames) {
+    // Fixup the parent pointers for any child frames on the OverflowList.
+    // nsIFrame::DestroyFrom depends on that to find the sticky scroll
+    // container (an ancestor).
+    nsIFrame* lineContainer = nsLayoutUtils::FindNearestBlockAncestor(this);
+    DrainSelfOverflowListInternal(eForDestroy, lineContainer);
+  }
+  nsContainerFrame::DestroyFrom(aDestructRoot);
+}
+
+void
 nsInlineFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists)
@@ -196,27 +211,32 @@ nsInlineFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 // Reflow methods
 
 /* virtual */ void
-nsInlineFrame::AddInlineMinWidth(nsRenderingContext *aRenderingContext,
-                                 nsIFrame::InlineMinWidthData *aData)
+nsInlineFrame::AddInlineMinISize(nsRenderingContext *aRenderingContext,
+                                 nsIFrame::InlineMinISizeData *aData)
 {
-  DoInlineIntrinsicWidth(aRenderingContext, aData, nsLayoutUtils::MIN_WIDTH);
+  DoInlineIntrinsicISize(aRenderingContext, aData, nsLayoutUtils::MIN_ISIZE);
 }
 
 /* virtual */ void
-nsInlineFrame::AddInlinePrefWidth(nsRenderingContext *aRenderingContext,
-                                  nsIFrame::InlinePrefWidthData *aData)
+nsInlineFrame::AddInlinePrefISize(nsRenderingContext *aRenderingContext,
+                                  nsIFrame::InlinePrefISizeData *aData)
 {
-  DoInlineIntrinsicWidth(aRenderingContext, aData, nsLayoutUtils::PREF_WIDTH);
+  DoInlineIntrinsicISize(aRenderingContext, aData, nsLayoutUtils::PREF_ISIZE);
 }
 
-/* virtual */ nsSize
+/* virtual */
+LogicalSize
 nsInlineFrame::ComputeSize(nsRenderingContext *aRenderingContext,
-                           nsSize aCBSize, nscoord aAvailableWidth,
-                           nsSize aMargin, nsSize aBorder, nsSize aPadding,
+                           WritingMode aWM,
+                           const LogicalSize& aCBSize,
+                           nscoord aAvailableISize,
+                           const LogicalSize& aMargin,
+                           const LogicalSize& aBorder,
+                           const LogicalSize& aPadding,
                            uint32_t aFlags)
 {
   // Inlines and text don't compute size before reflow.
-  return nsSize(NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE);
+  return LogicalSize(aWM, NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE);
 }
 
 nsRect
@@ -407,6 +427,28 @@ nsInlineFrame::Reflow(nsPresContext*          aPresContext,
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aMetrics);
 }
 
+nsresult 
+nsInlineFrame::AttributeChanged(int32_t aNameSpaceID,
+                                nsIAtom* aAttribute,
+                                int32_t aModType)
+{
+  nsresult rv =
+    nsInlineFrameBase::AttributeChanged(aNameSpaceID, aAttribute, aModType);
+
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  if (IsSVGText()) {
+    SVGTextFrame* f = static_cast<SVGTextFrame*>(
+      nsLayoutUtils::GetClosestFrameOfType(this, nsGkAtoms::svgTextFrame));
+    f->HandleAttributeChangeInDescendant(mContent->AsElement(),
+                                         aNameSpaceID, aAttribute);
+  }
+
+  return NS_OK;
+}
+
 bool
 nsInlineFrame::DrainSelfOverflowListInternal(DrainFlags aFlags,
                                              nsIFrame* aLineContainer)
@@ -422,11 +464,12 @@ nsInlineFrame::DrainSelfOverflowListInternal(DrainFlags aFlags,
       if (aLineContainer && aLineContainer->GetPrevContinuation()) {
         ReparentFloatsForInlineChild(aLineContainer, firstChild, true);
       }
-      const bool inFirstLine = (aFlags & eInFirstLine);
+      const bool doReparentSC =
+        (aFlags & eInFirstLine) && !(aFlags & eForDestroy);
       RestyleManager* restyleManager = PresContext()->RestyleManager();
       for (nsIFrame* f = firstChild; f; f = f->GetNextSibling()) {
         f->SetParent(this);
-        if (inFirstLine) {
+        if (doReparentSC) {
           restyleManager->ReparentStyleContext(f);
           nsLayoutUtils::MarkDescendantsDirty(f);
         }
@@ -690,31 +733,8 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
     aMetrics.ISize(lineWM) += framePadding.IEnd(frameWM);
   }
 
-  nsRefPtr<nsFontMetrics> fm;
-  float inflation = nsLayoutUtils::FontSizeInflationFor(this);
-  nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm), inflation);
-  aReflowState.rendContext->SetFont(fm);
-
-  if (fm) {
-    // Compute final height of the frame.
-    //
-    // Do things the standard css2 way -- though it's hard to find it
-    // in the css2 spec! It's actually found in the css1 spec section
-    // 4.4 (you will have to read between the lines to really see
-    // it).
-    //
-    // The height of our box is the sum of our font size plus the top
-    // and bottom border and padding. The height of children do not
-    // affect our height.
-    aMetrics.SetTopAscent(fm->MaxAscent());
-    aMetrics.Height() = fm->MaxHeight();
-  } else {
-    NS_WARNING("Cannot get font metrics - defaulting sizes to 0");
-    aMetrics.SetTopAscent(aMetrics.Height() = 0);
-  }
-  aMetrics.SetTopAscent(aMetrics.TopAscent() + aReflowState.ComputedPhysicalBorderPadding().top);
-  aMetrics.Height() += aReflowState.ComputedPhysicalBorderPadding().top +
-    aReflowState.ComputedPhysicalBorderPadding().bottom;
+  nsLayoutUtils::SetBSizeFromFontMetrics(this, aMetrics, aReflowState,
+                                         framePadding, lineWM, frameWM);
 
   // For now our overflow area is zero. The real value will be
   // computed in |nsLineLayout::RelativePositionFrames|.
@@ -879,22 +899,22 @@ nsInlineFrame::PushFrames(nsPresContext* aPresContext,
 
 //////////////////////////////////////////////////////////////////////
 
-int
+nsIFrame::LogicalSides
 nsInlineFrame::GetLogicalSkipSides(const nsHTMLReflowState* aReflowState) const
 {
   if (MOZ_UNLIKELY(StyleBorder()->mBoxDecorationBreak ==
                      NS_STYLE_BOX_DECORATION_BREAK_CLONE)) {
-    return 0;
+    return LogicalSides();
   }
 
-  int skip = 0;
+  LogicalSides skip;
   if (!IsFirst()) {
     nsInlineFrame* prev = (nsInlineFrame*) GetPrevContinuation();
     if ((GetStateBits() & NS_INLINE_FRAME_BIDI_VISUAL_STATE_IS_SET) ||
         (prev && (prev->mRect.height || prev->mRect.width))) {
       // Prev continuation is not empty therefore we don't render our start
       // border edge.
-      skip |= LOGICAL_SIDE_I_START;
+      skip |= eLogicalSideBitsIStart;
     }
     else {
       // If the prev continuation is empty, then go ahead and let our start
@@ -907,7 +927,7 @@ nsInlineFrame::GetLogicalSkipSides(const nsHTMLReflowState* aReflowState) const
         (next && (next->mRect.height || next->mRect.width))) {
       // Next continuation is not empty therefore we don't render our end
       // border edge.
-      skip |= LOGICAL_SIDE_I_END;
+      skip |= eLogicalSideBitsIEnd;
     }
     else {
       // If the next continuation is empty, then go ahead and let our end
@@ -921,15 +941,15 @@ nsInlineFrame::GetLogicalSkipSides(const nsHTMLReflowState* aReflowState) const
     // a split should skip the "start" side.  But figuring out which part of
     // the split we are involves getting our first continuation, which might be
     // expensive.  So don't bother if we already have the relevant bits set.
-    if (skip != LOGICAL_SIDES_I_BOTH) {
+    if (skip != LogicalSides(eLogicalSideBitsIBoth)) {
       // We're missing one of the skip bits, so check whether we need to set it.
       // Only get the first continuation once, as an optimization.
       nsIFrame* firstContinuation = FirstContinuation();
       if (firstContinuation->FrameIsNonLastInIBSplit()) {
-        skip |= LOGICAL_SIDE_I_END;
+        skip |= eLogicalSideBitsIEnd;
       }
       if (firstContinuation->FrameIsNonFirstInIBSplit()) {
-        skip |= LOGICAL_SIDE_I_START;
+        skip |= eLogicalSideBitsIStart;
       }
     }
   }
@@ -938,7 +958,7 @@ nsInlineFrame::GetLogicalSkipSides(const nsHTMLReflowState* aReflowState) const
 }
 
 nscoord
-nsInlineFrame::GetBaseline() const
+nsInlineFrame::GetLogicalBaseline(mozilla::WritingMode aWritingMode) const
 {
   return mBaseline;
 }

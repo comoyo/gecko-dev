@@ -17,6 +17,7 @@
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "SerializedLoadContext.h"
+#include "mozilla/ipc/BackgroundUtils.h"
 
 using namespace mozilla::ipc;
 
@@ -43,6 +44,10 @@ FTPChannelChild::FTPChannelChild(nsIURI* uri)
   NS_ADDREF(gFtpHandler);
   SetURI(uri);
   mEventQ = new ChannelEventQueue(static_cast<nsIFTPChannel*>(this));
+
+  // We could support thread retargeting, but as long as we're being driven by
+  // IPDL on the main thread it doesn't buy us anything.
+  DisallowThreadRetargeting();
 }
 
 FTPChannelChild::~FTPChannelChild()
@@ -139,6 +144,30 @@ FTPChannelChild::GetUploadStream(nsIInputStream** stream)
 
 //-----------------------------------------------------------------------------
 
+// helper function to assign loadInfo to openArgs
+void
+propagateLoadInfo(nsILoadInfo *aLoadInfo,
+                  FTPChannelOpenArgs& openArgs)
+{
+  mozilla::ipc::PrincipalInfo principalInfo;
+
+  if (aLoadInfo) {
+    mozilla::ipc::PrincipalToPrincipalInfo(aLoadInfo->LoadingPrincipal(),
+                                           &principalInfo);
+    openArgs.requestingPrincipalInfo() = principalInfo;
+    openArgs.securityFlags() = aLoadInfo->GetSecurityFlags();
+    openArgs.contentPolicyType() = aLoadInfo->GetContentPolicyType();
+    return;
+  }
+
+  // use default values if no loadInfo is provided
+  mozilla::ipc::PrincipalToPrincipalInfo(nsContentUtils::GetSystemPrincipal(),
+                                         &principalInfo);
+  openArgs.requestingPrincipalInfo() = principalInfo;
+  openArgs.securityFlags() = nsILoadInfo::SEC_NORMAL;
+  openArgs.contentPolicyType() = nsIContentPolicy::TYPE_OTHER;
+}
+
 NS_IMETHODIMP
 FTPChannelChild::AsyncOpen(::nsIStreamListener* listener, nsISupports* aContext)
 {
@@ -189,6 +218,10 @@ FTPChannelChild::AsyncOpen(::nsIStreamListener* listener, nsISupports* aContext)
   openArgs.startPos() = mStartPos;
   openArgs.entityID() = mEntityID;
   openArgs.uploadStream() = uploadStream;
+
+  nsCOMPtr<nsILoadInfo> loadInfo;
+  GetLoadInfo(getter_AddRefs(loadInfo));
+  propagateLoadInfo(loadInfo, openArgs);
 
   gNeckoChild->
     SendPFTPChannelConstructor(this, tabChild, IPC::SerializedLoadContext(this),
@@ -540,7 +573,7 @@ FTPChannelChild::DoFailedAsyncOpen(const nsresult& statusCode)
 class FTPFlushedForDiversionEvent : public ChannelEvent
 {
  public:
-  FTPFlushedForDiversionEvent(FTPChannelChild* aChild)
+  explicit FTPFlushedForDiversionEvent(FTPChannelChild* aChild)
   : mChild(aChild)
   {
     MOZ_RELEASE_ASSERT(aChild);
@@ -597,7 +630,7 @@ FTPChannelChild::RecvDivertMessages()
 class FTPDeleteSelfEvent : public ChannelEvent
 {
  public:
-  FTPDeleteSelfEvent(FTPChannelChild* aChild)
+  explicit FTPDeleteSelfEvent(FTPChannelChild* aChild)
   : mChild(aChild) {}
   void Run() { mChild->DoDeleteSelf(); }
  private:

@@ -22,7 +22,7 @@ interface HTMLMediaElement : HTMLElement {
   readonly attribute DOMString currentSrc;
 
   [SetterThrows]
-           attribute DOMString crossOrigin;
+           attribute DOMString? crossOrigin;
   const unsigned short NETWORK_EMPTY = 0;
   const unsigned short NETWORK_IDLE = 1;
   const unsigned short NETWORK_LOADING = 2;
@@ -86,8 +86,10 @@ interface HTMLMediaElement : HTMLElement {
 
   // TODO: Bug 847379
   // tracks
-  //readonly attribute AudioTrackList audioTracks;
-  //readonly attribute VideoTrackList videoTracks;
+  [Pref="media.track.enabled"]
+  readonly attribute AudioTrackList audioTracks;
+  [Pref="media.track.enabled"]
+  readonly attribute VideoTrackList videoTracks;
   [Pref="media.webvtt.enabled"]
   readonly attribute TextTrackList textTracks;
   [Pref="media.webvtt.enabled"]
@@ -104,6 +106,8 @@ partial interface HTMLMediaElement {
 
   // NB: for internal use with the video controls:
   [Func="IsChromeOrXBL"] attribute boolean mozMediaStatisticsShowing;
+  [Func="IsChromeOrXBL"] attribute boolean mozAllowCasting;
+  [Func="IsChromeOrXBL"] attribute boolean mozIsCasting;
 
   // Mozilla extension: stream capture
   [Throws]
@@ -140,18 +144,20 @@ enum MediaWaitingFor {
   "key"
 };
 
+#ifdef MOZ_EME
 // Encrypted Media Extensions
 partial interface HTMLMediaElement {
   [Pref="media.eme.enabled"]
   readonly attribute MediaKeys? mediaKeys;
-  
-  // Promise<any>
+
+  // void, not any: https://www.w3.org/Bugs/Public/show_bug.cgi?id=26457
   [Pref="media.eme.enabled", Throws, NewObject]
-  Promise setMediaKeys(MediaKeys? mediaKeys);
-  
+  Promise<void> setMediaKeys(MediaKeys? mediaKeys);
+
   [Pref="media.eme.enabled"]
-  attribute EventHandler onneedkey;
+  attribute EventHandler onencrypted;
 
   [Pref="media.eme.enabled"]
   readonly attribute MediaWaitingFor waitingFor;
 };
+#endif

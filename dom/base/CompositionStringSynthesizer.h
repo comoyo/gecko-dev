@@ -22,13 +22,14 @@ class CompositionStringSynthesizer MOZ_FINAL :
   public nsICompositionStringSynthesizer
 {
 public:
-  CompositionStringSynthesizer(nsPIDOMWindow* aWindow);
-  ~CompositionStringSynthesizer();
+  explicit CompositionStringSynthesizer(nsPIDOMWindow* aWindow);
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSICOMPOSITIONSTRINGSYNTHESIZER
 
 private:
+  ~CompositionStringSynthesizer();
+
   nsWeakPtr mWindow; // refers an instance of nsPIDOMWindow
   nsString mString;
   nsRefPtr<TextRangeArray> mClauses;

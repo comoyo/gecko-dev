@@ -3,19 +3,31 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+using GMPBufferType from "gmp-video-codec.h";
+using GMPAudioCodecType from "gmp-audio-codec.h";
+
 namespace mozilla {
 namespace gmp {
 
+struct GMPDecryptionData {
+  uint8_t[] mKeyId;
+  uint8_t[] mIV;
+  uint16_t[] mClearBytes;
+  uint32_t[] mCipherBytes;
+};
+
 struct GMPVideoEncodedFrameData
 {
-  int64_t mCaptureTime_ms;
   uint32_t mEncodedWidth;
   uint32_t mEncodedHeight;
-  uint32_t mTimeStamp;
+  uint64_t mTimestamp; // microseconds
+  uint64_t mDuration; // microseconds
   uint32_t mFrameType;
   uint32_t mSize;
+  GMPBufferType mBufferType;
   Shmem mBuffer;
   bool mCompleteFrame;
+  GMPDecryptionData mDecryptionData;
 };
 
 struct GMPPlaneData
@@ -32,8 +44,35 @@ struct GMPVideoi420FrameData
   GMPPlaneData mVPlane;
   int32_t mWidth;
   int32_t mHeight;
-  uint32_t mTimestamp;
-  int64_t mRenderTime_ms;
+  uint64_t mTimestamp; // microseconds
+  uint64_t mDuration; // microseconds
+};
+
+struct GMPAudioCodecData
+{
+  GMPAudioCodecType mCodecType;
+  uint32_t mChannelCount;
+  uint32_t mBitsPerChannel;
+  uint32_t mSamplesPerSecond;
+
+  uint8_t[] mExtraData;
+};
+
+struct GMPAudioEncodedSampleData
+{
+  uint8_t[] mData;
+  uint64_t mTimeStamp; // microseconds.
+  GMPDecryptionData mDecryptionData;
+  uint32_t mChannelCount;
+  uint32_t mSamplesPerSecond;
+};
+
+struct GMPAudioDecodedSampleData
+{
+  int16_t[] mData;
+  uint64_t mTimeStamp; // microseconds.
+  uint32_t mChannelCount;
+  uint32_t mSamplesPerSecond;
 };
 
 }

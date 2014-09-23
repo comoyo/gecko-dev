@@ -330,7 +330,7 @@ nsCSPParser::subHost()
       /* consume */
       ++charCounter;
     }
-    if (accept(DOT) && !accept(isCharacterToken)) {
+    if (accept(DOT) && !hostChar()) {
       return false;
     }
     if (charCounter > kSubHostPathCharacterCutoff) {
@@ -366,8 +366,8 @@ nsCSPParser::host()
     }
   }
 
-  // Expecting at least one Character
-  if (!accept(isCharacterToken)) {
+  // Expecting at least one host-char
+  if (!hostChar()) {
     const char16_t* params[] = { mCurToken.get() };
     logWarningErrorToConsole(nsIScriptError::warningFlag, "couldntParseInvalidHost",
                              params, ArrayLength(params));
@@ -684,6 +684,7 @@ nsCSPParser::sourceList(nsTArray<nsCSPBaseSrc*>& outSrcs)
     // mCurToken is only set here and remains the current token
     // to be processed, which avoid passing arguments between functions.
     mCurToken = mCurDir[i];
+    resetCurValue();
 
     CSPPARSERLOG(("nsCSPParser::sourceList, mCurToken: %s, mCurValue: %s",
                  NS_ConvertUTF16toUTF8(mCurToken).get(),
@@ -779,6 +780,17 @@ nsCSPParser::directiveName()
   if (!CSP_IsValidDirective(mCurToken)) {
     const char16_t* params[] = { mCurToken.get() };
     logWarningErrorToConsole(nsIScriptError::warningFlag, "couldNotProcessUnknownDirective",
+                             params, ArrayLength(params));
+    return nullptr;
+  }
+
+  // The directive 'reflected-xss' is part of CSP 1.1, see:
+  // http://www.w3.org/TR/2014/WD-CSP11-20140211/#reflected-xss
+  // Currently we are not supporting that directive, hence we log a
+  // warning to the console and ignore the directive including its values.
+  if (CSP_IsDirective(mCurToken, CSP_REFLECTED_XSS)) {
+    const char16_t* params[] = { mCurToken.get() };
+    logWarningErrorToConsole(nsIScriptError::warningFlag, "notSupportingDirective",
                              params, ArrayLength(params));
     return nullptr;
   }

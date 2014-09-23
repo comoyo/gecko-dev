@@ -11,18 +11,11 @@
 #include "mozilla/MemoryReporting.h"
 
 #include "jscntxt.h"
-#include "jsproxy.h"
 
 #include "gc/Marking.h"
 #include "gc/Zone.h"
+#include "proxy/Proxy.h"
 #include "vm/Shape.h"
-
-#ifdef JS_YARR
-#ifdef JS_ION
-#include "yarr/YarrJIT.h"
-#endif
-#include "yarr/YarrInterpreter.h"
-#endif // JS_YARR
 
 /*
  * JavaScript Regular Expressions
@@ -44,7 +37,7 @@
  */
 namespace js {
 
-class MatchPair;
+struct MatchPair;
 class MatchPairs;
 class RegExpShared;
 
@@ -106,21 +99,28 @@ CloneRegExpObject(JSContext *cx, JSObject *obj);
  */
 class RegExpShared
 {
+  public:
+    enum CompilationMode {
+        Normal,
+        MatchOnly
+    };
+
+  private:
     friend class RegExpCompartment;
     friend class RegExpStatics;
 
     typedef frontend::TokenStream TokenStream;
 
-#ifdef JS_YARR
-    typedef JSC::Yarr::BytecodePattern BytecodePattern;
-    typedef JSC::Yarr::ErrorCode ErrorCode;
-    typedef JSC::Yarr::YarrPattern YarrPattern;
-#ifdef JS_ION
-    typedef JSC::Yarr::JSGlobalData JSGlobalData;
-    typedef JSC::Yarr::YarrCodeBlock YarrCodeBlock;
-    typedef JSC::Yarr::YarrJITCompileMode YarrJITCompileMode;
-#endif
-#endif
+    struct RegExpCompilation
+    {
+        HeapPtrJitCode jitCode;
+        uint8_t *byteCode;
+
+        RegExpCompilation() : byteCode(nullptr) {}
+        ~RegExpCompilation() { js_free(byteCode); }
+
+        bool compiled() const { return jitCode || byteCode; }
+    };
 
     /* Source to the RegExp, for lazy compilation. */
     HeapPtrAtom        source;
@@ -130,68 +130,41 @@ class RegExpShared
     bool               canStringMatch;
     bool               marked_;
 
-#ifdef JS_YARR
+    RegExpCompilation  compilationArray[4];
 
-#ifdef JS_ION
-    /* Note: Native code is valid only if |codeBlock.isFallBack() == false|. */
-    YarrCodeBlock   codeBlock;
-#endif
-    BytecodePattern *bytecode;
-
-#else // JS_YARR
-
-#ifdef JS_ION
-    HeapPtrJitCode     jitCode;
-#endif
-    uint8_t            *byteCode;
-
-#endif // JS_YARR
+    static int CompilationIndex(CompilationMode mode, bool latin1) {
+        switch (mode) {
+          case Normal:    return latin1 ? 0 : 1;
+          case MatchOnly: return latin1 ? 2 : 3;
+        }
+        MOZ_CRASH();
+    }
 
     // Tables referenced by JIT code.
     Vector<uint8_t *, 0, SystemAllocPolicy> tables;
 
     /* Internal functions. */
-    bool compile(JSContext *cx, bool matchOnly, const jschar *sampleChars, size_t sampleLength);
-    bool compile(JSContext *cx, HandleAtom pattern, bool matchOnly, const jschar *sampleChars, size_t sampleLength);
+    bool compile(JSContext *cx, HandleLinearString input, CompilationMode mode);
+    bool compile(JSContext *cx, HandleAtom pattern, HandleLinearString input, CompilationMode mode);
 
-    bool compileIfNecessary(JSContext *cx, const jschar *sampleChars, size_t sampleLength);
+    bool compileIfNecessary(JSContext *cx, HandleLinearString input, CompilationMode mode);
 
-#ifdef JS_YARR
-    bool compileMatchOnlyIfNecessary(JSContext *cx);
-#endif
+    const RegExpCompilation &compilation(CompilationMode mode, bool latin1) const {
+        return compilationArray[CompilationIndex(mode, latin1)];
+    }
+
+    RegExpCompilation &compilation(CompilationMode mode, bool latin1) {
+        return compilationArray[CompilationIndex(mode, latin1)];
+    }
 
   public:
     RegExpShared(JSAtom *source, RegExpFlag flags);
     ~RegExpShared();
 
-#ifdef JS_YARR
-    /* Static functions to expose some Yarr logic. */
-
-    // This function should be deleted once bad Android platforms phase out. See bug 604774.
-    static bool isJITRuntimeEnabled(JSContext *cx) {
-        #ifdef JS_ION
-        # if defined(ANDROID)
-            return !cx->jitIsBroken;
-        # else
-            return true;
-        # endif
-        #else
-            return false;
-        #endif
-    }
-    static void reportYarrError(ExclusiveContext *cx, TokenStream *ts, ErrorCode error);
-    static bool checkSyntax(ExclusiveContext *cx, TokenStream *tokenStream, JSLinearString *source);
-#endif // JS_YARR
-
-    /* Primary interface: run this regular expression on the given string. */
-    RegExpRunStatus execute(JSContext *cx, const jschar *chars, size_t length,
-                            size_t *lastIndex, MatchPairs &matches);
-
-#ifdef JS_YARR
-    /* Run the regular expression without collecting matches, for test(). */
-    RegExpRunStatus executeMatchOnly(JSContext *cx, const jschar *chars, size_t length,
-                                     size_t *lastIndex, MatchPair &match);
-#endif
+    // Execute this RegExp on input starting from searchIndex, filling in
+    // matches if specified and otherwise only determining if there is a match.
+    RegExpRunStatus execute(JSContext *cx, HandleLinearString input, size_t searchIndex,
+                            MatchPairs *matches);
 
     // Register a table with this RegExpShared, and take ownership.
     bool addTable(uint8_t *table) {
@@ -201,7 +174,7 @@ class RegExpShared
     /* Accessors */
 
     size_t getParenCount() const {
-        JS_ASSERT(isCompiled(true) || isCompiled(false) || canStringMatch);
+        JS_ASSERT(isCompiled() || canStringMatch);
         return parenCount;
     }
 
@@ -215,45 +188,18 @@ class RegExpShared
     bool multiline() const              { return flags & MultilineFlag; }
     bool sticky() const                 { return flags & StickyFlag; }
 
-#ifdef JS_YARR
-
-    bool hasCode(bool matchOnly) const {
-#ifdef JS_ION
-        return matchOnly ? codeBlock.has16BitCodeMatchOnly() : codeBlock.has16BitCode();
-#else
-        return false;
-#endif
+    bool isCompiled(CompilationMode mode, bool latin1) const {
+        return compilation(mode, latin1).compiled();
     }
-    bool hasBytecode() const {
-        return bytecode != nullptr;
+    bool isCompiled() const {
+        return isCompiled(Normal, true) || isCompiled(Normal, false)
+            || isCompiled(MatchOnly, true) || isCompiled(MatchOnly, false);
     }
-    bool isCompiled(bool matchOnly) const {
-        return hasBytecode() || hasCode(matchOnly);
-    }
-
-#else // JS_YARR
-
-    bool hasJitCode() const {
-#ifdef JS_ION
-        return jitCode != nullptr;
-#else
-        return false;
-#endif
-    }
-    bool hasByteCode() const {
-        return byteCode != nullptr;
-    }
-
-    bool isCompiled(bool matchOnly) const {
-        return hasJitCode() || hasByteCode();
-    }
-
-#endif // JS_YARR
 
     void trace(JSTracer *trc);
 
     bool marked() const { return marked_; }
-    void clearMarked() { JS_ASSERT(marked_); marked_ = false; }
+    void clearMarked() { marked_ = false; }
 
     size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf);
 };
@@ -388,11 +334,11 @@ class RegExpObject : public JSObject
      * execution, as opposed to during something like XDR.
      */
     static RegExpObject *
-    create(ExclusiveContext *cx, RegExpStatics *res, const jschar *chars, size_t length,
+    create(ExclusiveContext *cx, RegExpStatics *res, const char16_t *chars, size_t length,
            RegExpFlag flags, frontend::TokenStream *ts, LifoAlloc &alloc);
 
     static RegExpObject *
-    createNoStatics(ExclusiveContext *cx, const jschar *chars, size_t length, RegExpFlag flags,
+    createNoStatics(ExclusiveContext *cx, const char16_t *chars, size_t length, RegExpFlag flags,
                     frontend::TokenStream *ts, LifoAlloc &alloc);
 
     static RegExpObject *
@@ -428,6 +374,10 @@ class RegExpObject : public JSObject
         flags |= multiline() ? MultilineFlag : 0;
         flags |= sticky() ? StickyFlag : 0;
         return RegExpFlag(flags);
+    }
+
+    bool needUpdateLastIndex() const {
+        return sticky() || global();
     }
 
     /* Flags. */

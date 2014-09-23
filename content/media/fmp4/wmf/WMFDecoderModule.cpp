@@ -7,8 +7,8 @@
 #include "WMF.h"
 #include "WMFDecoderModule.h"
 #include "WMFDecoder.h"
-#include "WMFVideoOutputSource.h"
-#include "WMFAudioOutputSource.h"
+#include "WMFVideoMFTManager.h"
+#include "WMFAudioMFTManager.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/DebugOnly.h"
 #include "WMFMediaDataDecoder.h"
@@ -57,36 +57,46 @@ WMFDecoderModule::Startup()
 nsresult
 WMFDecoderModule::Shutdown()
 {
-  MOZ_ASSERT(NS_IsMainThread(), "Must be on main thread.");
-
   DebugOnly<HRESULT> hr = wmf::MFShutdown();
   NS_ASSERTION(SUCCEEDED(hr), "MFShutdown failed");
 
   return NS_OK;
 }
 
-MediaDataDecoder*
+already_AddRefed<MediaDataDecoder>
 WMFDecoderModule::CreateH264Decoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
-                                    mozilla::layers::LayersBackend aLayersBackend,
-                                    mozilla::layers::ImageContainer* aImageContainer,
+                                    layers::LayersBackend aLayersBackend,
+                                    layers::ImageContainer* aImageContainer,
                                     MediaTaskQueue* aVideoTaskQueue,
                                     MediaDataDecoderCallback* aCallback)
 {
-  return new WMFMediaDataDecoder(new WMFVideoOutputSource(aLayersBackend,
-                                                          aImageContainer,
-                                                          sDXVAEnabled),
-                                 aVideoTaskQueue,
-                                 aCallback);
+  nsRefPtr<MediaDataDecoder> decoder =
+    new WMFMediaDataDecoder(new WMFVideoMFTManager(aConfig,
+                                                   aLayersBackend,
+                                                   aImageContainer,
+                                                   sDXVAEnabled),
+                            aVideoTaskQueue,
+                            aCallback);
+  return decoder.forget();
 }
 
-MediaDataDecoder*
-WMFDecoderModule::CreateAACDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
-                                   MediaTaskQueue* aAudioTaskQueue,
-                                   MediaDataDecoderCallback* aCallback)
+already_AddRefed<MediaDataDecoder>
+WMFDecoderModule::CreateAudioDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
+                                     MediaTaskQueue* aAudioTaskQueue,
+                                     MediaDataDecoderCallback* aCallback)
 {
-  return new WMFMediaDataDecoder(new WMFAudioOutputSource(aConfig),
-                                 aAudioTaskQueue,
-                                 aCallback);
+  nsRefPtr<MediaDataDecoder> decoder =
+    new WMFMediaDataDecoder(new WMFAudioMFTManager(aConfig),
+                            aAudioTaskQueue,
+                            aCallback);
+  return decoder.forget();
+}
+
+bool
+WMFDecoderModule::SupportsAudioMimeType(const char* aMimeType)
+{
+  return !strcmp(aMimeType, "audio/mp4a-latm") ||
+         !strcmp(aMimeType, "audio/mpeg");
 }
 
 } // namespace mozilla

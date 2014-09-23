@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 #include "mozilla/ArrayUtils.h"
-#include "mozilla/BasicEvents.h"
+#include "mozilla/ContentEvents.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/Likely.h"
 
@@ -70,10 +70,14 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(DOMSVGTranslatePoint)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-nsISVGPoint*
-DOMSVGTranslatePoint::Clone()
+SVGSVGElement::~SVGSVGElement()
 {
-  return new DOMSVGTranslatePoint(this);
+}
+
+DOMSVGPoint*
+DOMSVGTranslatePoint::Copy()
+{
+  return new DOMSVGPoint(mPt.GetX(), mPt.GetY());
 }
 
 nsISupports*
@@ -157,7 +161,7 @@ NS_INTERFACE_TABLE_TAIL_INHERITING(SVGSVGElementBase)
 //----------------------------------------------------------------------
 // Implementation
 
-SVGSVGElement::SVGSVGElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
+SVGSVGElement::SVGSVGElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                              FromParser aFromParser)
   : SVGSVGElementBase(aNodeInfo),
     mViewportWidth(0),
@@ -181,10 +185,10 @@ SVGSVGElement::SVGSVGElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
 
 // From NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGSVGElement)
 nsresult
-SVGSVGElement::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
+SVGSVGElement::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
 {
   *aResult = nullptr;
-  already_AddRefed<nsINodeInfo> ni = nsCOMPtr<nsINodeInfo>(aNodeInfo).forget();
+  already_AddRefed<mozilla::dom::NodeInfo> ni = nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();
   SVGSVGElement *it = new SVGSVGElement(ni, NOT_FROM_PARSER);
 
   nsCOMPtr<nsINode> kungFuDeathGrip = it;
@@ -514,11 +518,14 @@ SVGSVGElement::SetCurrentScaleTranslate(float s, float x, float y)
   if (doc) {
     nsCOMPtr<nsIPresShell> presShell = doc->GetShell();
     if (presShell && IsRoot()) {
-      bool scaling = (mPreviousScale != mCurrentScale);
       nsEventStatus status = nsEventStatus_eIgnore;
-      WidgetGUIEvent event(true, scaling ? NS_SVG_ZOOM : NS_SVG_SCROLL, 0);
-      event.eventStructType = scaling ? NS_SVGZOOM_EVENT : NS_EVENT;
-      presShell->HandleDOMEventWithTarget(this, &event, &status);
+      if (mPreviousScale != mCurrentScale) {
+        InternalSVGZoomEvent svgZoomEvent(true, NS_SVG_ZOOM);
+        presShell->HandleDOMEventWithTarget(this, &svgZoomEvent, &status);
+      } else {
+        WidgetEvent svgScrollEvent(true, NS_SVG_SCROLL);
+        presShell->HandleDOMEventWithTarget(this, &svgScrollEvent, &status);
+      }
       InvalidateTransformNotifyFrame();
     }
   }
@@ -749,12 +756,12 @@ SVGSVGElement::BindToTree(nsIDocument* aDocument,
                                               aCompileEventHandlers);
   NS_ENSURE_SUCCESS(rv,rv);
 
-  if (aDocument) {
+  nsIDocument* doc = GetComposedDoc();
+  if (doc) {
     // Setup the style sheet during binding, not element construction,
     // because we could move the root SVG element from the document
     // that created it to another document.
-    aDocument->
-      EnsureOnDemandBuiltInUASheet(nsLayoutStylesheetCache::SVGSheet());
+    doc->EnsureOnDemandBuiltInUASheet(nsLayoutStylesheetCache::SVGSheet());
   }
 
   if (mTimedDocumentRoot && smilController) {
@@ -949,9 +956,6 @@ SVGSVGElement::GetLength(uint8_t aCtxType)
 SVGSVGElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
                                         TransformTypes aWhich) const
 {
-  NS_ABORT_IF_FALSE(aWhich != eChildToUserSpace || aMatrix.IsIdentity(),
-                    "Skipping eUserSpaceToParent transforms makes no sense");
-
   // 'transform' attribute:
   gfxMatrix fromUserSpace =
     SVGSVGElementBase::PrependLocalTransformsTo(aMatrix, aWhich);
@@ -964,10 +968,10 @@ SVGSVGElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
     const_cast<SVGSVGElement*>(this)->GetAnimatedLengthValues(&x, &y, nullptr);
     if (aWhich == eAllTransforms) {
       // the common case
-      return ThebesMatrix(GetViewBoxTransform()) * gfxMatrix().Translate(gfxPoint(x, y)) * fromUserSpace;
+      return ThebesMatrix(GetViewBoxTransform()) * gfxMatrix::Translation(x, y) * fromUserSpace;
     }
     NS_ABORT_IF_FALSE(aWhich == eChildToUserSpace, "Unknown TransformTypes");
-    return ThebesMatrix(GetViewBoxTransform()) * gfxMatrix().Translate(gfxPoint(x, y));
+    return ThebesMatrix(GetViewBoxTransform()) * gfxMatrix::Translation(x, y) * aMatrix;
   }
 
   if (IsRoot()) {

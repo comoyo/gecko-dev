@@ -1,4 +1,4 @@
-# -*- Mode: JavaScript; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*-
+# -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -53,9 +53,9 @@ pref("extensions.blocklist.interval", 86400);
 // Controls what level the blocklist switches from warning about items to forcibly
 // blocking them.
 pref("extensions.blocklist.level", 2);
-pref("extensions.blocklist.url", "https://addons.mozilla.org/blocklist/3/%APP_ID%/%APP_VERSION%/%PRODUCT%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/%PING_COUNT%/%TOTAL_PING_COUNT%/%DAYS_SINCE_LAST_PING%/");
+pref("extensions.blocklist.url", "https://blocklist.addons.mozilla.org/blocklist/3/%APP_ID%/%APP_VERSION%/%PRODUCT%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/%PING_COUNT%/%TOTAL_PING_COUNT%/%DAYS_SINCE_LAST_PING%/");
 pref("extensions.blocklist.detailsURL", "https://www.mozilla.org/%LOCALE%/blocklist/");
-pref("extensions.blocklist.itemURL", "https://addons.mozilla.org/%LOCALE%/%APP%/blocked/%blockID%");
+pref("extensions.blocklist.itemURL", "https://blocklist.addons.mozilla.org/%LOCALE%/%APP%/blocked/%blockID%");
 
 pref("extensions.update.autoUpdateDefault", true);
 
@@ -139,6 +139,8 @@ pref("app.update.cert.maxErrors", 5);
 // when the |app.update.cert.checkAttributes| preference is set to false. Also,
 // the |app.update.url.override| preference should ONLY be used for testing.
 // IMPORTANT! metro.js should also be updated for updates to certs.X.issuerName
+// IMPORTANT! media.gmp-manager.certs.* prefs should also be updated if these
+// are updated.
 
 // Non-release builds (Nightly, Aurora, etc.) have been switched over to aus4.mozilla.org.
 // This condition protects us against accidentally using it for release builds.
@@ -218,7 +220,9 @@ pref("app.update.incompatible.mode", 0);
 
 // Whether or not to attempt using the service for updates.
 #ifdef MOZ_MAINTENANCE_SERVICE
+#ifndef HAVE_64BIT_BUILD
 pref("app.update.service.enabled", true);
+#endif
 #endif
 
 // Symmetric (can be overridden by individual extensions) update preferences.
@@ -244,6 +248,8 @@ pref("xpinstall.whitelist.add", "addons.mozilla.org");
 pref("xpinstall.whitelist.add.180", "marketplace.firefox.com");
 
 pref("lightweightThemes.update.enabled", true);
+pref("lightweightThemes.getMoreURL", "https://addons.mozilla.org/%LOCALE%/firefox/themes");
+pref("lightweightThemes.recommendedThemes", "[{\"id\":\"recommended-1\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/a-web-browser-renaissance/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.header.jpg\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.footer.jpg\",\"textcolor\":\"#000000\",\"accentcolor\":\"#f2d9b1\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.preview.jpg\",\"author\":\"Sean.Martell\",\"version\":\"0\"},{\"id\":\"recommended-2\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/space-fantasy/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.header.jpg\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.footer.jpg\",\"textcolor\":\"#ffffff\",\"accentcolor\":\"#d9d9d9\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.preview.jpg\",\"author\":\"fx5800p\",\"version\":\"1.0\"},{\"id\":\"recommended-3\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/linen-light/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.footer.png\",\"textcolor\":\"#None\",\"accentcolor\":\"#ada8a8\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.icon.png\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.preview.png\",\"author\":\"DVemer\",\"version\":\"1.0\"},{\"id\":\"recommended-4\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/pastel-gradient/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.footer.png\",\"textcolor\":\"#000000\",\"accentcolor\":\"#000000\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.icon.png\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.preview.png\",\"author\":\"darrinhenein\",\"version\":\"1.0\"},{\"id\":\"recommended-5\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/carbon-light/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.footer.png\",\"textcolor\":\"#3b3b3b\",\"accentcolor\":\"#2e2e2e\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.preview.jpg\",\"author\":\"Jaxivo\",\"version\":\"1.0\"}]");
 
 // UI tour experience.
 pref("browser.uitour.enabled", true);
@@ -252,11 +258,13 @@ pref("browser.uitour.themeOrigin", "https://addons.mozilla.org/%LOCALE%/firefox/
 pref("browser.uitour.pinnedTabUrl", "https://support.mozilla.org/%LOCALE%/kb/pinned-tabs-keep-favorite-websites-open");
 pref("browser.uitour.url", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/tour/");
 pref("browser.uitour.whitelist.add.260", "www.mozilla.org,support.mozilla.org");
+pref("browser.uitour.whitelist.add.340", "about:home");
 
 pref("browser.customizemode.tip0.shown", false);
 pref("browser.customizemode.tip0.learnMoreUrl", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/customize");
 
 pref("keyword.enabled", true);
+pref("browser.fixup.domainwhitelist.localhost", true);
 
 pref("general.useragent.locale", "@AB_CD@");
 pref("general.skins.selectedSkin", "classic/1.0");
@@ -278,13 +286,13 @@ pref("browser.startup.page",                1);
 pref("browser.startup.homepage",            "chrome://branding/locale/browserconfig.properties");
 
 pref("browser.slowStartup.notificationDisabled", false);
-pref("browser.slowStartup.timeThreshold", 45000);
+pref("browser.slowStartup.timeThreshold", 40000);
 pref("browser.slowStartup.maxSamples", 5);
 
 // This url, if changed, MUST continue to point to an https url. Pulling arbitrary content to inject into
 // this page over http opens us up to a man-in-the-middle attack that we'd rather not face. If you are a downstream
 // repackager of this code using an alternate snippet url, please keep your users safe
-pref("browser.aboutHomeSnippets.updateUrl", "https://snippets.mozilla.com/%STARTPAGE_VERSION%/%NAME%/%VERSION%/%APPBUILDID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/");
+pref("browser.aboutHomeSnippets.updateUrl", "https://snippets.cdn.mozilla.net/%STARTPAGE_VERSION%/%NAME%/%VERSION%/%APPBUILDID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/");
 
 pref("browser.enable_automatic_image_resizing", true);
 pref("browser.chrome.site_icons", true);
@@ -308,8 +316,14 @@ pref("browser.urlbar.doubleClickSelectsAll", true);
 #else
 pref("browser.urlbar.doubleClickSelectsAll", false);
 #endif
+
+// Control autoFill behavior
 pref("browser.urlbar.autoFill", true);
 pref("browser.urlbar.autoFill.typed", true);
+
+// Use the new unifiedComplete component
+pref("browser.urlbar.unifiedcomplete", true);
+
 // 0: Match anywhere (e.g., middle of words)
 // 1: Match on word boundaries and then try matching anywhere
 // 2: Match only on word boundaries (e.g., after / or .)
@@ -645,16 +659,10 @@ pref("accessibility.typeaheadfind.flashBar", 1);
 // plugin finder service url
 pref("pfs.datasource.url", "https://pfs.mozilla.org/plugins/PluginFinderService.php?mimetype=%PLUGIN_MIMETYPE%&appID=%APP_ID%&appVersion=%APP_VERSION%&clientOS=%CLIENT_OS%&chromeLocale=%CHROME_LOCALE%&appRelease=%APP_RELEASE%");
 
-// by default we show an infobar message when pages require plugins that are blocked, or are outdated
-pref("plugins.hide_infobar_for_blocked_plugin", false);
-pref("plugins.hide_infobar_for_outdated_plugin", false);
-
-pref("plugins.update.url", "https://www.mozilla.org/%LOCALE%/plugincheck/");
+pref("plugins.update.url", "https://www.mozilla.org/%LOCALE%/plugincheck/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_campaign=plugincheck-update");
 pref("plugins.update.notifyUser", false);
 
 pref("plugins.click_to_play", true);
-
-pref("plugins.hideMissingPluginsNotification", false);
 
 pref("plugin.default.state", 1);
 
@@ -689,12 +697,15 @@ pref("plugin.state.ciscowebcommunicator", 2);
 pref("plugin.state.npmcafeemss", 2);
 #endif
 
-// Cisco VGConnect for directv.com, bug 981403
+// Cisco VGConnect for directv.com, bug 981403 & bug 1051772
 #ifdef XP_WIN
 pref("plugin.state.npplayerplugin", 2);
 #endif
 #ifdef XP_MACOSX
 pref("plugin.state.playerplugin", 2);
+pref("plugin.state.playerplugin.dtv", 2);
+pref("plugin.state.playerplugin.ciscodrm", 2);
+pref("plugin.state.playerplugin.charter", 2);
 #endif
 
 // Cisco Jabber Client, bug 981905
@@ -808,10 +819,42 @@ pref("plugin.state.f5 ssl vpn plugin", 2);
 pref("plugin.state.f5 sam inspection host plugin", 2);
 #endif
 
-// display door hanger if flash not installed
-pref("plugins.notifyMissingFlash", true);
+// Roblox Launcher Plugin, bug 1024073
+#ifdef XP_WIN
+pref("plugin.state.nprobloxproxy", 2);
+#endif
+#ifdef XP_MACOSX
+pref("plugin.state.nproblox", 2);
+#endif
 
-pref("browser.preferences.instantApply", true);
+// Box Edit, bug 1029654
+#ifdef XP_WIN
+pref("plugin.state.npboxedit", 2);
+#endif
+#ifdef XP_MACOSX
+pref("plugin.state.box edit", 2);
+#endif
+
+// Nexus Personal, bug 1024965
+#ifdef XP_WIN
+pref("plugin.state.np_prsnl", 2);
+#endif
+#ifdef XP_MACOSX
+pref("plugin.state.personalplugin", 2);
+#endif
+#ifdef UNIX_BUT_NOT_MAC
+pref("plugin.state.libplugins", 2);
+#endif
+
+// Novell iPrint Client, bug 1036693
+#ifdef XP_WIN
+pref("plugin.state.npnipp", 2);
+pref("plugin.state.npnisp", 2);
+#endif
+#ifdef XP_MACOSX
+pref("plugin.state.iprint", 2);
+#endif
+
 #ifdef XP_MACOSX
 pref("browser.preferences.animateFadeIn", true);
 #else
@@ -819,7 +862,17 @@ pref("browser.preferences.animateFadeIn", false);
 #endif
 
 // Toggles between the two Preferences implementations, pop-up window and in-content
+#ifdef NIGHTLY_BUILD
 pref("browser.preferences.inContent", true);
+pref("browser.preferences.instantApply", true);
+#else
+pref("browser.preferences.inContent", false);
+#ifdef XP_WIN
+pref("browser.preferences.instantApply", false);
+#else
+pref("browser.preferences.instantApply", true);
+#endif
+#endif
 
 pref("browser.download.show_plugins_in_list", true);
 pref("browser.download.hide_plugins_without_extensions", true);
@@ -924,6 +977,13 @@ pref("gecko.handlerService.allowRegisterFromDifferentHost", false);
 #ifdef MOZ_SAFE_BROWSING
 pref("browser.safebrowsing.enabled", true);
 pref("browser.safebrowsing.malware.enabled", true);
+pref("browser.safebrowsing.downloads.enabled", true);
+// Remote lookups are only enabled for Windows in Nightly and Aurora
+#if defined(XP_WIN) && !defined(RELEASE_BUILD)
+pref("browser.safebrowsing.downloads.remote.enabled", true);
+#else
+pref("browser.safebrowsing.downloads.remote.enabled", false);
+#endif
 pref("browser.safebrowsing.debug", false);
 
 pref("browser.safebrowsing.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
@@ -936,6 +996,7 @@ pref("browser.safebrowsing.reportMalwareURL", "http://%LOCALE%.malware-report.mo
 pref("browser.safebrowsing.reportMalwareErrorURL", "http://%LOCALE%.malware-error.mozilla.com/?hl=%LOCALE%");
 
 pref("browser.safebrowsing.malware.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
+
 pref("browser.safebrowsing.appRepURL", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
 
 #ifdef MOZILLA_OFFICIAL
@@ -950,6 +1011,9 @@ pref("urlclassifier.alternate_error_page", "blocked");
 
 // The number of random entries to send with a gethash request.
 pref("urlclassifier.gethashnoise", 4);
+
+// Gethash timeout for Safebrowsing.
+pref("urlclassifier.gethash.timeout_ms", 5000);
 
 // If an urlclassifier table has not been updated in this number of seconds,
 // a gethash request will be forced to check that the result is still in
@@ -1077,13 +1141,6 @@ pref("browser.zoom.updateBackgroundTabs", true);
 // The breakpad report server to link to in about:crashes
 pref("breakpad.reportURL", "https://crash-stats.mozilla.com/report/index/");
 
-#ifndef RELEASE_BUILD
-// Override submission of plugin hang reports to a different processing server
-// for the smaller-volume nightly/aurora populations.
-pref("toolkit.crashreporter.pluginHangSubmitURL",
-     "https://hang-reports.mozilla.org/submit");
-#endif
-
 // URL for "Learn More" for Crash Reporter
 pref("toolkit.crashreporter.infoURL",
      "https://www.mozilla.org/legal/privacy/firefox.html#crash-reporter");
@@ -1130,6 +1187,23 @@ pref("browser.tabs.remote", false);
 #endif
 pref("browser.tabs.remote.autostart", false);
 
+#if defined(MOZ_CONTENT_SANDBOX) && defined(XP_WIN)
+// This controls whether the content process on Windows is sandboxed.
+// You also need to be using remote tabs, see above.
+// on = full sandbox enabled
+// warn = warn only sandbox enabled
+// anything else = sandbox disabled
+// This will probably require a restart.
+pref("browser.tabs.remote.sandbox", "off");
+
+#if defined(MOZ_STACKWALKING)
+// This controls the depth of stack trace that is logged when the warn only
+// sandbox reports that a resource access request has been blocked.
+// This does not require a restart to take effect.
+pref("browser.tabs.remote.sandbox.warnOnlyStackTraceDepth", 0);
+#endif
+#endif
+
 // This pref governs whether we attempt to work around problems caused by
 // plugins using OS calls to manipulate the cursor while running out-of-
 // process.  These workarounds all involve intercepting (hooking) certain
@@ -1173,7 +1247,6 @@ pref("services.sync.prefs.sync.browser.link.open_newwindow", true);
 pref("services.sync.prefs.sync.browser.offline-apps.notify", true);
 pref("services.sync.prefs.sync.browser.safebrowsing.enabled", true);
 pref("services.sync.prefs.sync.browser.safebrowsing.malware.enabled", true);
-pref("services.sync.prefs.sync.browser.search.selectedEngine", true);
 pref("services.sync.prefs.sync.browser.search.update", true);
 pref("services.sync.prefs.sync.browser.sessionstore.restore_on_demand", true);
 pref("services.sync.prefs.sync.browser.startup.homepage", true);
@@ -1214,6 +1287,7 @@ pref("services.sync.prefs.sync.privacy.clearOnShutdown.siteSettings", true);
 pref("services.sync.prefs.sync.privacy.donottrackheader.enabled", true);
 pref("services.sync.prefs.sync.privacy.donottrackheader.value", true);
 pref("services.sync.prefs.sync.privacy.sanitize.sanitizeOnShutdown", true);
+pref("services.sync.prefs.sync.privacy.trackingprotection.enabled", true);
 pref("services.sync.prefs.sync.security.OCSP.enabled", true);
 pref("services.sync.prefs.sync.security.OCSP.require", true);
 pref("services.sync.prefs.sync.security.default_personal_cert", true);
@@ -1237,12 +1311,8 @@ pref("devtools.appmanager.enabled", true);
 pref("devtools.appmanager.lastTab", "help");
 pref("devtools.appmanager.manifestEditor.enabled", true);
 
-// Enable devtools webide
-#ifdef MOZ_DEVTOOLS_WEBIDE
+// Enable DevTools WebIDE by default
 pref("devtools.webide.enabled", true);
-#else
-pref("devtools.webide.enabled", false);
-#endif
 
 // Toolbox preferences
 pref("devtools.toolbox.footer.height", 250);
@@ -1252,9 +1322,12 @@ pref("devtools.toolbox.selectedTool", "webconsole");
 pref("devtools.toolbox.toolbarSpec", '["splitconsole", "paintflashing toggle","tilt toggle","scratchpad","resize toggle","eyedropper","screenshot --fullpage"]');
 pref("devtools.toolbox.sideEnabled", true);
 pref("devtools.toolbox.zoomValue", "1");
+pref("devtools.toolbox.splitconsoleEnabled", false);
+pref("devtools.toolbox.splitconsoleHeight", 100);
 
 // Toolbox Button preferences
 pref("devtools.command-button-pick.enabled", true);
+pref("devtools.command-button-frames.enabled", false);
 pref("devtools.command-button-splitconsole.enabled", true);
 pref("devtools.command-button-paintflashing.enabled", false);
 pref("devtools.command-button-tilt.enabled", false);
@@ -1296,6 +1369,7 @@ pref("devtools.debugger.ignore-caught-exceptions", true);
 pref("devtools.debugger.source-maps-enabled", true);
 pref("devtools.debugger.pretty-print-enabled", true);
 pref("devtools.debugger.auto-pretty-print", false);
+pref("devtools.debugger.auto-black-box", true);
 pref("devtools.debugger.tracer", false);
 
 // The default Debugger UI settings
@@ -1306,11 +1380,15 @@ pref("devtools.debugger.ui.variables-sorting-enabled", true);
 pref("devtools.debugger.ui.variables-only-enum-visible", false);
 pref("devtools.debugger.ui.variables-searchbox-visible", false);
 
-// Enable the Profiler
+// Enable the Profiler and the Timeline
 pref("devtools.profiler.enabled", true);
+pref("devtools.timeline.enabled", false);
 
 // The default Profiler UI settings
 pref("devtools.profiler.ui.show-platform-data", false);
+
+// The default cache UI setting
+pref("devtools.cache.disabled", false);
 
 // Enable the Network Monitor
 pref("devtools.netmonitor.enabled", true);
@@ -1336,14 +1414,19 @@ pref("devtools.tilt.outro_transition", true);
 // - enableAutocompletion: Whether to enable JavaScript autocompletion.
 pref("devtools.scratchpad.recentFilesMax", 10);
 pref("devtools.scratchpad.showTrailingSpace", false);
-pref("devtools.scratchpad.enableCodeFolding", true);
 pref("devtools.scratchpad.enableAutocompletion", true);
+
+// Enable the Storage Inspector
+pref("devtools.storage.enabled", false);
 
 // Enable the Style Editor.
 pref("devtools.styleeditor.enabled", true);
 pref("devtools.styleeditor.source-maps-enabled", false);
 pref("devtools.styleeditor.autocompletion-enabled", true);
-pref("devtools.styleeditor.showMediaSidebar", false);
+pref("devtools.styleeditor.showMediaSidebar", true);
+pref("devtools.styleeditor.mediaSidebarWidth", 238);
+pref("devtools.styleeditor.navSidebarWidth", 245);
+pref("devtools.styleeditor.transitions", true);
 
 // Enable the Shader Editor.
 pref("devtools.shadereditor.enabled", false);
@@ -1405,10 +1488,6 @@ pref("devtools.browserconsole.filter.secwarn", true);
 // Text size in the Web Console. Use 0 for the system default size.
 pref("devtools.webconsole.fontSize", 0);
 
-// Number of usages of the web console or scratchpad.
-// If this is less than 10, then pasting code into the web console or scratchpad is disabled
-pref("devtools.selfxss.count", 0);
-
 // Persistent logging: |true| if you want the Web Console to keep all of the
 // logged messages after reloading the page, |false| if you want the output to
 // be cleared each time page navigation happens.
@@ -1440,6 +1519,8 @@ pref("devtools.editor.expandtab", true);
 pref("devtools.editor.keymap", "default");
 pref("devtools.editor.autoclosebrackets", true);
 pref("devtools.editor.detectindentation", true);
+pref("devtools.editor.enableCodeFolding", true);
+pref("devtools.editor.autocomplete", true);
 
 // Enable the Font Inspector
 pref("devtools.fontinspector.enabled", true);
@@ -1463,6 +1544,9 @@ pref("browser.newtab.url", "about:newtab");
 // Activates preloading of the new tab url.
 pref("browser.newtab.preload", true);
 
+// Remembers if the about:newtab intro has been shown
+pref("browser.newtabpage.introShown", false);
+
 // Toggles the content of 'about:newtab'. Shows the grid when enabled.
 pref("browser.newtabpage.enabled", true);
 
@@ -1470,9 +1554,13 @@ pref("browser.newtabpage.enabled", true);
 pref("browser.newtabpage.rows", 3);
 
 // number of columns of newtab grid
-pref("browser.newtabpage.columns", 3);
+pref("browser.newtabpage.columns", 5);
 
-pref("browser.newtabpage.directory.source", "chrome://global/content/directoryLinks.json");
+// directory tiles download URL
+pref("browser.newtabpage.directory.source", "https://tiles.services.mozilla.com/v2/links/fetch");
+
+// endpoint to send newtab click and view pings
+pref("browser.newtabpage.directory.ping", "https://tiles.services.mozilla.com/v2/links/");
 
 // Enable the DOM fullscreen API.
 pref("full-screen-api.enabled", true);
@@ -1509,23 +1597,36 @@ pref("shumway.disabled", true);
 // (This is intentionally on the high side; see bug 746055.)
 pref("image.mem.max_decoded_image_kb", 256000);
 
-#ifdef MOZ_LOOP
-pref("loop.server", "https://loop.services.mozilla.com");
-pref("loop.do_not_disturb", false);
+// Enable by default development builds up until early beta
+#ifdef EARLY_BETA_OR_EARLIER
+pref("loop.enabled", true);
+pref("loop.throttled", false);
+#else
+pref("loop.enabled", true);
+pref("loop.throttled", true);
+pref("loop.soft_start_ticket_number", -1);
+pref("loop.soft_start_hostname", "soft-start.loop.services.mozilla.com");
 #endif
+
+pref("loop.server", "https://loop.services.mozilla.com");
+pref("loop.seenToS", "unseen");
+pref("loop.legal.ToS_url", "https://accounts.firefox.com/legal/terms");
+pref("loop.legal.privacy_url", "https://www.mozilla.org/privacy/");
+pref("loop.do_not_disturb", false);
+pref("loop.ringtone", "chrome://browser/content/loop/shared/sounds/Firefox-Long.ogg");
+pref("loop.retry_delay.start", 60000);
+pref("loop.retry_delay.limit", 300000);
+pref("loop.feedback.baseUrl", "https://input.mozilla.org/api/v1/feedback");
+pref("loop.feedback.product", "Loop");
+pref("loop.debug.websocket", false);
+pref("loop.debug.sdk", false);
 
 // serverURL to be assigned by services team
 pref("services.push.serverURL", "wss://push.services.mozilla.com/");
 
-// Default social providers
-pref("social.manifest.facebook", "{\"origin\":\"https://www.facebook.com\",\"name\":\"Facebook Share\",\"shareURL\":\"https://www.facebook.com/sharer/sharer.php?u=%{url}\",\"iconURL\":\"data:image/x-icon;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8%2F9hAAAAX0lEQVQ4jWP4%2F%2F8%2FAyUYTFhHzjgDxP9JxGeQDSBVMxgTbUBCxer%2Fr999%2BQ8DJBuArJksA9A10s8AXIBoA0B%2BR%2FY%2FjD%2BEwoBoA1yT5v3PbdmCE8MAshhID%2FUMoDgzUYIBj0Cgi7ar4coAAAAASUVORK5CYII%3D\",\"icon32URL\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAADbklEQVRYCc1Xv08UQRj99tctexAuCEFjRE0kGBEtLDSGqIWNxkYKbTAxNlY2JhaGWltNtNFeKgsKKxITK43/gCYW+IsoRhA4D47bH7fn9+bcvdm5JR7sefolC3Ozu9978+bNN7PayUv3HN3umdY0Y6IWBtSJ0HSTarXqTOiuTep6Lj+tdxAcA8RAgSmwdd2aCDs0clldYALb/FvgYVhjmfliVA2XpjEgWo0Attn42Z6WH1RFor5ehwo9XQIUZMoVn4qlCoVMSo62EvD8Kh0b3U2Xz43R2PBO6mUCGDlAf65V6MadZzT/rUimoccc2kYA4BfPHqJb105RzjJigKhRq9kEJUBIjgYVuXeL7SAI6eD+Abp5dTwVHOmEHxT50d8WBYJqSOdPj5BjW8gZR8UNqFR2xagx/65XFYaMH+BGWwiYpi4UkBPPLxTp9v1Z+lHc4DWvCQXWmIy6EjITgKowVd5Jjv7N3Hd6y5esigoOwpkJIAmMpZpLJGdiaaC4F0UmAj6bD84GCEwmB/qxMmRilmnwb/mpjAocHh4UEoNAt5NLZB7oy9OJo0PxqkAtePdhiSqunyC1LQUwWMPQaOr6GRre258Ajn4cP7KHcEXhsxpXbj+lT19X2TMNGTLVAcjcalS8gDwsQ2UOMhH4k8FkcrEn5E5ub2sKohxLK2VR77Hl9RUcsrgeRIEiVOT6z+tDbIeLy+vk+kGTCbXxycet6xhl//3f6bJEkdHYhA+mLtDIvoH4ieev5+juoxdk5+pjhALYEdXIpEB5w+NlSKSzqVQ/+H7IO6BLtl3fngGMiqhGJgIwlM6qpyUGFjySdk8m0Zg0ubeD7X9OIDEFajltRQgUJaUKx69tdgaQa0FMADuahZPMFtcEwNPm2hA7ZI5sK4aoE2NvYI+o8hkCIe7CwTv68zS0q9Dk5vpbm/8FXxitSzmMFHpsGj0wyLUheTwD2Y9fVgh1Ae0EPUgD9241ZEnld+v5kgnVZ/8fE0brVh5BK+1oCqKKF72Dk7HwBsssB/pklU1dfChy3S659H5+uelgIb+8WRv1/uGTV9Sdb5wJFlfW6fPCalMhwhSU1j2xKwKbP838GcOwJja4TqO0bjdmXxYTy1EYjFdCWoCEYZhseH/GDL3yJPHnuW6YmT7P1SlIA4768Hke4vOcsX8BE346lLHhDUQAAAAASUVORK5CYII=\", \"icon64URL\":\"data:image/png;base64,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\", \"description\":\"Easily share the web to your Facebook friends.\",\"author\":\"Facebook\",\"homepageURL\":\"https://www.facebook.com\",\"builtin\":\"true\",\"version\":1}");
-
 pref("social.sidebar.unload_timeout_ms", 10000);
 
 pref("dom.identity.enabled", false);
-
-// Turn on the CSP 1.0 parser for Content Security Policy headers
-pref("security.csp.speccompliant", true);
 
 // Block insecure active content on https pages
 pref("security.mixed_content.block_active_content", true);
@@ -1542,11 +1643,6 @@ pref("dom.debug.propagate_gesture_events_through_content", false);
 
 // The request URL of the GeoLocation backend.
 pref("geo.wifi.uri", "https://www.googleapis.com/geolocation/v1/geolocate?key=%GOOGLE_API_KEY%");
-#ifdef RELEASE_BUILD
-pref("geo.wifi.logging.enabled", false);
-#else
-pref("geo.wifi.logging.enabled", true);
-#endif
 
 // Necko IPC security checks only needed for app isolation for cookies/cache/etc:
 // currently irrelevant for desktop e10s
@@ -1581,8 +1677,45 @@ pref("ui.key.menuAccessKeyFocuses", true);
 // Encrypted media extensions.
 pref("media.eme.enabled", false);
 
-// Delete HTTP cache v2 data of users that didn't opt-in manually
-pref("browser.cache.auto_delete_cache_version", 1);
+// GMPInstallManager prefs
+
+// Enables some extra logging (can reduce performance)
+pref("media.gmp-manager.log", false);
+
+// User-settable override to media.gmp-manager.url for testing purposes.
+//pref("media.gmp-manager.url.override", "");
+
+// Update service URL for GMP install/updates:
+pref("media.gmp-manager.url", "https://aus4.mozilla.org/update/3/GMP/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
+
+// When |media.gmp-manager.cert.requireBuiltIn| is true or not specified the
+// final certificate and all certificates the connection is redirected to before
+// the final certificate for the url specified in the |media.gmp-manager.url|
+// preference must be built-in.
+pref("media.gmp-manager.cert.requireBuiltIn", true);
+
+// The |media.gmp-manager.certs.| preference branch contains branches that are
+// sequentially numbered starting at 1 that contain attribute name / value
+// pairs for the certificate used by the server that hosts the update xml file
+// as specified in the |media.gmp-manager.url| preference. When these preferences are
+// present the following conditions apply for a successful update check:
+// 1. the uri scheme must be https
+// 2. the preference name must exist as an attribute name on the certificate and
+//    the value for the name must be the same as the value for the attribute name
+//    on the certificate.
+// If these conditions aren't met it will be treated the same as when there is
+// no update available. This validation will not be performed when the
+// |media.gmp-manager.url.override| user preference has been set for testing updates or
+// when the |media.gmp-manager.cert.checkAttributes| preference is set to false. Also,
+// the |media.gmp-manager.url.override| preference should ONLY be used for testing.
+// IMPORTANT! app.update.certs.* prefs should also be updated if these
+// are updated.
+pref("media.gmp-manager.cert.checkAttributes", true);
+pref("media.gmp-manager.certs.1.issuerName", "CN=DigiCert Secure Server CA,O=DigiCert Inc,C=US");
+pref("media.gmp-manager.certs.1.commonName", "aus4.mozilla.org");
+pref("media.gmp-manager.certs.2.issuerName", "CN=Thawte SSL CA,O=\"Thawte, Inc.\",C=US");
+pref("media.gmp-manager.certs.2.commonName", "aus4.mozilla.org");
+
 // Play with different values of the decay time and get telemetry,
 // 0 means to randomize (and persist) the experiment value in users' profiles,
 // -1 means no experiment is run and we use the preferred value for frecency (6h)
@@ -1597,7 +1730,8 @@ pref("browser.translation.ui.show", false);
 pref("experiments.enabled", true);
 pref("experiments.manifest.fetchIntervalSeconds", 86400);
 pref("experiments.manifest.uri", "https://telemetry-experiment.cdn.mozilla.net/manifest/v1/firefox/%VERSION%/%CHANNEL%");
-pref("experiments.manifest.certs.1.commonName", "*.cdn.mozilla.net");
-pref("experiments.manifest.certs.1.issuerName", "CN=Cybertrust Public SureServer SV CA,O=Cybertrust Inc");
 // Whether experiments are supported by the current application profile.
 pref("experiments.supported", true);
+
+// Enable the OpenH264 plugin support in the addon manager.
+pref("media.gmp-gmpopenh264.provider.enabled", true);

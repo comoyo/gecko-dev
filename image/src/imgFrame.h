@@ -8,35 +8,86 @@
 #define imgFrame_h
 
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/Move.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/VolatileBuffer.h"
 #include "gfxDrawable.h"
 #include "imgIContainer.h"
 
+namespace mozilla {
+namespace image {
+
+class ImageRegion;
+class DrawableFrameRef;
+class RawAccessFrameRef;
+
 class imgFrame
 {
-  typedef mozilla::gfx::Color Color;
-  typedef mozilla::gfx::DataSourceSurface DataSourceSurface;
-  typedef mozilla::gfx::IntSize IntSize;
-  typedef mozilla::gfx::SourceSurface SourceSurface;
-  typedef mozilla::gfx::SurfaceFormat SurfaceFormat;
+  typedef gfx::Color Color;
+  typedef gfx::DataSourceSurface DataSourceSurface;
+  typedef gfx::DrawTarget DrawTarget;
+  typedef gfx::IntSize IntSize;
+  typedef gfx::SourceSurface SourceSurface;
+  typedef gfx::SurfaceFormat SurfaceFormat;
 
 public:
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(imgFrame)
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(imgFrame)
+
   imgFrame();
-  ~imgFrame();
 
-  nsresult Init(int32_t aX, int32_t aY, int32_t aWidth, int32_t aHeight, mozilla::gfx::SurfaceFormat aFormat, uint8_t aPaletteDepth = 0);
-  nsresult Optimize();
+  /**
+   * Initialize this imgFrame with an empty surface and prepare it for being
+   * written to by a decoder.
+   *
+   * This is appropriate for use with decoded images, but it should not be used
+   * when drawing content into an imgFrame, as it may use a different graphics
+   * backend than normal content drawing.
+   */
+  nsresult InitForDecoder(const nsIntRect& aRect,
+                          SurfaceFormat aFormat,
+                          uint8_t aPaletteDepth = 0);
 
-  bool Draw(gfxContext *aContext, GraphicsFilter aFilter,
-            const gfxMatrix &aUserSpaceToImageSpace, const gfxRect& aFill,
-            const nsIntMargin &aPadding, const nsIntRect &aSubimage,
-            uint32_t aImageFlags = imgIContainer::FLAG_NONE);
+  nsresult InitForDecoder(const nsIntSize& aSize,
+                          SurfaceFormat aFormat,
+                          uint8_t aPaletteDepth = 0)
+  {
+    return InitForDecoder(nsIntRect(0, 0, aSize.width, aSize.height),
+                          aFormat, aPaletteDepth);
+  }
+
+
+  /**
+   * Initialize this imgFrame with a new surface and draw the provided
+   * gfxDrawable into it.
+   *
+   * This is appropriate to use when drawing content into an imgFrame, as it
+   * uses the same graphics backend as normal content drawing. The downside is
+   * that the underlying surface may not be stored in a volatile buffer on all
+   * platforms, and raw access to the surface (using RawAccessRef() or
+   * LockImageData()) may be much more expensive than in the InitForDecoder()
+   * case.
+   */
+  nsresult InitWithDrawable(gfxDrawable* aDrawable,
+                            const nsIntSize& aSize,
+                            const SurfaceFormat aFormat,
+                            GraphicsFilter aFilter,
+                            uint32_t aImageFlags);
+
+  DrawableFrameRef DrawableRef();
+  RawAccessFrameRef RawAccessRef();
+
+  bool Draw(gfxContext* aContext, const ImageRegion& aRegion,
+            const nsIntMargin& aPadding, GraphicsFilter aFilter,
+            uint32_t aImageFlags);
 
   nsresult ImageUpdated(const nsIntRect &aUpdateRect);
 
   nsIntRect GetRect() const;
-  mozilla::gfx::SurfaceFormat GetFormat() const;
+  IntSize GetSize() const { return mSize; }
+  bool NeedsPadding() const { return mOffset != nsIntPoint(0, 0); }
+  int32_t GetStride() const;
+  SurfaceFormat GetFormat() const;
   bool GetNeedsBackground() const;
   uint32_t GetImageBytesPerRow() const;
   uint32_t GetImageDataLength() const;
@@ -66,8 +117,10 @@ public:
   nsresult UnlockImageData();
 
   void SetDiscardable();
+  void SetOptimizable();
 
-  mozilla::TemporaryRef<SourceSurface> GetSurface();
+  TemporaryRef<SourceSurface> GetSurface();
+  TemporaryRef<DrawTarget> GetDrawTarget();
 
   Color
   SinglePixelColor()
@@ -80,11 +133,11 @@ public:
     return mSinglePixel;
   }
 
-  mozilla::TemporaryRef<SourceSurface> CachedSurface();
+  TemporaryRef<SourceSurface> CachedSurface();
 
   size_t SizeOfExcludingThisWithComputedFallbackIfHeap(
            gfxMemoryLocation aLocation,
-           mozilla::MallocSizeOf aMallocSizeOf) const;
+           MallocSizeOf aMallocSizeOf) const;
 
   uint8_t GetPaletteDepth() const { return mPaletteDepth; }
   uint32_t PaletteDataLength() const {
@@ -95,6 +148,10 @@ public:
   }
 
 private: // methods
+
+  ~imgFrame();
+
+  nsresult Optimize();
 
   struct SurfaceWithFormat {
     nsRefPtr<gfxDrawable> mDrawable;
@@ -108,24 +165,22 @@ private: // methods
   SurfaceWithFormat SurfaceForDrawing(bool               aDoPadding,
                                       bool               aDoPartialDecode,
                                       bool               aDoTile,
+                                      gfxContext*        aContext,
                                       const nsIntMargin& aPadding,
-                                      gfxMatrix&         aUserSpaceToImageSpace,
-                                      gfxRect&           aFill,
-                                      gfxRect&           aSubimage,
-                                      gfxRect&           aSourceRect,
                                       gfxRect&           aImageRect,
+                                      ImageRegion&       aRegion,
                                       SourceSurface*     aSurface);
 
 private: // data
-  mozilla::RefPtr<DataSourceSurface> mImageSurface;
-  mozilla::RefPtr<SourceSurface> mOptSurface;
+  RefPtr<DataSourceSurface> mImageSurface;
+  RefPtr<SourceSurface> mOptSurface;
 
   IntSize      mSize;
   nsIntPoint   mOffset;
 
   nsIntRect    mDecoded;
 
-  mutable mozilla::Mutex mDecodedMutex;
+  mutable Mutex mDecodedMutex;
 
   // The palette and image data for images that are paletted, since Cairo
   // doesn't support these images.
@@ -142,8 +197,8 @@ private: // data
   /** Indicates how many readers currently have locked this frame */
   int32_t mLockCount;
 
-  mozilla::RefPtr<mozilla::VolatileBuffer> mVBuf;
-  mozilla::VolatileBufferPtr<uint8_t> mVBufPtr;
+  RefPtr<VolatileBuffer> mVBuf;
+  VolatileBufferPtr<uint8_t> mVBufPtr;
 
   SurfaceFormat mFormat;
   uint8_t      mPaletteDepth;
@@ -152,38 +207,172 @@ private: // data
   bool mCompositingFailed;
   bool mNonPremult;
   bool mDiscardable;
+  bool mOptimizable;
 
   /** Have we called DiscardTracker::InformAllocation()? */
   bool mInformedDiscardTracker;
+
+  friend class DrawableFrameRef;
+  friend class RawAccessFrameRef;
 };
 
-namespace mozilla {
-namespace image {
-  // An RAII class to ensure it's easy to balance locks and unlocks on
-  // imgFrames.
-  class AutoFrameLocker
-  {
-  public:
-    AutoFrameLocker(imgFrame* frame)
-      : mFrame(frame)
-      , mSucceeded(NS_SUCCEEDED(frame->LockImageData()))
-    {}
+/**
+ * A reference to an imgFrame that holds the imgFrame's surface in memory,
+ * allowing drawing. If you have a DrawableFrameRef |ref| and |if (ref)| returns
+ * true, then calls to Draw() and GetSurface() are guaranteed to succeed.
+ */
+class DrawableFrameRef MOZ_FINAL
+{
+  // Implementation details for safe boolean conversion.
+  typedef void (DrawableFrameRef::* ConvertibleToBool)(float*****, double*****);
+  void nonNull(float*****, double*****) {}
 
-    ~AutoFrameLocker()
-    {
-      if (mSucceeded) {
-        mFrame->UnlockImageData();
-      }
+public:
+  DrawableFrameRef() { }
+
+  explicit DrawableFrameRef(imgFrame* aFrame)
+    : mFrame(aFrame)
+    , mRef(aFrame->mVBuf)
+  {
+    if (mRef.WasBufferPurged()) {
+      mFrame = nullptr;
+      mRef = nullptr;
+    }
+  }
+
+  DrawableFrameRef(DrawableFrameRef&& aOther)
+    : mFrame(aOther.mFrame.forget())
+    , mRef(Move(aOther.mRef))
+  { }
+
+  DrawableFrameRef& operator=(DrawableFrameRef&& aOther)
+  {
+    MOZ_ASSERT(this != &aOther, "Self-moves are prohibited");
+    mFrame = aOther.mFrame.forget();
+    mRef = Move(aOther.mRef);
+    return *this;
+  }
+
+  operator ConvertibleToBool() const
+  {
+    return bool(mFrame) ? &DrawableFrameRef::nonNull : 0;
+  }
+
+  imgFrame* operator->()
+  {
+    MOZ_ASSERT(mFrame);
+    return mFrame;
+  }
+
+  const imgFrame* operator->() const
+  {
+    MOZ_ASSERT(mFrame);
+    return mFrame;
+  }
+
+  imgFrame* get() { return mFrame; }
+  const imgFrame* get() const { return mFrame; }
+
+  void reset()
+  {
+    mFrame = nullptr;
+    mRef = nullptr;
+  }
+
+private:
+  nsRefPtr<imgFrame> mFrame;
+  VolatileBufferPtr<uint8_t> mRef;
+};
+
+/**
+ * A reference to an imgFrame that holds the imgFrame's surface in memory in a
+ * format appropriate for access as raw data. If you have a RawAccessFrameRef
+ * |ref| and |if (ref)| is true, then calls to GetImageData(), GetPaletteData(),
+ * and GetDrawTarget() are guaranteed to succeed. This guarantee is stronger
+ * than DrawableFrameRef, so everything that a valid DrawableFrameRef guarantees
+ * is also guaranteed by a valid RawAccessFrameRef.
+ *
+ * This may be considerably more expensive than is necessary just for drawing,
+ * so only use this when you need to read or write the raw underlying image data
+ * that the imgFrame holds.
+ */
+class RawAccessFrameRef MOZ_FINAL
+{
+  // Implementation details for safe boolean conversion.
+  typedef void (RawAccessFrameRef::* ConvertibleToBool)(float*****, double*****);
+  void nonNull(float*****, double*****) {}
+
+public:
+  RawAccessFrameRef() { }
+
+  explicit RawAccessFrameRef(imgFrame* aFrame)
+    : mFrame(aFrame)
+  {
+    MOZ_ASSERT(mFrame, "Need a frame");
+
+    if (NS_FAILED(mFrame->LockImageData())) {
+      mFrame->UnlockImageData();
+      mFrame = nullptr;
+    }
+  }
+
+  RawAccessFrameRef(RawAccessFrameRef&& aOther)
+    : mFrame(aOther.mFrame.forget())
+  { }
+
+  ~RawAccessFrameRef()
+  {
+    if (mFrame) {
+      mFrame->UnlockImageData();
+    }
+  }
+
+  RawAccessFrameRef& operator=(RawAccessFrameRef&& aOther)
+  {
+    MOZ_ASSERT(this != &aOther, "Self-moves are prohibited");
+
+    if (mFrame) {
+      mFrame->UnlockImageData();
     }
 
-    // Whether the lock request succeeded.
-    bool Succeeded() { return mSucceeded; }
+    mFrame = aOther.mFrame.forget();
 
-  private:
-    imgFrame* mFrame;
-    bool mSucceeded;
-  };
-}
-}
+    return *this;
+  }
+
+  operator ConvertibleToBool() const
+  {
+    return bool(mFrame) ? &RawAccessFrameRef::nonNull : 0;
+  }
+
+  imgFrame* operator->()
+  {
+    MOZ_ASSERT(mFrame);
+    return mFrame.get();
+  }
+
+  const imgFrame* operator->() const
+  {
+    MOZ_ASSERT(mFrame);
+    return mFrame;
+  }
+
+  imgFrame* get() { return mFrame; }
+  const imgFrame* get() const { return mFrame; }
+
+  void reset()
+  {
+    if (mFrame) {
+      mFrame->UnlockImageData();
+    }
+    mFrame = nullptr;
+  }
+
+private:
+  nsRefPtr<imgFrame> mFrame;
+};
+
+} // namespace image
+} // namespace mozilla
 
 #endif /* imgFrame_h */

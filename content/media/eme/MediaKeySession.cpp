@@ -8,10 +8,11 @@
 #include "mozilla/dom/MediaKeySession.h"
 #include "mozilla/dom/MediaKeyError.h"
 #include "mozilla/dom/MediaKeyMessageEvent.h"
-#include "mozilla/dom/MediaKeyNeededEvent.h"
+#include "mozilla/dom/MediaEncryptedEvent.h"
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/CDMProxy.h"
 #include "mozilla/AsyncEventDispatcher.h"
+#include "mozilla/Move.h"
 
 namespace mozilla {
 namespace dom {
@@ -31,7 +32,8 @@ NS_IMPL_RELEASE_INHERITED(MediaKeySession, DOMEventTargetHelper)
 MediaKeySession::MediaKeySession(nsPIDOMWindow* aParent,
                                  MediaKeys* aKeys,
                                  const nsAString& aKeySystem,
-                                 SessionType aSessionType)
+                                 SessionType aSessionType,
+                                 ErrorResult& aRv)
   : DOMEventTargetHelper(aParent)
   , mKeys(aKeys)
   , mKeySystem(aKeySystem)
@@ -39,7 +41,7 @@ MediaKeySession::MediaKeySession(nsPIDOMWindow* aParent,
   , mIsClosed(false)
 {
   MOZ_ASSERT(aParent);
-  mClosed = mKeys->MakePromise();
+  mClosed = mKeys->MakePromise(aRv);
 }
 
 void MediaKeySession::Init(const nsAString& aSessionId)
@@ -66,7 +68,13 @@ MediaKeySession::GetKeySystem(nsString& aKeySystem) const
 void
 MediaKeySession::GetSessionId(nsString& aSessionId) const
 {
-  aSessionId = mSessionId;
+  aSessionId = GetSessionId();
+}
+
+const nsString&
+MediaKeySession::GetSessionId() const
+{
+  return mSessionId;
 }
 
 JSObject*
@@ -88,26 +96,32 @@ MediaKeySession::Closed() const
 }
 
 already_AddRefed<Promise>
-MediaKeySession::Update(const Uint8Array& aResponse)
+MediaKeySession::Update(const ArrayBufferViewOrArrayBuffer& aResponse, ErrorResult& aRv)
 {
-  nsRefPtr<Promise> promise(mKeys->MakePromise());
-  aResponse.ComputeLengthAndData();
+  nsRefPtr<Promise> promise(mKeys->MakePromise(aRv));
+  if (aRv.Failed()) {
+    return nullptr;
+  }
+  nsTArray<uint8_t> data;
   if (IsClosed() ||
       !mKeys->GetCDMProxy() ||
-      !aResponse.Length()) {
+      !CopyArrayBufferViewOrArrayBufferData(aResponse, data)) {
     promise->MaybeReject(NS_ERROR_DOM_INVALID_ACCESS_ERR);
     return promise.forget();
   }
   mKeys->GetCDMProxy()->UpdateSession(mSessionId,
                                       mKeys->StorePromise(promise),
-                                      aResponse);
+                                      data);
   return promise.forget();
 }
 
 already_AddRefed<Promise>
-MediaKeySession::Close()
+MediaKeySession::Close(ErrorResult& aRv)
 {
-  nsRefPtr<Promise> promise(mKeys->MakePromise());
+  nsRefPtr<Promise> promise(mKeys->MakePromise(aRv));
+  if (aRv.Failed()) {
+    return nullptr;
+  }
   if (IsClosed() || !mKeys->GetCDMProxy()) {
     promise->MaybeResolve(JS::UndefinedHandleValue);
     return promise.forget();
@@ -137,9 +151,12 @@ MediaKeySession::IsClosed() const
 }
 
 already_AddRefed<Promise>
-MediaKeySession::Remove()
+MediaKeySession::Remove(ErrorResult& aRv)
 {
-  nsRefPtr<Promise> promise(mKeys->MakePromise());
+  nsRefPtr<Promise> promise(mKeys->MakePromise(aRv));
+  if (aRv.Failed()) {
+    return nullptr;
+  }
   if (mSessionType != SessionType::Persistent) {
     promise->MaybeReject(NS_ERROR_DOM_INVALID_ACCESS_ERR);
     // "The operation is not supported on session type sessions."
@@ -154,9 +171,37 @@ MediaKeySession::Remove()
   return promise.forget();
 }
 
+already_AddRefed<Promise>
+MediaKeySession::GetUsableKeyIds(ErrorResult& aRv)
+{
+  nsRefPtr<Promise> promise(mKeys->MakePromise(aRv));
+  if (aRv.Failed()) {
+    return nullptr;
+  }
+
+  if (IsClosed() || !mKeys->GetCDMProxy()) {
+    promise->MaybeReject(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return promise.forget();
+  }
+
+  nsTArray<CencKeyId> keyIds;
+  {
+    CDMCaps::AutoLock caps(mKeys->GetCDMProxy()->Capabilites());
+    caps.GetUsableKeysForSession(mSessionId, keyIds);
+  }
+
+  nsTArray<TypedArrayCreator<ArrayBuffer>> array;
+  for (size_t i = 0; i < keyIds.Length(); i++) {
+    array.AppendElement(keyIds[i]);
+  }
+  promise->MaybeResolve(array);
+
+  return promise.forget();
+}
+
 void
 MediaKeySession::DispatchKeyMessage(const nsTArray<uint8_t>& aMessage,
-                                    const nsString& aURL)
+                                    const nsAString& aURL)
 {
   nsRefPtr<MediaKeyMessageEvent> event(
     MediaKeyMessageEvent::Constructor(this, aURL, aMessage));

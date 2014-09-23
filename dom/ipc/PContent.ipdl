@@ -10,6 +10,7 @@ include protocol PBlob;
 include protocol PBluetooth;
 include protocol PBrowser;
 include protocol PCompositor;
+include protocol PContentBridge;
 include protocol PCycleCollectWithLogs;
 include protocol PCrashReporter;
 include protocol PExternalHelperApp;
@@ -21,7 +22,9 @@ include protocol PHal;
 include protocol PImageBridge;
 include protocol PIndexedDB;
 include protocol PMemoryReportRequest;
+include protocol PMobileConnection;
 include protocol PNecko;
+include protocol PScreenManager;
 include protocol PSharedBufferManager;
 include protocol PSms;
 include protocol PSpeechSynthesis;
@@ -29,6 +32,7 @@ include protocol PStorage;
 include protocol PTelephony;
 include protocol PTestShell;
 include protocol PJavaScript;
+include protocol PRemoteSpellcheckEngine;
 include DOMTypes;
 include JavaScriptTypes;
 include InputStreamParams;
@@ -54,6 +58,12 @@ using mozilla::dom::NativeThreadId from "mozilla/dom/TabMessageUtils.h";
 using mozilla::hal::ProcessPriority from "mozilla/HalTypes.h";
 using gfxIntSize from "nsSize.h";
 
+union ChromeRegistryItem
+{
+    ChromePackage;
+    OverrideMapping;
+};
+
 namespace mozilla {
 namespace dom {
 
@@ -65,6 +75,7 @@ struct FontListEntry {
     int16_t   stretch;
     uint8_t   italic;
     uint8_t   index;
+    bool      isHidden;
 };
 
 struct DeviceStorageFreeSpaceParams
@@ -117,6 +128,14 @@ struct DeviceStorageAddParams
   PBlob blob;
 };
 
+struct DeviceStorageAppendParams
+{
+  nsString type;
+  nsString storageName;
+  nsString relpath;
+  PBlob blob;
+};
+
 struct DeviceStorageCreateFdParams
 {
   nsString type;
@@ -150,6 +169,7 @@ struct DeviceStorageEnumerationParams
 union DeviceStorageParams
 {
   DeviceStorageAddParams;
+  DeviceStorageAppendParams;
   DeviceStorageCreateFdParams;
   DeviceStorageGetParams;
   DeviceStorageDeleteParams;
@@ -270,6 +290,25 @@ struct DataStoreSetting {
   bool enabled;
 };
 
+// Note: Any changes to this structure should also be changed in
+// FileSystemUpdate below.
+struct VolumeInfo {
+  nsString name;
+  nsString mountPoint;
+  int32_t volState;
+  int32_t mountGeneration;
+  bool isMediaPresent;
+  bool isSharing;
+  bool isFormatting;
+  bool isFake;
+  bool isUnmounting;
+};
+
+union MaybeFileDesc {
+    FileDescriptor;
+    void_t;
+};
+
 intr protocol PContent
 {
     parent opens PCompositor;
@@ -291,13 +330,16 @@ intr protocol PContent
     manages PHal;
     manages PIndexedDB;
     manages PMemoryReportRequest;
+    manages PMobileConnection;
     manages PNecko;
+    manages PScreenManager;
     manages PSms;
     manages PSpeechSynthesis;
     manages PStorage;
     manages PTelephony;
     manages PTestShell;
     manages PJavaScript;
+    manages PRemoteSpellcheckEngine;
 
 both:
     // Depending on exactly how the new browser is being created, it might be
@@ -340,7 +382,8 @@ child:
      */
     async SetProcessSandbox();
 
-    PMemoryReportRequest(uint32_t generation, bool minimizeMemoryUsage, nsString DMDDumpIdent);
+    PMemoryReportRequest(uint32_t generation, bool anonymize,
+                         bool minimizeMemoryUsage, MaybeFileDesc DMDFile);
 
     /**
      * Notify the AudioChannelService in the child processes.
@@ -365,7 +408,8 @@ child:
     PTestShell();
 
     RegisterChrome(ChromePackage[] packages, ResourceMapping[] resources,
-                   OverrideMapping[] overrides, nsCString locale);
+                   OverrideMapping[] overrides, nsCString locale, bool reset);
+    RegisterChromeItem(ChromeRegistryItem item);
 
     async SetOffline(bool offline);
 
@@ -402,9 +446,11 @@ child:
     FilePathUpdate(nsString storageType, nsString storageName, nsString filepath,
                    nsCString reasons);
 
+    // Note: Any changes to this structure should also be changed in
+    // VolumeInfo above.
     FileSystemUpdate(nsString fsName, nsString mountPoint, int32_t fsState,
                      int32_t mountGeneration, bool isMediaPresent,
-                     bool isSharing, bool isFormatting, bool isFake);
+                     bool isSharing, bool isFormatting, bool isFake, bool isUnmounting);
 
     // Ask the Nuwa process to create a new child process.
     NuwaFork();
@@ -424,6 +470,12 @@ child:
      * Notify idle observers in the child
      */
     NotifyIdleObserver(uint64_t observerId, nsCString topic, nsString str);
+
+    /**
+     * Notify windows in the child to apply a new app style.
+     */
+    OnAppThemeChanged();
+
 parent:
     /**
      * Tell the content process some attributes of itself.  This is
@@ -443,8 +495,14 @@ parent:
     sync GetXPCOMProcessAttributes()
         returns (bool isOffline);
 
+    sync CreateChildProcess(IPCTabContext context,
+                            ProcessPriority priority)
+        returns (uint64_t id, bool isForApp, bool isForBrowser);
+    intr BridgeToChildProcess(uint64_t id);
+
     async PJavaScript();
 
+    sync PRemoteSpellcheckEngine();
     PDeviceStorageRequest(DeviceStorageParams params);
 
     PFileSystemRequest(FileSystemParams params);
@@ -456,11 +514,21 @@ parent:
 
     async GetSystemMemory(uint64_t getterId);
 
+    sync IsSecureURI(uint32_t type, URIParams uri, uint32_t flags)
+        returns (bool isSecureURI);
+
     PHal();
 
     PIndexedDB();
 
+    PMobileConnection(uint32_t clientId);
+
     PNecko();
+
+    rpc PScreenManager()
+        returns (uint32_t numberOfScreens,
+                 float systemDefaultScale,
+                 bool success);
 
     PSms();
 
@@ -505,6 +573,7 @@ parent:
                           nsString name,
                           nsString bidi,
                           nsString lang,
+                          nsString data,
                           Principal principal);
 
     CloseAlert(nsString name, Principal principal);
@@ -566,15 +635,15 @@ parent:
     async AudioChannelChangedNotification();
     async AudioChannelChangeDefVolChannel(int32_t aChannel, bool aHidden);
 
-    sync DataStoreGetStores(nsString aName, Principal aPrincipal)
+    sync DataStoreGetStores(nsString aName, nsString aOwner, Principal aPrincipal)
         returns (DataStoreSetting[] dataStores);
 
     async FilePathUpdateNotify(nsString aType,
                                nsString aStorageName,
                                nsString aFilepath,
                                nsCString aReason);
-    // get nsIVolumeService to broadcast volume information
-    async BroadcastVolume(nsString volumeName);
+
+    sync GetVolumes() returns (VolumeInfo[] volumes);
 
     // Notify the parent that the child has finished handling a system message.
     async SystemMessageHandled();
@@ -589,6 +658,11 @@ parent:
 
     sync KeywordToURI(nsCString keyword)
         returns (OptionalInputStreamParams postData, OptionalURIParams uri);
+
+    // Tell the compositor to allocate a layer tree id for nested remote mozbrowsers.
+    sync AllocateLayerTreeId()
+        returns (uint64_t id);
+    async DeallocateLayerTreeId(uint64_t id);
 
     sync SpeakerManagerForceSpeaker(bool aEnable);
 
@@ -624,6 +698,8 @@ parent:
      * use the newly-invalid surface.
      */
     BackUpXResources(FileDescriptor aXSocketFd);
+
+    sync OpenAnonymousTemporaryFile() returns (FileDescriptor aFD);
 
 both:
      AsyncMessage(nsString aMessage, ClonedMessageData aData,

@@ -17,86 +17,105 @@ namespace layers {
 
 class CompositableForwarder;
 
-SharedTextureClientOGL::SharedTextureClientOGL(TextureFlags aFlags)
+////////////////////////////////////////////////////////////////////////
+// EGLImageTextureClient
+
+EGLImageTextureClient::EGLImageTextureClient(TextureFlags aFlags,
+                                             EGLImage aImage,
+                                             gfx::IntSize aSize,
+                                             bool aInverted)
   : TextureClient(aFlags)
-  , mHandle(0)
-  , mInverted(false)
+  , mImage(aImage)
+  , mSize(aSize)
+  , mIsLocked(false)
 {
-  // SharedTextureClient is always owned externally.
-  mFlags |= TextureFlags::DEALLOCATE_CLIENT;
-}
-
-SharedTextureClientOGL::~SharedTextureClientOGL()
-{
-  // the shared data is owned externally.
-}
-
-
-bool
-SharedTextureClientOGL::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
-{
-  MOZ_ASSERT(IsValid());
-  if (!IsAllocated()) {
-    return false;
-  }
-  aOutDescriptor = SharedTextureDescriptor(mShareType, mHandle, mSize, mInverted);
-  return true;
-}
-
-void
-SharedTextureClientOGL::InitWith(gl::SharedTextureHandle aHandle,
-                                 gfx::IntSize aSize,
-                                 gl::SharedTextureShareType aShareType,
-                                 bool aInverted)
-{
-  MOZ_ASSERT(IsValid());
-  MOZ_ASSERT(!IsAllocated());
-  mHandle = aHandle;
-  mSize = aSize;
-  mShareType = aShareType;
-  mInverted = aInverted;
-  if (mInverted) {
+  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default,
+             "Can't pass an `EGLImage` between processes.");
+  
+  // Our data is always owned externally.
+  AddFlags(TextureFlags::DEALLOCATE_CLIENT);
+  
+  if (aInverted) {
     AddFlags(TextureFlags::NEEDS_Y_FLIP);
   }
 }
+  
+EGLImageTextureClient::~EGLImageTextureClient()
+{
+  // Our data is always owned externally.
+}
 
 bool
-SharedTextureClientOGL::Lock(OpenMode mode)
+EGLImageTextureClient::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
 {
-  MOZ_ASSERT(!mIsLocked);
-  if (!IsValid() || !IsAllocated()) {
-    return false;
-  }
-  mIsLocked = true;
+  MOZ_ASSERT(IsValid());
+  MOZ_ASSERT(IsAllocated());
+
+  aOutDescriptor = EGLImageDescriptor((uintptr_t)mImage, mSize);
   return true;
 }
 
+bool
+EGLImageTextureClient::Lock(OpenMode mode)
+  {
+    MOZ_ASSERT(!mIsLocked);
+    if (!IsValid() || !IsAllocated()) {
+      return false;
+    }
+    mIsLocked = true;
+    return true;
+  }
+  
 void
-SharedTextureClientOGL::Unlock()
+EGLImageTextureClient::Unlock()
 {
   MOZ_ASSERT(mIsLocked);
   mIsLocked = false;
 }
+  
+////////////////////////////////////////////////////////////////////////
+// SurfaceTextureClient
 
-bool
-SharedTextureClientOGL::IsAllocated() const
-{
-  return mHandle != 0;
-}
+#ifdef MOZ_WIDGET_ANDROID
 
-StreamTextureClientOGL::StreamTextureClientOGL(TextureFlags aFlags)
+SurfaceTextureClient::SurfaceTextureClient(TextureFlags aFlags,
+                                           nsSurfaceTexture* aSurfTex,
+                                           gfx::IntSize aSize,
+                                           bool aInverted)
   : TextureClient(aFlags)
+  , mSurfTex(aSurfTex)
+  , mSize(aSize)
   , mIsLocked(false)
 {
-}
+  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default,
+             "Can't pass pointers between processes.");
 
-StreamTextureClientOGL::~StreamTextureClientOGL()
+  // Our data is always owned externally.
+  AddFlags(TextureFlags::DEALLOCATE_CLIENT);
+
+  if (aInverted) {
+    AddFlags(TextureFlags::NEEDS_Y_FLIP);
+  }
+}
+  
+SurfaceTextureClient::~SurfaceTextureClient()
 {
-  // the data is owned externally.
+  // Our data is always owned externally.
 }
 
 bool
-StreamTextureClientOGL::Lock(OpenMode mode)
+SurfaceTextureClient::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
+{
+  MOZ_ASSERT(IsValid());
+  MOZ_ASSERT(IsAllocated());
+
+  aOutDescriptor = SurfaceTextureDescriptor((uintptr_t)mSurfTex.get(),
+                                            mSize);
+  return true;
+}
+
+bool
+SurfaceTextureClient::Lock(OpenMode mode)
 {
   MOZ_ASSERT(!mIsLocked);
   if (!IsValid() || !IsAllocated()) {
@@ -107,38 +126,13 @@ StreamTextureClientOGL::Lock(OpenMode mode)
 }
 
 void
-StreamTextureClientOGL::Unlock()
+SurfaceTextureClient::Unlock()
 {
   MOZ_ASSERT(mIsLocked);
   mIsLocked = false;
 }
 
-bool
-StreamTextureClientOGL::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
-{
-  if (!IsAllocated()) {
-    return false;
-  }
-
-  gfx::SurfaceStreamHandle handle = mStream->GetShareHandle();
-  aOutDescriptor = SurfaceStreamDescriptor(handle, false);
-  return true;
-}
-
-void
-StreamTextureClientOGL::InitWith(gfx::SurfaceStream* aStream)
-{
-  MOZ_ASSERT(!IsAllocated());
-  mStream = aStream;
-  mGL = mStream->GLContext();
-}
-
-bool
-StreamTextureClientOGL::IsAllocated() const
-{
-  return mStream != 0;
-}
-
+#endif // MOZ_WIDGET_ANDROID
 
 } // namespace
 } // namespace

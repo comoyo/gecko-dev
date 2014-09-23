@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -70,6 +71,10 @@ DIR_ATOM(sCommon_Desktopdirectory, NS_WIN_COMMON_DESKTOP_DIRECTORY)
 DIR_ATOM(sCommon_AppData, NS_WIN_COMMON_APPDATA_DIR)
 DIR_ATOM(sAppdata, NS_WIN_APPDATA_DIR)
 DIR_ATOM(sLocalAppdata, NS_WIN_LOCAL_APPDATA_DIR)
+#if defined(MOZ_CONTENT_SANDBOX)
+DIR_ATOM(sLocalAppdataLow, NS_WIN_LOCAL_APPDATA_LOW_DIR)
+DIR_ATOM(sLowIntegrityTemp, NS_WIN_LOW_INTEGRITY_TEMP)
+#endif
 DIR_ATOM(sPrinthood, NS_WIN_PRINTHOOD)
 DIR_ATOM(sWinCookiesDirectory, NS_WIN_COOKIES_DIR)
 DIR_ATOM(sDefaultDownloadDirectory, NS_WIN_DEFAULT_DOWNLOAD_DIR)

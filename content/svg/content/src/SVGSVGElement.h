@@ -18,7 +18,7 @@
 #include "mozilla/Attributes.h"
 
 nsresult NS_NewSVGSVGElement(nsIContent **aResult,
-                             already_AddRefed<nsINodeInfo>&& aNodeInfo,
+                             already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                              mozilla::dom::FromParser aFromParser);
 
 class nsSMILTimeContainer;
@@ -47,15 +47,15 @@ class SVGSVGElement;
 class DOMSVGTranslatePoint MOZ_FINAL : public nsISVGPoint {
 public:
   DOMSVGTranslatePoint(SVGPoint* aPt, SVGSVGElement *aElement)
-    : nsISVGPoint(aPt), mElement(aElement) {}
+    : nsISVGPoint(aPt, true), mElement(aElement) {}
 
-  DOMSVGTranslatePoint(DOMSVGTranslatePoint* aPt)
-    : nsISVGPoint(&aPt->mPt), mElement(aPt->mElement) {}
+  explicit DOMSVGTranslatePoint(DOMSVGTranslatePoint* aPt)
+    : nsISVGPoint(&aPt->mPt, true), mElement(aPt->mElement) {}
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(DOMSVGTranslatePoint, nsISVGPoint)
 
-  virtual nsISVGPoint* Clone() MOZ_OVERRIDE;
+  virtual DOMSVGPoint* Copy() MOZ_OVERRIDE;
 
   // WebIDL
   virtual float X() MOZ_OVERRIDE { return mPt.GetX(); }
@@ -67,6 +67,9 @@ public:
   virtual nsISupports* GetParentObject() MOZ_OVERRIDE;
 
   nsRefPtr<SVGSVGElement> mElement;
+
+private:
+  ~DOMSVGTranslatePoint() {}
 };
 
 class svgFloatSize {
@@ -91,13 +94,15 @@ class SVGSVGElement MOZ_FINAL : public SVGSVGElementBase
   friend class mozilla::SVGFragmentIdentifier;
   friend class mozilla::AutoSVGRenderingState;
 
-  SVGSVGElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
+  SVGSVGElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                 FromParser aFromParser);
   virtual JSObject* WrapNode(JSContext *aCx) MOZ_OVERRIDE;
 
   friend nsresult (::NS_NewSVGSVGElement(nsIContent **aResult,
-                                         already_AddRefed<nsINodeInfo>&& aNodeInfo,
+                                         already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                                          mozilla::dom::FromParser aFromParser));
+
+  ~SVGSVGElement();
 
 public:
   // interfaces:
@@ -198,7 +203,7 @@ public:
   // SVG-as-an-image documents.)
   virtual void FlushImageTransformInvalidation();
 
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
 
   // Returns true IFF our attributes are currently overridden by a <view>
   // element and that element's ID matches the passed-in string.
@@ -396,11 +401,12 @@ private:
 class MOZ_STACK_CLASS AutoSVGRenderingState
 {
 public:
-  AutoSVGRenderingState(const SVGImageContext* aSVGContext,
+  AutoSVGRenderingState(const Maybe<SVGImageContext>& aSVGContext,
                         float aFrameTime,
                         dom::SVGSVGElement* aRootElem
                         MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-    : mHaveOverrides(!!aSVGContext)
+    : mHaveOverrides(aSVGContext.isSome() &&
+                     aSVGContext->GetPreserveAspectRatio().isSome())
     , mRootElem(aRootElem)
   {
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
@@ -410,7 +416,7 @@ public:
       // XXXdholbert We should technically be overriding the helper doc's clip
       // and overflow properties here, too. See bug 272288 comment 36.
       mRootElem->SetImageOverridePreserveAspectRatio(
-          aSVGContext->GetPreserveAspectRatio());
+          *aSVGContext->GetPreserveAspectRatio());
     }
 
     mOriginalTime = mRootElem->GetCurrentTime();

@@ -7,8 +7,6 @@
 #ifndef jit_BaselineCompiler_h
 #define jit_BaselineCompiler_h
 
-#ifdef JS_ION
-
 #include "jit/FixedList.h"
 #if defined(JS_CODEGEN_X86)
 # include "jit/x86/BaselineCompiler-x86.h"
@@ -18,6 +16,8 @@
 # include "jit/arm/BaselineCompiler-arm.h"
 #elif defined(JS_CODEGEN_MIPS)
 # include "jit/mips/BaselineCompiler-mips.h"
+#elif defined(JS_CODEGEN_NONE)
+# include "jit/none/BaselineCompiler-none.h"
 #else
 # error "Unknown architecture!"
 #endif
@@ -62,6 +62,7 @@ namespace jit {
     _(JSOP_DOUBLE)             \
     _(JSOP_STRING)             \
     _(JSOP_OBJECT)             \
+    _(JSOP_CALLSITEOBJ)        \
     _(JSOP_REGEXP)             \
     _(JSOP_LAMBDA)             \
     _(JSOP_LAMBDA_ARROW)       \
@@ -91,6 +92,7 @@ namespace jit {
     _(JSOP_BITNOT)             \
     _(JSOP_NEG)                \
     _(JSOP_NEWARRAY)           \
+    _(JSOP_NEWARRAY_COPYONWRITE) \
     _(JSOP_INITELEM_ARRAY)     \
     _(JSOP_NEWOBJECT)          \
     _(JSOP_NEWINIT)            \
@@ -98,7 +100,6 @@ namespace jit {
     _(JSOP_INITELEM_GETTER)    \
     _(JSOP_INITELEM_SETTER)    \
     _(JSOP_INITELEM_INC)       \
-    _(JSOP_SPREAD)             \
     _(JSOP_MUTATEPROTO)        \
     _(JSOP_INITPROP)           \
     _(JSOP_INITPROP_GETTER)    \
@@ -134,6 +135,11 @@ namespace jit {
     _(JSOP_SETLOCAL)           \
     _(JSOP_GETARG)             \
     _(JSOP_SETARG)             \
+    _(JSOP_CHECKLEXICAL)       \
+    _(JSOP_INITLEXICAL)        \
+    _(JSOP_CHECKALIASEDLEXICAL) \
+    _(JSOP_INITALIASEDLEXICAL) \
+    _(JSOP_UNINITIALIZED)      \
     _(JSOP_CALL)               \
     _(JSOP_FUNCALL)            \
     _(JSOP_FUNAPPLY)           \
@@ -164,7 +170,7 @@ namespace jit {
     _(JSOP_TABLESWITCH)        \
     _(JSOP_ITER)               \
     _(JSOP_MOREITER)           \
-    _(JSOP_ITERNEXT)           \
+    _(JSOP_ISNOITER)           \
     _(JSOP_ENDITER)            \
     _(JSOP_CALLEE)             \
     _(JSOP_SETRVAL)            \
@@ -213,6 +219,7 @@ class BaselineCompiler : public BaselineCompilerSpecific
   private:
     MethodStatus emitBody();
 
+    void emitInitializeLocals(size_t n, const Value &v);
     bool emitPrologue();
     bool emitEpilogue();
 #ifdef JSGC_GENERATIONAL
@@ -228,7 +235,7 @@ class BaselineCompiler : public BaselineCompilerSpecific
 
     bool emitStackCheck(bool earlyCheck=false);
     bool emitInterruptCheck();
-    bool emitUseCountIncrement(bool allowOsr=true);
+    bool emitWarmUpCounterIncrement(bool allowOsr=true);
     bool emitArgumentTypeChecks();
     bool emitDebugPrologue();
     bool emitDebugTrap();
@@ -266,6 +273,8 @@ class BaselineCompiler : public BaselineCompilerSpecific
 
     bool emitFormalArgAccess(uint32_t arg, bool get);
 
+    bool emitUninitializedLexicalCheck(const ValueOperand &val);
+
     bool addPCMappingEntry(bool addIndexEntry);
 
     void getScopeCoordinateObject(Register reg);
@@ -273,9 +282,9 @@ class BaselineCompiler : public BaselineCompilerSpecific
     Address getScopeCoordinateAddress(Register reg);
 };
 
+extern const VMFunction NewArrayCopyOnWriteInfo;
+
 } // namespace jit
 } // namespace js
-
-#endif // JS_ION
 
 #endif /* jit_BaselineCompiler_h */

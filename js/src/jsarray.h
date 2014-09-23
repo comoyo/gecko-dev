@@ -48,11 +48,6 @@ extern ArrayObject * JS_FASTCALL
 NewDenseEmptyArray(JSContext *cx, JSObject *proto = nullptr,
                    NewObjectKind newKind = GenericObject);
 
-/* Create a dense array with length and capacity == 'length', initialized length set to 0. */
-extern ArrayObject * JS_FASTCALL
-NewDenseAllocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *proto = nullptr,
-                       NewObjectKind newKind = GenericObject);
-
 /*
  * Create a dense array with a set length, but without allocating space for the
  * contents. This is useful, e.g., when accepting length from the user.
@@ -60,6 +55,33 @@ NewDenseAllocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *proto = 
 extern ArrayObject * JS_FASTCALL
 NewDenseUnallocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *proto = nullptr,
                          NewObjectKind newKind = GenericObject);
+
+/*
+ * Create a dense array with length and capacity == |length|, initialized length set to 0,
+ * but with only |EagerAllocationMaxLength| elements allocated.
+ */
+extern ArrayObject * JS_FASTCALL
+NewDensePartlyAllocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *proto = nullptr,
+                             NewObjectKind newKind = GenericObject);
+
+/* Create a dense array with length and capacity == 'length', initialized length set to 0. */
+extern ArrayObject * JS_FASTCALL
+NewDenseFullyAllocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *proto = nullptr,
+                            NewObjectKind newKind = GenericObject);
+
+enum AllocatingBehaviour {
+    NewArray_Unallocating,
+    NewArray_PartlyAllocating,
+    NewArray_FullyAllocating
+};
+
+/*
+ * Create a dense array with a set length, but only allocates space for the
+ * contents if the length is not excessive.
+ */
+extern ArrayObject *
+NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleTypeObject type,
+              AllocatingBehaviour allocating);
 
 /* Create a dense array with a copy of the dense array elements in src. */
 extern ArrayObject *
@@ -72,7 +94,11 @@ NewDenseCopiedArray(JSContext *cx, uint32_t length, const Value *values, JSObjec
 
 /* Create a dense array based on templateObject with the given length. */
 extern ArrayObject *
-NewDenseAllocatedArrayWithTemplate(JSContext *cx, uint32_t length, JSObject *templateObject);
+NewDenseFullyAllocatedArrayWithTemplate(JSContext *cx, uint32_t length, JSObject *templateObject);
+
+/* Create a dense array with the same copy-on-write elements as another object. */
+extern JSObject *
+NewDenseCopyOnWriteArray(JSContext *cx, HandleObject templateObject, gc::InitialHeap heap);
 
 /*
  * Determines whether a write to the given element on |obj| should fail because
@@ -133,9 +159,19 @@ array_splice_impl(JSContext *cx, unsigned argc, js::Value *vp, bool pop);
 extern bool
 array_concat(JSContext *cx, unsigned argc, js::Value *vp);
 
+template <bool Locale>
+JSString *
+ArrayJoin(JSContext *cx, HandleObject obj, HandleLinearString sepstr, uint32_t length);
+
 extern bool
 array_concat_dense(JSContext *cx, Handle<ArrayObject*> arr1, Handle<ArrayObject*> arr2,
                    Handle<ArrayObject*> result);
+
+bool
+array_join(JSContext *cx, unsigned argc, js::Value *vp);
+
+extern JSString *
+array_join_impl(JSContext *cx, HandleValue array, HandleString sep);
 
 extern void
 ArrayShiftMoveElements(JSObject *obj);

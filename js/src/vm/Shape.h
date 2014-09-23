@@ -26,7 +26,9 @@
 #include "gc/Marking.h"
 #include "gc/Rooting.h"
 #include "js/HashTable.h"
+#include "js/MemoryMetrics.h"
 #include "js/RootingAPI.h"
+#include "js/UbiNode.h"
 #include "vm/PropDesc.h"
 
 #ifdef _MSC_VER
@@ -111,6 +113,10 @@ class Nursery;
 class ObjectImpl;
 class StaticBlockObject;
 
+namespace gc {
+class ForkJoinNursery;
+}
+
 typedef JSPropertyOp         PropertyOp;
 typedef JSStrictPropertyOp   StrictPropertyOp;
 typedef JSPropertyDescriptor PropertyDescriptor;
@@ -125,8 +131,11 @@ static const uint32_t SHAPE_MAXIMUM_SLOT = JS_BIT(24) - 2;
  */
 struct ShapeTable {
     static const uint32_t HASH_BITS     = mozilla::tl::BitSize<HashNumber>::value;
-    static const uint32_t MIN_ENTRIES   = 7;
-    static const uint32_t MIN_SIZE_LOG2 = 4;
+    static const uint32_t MIN_ENTRIES   = 11;
+
+    // This value is low because it's common for a ShapeTable to be created
+    // with an entryCount of zero.
+    static const uint32_t MIN_SIZE_LOG2 = 2;
     static const uint32_t MIN_SIZE      = JS_BIT(MIN_SIZE_LOG2);
 
     int             hashShift;          /* multiplicative hash shift */
@@ -154,9 +163,6 @@ struct ShapeTable {
     /* By definition, hashShift = HASH_BITS - log2(capacity). */
     uint32_t capacity() const { return JS_BIT(HASH_BITS - hashShift); }
 
-    /* Computes the size of the entries array for a given capacity. */
-    static size_t sizeOfEntries(size_t cap) { return cap * sizeof(Shape *); }
-
     /*
      * This counts the ShapeTable object itself (which must be
      * heap-allocated) and its |entries| array.
@@ -180,12 +186,17 @@ struct ShapeTable {
 
     /*
      * NB: init and change are fallible but do not report OOM, so callers can
-     * cope or ignore. They do however use the context's calloc_ method in
+     * cope or ignore. They do however use the context's calloc method in
      * order to update the malloc counter on success.
      */
     bool            init(ThreadSafeContext *cx, Shape *lastProp);
     bool            change(int log2Delta, ThreadSafeContext *cx);
     Shape           **search(jsid id, bool adding);
+
+#ifdef JSGC_COMPACTING
+    /* Update entries whose shapes have been moved */
+    void            fixupAfterMovingGC();
+#endif
 };
 
 /*
@@ -271,7 +282,7 @@ GetterSetterWriteBarrierPostRemove(JSRuntime *rt, JSObject **objp)
 #endif
 }
 
-class BaseShape : public gc::BarrieredCell<BaseShape>
+class BaseShape : public gc::TenuredCell
 {
   public:
     friend class Shape;
@@ -301,14 +312,24 @@ class BaseShape : public gc::BarrieredCell<BaseShape>
         NOT_EXTENSIBLE      =   0x10,
         INDEXED             =   0x20,
         BOUND_FUNCTION      =   0x40,
-        VAROBJ              =   0x80,
+        HAD_ELEMENTS_ACCESS =   0x80,
         WATCHED             =  0x100,
         ITERATED_SINGLETON  =  0x200,
         NEW_TYPE_UNKNOWN    =  0x400,
         UNCACHEABLE_PROTO   =  0x800,
-        HAD_ELEMENTS_ACCESS = 0x1000,
 
-        OBJECT_FLAG_MASK    = 0x1ff8
+        // These two flags control which scope a new variables ends up on in the
+        // scope chain. If the variable is "qualified" (i.e., if it was defined
+        // using var, let, or const) then it ends up on the lowest scope in the
+        // chain that has the QUALIFIED_VAROBJ flag set. If it's "unqualified"
+        // (i.e., if it was introduced without any var, let, or const, which
+        // incidentally is an error in strict mode) then it goes on the lowest
+        // scope in the chain with the UNQUALIFIED_VAROBJ flag set (which is
+        // typically the global).
+        QUALIFIED_VAROBJ    = 0x1000,
+        UNQUALIFIED_VAROBJ  = 0x2000,
+
+        OBJECT_FLAG_MASK    = 0x3ff8
     };
 
   private:
@@ -491,6 +512,10 @@ class BaseShape : public gc::BarrieredCell<BaseShape>
             gc::MarkObject(trc, &metadata, "metadata");
     }
 
+#ifdef JSGC_COMPACTING
+    void fixupAfterMovingGC();
+#endif
+
   private:
     static void staticAsserts() {
         JS_STATIC_ASSERT(offsetof(BaseShape, clasp_) == offsetof(js::shadow::BaseShape, clasp_));
@@ -536,7 +561,7 @@ BaseShape::baseUnowned()
 }
 
 /* Entries for the per-compartment baseShapes set of unowned base shapes. */
-struct StackBaseShape
+struct StackBaseShape : public DefaultHasher<ReadBarrieredUnownedBaseShape>
 {
     typedef const StackBaseShape *Lookup;
 
@@ -606,12 +631,13 @@ typedef HashSet<ReadBarrieredUnownedBaseShape,
                 SystemAllocPolicy> BaseShapeSet;
 
 
-class Shape : public gc::BarrieredCell<Shape>
+class Shape : public gc::TenuredCell
 {
     friend class ::JSObject;
     friend class ::JSFunction;
     friend class js::Bindings;
     friend class js::Nursery;
+    friend class js::gc::ForkJoinNursery;
     friend class js::ObjectImpl;
     friend class js::PropertyTree;
     friend class js::StaticBlockObject;
@@ -714,12 +740,17 @@ class Shape : public gc::BarrieredCell<Shape>
     ShapeTable &table() const { return base()->table(); }
 
     void addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
-                                size_t *propTableSize, size_t *kidsSize) const {
-        if (hasTable())
-            *propTableSize += table().sizeOfIncludingThis(mallocSizeOf);
+                                JS::ClassInfo *info) const
+    {
+        if (hasTable()) {
+            if (inDictionary())
+                info->shapesMallocHeapDictTables += table().sizeOfIncludingThis(mallocSizeOf);
+            else
+                info->shapesMallocHeapTreeTables += table().sizeOfIncludingThis(mallocSizeOf);
+        }
 
         if (!inDictionary() && kids.isHash())
-            *kidsSize += kids.toHash()->sizeOfIncludingThis(mallocSizeOf);
+            info->shapesMallocHeapTreeKids += kids.toHash()->sizeOfIncludingThis(mallocSizeOf);
     }
 
     bool isNative() const {
@@ -793,7 +824,13 @@ class Shape : public gc::BarrieredCell<Shape>
         /* Property stored in per-object dictionary, not shared property tree. */
         IN_DICTIONARY   = 0x02,
 
-        UNUSED_BITS     = 0x3C
+        /*
+         * Slotful property was stored to more than once. This is used as a
+         * hint for type inference.
+         */
+        OVERWRITTEN     = 0x04,
+
+        UNUSED_BITS     = 0x38
     };
 
     /* Get a shape identical to this one, without parent/kids information. */
@@ -850,6 +887,13 @@ class Shape : public gc::BarrieredCell<Shape>
         return (hasSetterValue() && base()->setterObj)
                ? ObjectValue(*base()->setterObj)
                : UndefinedValue();
+    }
+
+    void setOverwritten() {
+        flags |= OVERWRITTEN;
+    }
+    bool hadOverwrite() const {
+        return flags & OVERWRITTEN;
     }
 
     void update(PropertyOp getter, StrictPropertyOp setter, uint8_t attrs);
@@ -1013,10 +1057,19 @@ class Shape : public gc::BarrieredCell<Shape>
     inline Shape *search(ExclusiveContext *cx, jsid id);
     inline Shape *searchLinear(jsid id);
 
+#ifdef JSGC_COMPACTING
+    void fixupAfterMovingGC();
+#endif
+
     /* For JIT usage */
     static inline size_t offsetOfBase() { return offsetof(Shape, base_); }
 
   private:
+#ifdef JSGC_COMPACTING
+    void fixupDictionaryShapeAfterMovingGC();
+    void fixupShapeTreeAfterMovingGC();
+#endif
+
     static void staticAsserts() {
         JS_STATIC_ASSERT(offsetof(Shape, base_) == offsetof(js::shadow::Shape, base));
         JS_STATIC_ASSERT(offsetof(Shape, slotInfo) == offsetof(js::shadow::Shape, slotInfo));
@@ -1195,6 +1248,7 @@ struct StackShape
         JS_ASSERT(base);
         JS_ASSERT(!JSID_IS_VOID(propid));
         JS_ASSERT(slot <= SHAPE_INVALID_SLOT);
+        JS_ASSERT_IF(attrs & (JSPROP_GETTER | JSPROP_SETTER), attrs & JSPROP_SHARED);
     }
 
     explicit StackShape(Shape *shape)
@@ -1303,6 +1357,7 @@ Shape::Shape(const StackShape &other, uint32_t nfixed)
     flags(other.flags),
     parent(nullptr)
 {
+    JS_ASSERT_IF(attrs & (JSPROP_GETTER | JSPROP_SETTER), attrs & JSPROP_SHARED);
     kids.setNull();
 }
 
@@ -1400,9 +1455,13 @@ IsImplicitDenseOrTypedArrayElement(Shape *prop)
 #pragma warning(pop)
 #endif
 
+// JS::ubi::Nodes can point to Shapes and BaseShapes; they're js::gc::Cell
+// instances that occupy a compartment.
 namespace JS {
-template<> class AnchorPermitted<js::Shape *> { };
-template<> class AnchorPermitted<const js::Shape *> { };
+namespace ubi {
+template<> struct Concrete<js::Shape> : TracerConcreteWithCompartment<js::Shape> { };
+template<> struct Concrete<js::BaseShape> : TracerConcreteWithCompartment<js::BaseShape> { };
+}
 }
 
 #endif /* vm_Shape_h */

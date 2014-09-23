@@ -7,11 +7,17 @@ let LoopUI;
 
 XPCOMUtils.defineLazyModuleGetter(this, "injectLoopAPI", "resource:///modules/loop/MozLoopAPI.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "MozLoopService", "resource:///modules/loop/MozLoopService.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/PanelFrame.jsm");
 
 
 (function() {
 
   LoopUI = {
+    get toolbarButton() {
+      delete this.toolbarButton;
+      return this.toolbarButton = CustomizableUI.getWidget("loop-call-button").forWindow(window);
+    },
+
     /**
      * Opens the panel for Loop and sizes it appropriately.
      *
@@ -19,50 +25,76 @@ XPCOMUtils.defineLazyModuleGetter(this, "MozLoopService", "resource:///modules/l
      *                      the panel to the button which triggers it.
      */
     openCallPanel: function(event) {
-      let panel = document.getElementById("loop-panel");
-      let anchor = event.target;
-      let iframe = document.getElementById("loop-panel-frame");
+      let callback = iframe => {
+        iframe.addEventListener("DOMContentLoaded", function documentDOMLoaded() {
+          iframe.removeEventListener("DOMContentLoaded", documentDOMLoaded, true);
+          injectLoopAPI(iframe.contentWindow);
+        }, true);
+      };
 
-      if (!iframe) {
-        // XXX This should be using SharedFrame (bug 1011392 may do this).
-        iframe = document.createElement("iframe");
-        iframe.setAttribute("id", "loop-panel-frame");
-        iframe.setAttribute("type", "content");
-        iframe.setAttribute("class", "loop-frame social-panel-frame");
-        iframe.setAttribute("flex", "1");
-        panel.appendChild(iframe);
-      }
+      // Used to clear the temporary "login" state from the button.
+      Services.obs.notifyObservers(null, "loop-status-changed", null);
 
-      // We inject in DOMContentLoaded as that is before any scripts have tun.
-      iframe.addEventListener("DOMContentLoaded", function documentDOMLoaded() {
-        iframe.removeEventListener("DOMContentLoaded", documentDOMLoaded, true);
-        injectLoopAPI(iframe.contentWindow);
-
-        // We use loopPanelInitialized so that we know we've finished localising before
-        // sizing the panel.
-        iframe.contentWindow.addEventListener("loopPanelInitialized",
-          function documentLoaded() {
-            iframe.contentWindow.removeEventListener("loopPanelInitialized",
-                                                     documentLoaded, true);
-            // XXX We end up with the wrong size here, so this
-            // needs further investigation (bug 1011394).
-            sizeSocialPanelToContent(panel, iframe);
-          }, true);
-
-      }, true);
-
-      iframe.setAttribute("src", "about:looppanel");
-      panel.hidden = false;
-      panel.openPopup(anchor, "bottomcenter topright", 0, 0, false, false);
+      PanelFrame.showPopup(window, event.target, "loop", null,
+                           "about:looppanel", null, callback);
     },
 
     /**
      * Triggers the initialization of the loop service.  Called by
      * delayedStartup.
      */
-    initialize: function() {
+    init: function() {
+      if (!Services.prefs.getBoolPref("loop.enabled")) {
+        this.toolbarButton.node.hidden = true;
+        return;
+      }
+
+      // Add observer notifications before the service is initialized
+      Services.obs.addObserver(this, "loop-status-changed", false);
+
+      // If we're throttled, check to see if it's our turn to be unthrottled
+      if (Services.prefs.getBoolPref("loop.throttled")) {
+        this.toolbarButton.node.hidden = true;
+        MozLoopService.checkSoftStart(this.toolbarButton.node);
+        return;
+      }
+
       MozLoopService.initialize();
+      this.updateToolbarState();
     },
 
+    uninit: function() {
+      Services.obs.removeObserver(this, "loop-status-changed");
+    },
+
+    // Implements nsIObserver
+    observe: function(subject, topic, data) {
+      if (topic != "loop-status-changed") {
+        return;
+      }
+      this.updateToolbarState(data);
+    },
+
+    /**
+     * Updates the toolbar/menu-button state to reflect Loop status.
+     *
+     * @param {string} [aReason] Some states are only shown if
+     *                           a related reason is provided.
+     *
+     *                 aReason="login": Used after a login is completed
+     *                   successfully. This is used so the state can be
+     *                   temporarily shown until the next state change.
+     */
+    updateToolbarState: function(aReason = null) {
+      let state = "";
+      if (MozLoopService.errors.size) {
+        state = "error";
+      } else if (aReason == "login" && MozLoopService.userProfile) {
+        state = "active";
+      } else if (MozLoopService.doNotDisturb) {
+        state = "disabled";
+      }
+      this.toolbarButton.node.setAttribute("state", state);
+    },
   };
 })();

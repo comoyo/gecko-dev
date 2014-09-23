@@ -43,22 +43,28 @@ private:
 // reporters.  The following sequence should be used.
 // - ClearReports()
 // - run the memory reporters
-// - Dump()
+// - AnalyzeReports()
 // This sequence avoids spurious twice-reported warnings.
 MOZ_EXPORT void
 ClearReports();
 
-// Checks which heap blocks have been reported, and dumps a human-readable
+// Determines which heap blocks have been reported, and dumps a human-readable
 // summary (via |aWrite|).  If |aWrite| is nullptr it will dump to stderr.
-// Beware:  this output may have very long lines.
+// Beware: this output may have very long lines.
 MOZ_EXPORT void
-Dump(Writer aWriter);
+AnalyzeReports(const Writer& aWriter);
 
-// A useful |WriterFun|.  If |fp| is a FILE* you want |Dump|'s output to be
-// written to, call:
+// Measures all heap blocks, and dumps a human-readable summary (via |aWrite|).
+// If |aWrite| is nullptr it will dump to stderr.  Beware: this output may
+// have very long lines.
+MOZ_EXPORT void
+AnalyzeHeap(const Writer& aWriter);
+
+// A useful |WriterFun|.  For example, if |fp| is a FILE* you want
+// |AnalyzeReports|'s output to be written to, call:
 //
 //   dmd::Writer writer(FpWrite, fp);
-//   dmd::Dump(writer);
+//   dmd::AnalyzeReports(writer);
 MOZ_EXPORT void
 FpWrite(void* aFp, const char* aFmt, va_list aAp);
 
@@ -77,6 +83,10 @@ struct Sizes
 // reporter for DMD.
 MOZ_EXPORT void
 SizeOf(Sizes* aSizes);
+
+// Prints a status message prefixed with "DMD[<pid>]". Use sparingly.
+MOZ_EXPORT void
+StatusMsg(const char* aFmt, ...);
 
 // Indicates whether or not DMD is running.
 MOZ_EXPORT bool

@@ -28,7 +28,7 @@ class nsPIDOMWindow;
 namespace mozilla {
 class EventChainPostVisitor;
 namespace dom {
-class ContentParent;
+class nsIContentParent;
 namespace quota {
 class Client;
 }
@@ -48,8 +48,8 @@ class IndexedDBDatabaseChild;
 class IndexedDBDatabaseParent;
 struct ObjectStoreInfoGuts;
 
-class IDBDatabase : public IDBWrapperCache,
-                    public nsIOfflineStorage
+class IDBDatabase MOZ_FINAL : public IDBWrapperCache,
+                              public nsIOfflineStorage
 {
   friend class AsyncConnectionHelper;
   friend class IndexedDatabaseManager;
@@ -68,7 +68,7 @@ public:
          already_AddRefed<DatabaseInfo> aDatabaseInfo,
          const nsACString& aASCIIOrigin,
          FileManager* aFileManager,
-         mozilla::dom::ContentParent* aContentParent);
+         mozilla::dom::nsIContentParent* aContentParent);
 
   static IDBDatabase*
   FromStorage(nsIOfflineStorage* aStorage);
@@ -153,7 +153,7 @@ public:
     return mActorParent;
   }
 
-  mozilla::dom::ContentParent*
+  mozilla::dom::nsIContentParent*
   GetContentParent() const
   {
     return mContentParent;
@@ -226,13 +226,20 @@ public:
   }
 
   already_AddRefed<IDBRequest>
+  CreateMutableFile(const nsAString& aName, const Optional<nsAString>& aType,
+                    ErrorResult& aRv);
+
+  already_AddRefed<IDBRequest>
   MozCreateFileHandle(const nsAString& aName, const Optional<nsAString>& aType,
-                      ErrorResult& aRv);
+                      ErrorResult& aRv)
+  {
+    return CreateMutableFile(aName, aType, aRv);
+  }
 
   virtual void LastRelease() MOZ_OVERRIDE;
 
 private:
-  IDBDatabase(IDBWrapperCache* aOwnerCache);
+  explicit IDBDatabase(IDBWrapperCache* aOwnerCache);
   ~IDBDatabase();
 
   void OnUnlink();
@@ -258,7 +265,7 @@ private:
   IndexedDBDatabaseChild* mActorChild;
   IndexedDBDatabaseParent* mActorParent;
 
-  mozilla::dom::ContentParent* mContentParent;
+  mozilla::dom::nsIContentParent* mContentParent;
 
   nsRefPtr<mozilla::dom::quota::Client> mQuotaClient;
 

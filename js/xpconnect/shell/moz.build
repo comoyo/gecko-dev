@@ -6,7 +6,7 @@
 
 FAIL_ON_WARNINGS = True
 
-PROGRAM = 'xpcshell'
+Program('xpcshell')
 
 SOURCES += [
     'xpcshell.cpp',
@@ -16,8 +16,6 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     SOURCES += [
         'xpcshellMacUtils.mm',
     ]
-
-DEFINES['JS_THREADSAFE'] = True
 
 if CONFIG['MOZ_SHARK']:
     DEFINES['MOZ_SHARK'] = True
@@ -37,3 +35,10 @@ if CONFIG['_MSC_VER']:
 
 if CONFIG['OS_ARCH'] == 'WINNT':
     RCINCLUDE = 'xpcshell.rc'
+
+USE_LIBS += [
+    'mozalloc',
+    'nspr',
+    'xpcomglue_s',
+    'xul',
+]

@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include <map>
 #include <bitset>
+#include <queue>
 
 #ifdef DEBUG
 #include <string.h>
@@ -25,9 +26,10 @@
 #undef GetClassName
 #endif
 
+#include "mozilla/UniquePtr.h"
+
 #include "GLDefs.h"
 #include "GLLibraryLoader.h"
-#include "gfx3DMatrix.h"
 #include "nsISupportsImpl.h"
 #include "plstr.h"
 #include "nsDataHashtable.h"
@@ -40,7 +42,6 @@
 #include "GLContextSymbols.h"
 #include "base/platform_thread.h"       // for PlatformThreadId
 #include "mozilla/GenericRefCounted.h"
-#include "mozilla/Scoped.h"
 #include "gfx2DGlue.h"
 
 class nsIntRegion;
@@ -53,9 +54,8 @@ namespace android {
 
 namespace mozilla {
     namespace gfx {
-        class SourceSurface;
         class DataSourceSurface;
-        struct SurfaceCaps;
+        class SourceSurface;
     }
 
     namespace gl {
@@ -66,7 +66,7 @@ namespace mozilla {
         class GLBlitHelper;
         class GLBlitTextureImageHelper;
         class GLReadTexImageHelper;
-        class SharedSurface_GL;
+        struct SurfaceCaps;
     }
 
     namespace layers {
@@ -80,6 +80,8 @@ namespace gl {
 MOZ_BEGIN_ENUM_CLASS(GLFeature)
     bind_buffer_offset,
     blend_minmax,
+    clear_buffers,
+    copy_buffer,
     depth_texture,
     draw_buffers,
     draw_instanced,
@@ -138,6 +140,7 @@ MOZ_END_ENUM_CLASS(GLVendor)
 MOZ_BEGIN_ENUM_CLASS(GLRenderer)
     Adreno200,
     Adreno205,
+    AdrenoTM200,
     AdrenoTM205,
     AdrenoTM320,
     SGX530,
@@ -145,6 +148,8 @@ MOZ_BEGIN_ENUM_CLASS(GLRenderer)
     Tegra,
     AndroidEmulator,
     GalliumLlvmpipe,
+    IntelHD3000,
+    MicrosoftBasicRenderDriver,
     Other
 MOZ_END_ENUM_CLASS(GLRenderer)
 
@@ -329,85 +334,89 @@ public:
      * in GLContext.cpp.
      */
     enum GLExtensions {
-        EXT_framebuffer_object,
-        ARB_framebuffer_object,
-        ARB_texture_rectangle,
-        EXT_bgra,
-        EXT_texture_format_BGRA8888,
-        OES_depth24,
-        OES_depth32,
-        OES_stencil8,
-        OES_texture_npot,
-        IMG_texture_npot,
-        ARB_depth_texture,
-        OES_depth_texture,
-        OES_packed_depth_stencil,
-        IMG_read_format,
-        EXT_read_format_bgra,
-        APPLE_client_storage,
-        APPLE_texture_range,
-        ARB_texture_non_power_of_two,
-        ARB_pixel_buffer_object,
-        ARB_ES2_compatibility,
-        ARB_ES3_compatibility,
-        OES_texture_float,
-        OES_texture_float_linear,
-        ARB_texture_float,
-        OES_texture_half_float,
-        OES_texture_half_float_linear,
-        NV_half_float,
-        EXT_color_buffer_float,
-        EXT_color_buffer_half_float,
-        ARB_color_buffer_float,
-        EXT_unpack_subimage,
-        OES_standard_derivatives,
-        EXT_texture_filter_anisotropic,
-        EXT_texture_compression_s3tc,
-        EXT_texture_compression_dxt1,
+        Extension_None = 0,
+        AMD_compressed_ATC_texture,
+        ANGLE_depth_texture,
+        ANGLE_framebuffer_blit,
+        ANGLE_framebuffer_multisample,
+        ANGLE_instanced_arrays,
         ANGLE_texture_compression_dxt3,
         ANGLE_texture_compression_dxt5,
-        AMD_compressed_ATC_texture,
-        IMG_texture_compression_pvrtc,
-        EXT_framebuffer_blit,
-        ANGLE_framebuffer_blit,
-        EXT_framebuffer_multisample,
-        ANGLE_framebuffer_multisample,
-        OES_rgb8_rgba8,
-        ARB_robustness,
-        EXT_robustness,
-        ARB_sync,
-        OES_EGL_image,
-        OES_EGL_sync,
-        OES_EGL_image_external,
-        EXT_packed_depth_stencil,
-        OES_element_index_uint,
-        OES_vertex_array_object,
-        ARB_vertex_array_object,
+        APPLE_client_storage,
+        APPLE_texture_range,
         APPLE_vertex_array_object,
+        ARB_ES2_compatibility,
+        ARB_ES3_compatibility,
+        ARB_color_buffer_float,
+        ARB_copy_buffer,
+        ARB_depth_texture,
         ARB_draw_buffers,
-        EXT_draw_buffers,
-        EXT_gpu_shader4,
-        EXT_blend_minmax,
         ARB_draw_instanced,
-        EXT_draw_instanced,
-        NV_draw_instanced,
-        ARB_instanced_arrays,
-        NV_instanced_arrays,
-        ANGLE_instanced_arrays,
-        EXT_occlusion_query_boolean,
-        ARB_occlusion_query2,
-        EXT_transform_feedback,
-        NV_transform_feedback,
-        ANGLE_depth_texture,
-        EXT_sRGB,
-        EXT_texture_sRGB,
+        ARB_framebuffer_object,
         ARB_framebuffer_sRGB,
-        EXT_framebuffer_sRGB,
-        KHR_debug,
         ARB_half_float_pixel,
-        EXT_frag_depth,
-        OES_compressed_ETC1_RGB8_texture,
+        ARB_instanced_arrays,
+        ARB_occlusion_query2,
+        ARB_pixel_buffer_object,
+        ARB_robustness,
+        ARB_sync,
+        ARB_texture_float,
+        ARB_texture_non_power_of_two,
+        ARB_texture_rectangle,
+        ARB_vertex_array_object,
+        EXT_bgra,
+        EXT_blend_minmax,
+        EXT_color_buffer_float,
+        EXT_color_buffer_half_float,
+        EXT_draw_buffers,
+        EXT_draw_instanced,
         EXT_draw_range_elements,
+        EXT_frag_depth,
+        EXT_framebuffer_blit,
+        EXT_framebuffer_multisample,
+        EXT_framebuffer_object,
+        EXT_framebuffer_sRGB,
+        EXT_gpu_shader4,
+        EXT_occlusion_query_boolean,
+        EXT_packed_depth_stencil,
+        EXT_read_format_bgra,
+        EXT_robustness,
+        EXT_sRGB,
+        EXT_shader_texture_lod,
+        EXT_texture_compression_dxt1,
+        EXT_texture_compression_s3tc,
+        EXT_texture_filter_anisotropic,
+        EXT_texture_format_BGRA8888,
+        EXT_texture_sRGB,
+        EXT_transform_feedback,
+        EXT_unpack_subimage,
+        IMG_read_format,
+        IMG_texture_compression_pvrtc,
+        IMG_texture_npot,
+        KHR_debug,
+        NV_draw_instanced,
+        NV_fence,
+        NV_half_float,
+        NV_instanced_arrays,
+        NV_transform_feedback,
+        OES_EGL_image,
+        OES_EGL_image_external,
+        OES_EGL_sync,
+        OES_compressed_ETC1_RGB8_texture,
+        OES_depth24,
+        OES_depth32,
+        OES_depth_texture,
+        OES_element_index_uint,
+        OES_packed_depth_stencil,
+        OES_rgb8_rgba8,
+        OES_standard_derivatives,
+        OES_stencil8,
+        OES_texture_float,
+        OES_texture_float_linear,
+        OES_texture_half_float,
+        OES_texture_half_float_linear,
+        OES_texture_npot,
+        OES_vertex_array_object,
         Extensions_Max,
         Extensions_End
     };
@@ -492,10 +501,14 @@ private:
      */
     void MarkUnsupported(GLFeature feature);
 
+    /**
+     * Is this feature supported using the core (unsuffixed) symbols?
+     */
+    bool IsFeatureProvidedByCoreSymbols(GLFeature feature);
+
 // -----------------------------------------------------------------------------
 // Robustness handling
 public:
-
     bool HasRobustness() const {
         return mHasRobustness;
     }
@@ -506,17 +519,13 @@ public:
      */
     virtual bool SupportsRobustness() const = 0;
 
-
 private:
     bool mHasRobustness;
-
 
 // -----------------------------------------------------------------------------
 // Error handling
 public:
-
-    static const char* GLErrorToString(GLenum aError)
-    {
+    static const char* GLErrorToString(GLenum aError) {
         switch (aError) {
             case LOCAL_GL_INVALID_ENUM:
                 return "GL_INVALID_ENUM";
@@ -539,12 +548,10 @@ public:
         }
     }
 
-
     /** \returns the first GL error, and guarantees that all GL error flags are cleared,
      * i.e. that a subsequent GetError call will return NO_ERROR
      */
-    GLenum GetAndClearError()
-    {
+    GLenum GetAndClearError() {
         // the first error is what we want to return
         GLenum error = fGetError();
 
@@ -556,30 +563,99 @@ public:
         return error;
     }
 
-
-    /*** In GL debug mode, we completely override glGetError ***/
-
-    GLenum fGetError()
-    {
-#ifdef DEBUG
-        // debug mode ends up eating the error in AFTER_GL_CALL
-        if (DebugMode()) {
-            GLenum err = mGLError;
-            mGLError = LOCAL_GL_NO_ERROR;
-            return err;
-        }
-#endif // DEBUG
-
+private:
+    GLenum raw_fGetError() {
         return mSymbols.fGetError();
     }
 
+    std::queue<GLenum> mGLErrorQueue;
 
-#ifdef DEBUG
+public:
+    GLenum fGetError() {
+        if (!mGLErrorQueue.empty()) {
+            GLenum err = mGLErrorQueue.front();
+            mGLErrorQueue.pop();
+            return err;
+        }
+
+        return GetUnpushedError();
+    }
+
 private:
+    GLenum GetUnpushedError() {
+        return raw_fGetError();
+    }
 
-    GLenum mGLError;
-#endif // DEBUG
+    void ClearUnpushedErrors() {
+        while (GetUnpushedError()) {
+            // Discard errors.
+        }
+    }
 
+    GLenum GetAndClearUnpushedErrors() {
+        GLenum err = GetUnpushedError();
+        if (err) {
+            ClearUnpushedErrors();
+        }
+        return err;
+    }
+
+    void PushError(GLenum err) {
+        mGLErrorQueue.push(err);
+    }
+
+    void GetAndPushAllErrors() {
+        while (true) {
+            GLenum err = GetUnpushedError();
+            if (!err)
+                break;
+
+            PushError(err);
+        }
+    }
+
+    ////////////////////////////////////
+    // Use this safer option.
+private:
+#ifdef DEBUG
+    bool mIsInLocalErrorCheck;
+#endif
+
+public:
+    class ScopedLocalErrorCheck {
+        GLContext* const mGL;
+        bool mHasBeenChecked;
+
+    public:
+        explicit ScopedLocalErrorCheck(GLContext* gl)
+            : mGL(gl)
+            , mHasBeenChecked(false)
+        {
+#ifdef DEBUG
+            MOZ_ASSERT(!mGL->mIsInLocalErrorCheck);
+            mGL->mIsInLocalErrorCheck = true;
+#endif
+            mGL->GetAndPushAllErrors();
+        }
+
+        GLenum GetLocalError() {
+#ifdef DEBUG
+            MOZ_ASSERT(mGL->mIsInLocalErrorCheck);
+            mGL->mIsInLocalErrorCheck = false;
+#endif
+
+            MOZ_ASSERT(!mHasBeenChecked);
+            mHasBeenChecked = true;
+
+            return mGL->GetAndClearUnpushedErrors();
+        }
+
+        ~ScopedLocalErrorCheck() {
+            MOZ_ASSERT(mHasBeenChecked);
+        }
+    };
+
+private:
     static void GLAPIENTRY StaticDebugCallback(GLenum source,
                                                GLenum type,
                                                GLuint id,
@@ -614,8 +690,7 @@ private:
 # endif
 #endif
 
-    void BeforeGLCall(const char* glFunction)
-    {
+    void BeforeGLCall(const char* glFunction) {
         MOZ_ASSERT(IsCurrent());
         if (DebugMode()) {
             GLContext *currentGLContext = nullptr;
@@ -633,21 +708,23 @@ private:
         }
     }
 
-    void AfterGLCall(const char* glFunction)
-    {
+    void AfterGLCall(const char* glFunction) {
         if (DebugMode()) {
             // calling fFinish() immediately after every GL call makes sure that if this GL command crashes,
             // the stack trace will actually point to it. Otherwise, OpenGL being an asynchronous API, stack traces
             // tend to be meaningless
             mSymbols.fFinish();
-            mGLError = mSymbols.fGetError();
+            GLenum err = GetUnpushedError();
+            PushError(err);
+
             if (DebugMode() & DebugTrace)
-                printf_stderr("[gl:%p] < %s [0x%04x]\n", this, glFunction, mGLError);
-            if (mGLError != LOCAL_GL_NO_ERROR) {
+                printf_stderr("[gl:%p] < %s [0x%04x]\n", this, glFunction, err);
+
+            if (err != LOCAL_GL_NO_ERROR) {
                 printf_stderr("GL ERROR: %s generated GL error %s(0x%04x)\n",
                               glFunction,
-                              GLErrorToString(mGLError),
-                              mGLError);
+                              GLErrorToString(err),
+                              err);
                 if (DebugMode() & DebugAbortOnError)
                     NS_ABORT();
             }
@@ -708,8 +785,10 @@ private:
     // if it's bound.
     void AfterGLDrawCall()
     {
-        if (mScreen)
+        if (mScreen) {
             mScreen->AfterDrawCall();
+        }
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     // Do whatever setup is necessary to read from our offscreen FBO, if it's
@@ -830,6 +909,7 @@ private:
         BEFORE_GL_CALL;
         mSymbols.fBufferData(target, size, data, usage);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
 public:
@@ -841,9 +921,9 @@ public:
             !data &&
             Vendor() == GLVendor::NVIDIA)
         {
-            ScopedDeleteArray<char> buf(new char[1]);
+            UniquePtr<char[]> buf = MakeUnique<char[]>(1);
             buf[0] = 0;
-            fBufferSubData(target, size-1, 1, buf);
+            fBufferSubData(target, size-1, 1, buf.get());
         }
     }
 
@@ -852,6 +932,7 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fBufferSubData(target, offset, size, data);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
 private:
@@ -866,6 +947,30 @@ public:
         BeforeGLDrawCall();
         raw_fClear(mask);
         AfterGLDrawCall();
+    }
+
+    void fClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+        BEFORE_GL_CALL;
+        mSymbols.fClearBufferfi(buffer, drawbuffer, depth, stencil);
+        AFTER_GL_CALL;
+    }
+
+    void fClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+        BEFORE_GL_CALL;
+        mSymbols.fClearBufferfv(buffer, drawbuffer, value);
+        AFTER_GL_CALL;
+    }
+
+    void fClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
+        BEFORE_GL_CALL;
+        mSymbols.fClearBufferiv(buffer, drawbuffer, value);
+        AFTER_GL_CALL;
+    }
+
+    void fClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
+        BEFORE_GL_CALL;
+        mSymbols.fClearBufferuiv(buffer, drawbuffer, value);
+        AFTER_GL_CALL;
     }
 
     void fClearColor(GLclampf r, GLclampf g, GLclampf b, GLclampf a) {
@@ -897,6 +1002,7 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fCompressedTexImage2D(target, level, internalformat, width, height, border, imageSize, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     void fCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const GLvoid *pixels) {
@@ -904,6 +1010,7 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fCompressedTexSubImage2D(target, level, xoffset, yoffset, width, height, format, imageSize, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     void fCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
@@ -1053,12 +1160,14 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fFinish();
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = false;
     }
 
     void fFlush() {
         BEFORE_GL_CALL;
         mSymbols.fFlush();
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = false;
     }
 
     void fFrontFace(GLenum face) {
@@ -1450,6 +1559,7 @@ private:
         BEFORE_GL_CALL;
         mSymbols.fReadPixels(x, y, width, height, format, type, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
 public:
@@ -1552,6 +1662,7 @@ private:
         BEFORE_GL_CALL;
         mSymbols.fTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
 public:
@@ -1572,6 +1683,7 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     void fUniform1f(GLint location, GLfloat v0) {
@@ -2189,6 +2301,7 @@ public:
         ASSERT_SYMBOL_PRESENT(fEGLImageTargetTexture2D);
         mSymbols.fEGLImageTargetTexture2D(target, image);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     void fEGLImageTargetRenderbufferStorage(GLenum target, GLeglImage image)
@@ -2492,18 +2605,86 @@ public:
         return ret;
     }
 
+// -----------------------------------------------------------------------------
+// Extension NV_fence
+public:
+    void fGenFences(GLsizei n, GLuint* fences)
+    {
+        ASSERT_SYMBOL_PRESENT(fGenFences);
+        BEFORE_GL_CALL;
+        mSymbols.fGenFences(n, fences);
+        AFTER_GL_CALL;
+    }
+
+    void fDeleteFences(GLsizei n, const GLuint* fences)
+    {
+        ASSERT_SYMBOL_PRESENT(fDeleteFences);
+        BEFORE_GL_CALL;
+        mSymbols.fDeleteFences(n, fences);
+        AFTER_GL_CALL;
+    }
+
+    void fSetFence(GLuint fence, GLenum condition)
+    {
+        ASSERT_SYMBOL_PRESENT(fSetFence);
+        BEFORE_GL_CALL;
+        mSymbols.fSetFence(fence, condition);
+        AFTER_GL_CALL;
+    }
+
+    realGLboolean fTestFence(GLuint fence)
+    {
+        ASSERT_SYMBOL_PRESENT(fTestFence);
+        BEFORE_GL_CALL;
+        realGLboolean ret = mSymbols.fTestFence(fence);
+        AFTER_GL_CALL;
+        return ret;
+    }
+
+    void fFinishFence(GLuint fence)
+    {
+        ASSERT_SYMBOL_PRESENT(fFinishFence);
+        BEFORE_GL_CALL;
+        mSymbols.fFinishFence(fence);
+        AFTER_GL_CALL;
+    }
+
+    realGLboolean fIsFence(GLuint fence)
+    {
+        ASSERT_SYMBOL_PRESENT(fIsFence);
+        BEFORE_GL_CALL;
+        realGLboolean ret = mSymbols.fIsFence(fence);
+        AFTER_GL_CALL;
+        return ret;
+    }
+
+    void fGetFenceiv(GLuint fence, GLenum pname, GLint* params)
+    {
+        ASSERT_SYMBOL_PRESENT(fGetFenceiv);
+        BEFORE_GL_CALL;
+        mSymbols.fGetFenceiv(fence, pname, params);
+        AFTER_GL_CALL;
+    }
+
+// Core GL & Extension ARB_copy_buffer
+public:
+    void fCopyBufferSubData(GLenum readtarget, GLenum writetarget,
+                            GLintptr readoffset, GLintptr writeoffset,
+                            GLsizeiptr size)
+    {
+        BEFORE_GL_CALL;
+        ASSERT_SYMBOL_PRESENT(fCopyBufferSubData);
+        mSymbols.fCopyBufferSubData(readtarget, writetarget, readoffset, writeoffset, size);
+        AFTER_GL_CALL;
+    }
+
 
 // -----------------------------------------------------------------------------
 // Constructor
-public:
-
-    typedef struct gfx::SurfaceCaps SurfaceCaps;
-
-
 protected:
-    GLContext(const SurfaceCaps& caps,
-              GLContext* sharedContext = nullptr,
-              bool isOffscreen = false);
+    explicit GLContext(const SurfaceCaps& caps,
+                       GLContext* sharedContext = nullptr,
+                       bool isOffscreen = false);
 
 
 // -----------------------------------------------------------------------------
@@ -2511,12 +2692,13 @@ protected:
 public:
     virtual ~GLContext();
 
+    // Mark this context as destroyed.  This will nullptr out all
+    // the GL function pointers!
+    void MarkDestroyed();
 
 // -----------------------------------------------------------------------------
 // Everything that isn't standard GL APIs
 protected:
-    typedef class gfx::SharedSurface SharedSurface;
-    typedef gfx::SharedSurfaceType SharedSurfaceType;
     typedef gfx::SurfaceFormat SurfaceFormat;
 
     virtual bool MakeCurrentImpl(bool aForce) = 0;
@@ -2554,10 +2736,6 @@ public:
     virtual bool SetupLookupFunction() = 0;
 
     virtual void ReleaseSurface() {}
-
-    // Mark this context as destroyed.  This will nullptr out all
-    // the GL function pointers!
-    void MarkDestroyed();
 
     bool IsDestroyed() {
         // MarkDestroyed will mark all these as null.
@@ -2700,7 +2878,7 @@ public:
     GLint GetMaxTextureImageSize() { return mMaxTextureImageSize; }
 
 public:
-    std::map<GLuint, SharedSurface_GL*> mFBOMapping;
+    std::map<GLuint, SharedSurface*> mFBOMapping;
 
     enum {
         DebugEnabled = 1 << 0,
@@ -2735,9 +2913,9 @@ protected:
     static unsigned sCurrentGLContextTLS;
 #endif
 
-    ScopedDeletePtr<GLBlitHelper> mBlitHelper;
-    ScopedDeletePtr<GLBlitTextureImageHelper> mBlitTextureImageHelper;
-    ScopedDeletePtr<GLReadTexImageHelper> mReadTexImageHelper;
+    UniquePtr<GLBlitHelper> mBlitHelper;
+    UniquePtr<GLBlitTextureImageHelper> mBlitTextureImageHelper;
+    UniquePtr<GLReadTexImageHelper> mReadTexImageHelper;
 
 public:
     GLBlitHelper* BlitHelper();
@@ -2769,7 +2947,7 @@ public:
         fScissor(0, 0, size.width, size.height);
         fViewport(0, 0, size.width, size.height);
 
-        mCaps = mScreen->Caps();
+        mCaps = mScreen->mCaps;
         if (mCaps.any)
             DetermineCaps();
 
@@ -2856,24 +3034,24 @@ public:
 
 protected:
     friend class GLScreenBuffer;
-    GLScreenBuffer* mScreen;
+    UniquePtr<GLScreenBuffer> mScreen;
 
     void DestroyScreenBuffer();
 
-    SharedSurface_GL* mLockedSurface;
+    SharedSurface* mLockedSurface;
 
 public:
-    void LockSurface(SharedSurface_GL* surf) {
+    void LockSurface(SharedSurface* surf) {
         MOZ_ASSERT(!mLockedSurface);
         mLockedSurface = surf;
     }
 
-    void UnlockSurface(SharedSurface_GL* surf) {
+    void UnlockSurface(SharedSurface* surf) {
         MOZ_ASSERT(mLockedSurface == surf);
         mLockedSurface = nullptr;
     }
 
-    SharedSurface_GL* GetLockedSurface() const {
+    SharedSurface* GetLockedSurface() const {
         return mLockedSurface;
     }
 
@@ -2882,11 +3060,11 @@ public:
     }
 
     GLScreenBuffer* Screen() const {
-        return mScreen;
+        return mScreen.get();
     }
 
     bool PublishFrame();
-    SharedSurface_GL* RequestFrame();
+    SharedSurface* RequestFrame();
 
     /* Clear to transparent black, with 0 depth and stencil,
      * while preserving current ClearColor etc. values.
@@ -2921,6 +3099,7 @@ protected:
     GLint mMaxCubeMapTextureSize;
     GLint mMaxTextureImageSize;
     GLint mMaxRenderbufferSize;
+    GLint mMaxViewportDims[2];
     GLsizei mMaxSamples;
     bool mNeedsTextureSizeChecks;
     bool mWorkAroundDriverBugs;
@@ -3020,6 +3199,13 @@ public:
     nsTArray<NamedResource> mTrackedBuffers;
     nsTArray<NamedResource> mTrackedQueries;
 #endif
+
+
+protected:
+    bool mHeavyGLCallsSinceLastFlush;
+
+public:
+    void FlushIfHeavyGLCallsSinceLastFlush();
 };
 
 bool DoesStringMatch(const char* aString, const char *aWantedString);

@@ -35,16 +35,17 @@
 using namespace js;
 using namespace js::irregexp;
 
+template <typename CharT>
 int
-irregexp::CaseInsensitiveCompareStrings(const jschar *substring1, const jschar *substring2,
+irregexp::CaseInsensitiveCompareStrings(const CharT *substring1, const CharT *substring2,
 					size_t byteLength)
 {
-    JS_ASSERT(byteLength % 2 == 0);
-    size_t length = byteLength >> 1;
+    JS_ASSERT(byteLength % sizeof(CharT) == 0);
+    size_t length = byteLength / sizeof(CharT);
 
     for (size_t i = 0; i < length; i++) {
-        jschar c1 = substring1[i];
-        jschar c2 = substring2[i];
+        char16_t c1 = substring1[i];
+        char16_t c2 = substring2[i];
         if (c1 != c2) {
             c1 = unicode::ToLowerCase(c1);
             c2 = unicode::ToLowerCase(c2);
@@ -55,6 +56,14 @@ irregexp::CaseInsensitiveCompareStrings(const jschar *substring1, const jschar *
 
     return 1;
 }
+
+template int
+irregexp::CaseInsensitiveCompareStrings(const Latin1Char *substring1, const Latin1Char *substring2,
+					size_t byteLength);
+
+template int
+irregexp::CaseInsensitiveCompareStrings(const char16_t *substring1, const char16_t *substring2,
+					size_t byteLength);
 
 InterpretedRegExpMacroAssembler::InterpretedRegExpMacroAssembler(LifoAlloc *alloc, RegExpShared *shared,
                                                                  size_t numSavedRegisters)
@@ -76,7 +85,7 @@ InterpretedRegExpMacroAssembler::~InterpretedRegExpMacroAssembler()
 }
 
 RegExpCode
-InterpretedRegExpMacroAssembler::GenerateCode(JSContext *cx)
+InterpretedRegExpMacroAssembler::GenerateCode(JSContext *cx, bool match_only)
 {
     Bind(&backtrack_);
     Emit(BC_POP_BT, 0);
@@ -164,14 +173,14 @@ InterpretedRegExpMacroAssembler::CheckCharacterAfterAnd(unsigned c, unsigned and
 }
 
 void
-InterpretedRegExpMacroAssembler::CheckCharacterGT(jschar limit, jit::Label* on_greater)
+InterpretedRegExpMacroAssembler::CheckCharacterGT(char16_t limit, jit::Label* on_greater)
 {
     Emit(BC_CHECK_GT, limit);
     EmitOrLink(on_greater);
 }
 
 void
-InterpretedRegExpMacroAssembler::CheckCharacterLT(jschar limit, jit::Label* on_less)
+InterpretedRegExpMacroAssembler::CheckCharacterLT(char16_t limit, jit::Label* on_less)
 {
     Emit(BC_CHECK_LT, limit);
     EmitOrLink(on_less);
@@ -236,7 +245,7 @@ InterpretedRegExpMacroAssembler::CheckNotCharacterAfterAnd(unsigned c, unsigned 
 }
 
 void
-InterpretedRegExpMacroAssembler::CheckNotCharacterAfterMinusAnd(jschar c, jschar minus, jschar and_with,
+InterpretedRegExpMacroAssembler::CheckNotCharacterAfterMinusAnd(char16_t c, char16_t minus, char16_t and_with,
                                                                 jit::Label* on_not_equal)
 {
     Emit(BC_MINUS_AND_CHECK_NOT_CHAR, c);
@@ -246,7 +255,7 @@ InterpretedRegExpMacroAssembler::CheckNotCharacterAfterMinusAnd(jschar c, jschar
 }
 
 void
-InterpretedRegExpMacroAssembler::CheckCharacterInRange(jschar from, jschar to,
+InterpretedRegExpMacroAssembler::CheckCharacterInRange(char16_t from, char16_t to,
                                                        jit::Label* on_in_range)
 {
     Emit(BC_CHECK_CHAR_IN_RANGE, 0);
@@ -256,7 +265,7 @@ InterpretedRegExpMacroAssembler::CheckCharacterInRange(jschar from, jschar to,
 }
 
 void
-InterpretedRegExpMacroAssembler::CheckCharacterNotInRange(jschar from, jschar to,
+InterpretedRegExpMacroAssembler::CheckCharacterNotInRange(char16_t from, char16_t to,
                                                           jit::Label* on_not_in_range)
 {
     Emit(BC_CHECK_CHAR_NOT_IN_RANGE, 0);

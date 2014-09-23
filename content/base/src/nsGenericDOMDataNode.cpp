@@ -24,7 +24,6 @@
 #include "nsIDOMText.h"
 #include "nsCOMPtr.h"
 #include "nsDOMString.h"
-#include "nsIDOMUserDataHandler.h"
 #include "nsChangeHint.h"
 #include "nsCOMArray.h"
 #include "nsNodeUtils.h"
@@ -40,7 +39,7 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 
-nsGenericDOMDataNode::nsGenericDOMDataNode(already_AddRefed<nsINodeInfo>& aNodeInfo)
+nsGenericDOMDataNode::nsGenericDOMDataNode(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : nsIContent(aNodeInfo)
 {
   NS_ABORT_IF_FALSE(mNodeInfo->NodeType() == nsIDOMNode::TEXT_NODE ||
@@ -52,7 +51,7 @@ nsGenericDOMDataNode::nsGenericDOMDataNode(already_AddRefed<nsINodeInfo>& aNodeI
                     "Bad NodeType in aNodeInfo");
 }
 
-nsGenericDOMDataNode::nsGenericDOMDataNode(already_AddRefed<nsINodeInfo>&& aNodeInfo)
+nsGenericDOMDataNode::nsGenericDOMDataNode(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo)
   : nsIContent(aNodeInfo)
 {
   NS_ABORT_IF_FALSE(mNodeInfo->NodeType() == nsIDOMNode::TEXT_NODE ||
@@ -89,7 +88,16 @@ NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_BEGIN(nsGenericDOMDataNode)
   return Element::CanSkipThis(tmp);
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_END
 
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsGenericDOMDataNode)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGenericDOMDataNode)
+  if (MOZ_UNLIKELY(cb.WantDebugInfo())) {
+    char name[40];
+    PR_snprintf(name, sizeof(name), "nsGenericDOMDataNode (len=%d)",
+                tmp->mText.GetLength());
+    cb.DescribeRefCountedNode(tmp->mRefCnt.get(), name);
+  } else {
+    NS_IMPL_CYCLE_COLLECTION_DESCRIBE(nsGenericDOMDataNode, tmp->mRefCnt.get())
+  }
+
   // Always need to traverse script objects, so do that before we check
   // if we're uncollectable.
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
@@ -313,9 +321,9 @@ nsGenericDOMDataNode::SetTextInternal(uint32_t aOffset, uint32_t aCount,
     nsNodeUtils::CharacterDataWillChange(this, &info);
   }
 
-  if (NodeType() == nsIDOMNode::TEXT_NODE) {
-    SetDirectionFromChangedTextNode(this, aOffset, aBuffer, aLength, aNotify);
-  }
+  Directionality oldDir = eDir_NotSet;
+  bool dirAffectsAncestor = (NodeType() == nsIDOMNode::TEXT_NODE &&
+                             TextNodeWillChangeDirection(this, &oldDir, aOffset));
 
   if (aOffset == 0 && endOffset == textLength) {
     // Replacing whole text or old text was empty.  Don't bother to check for
@@ -360,6 +368,10 @@ nsGenericDOMDataNode::SetTextInternal(uint32_t aOffset, uint32_t aCount,
     // If we found bidi characters in mText.SetTo() above, indicate that the
     // document contains bidi characters.
     document->SetBidiEnabled();
+  }
+
+  if (dirAffectsAncestor) {
+    TextNodeChangedDirection(this, oldDir, aNotify);
   }
 
   // Notify observers
@@ -491,7 +503,7 @@ nsGenericDOMDataNode::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     if (aParent->HasFlag(NODE_CHROME_ONLY_ACCESS)) {
       SetFlags(NODE_CHROME_ONLY_ACCESS);
     }
-    if (aParent->HasFlag(NODE_IS_IN_SHADOW_TREE)) {
+    if (aParent->IsInShadowTree()) {
       ClearSubtreeRootPointer();
       SetFlags(NODE_IS_IN_SHADOW_TREE);
     }
@@ -528,7 +540,7 @@ nsGenericDOMDataNode::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     }
     // Clear the lazy frame construction bits.
     UnsetFlags(NODE_NEEDS_FRAME | NODE_DESCENDANTS_NEED_FRAMES);
-  } else if (!HasFlag(NODE_IS_IN_SHADOW_TREE)) {
+  } else if (!IsInShadowTree()) {
     // If we're not in the doc and not in a shadow tree,
     // update our subtree pointer.
     SetSubtreeRootPointer(aParent->SubtreeRoot());

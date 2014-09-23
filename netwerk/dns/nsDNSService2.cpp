@@ -57,7 +57,7 @@ public:
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSIDNSRECORD
 
-    nsDNSRecord(nsHostRecord *hostRecord)
+    explicit nsDNSRecord(nsHostRecord *hostRecord)
         : mHostRecord(hostRecord)
         , mIter(nullptr)
         , mIterGenCnt(-1)
@@ -250,6 +250,8 @@ nsDNSRecord::ReportUnusable(uint16_t aPort)
 class nsDNSAsyncRequest MOZ_FINAL : public nsResolveHostCallback
                                   , public nsICancelable
 {
+    ~nsDNSAsyncRequest() {}
+
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSICANCELABLE
@@ -264,7 +266,6 @@ public:
         , mListener(listener)
         , mFlags(flags)
         , mAF(af) {}
-    ~nsDNSAsyncRequest() {}
 
     void OnLookupComplete(nsHostResolver *, nsHostRecord *, nsresult);
     // Returns TRUE if the DNS listener arg is the same as the member listener
@@ -310,6 +311,12 @@ nsDNSAsyncRequest::OnLookupComplete(nsHostResolver *resolver,
 bool
 nsDNSAsyncRequest::EqualsAsyncListener(nsIDNSListener *aListener)
 {
+    nsCOMPtr<nsIDNSListenerProxy> wrapper = do_QueryInterface(mListener);
+    if (wrapper) {
+        nsCOMPtr<nsIDNSListener> originalListener;
+        wrapper->GetOriginalListener(getter_AddRefs(originalListener));
+        return aListener == originalListener;
+    }
     return (aListener == mListener);
 }
 
@@ -341,7 +348,7 @@ nsDNSAsyncRequest::Cancel(nsresult reason)
 class nsDNSSyncRequest : public nsResolveHostCallback
 {
 public:
-    nsDNSSyncRequest(PRMonitor *mon)
+    explicit nsDNSSyncRequest(PRMonitor *mon)
         : mDone(false)
         , mStatus(NS_OK)
         , mMonitor(mon) {}
@@ -482,8 +489,8 @@ nsDNSService::Init()
 
     // prefs
     uint32_t maxCacheEntries  = 400;
-    uint32_t maxCacheLifetime = 120; // seconds
-    uint32_t lifetimeGracePeriod = 60; // seconds
+    uint32_t defaultCacheLifetime = 120; // seconds
+    uint32_t defaultGracePeriod = 60; // seconds
     bool     disableIPv6      = false;
     bool     disablePrefetch  = false;
     int      proxyType        = nsIProtocolProxyService::PROXYCONFIG_DIRECT;
@@ -499,9 +506,9 @@ nsDNSService::Init()
         if (NS_SUCCEEDED(prefs->GetIntPref(kPrefDnsCacheEntries, &val)))
             maxCacheEntries = (uint32_t) val;
         if (NS_SUCCEEDED(prefs->GetIntPref(kPrefDnsCacheExpiration, &val)))
-            maxCacheLifetime = val;
+            defaultCacheLifetime = val;
         if (NS_SUCCEEDED(prefs->GetIntPref(kPrefDnsCacheGrace, &val)))
-            lifetimeGracePeriod = val;
+            defaultGracePeriod = val;
 
         // ASSUMPTION: pref branch does not modify out params on failure
         prefs->GetBoolPref(kPrefDisableIPv6, &disableIPv6);
@@ -555,8 +562,8 @@ nsDNSService::Init()
 
     nsRefPtr<nsHostResolver> res;
     nsresult rv = nsHostResolver::Create(maxCacheEntries,
-                                         maxCacheLifetime,
-                                         lifetimeGracePeriod,
+                                         defaultCacheLifetime,
+                                         defaultGracePeriod,
                                          getter_AddRefs(res));
     if (NS_SUCCEEDED(rv)) {
         // now, set all of our member variables while holding the lock
@@ -675,15 +682,20 @@ nsDNSService::AsyncResolve(const nsACString  &hostname,
 
     const nsACString *hostPtr = &hostname;
 
+    nsAutoCString strLocalhost(NS_LITERAL_CSTRING("localhost"));
     if (localDomain) {
-        hostPtr = &(NS_LITERAL_CSTRING("localhost"));
+        hostPtr = &strLocalhost;
     }
 
     nsresult rv;
     nsAutoCString hostACE;
     if (idn && !IsASCII(*hostPtr)) {
-        if (NS_SUCCEEDED(idn->ConvertUTF8toACE(*hostPtr, hostACE)))
+        if (IsUTF8(*hostPtr) &&
+            NS_SUCCEEDED(idn->ConvertUTF8toACE(*hostPtr, hostACE))) {
             hostPtr = &hostACE;
+        } else {
+            return NS_ERROR_FAILURE;
+        }
     }
 
     // make sure JS callers get notification on the main thread
@@ -745,8 +757,12 @@ nsDNSService::CancelAsyncResolve(const nsACString  &aHostname,
 
     nsAutoCString hostACE;
     if (idn && !IsASCII(aHostname)) {
-        if (NS_SUCCEEDED(idn->ConvertUTF8toACE(aHostname, hostACE)))
+        if (IsUTF8(aHostname) &&
+            NS_SUCCEEDED(idn->ConvertUTF8toACE(aHostname, hostACE))) {
             hostname = hostACE;
+        } else {
+            return NS_ERROR_FAILURE;
+        }
     }
 
     uint16_t af = GetAFForLookup(hostname, aFlags);
@@ -784,15 +800,20 @@ nsDNSService::Resolve(const nsACString &hostname,
 
     const nsACString *hostPtr = &hostname;
 
+    nsAutoCString strLocalhost(NS_LITERAL_CSTRING("localhost"));
     if (localDomain) {
-        hostPtr = &(NS_LITERAL_CSTRING("localhost"));
+        hostPtr = &strLocalhost;
     }
 
     nsresult rv;
     nsAutoCString hostACE;
     if (idn && !IsASCII(*hostPtr)) {
-        if (NS_SUCCEEDED(idn->ConvertUTF8toACE(*hostPtr, hostACE)))
+        if (IsUTF8(*hostPtr) &&
+            NS_SUCCEEDED(idn->ConvertUTF8toACE(*hostPtr, hostACE))) {
             hostPtr = &hostACE;
+        } else {
+            return NS_ERROR_FAILURE;
+        }
     }
 
     //
@@ -936,13 +957,6 @@ nsDNSService::GetDNSCacheEntries(nsTArray<mozilla::net::DNSCacheEntries> *args)
     return NS_OK;
 }
 
-static size_t
-SizeOfLocalDomainsEntryExcludingThis(nsCStringHashKey* entry,
-                                     MallocSizeOf mallocSizeOf, void*)
-{
-    return entry->GetKey().SizeOfExcludingThisMustBeUnshared(mallocSizeOf);
-}
-
 size_t
 nsDNSService::SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const
 {
@@ -954,8 +968,7 @@ nsDNSService::SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const
     size_t n = mallocSizeOf(this);
     n += mResolver->SizeOfIncludingThis(mallocSizeOf);
     n += mIPv4OnlyDomains.SizeOfExcludingThisMustBeUnshared(mallocSizeOf);
-    n += mLocalDomains.SizeOfExcludingThis(SizeOfLocalDomainsEntryExcludingThis,
-                                           mallocSizeOf);
+    n += mLocalDomains.SizeOfExcludingThis(mallocSizeOf);
     return n;
 }
 
@@ -963,7 +976,7 @@ MOZ_DEFINE_MALLOC_SIZE_OF(DNSServiceMallocSizeOf)
 
 NS_IMETHODIMP
 nsDNSService::CollectReports(nsIHandleReportCallback* aHandleReport,
-                             nsISupports* aData)
+                             nsISupports* aData, bool aAnonymize)
 {
     return MOZ_COLLECT_REPORT(
         "explicit/network/dns-service", KIND_HEAP, UNITS_BYTES,

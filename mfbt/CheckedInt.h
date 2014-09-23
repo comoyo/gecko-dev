@@ -447,7 +447,7 @@ struct NegateImpl<T, true>
  * (aX+aY)/aZ, that doesn't crash if aZ==0, and that reports on error (divide by
  * zero or integer overflow). You could code it as follows:
    @code
-   bool computeXPlusYOverZ(int aX, int aY, int aZ, int *aResult)
+   bool computeXPlusYOverZ(int aX, int aY, int aZ, int* aResult)
    {
      CheckedInt<int> checkedResult = (CheckedInt<int>(aX) + aY) / aZ;
      if (checkedResult.isValid()) {
@@ -672,7 +672,7 @@ private:
 #define MOZ_CHECKEDINT_BASIC_BINARY_OPERATOR(NAME, OP)                        \
   template<typename T>                                                        \
   inline CheckedInt<T>                                                        \
-  operator OP(const CheckedInt<T> &aLhs, const CheckedInt<T> &aRhs)           \
+  operator OP(const CheckedInt<T>& aLhs, const CheckedInt<T>& aRhs)           \
   {                                                                           \
     if (!detail::Is##NAME##Valid(aLhs.mValue, aRhs.mValue)) {                 \
       return CheckedInt<T>(0, false);                                         \
@@ -732,12 +732,12 @@ castToCheckedInt(U aU)
     return *this;                                                             \
   }                                                                           \
   template<typename T, typename U>                                            \
-  inline CheckedInt<T> operator OP(const CheckedInt<T> &aLhs, U aRhs)         \
+  inline CheckedInt<T> operator OP(const CheckedInt<T>& aLhs, U aRhs)         \
   {                                                                           \
     return aLhs OP castToCheckedInt<T>(aRhs);                                 \
   }                                                                           \
   template<typename T, typename U>                                            \
-  inline CheckedInt<T> operator OP(U aLhs, const CheckedInt<T> &aRhs)         \
+  inline CheckedInt<T> operator OP(U aLhs, const CheckedInt<T>& aRhs)         \
   {                                                                           \
     return castToCheckedInt<T>(aLhs) OP aRhs;                                 \
   }
@@ -752,14 +752,14 @@ MOZ_CHECKEDINT_CONVENIENCE_BINARY_OPERATORS(%, %=)
 
 template<typename T, typename U>
 inline bool
-operator ==(const CheckedInt<T> &aLhs, U aRhs)
+operator ==(const CheckedInt<T>& aLhs, U aRhs)
 {
   return aLhs == castToCheckedInt<T>(aRhs);
 }
 
 template<typename T, typename U>
 inline bool
-operator ==(U aLhs, const CheckedInt<T> &aRhs)
+operator ==(U aLhs, const CheckedInt<T>& aRhs)
 {
   return castToCheckedInt<T>(aLhs) == aRhs;
 }

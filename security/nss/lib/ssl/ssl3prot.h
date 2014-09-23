@@ -14,6 +14,11 @@ typedef PRUint8 SSL3Opaque;
 typedef PRUint16 SSL3ProtocolVersion;
 /* version numbers are defined in sslproto.h */
 
+/* The TLS 1.3 draft version. Used to avoid negotiating
+ * between incompatible pre-standard TLS 1.3 drafts.
+ * TODO(ekr@rtfm.com): Remove when TLS 1.3 is published. */
+#define TLS_1_3_DRAFT_VERSION  3
+
 typedef PRUint16 ssl3CipherSuite;
 /* The cipher suites are defined in sslproto.h */
 
@@ -98,6 +103,7 @@ typedef enum {
     protocol_version        = 70,
     insufficient_security   = 71,
     internal_error          = 80,
+    inappropriate_fallback  = 86,	/* could also be sent for SSLv3 */
     user_canceled           = 90,
     no_renegotiation        = 100,
 
@@ -106,7 +112,8 @@ typedef enum {
     certificate_unobtainable        = 111,
     unrecognized_name               = 112,
     bad_certificate_status_response = 113,
-    bad_certificate_hash_value      = 114
+    bad_certificate_hash_value      = 114,
+    no_application_protocol         = 120
 
 } SSL3AlertDescription;
 

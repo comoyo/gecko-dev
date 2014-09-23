@@ -18,7 +18,7 @@ class TelephonyIPCService;
 class TelephonyChild : public PTelephonyChild
 {
 public:
-  TelephonyChild(TelephonyIPCService* aService);
+  explicit TelephonyChild(TelephonyIPCService* aService);
 
 protected:
   virtual ~TelephonyChild();
@@ -42,7 +42,7 @@ protected:
 
   virtual bool
   RecvNotifyCdmaCallWaiting(const uint32_t& aClientId,
-                            const nsString& aNumber) MOZ_OVERRIDE;
+                            const IPCCdmaWaitingCallData& aData) MOZ_OVERRIDE;
 
   virtual bool
   RecvNotifyConferenceCallStateChanged(const uint16_t& aCallState) MOZ_OVERRIDE;
@@ -80,12 +80,21 @@ protected:
                                const IPCCallStateData& aData) MOZ_OVERRIDE;
 
   virtual bool
-  RecvNotifyDialError(const nsString& aError) MOZ_OVERRIDE;
-
-  virtual bool
-  RecvNotifyDialSuccess(const uint32_t& aCallIndex) MOZ_OVERRIDE;
+  RecvNotifyDialMMI(const nsString& aServiceCode) MOZ_OVERRIDE;
 
 private:
+  bool
+  DoResponse(const DialResponseError& aResponse);
+
+  bool
+  DoResponse(const DialResponseCallSuccess& aResponse);
+
+  bool
+  DoResponse(const DialResponseMMISuccess& aResponse);
+
+  bool
+  DoResponse(const DialResponseMMIError& aResponse);
+
   nsCOMPtr<nsITelephonyListener> mListener;
   nsCOMPtr<nsITelephonyCallback> mCallback;
 };

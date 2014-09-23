@@ -58,12 +58,13 @@ this.TabCrashReporter = {
     if (!dumpID)
       return
 
-    if (CrashSubmit.submit(dumpID)) {
+    if (CrashSubmit.submit(dumpID, { recordSubmission: true })) {
       this.childMap.set(childID, null); // Avoid resubmission.
+      this.removeSubmitCheckboxesForSameCrash(childID);
     }
   },
 
-  reloadCrashedTabs: function () {
+  removeSubmitCheckboxesForSameCrash: function(childID) {
     let enumerator = Services.wm.getEnumerator("navigator:browser");
     while (enumerator.hasMoreElements()) {
       let window = enumerator.getNext();
@@ -78,11 +79,25 @@ this.TabCrashReporter = {
         if (!doc.documentURI.startsWith("about:tabcrashed"))
           continue;
 
-        let url = browser.currentURI.spec;
-        window.gBrowser.updateBrowserRemoteness(browser, url);
-        browser.loadURIWithFlags(url, Ci.nsIWebNavigation.LOAD_FLAGS_NONE, null, null, null);
+        if (this.browserMap.get(browser) == childID) {
+          this.browserMap.delete(browser);
+          browser.contentDocument.documentElement.classList.remove("crashDumpAvailable");
+        }
       }
     }
+  },
+
+  reloadCrashedTab: function (browser) {
+    if (browser.isRemoteBrowser)
+      return;
+
+    let doc = browser.contentDocument;
+    if (!doc.documentURI.startsWith("about:tabcrashed"))
+      return;
+
+    let url = browser.currentURI.spec;
+    browser.getTabBrowser().updateBrowserRemotenessByURL(browser, url);
+    browser.loadURIWithFlags(url, Ci.nsIWebNavigation.LOAD_FLAGS_NONE, null, null, null);
   },
 
   onAboutTabCrashedLoad: function (aBrowser) {
@@ -93,6 +108,6 @@ this.TabCrashReporter = {
     if (!dumpID)
       return;
 
-    aBrowser.contentDocument.documentElement.classList.add("crashDumpAvaible");
+    aBrowser.contentDocument.documentElement.classList.add("crashDumpAvailable");
   }
 }

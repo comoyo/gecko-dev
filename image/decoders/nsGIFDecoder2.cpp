@@ -75,7 +75,7 @@ nsGIFDecoder2::nsGIFDecoder2(RasterImage &aImage)
   , mCurrentRow(-1)
   , mLastFlushedRow(-1)
   , mOldColor(0)
-  , mCurrentFrame(-1)
+  , mCurrentFrameIndex(-1)
   , mCurrentPass(0)
   , mLastFlushedPass(0)
   , mGIFOpen(false)
@@ -105,7 +105,7 @@ nsGIFDecoder2::FinishInternal()
 
   // If the GIF got cut off, handle it anyway
   if (!IsSizeDecode() && mGIFOpen) {
-    if (mCurrentFrame == mGIFStruct.images_decoded)
+    if (mCurrentFrameIndex == mGIFStruct.images_decoded)
       EndImageFrame();
     PostDecodeDone(mGIFStruct.loop_count - 1);
     mGIFOpen = false;
@@ -174,26 +174,28 @@ void nsGIFDecoder2::BeginImageFrame(uint16_t aDepth)
     NeedNewFrame(mGIFStruct.images_decoded, mGIFStruct.x_offset,
                  mGIFStruct.y_offset, mGIFStruct.width, mGIFStruct.height,
                  format, aDepth);
-  }
-
-  // Our first full frame is automatically created by the image decoding
-  // infrastructure. Just use it as long as it matches up.
-  else if (!GetCurrentFrame()->GetRect().IsEqualEdges(nsIntRect(mGIFStruct.x_offset,
-                                                                mGIFStruct.y_offset,
-                                                                mGIFStruct.width,
-                                                                mGIFStruct.height))) {
-    // Regardless of depth of input, image is decoded into 24bit RGB
-    NeedNewFrame(mGIFStruct.images_decoded, mGIFStruct.x_offset,
-                 mGIFStruct.y_offset, mGIFStruct.width, mGIFStruct.height,
-                 format);
   } else {
-    // Our preallocated frame matches up, with the possible exception of alpha.
-    if (format == gfx::SurfaceFormat::B8G8R8X8) {
-      GetCurrentFrame()->SetHasNoAlpha();
+    nsRefPtr<imgFrame> currentFrame = GetCurrentFrame();
+
+    // Our first full frame is automatically created by the image decoding
+    // infrastructure. Just use it as long as it matches up.
+    if (!currentFrame->GetRect().IsEqualEdges(nsIntRect(mGIFStruct.x_offset,
+                                                        mGIFStruct.y_offset,
+                                                        mGIFStruct.width,
+                                                        mGIFStruct.height))) {
+      // Regardless of depth of input, image is decoded into 24bit RGB
+      NeedNewFrame(mGIFStruct.images_decoded, mGIFStruct.x_offset,
+                   mGIFStruct.y_offset, mGIFStruct.width, mGIFStruct.height,
+                   format);
+    } else {
+      // Our preallocated frame matches up, with the possible exception of alpha.
+      if (format == gfx::SurfaceFormat::B8G8R8X8) {
+        currentFrame->SetHasNoAlpha();
+      }
     }
   }
 
-  mCurrentFrame = mGIFStruct.images_decoded;
+  mCurrentFrameIndex = mGIFStruct.images_decoded;
 }
 
 
@@ -251,7 +253,7 @@ void nsGIFDecoder2::EndImageFrame()
     mOldColor = 0;
   }
 
-  mCurrentFrame = -1;
+  mCurrentFrameIndex = -1;
 }
 
 

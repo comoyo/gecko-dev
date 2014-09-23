@@ -24,7 +24,7 @@ namespace mozilla {
   class ErrorResult;
   class nsDOMCameraControl;
   namespace dom {
-    class CameraConfiguration;
+    struct CameraConfiguration;
     class GetCameraCallback;
     class CameraErrorCallback;
   }
@@ -90,7 +90,7 @@ protected:
 
 private:
   nsDOMCameraManager() MOZ_DELETE;
-  nsDOMCameraManager(nsPIDOMWindow* aWindow);
+  explicit nsDOMCameraManager(nsPIDOMWindow* aWindow);
   nsDOMCameraManager(const nsDOMCameraManager&) MOZ_DELETE;
   nsDOMCameraManager& operator=(const nsDOMCameraManager&) MOZ_DELETE;
 
