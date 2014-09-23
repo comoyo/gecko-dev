@@ -53,7 +53,6 @@
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_WARNING
 #include "nsIDOMWindowUtils.h"          // for nsIDOMWindowUtils
-#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsMathUtils.h"                // for NS_hypot
 #include "nsPoint.h"                    // for nsIntPoint
 #include "nsStyleConsts.h"
@@ -738,15 +737,12 @@ AsyncPanZoomController::AsyncPanZoomController(uint64_t aLayersId,
      mSharedLock(nullptr),
      mAsyncTransformAppliedToContent(false)
 {
-  MOZ_COUNT_CTOR(AsyncPanZoomController);
-
   if (aGestures == USE_GESTURE_DETECTOR) {
     mGestureEventListener = new GestureEventListener(this);
   }
 }
 
 AsyncPanZoomController::~AsyncPanZoomController() {
-  MOZ_COUNT_DTOR(AsyncPanZoomController);
 }
 
 PCompositorParent*
@@ -2373,6 +2369,19 @@ Matrix4x4 AsyncPanZoomController::GetTransformToLastDispatchedPaint() {
 
   return Matrix4x4().Translate(scrollChange.x, scrollChange.y, 0) *
          Matrix4x4().Scale(zoomChange, zoomChange, 1);
+}
+
+bool AsyncPanZoomController::IsCurrentlyCheckerboarding() const {
+  ReentrantMonitorAutoEnter lock(mMonitor);
+
+  if (!gfxPrefs::APZAllowCheckerboarding()) {
+    return false;
+  }
+
+  CSSPoint currentScrollOffset = mFrameMetrics.GetScrollOffset() + mTestAsyncScrollOffset;
+  CSSRect painted = mLastContentPaintMetrics.mDisplayPort + mLastContentPaintMetrics.GetScrollOffset();
+  CSSRect visible = CSSRect(currentScrollOffset, mFrameMetrics.CalculateCompositedSizeInCssPixels());
+  return !painted.Contains(visible);
 }
 
 void AsyncPanZoomController::NotifyLayersUpdated(const FrameMetrics& aLayerMetrics, bool aIsFirstPaint) {

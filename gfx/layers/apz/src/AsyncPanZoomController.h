@@ -239,6 +239,14 @@ public:
   Matrix4x4 GetTransformToLastDispatchedPaint();
 
   /**
+   * Returns whether or not the APZC is currently in a state of checkerboarding.
+   * This is a simple computation based on the last-painted content and whether
+   * the async transform has pushed it so far that it doesn't fully contain the
+   * composition bounds.
+   */
+  bool IsCurrentlyCheckerboarding() const;
+
+  /**
    * Recalculates the displayport. Ideally, this should paint an area bigger
    * than the composite-to dimensions so that when you scroll down, you don't
    * checkerboard immediately. This includes a bunch of logic, including
@@ -870,6 +878,14 @@ public:
   AsyncPanZoomController* GetLastChild() const { return mLastChild; }
   AsyncPanZoomController* GetPrevSibling() const { return mPrevSibling; }
   AsyncPanZoomController* GetParent() const { return mParent; }
+
+  AsyncPanZoomController* GetFirstChild() const {
+    AsyncPanZoomController* child = GetLastChild();
+    while (child && child->GetPrevSibling()) {
+      child = child->GetPrevSibling();
+    }
+    return child;
+  }
 
   /* Returns true if there is no APZC higher in the tree with the same
    * layers id.
