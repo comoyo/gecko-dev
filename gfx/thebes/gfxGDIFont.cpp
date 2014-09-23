@@ -8,14 +8,13 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/WindowsVersion.h"
 
-#include "gfxHarfBuzzShaper.h"
 #include <algorithm>
-#include "gfxGraphiteShaper.h"
 #include "gfxWindowsPlatform.h"
 #include "gfxContext.h"
 #include "mozilla/Preferences.h"
 #include "nsUnicodeProperties.h"
 #include "gfxFontConstants.h"
+#include "gfxTextRun.h"
 
 #include "cairo-win32.h"
 
@@ -49,12 +48,9 @@ gfxGDIFont::gfxGDIFont(GDIFontEntry *aFontEntry,
       mFontFace(nullptr),
       mMetrics(nullptr),
       mSpaceGlyph(0),
-      mNeedsBold(aNeedsBold)
+      mNeedsBold(aNeedsBold),
+      mScriptCache(nullptr)
 {
-    if (FontCanSupportGraphite()) {
-        mGraphiteShaper = new gfxGraphiteShaper(this);
-    }
-    mHarfBuzzShaper = new gfxHarfBuzzShaper(this);
 }
 
 gfxGDIFont::~gfxGDIFont()
@@ -68,6 +64,9 @@ gfxGDIFont::~gfxGDIFont()
     if (mFont) {
         ::DeleteObject(mFont);
     }
+    if (mScriptCache) {
+        ScriptFreeCache(&mScriptCache);
+    }
     delete mMetrics;
 }
 
@@ -79,13 +78,12 @@ gfxGDIFont::CopyWithAntialiasOption(AntialiasOption anAAOption)
 }
 
 bool
-gfxGDIFont::ShapeText(gfxContext      *aContext,
+gfxGDIFont::ShapeText(gfxContext     *aContext,
                       const char16_t *aText,
-                      uint32_t         aOffset,
-                      uint32_t         aLength,
-                      int32_t          aScript,
-                      gfxShapedText   *aShapedText,
-                      bool             aPreferPlatformShaping)
+                      uint32_t        aOffset,
+                      uint32_t        aLength,
+                      int32_t         aScript,
+                      gfxShapedText  *aShapedText)
 {
     if (!mMetrics) {
         Initialize();
@@ -104,7 +102,7 @@ gfxGDIFont::ShapeText(gfxContext      *aContext,
     }
 
     return gfxFont::ShapeText(aContext, aText, aOffset, aLength, aScript,
-                              aShapedText, aPreferPlatformShaping);
+                              aShapedText);
 }
 
 const gfxFont::Metrics&
@@ -180,7 +178,7 @@ gfxGDIFont::Initialize()
     GDIFontEntry* fe = static_cast<GDIFontEntry*>(GetFontEntry());
     bool wantFakeItalic =
         (mStyle.style & (NS_FONT_STYLE_ITALIC | NS_FONT_STYLE_OBLIQUE)) &&
-        !fe->IsItalic();
+        !fe->IsItalic() && mStyle.allowSyntheticStyle;
 
     // If the font's family has an actual italic face (but font matching
     // didn't choose it), we have to use a cairo transform instead of asking
@@ -243,9 +241,6 @@ gfxGDIFont::Initialize()
         TEXTMETRIC& metrics = oMetrics.otmTextMetrics;
 
         if (0 < GetOutlineTextMetrics(dc.GetDC(), sizeof(oMetrics), &oMetrics)) {
-            mMetrics->superscriptOffset = (double)oMetrics.otmptSuperscriptOffset.y;
-            // Some fonts have wrong sign on their subscript offset, bug 410917.
-            mMetrics->subscriptOffset = fabs((double)oMetrics.otmptSubscriptOffset.y);
             mMetrics->strikeoutSize = (double)oMetrics.otmsStrikeoutSize;
             mMetrics->strikeoutOffset = (double)oMetrics.otmsStrikeoutPosition;
             mMetrics->underlineSize = (double)oMetrics.otmsUnderscoreSize;
@@ -284,8 +279,6 @@ gfxGDIFont::Initialize()
 
             mMetrics->xHeight =
                 ROUND((float)metrics.tmAscent * DEFAULT_XHEIGHT_FACTOR);
-            mMetrics->superscriptOffset = mMetrics->xHeight;
-            mMetrics->subscriptOffset = mMetrics->xHeight;
             mMetrics->strikeoutSize = 1;
             mMetrics->strikeoutOffset = ROUND(mMetrics->xHeight * 0.5f); // 50% of xHeight
             mMetrics->underlineSize = 1;
@@ -390,9 +383,8 @@ gfxGDIFont::Initialize()
     printf("    maxAscent: %f maxDescent: %f maxAdvance: %f\n", mMetrics->maxAscent, mMetrics->maxDescent, mMetrics->maxAdvance);
     printf("    internalLeading: %f externalLeading: %f\n", mMetrics->internalLeading, mMetrics->externalLeading);
     printf("    spaceWidth: %f aveCharWidth: %f xHeight: %f\n", mMetrics->spaceWidth, mMetrics->aveCharWidth, mMetrics->xHeight);
-    printf("    uOff: %f uSize: %f stOff: %f stSize: %f supOff: %f subOff: %f\n",
-           mMetrics->underlineOffset, mMetrics->underlineSize, mMetrics->strikeoutOffset, mMetrics->strikeoutSize,
-           mMetrics->superscriptOffset, mMetrics->subscriptOffset);
+    printf("    uOff: %f uSize: %f stOff: %f stSize: %f\n",
+           mMetrics->underlineOffset, mMetrics->underlineSize, mMetrics->strikeoutOffset, mMetrics->strikeoutSize);
 #endif
 }
 
@@ -440,7 +432,7 @@ gfxGDIFont::GetGlyph(uint32_t aUnicode, uint32_t aVarSelector)
     }
 
     if (!mGlyphIDs) {
-        mGlyphIDs = new nsDataHashtable<nsUint32HashKey,uint32_t>(128);
+        mGlyphIDs = new nsDataHashtable<nsUint32HashKey,uint32_t>(64);
     }
 
     uint32_t gid;
@@ -448,15 +440,16 @@ gfxGDIFont::GetGlyph(uint32_t aUnicode, uint32_t aVarSelector)
         return gid;
     }
 
-    AutoDC dc;
-    AutoSelectFont fs(dc.GetDC(), GetHFONT());
-
     wchar_t ch = aUnicode;
     WORD glyph;
-    DWORD ret = GetGlyphIndicesW(dc.GetDC(), &ch, 1, &glyph,
-                                 GGI_MARK_NONEXISTING_GLYPHS);
-    if (ret == GDI_ERROR || glyph == 0xFFFF) {
-        return 0;
+    DWORD ret = ScriptGetCMap(nullptr, &mScriptCache, &ch, 1, 0, &glyph);
+    if (ret == E_PENDING) {
+        AutoDC dc;
+        AutoSelectFont fs(dc.GetDC(), GetHFONT());
+        ret = ScriptGetCMap(dc.GetDC(), &mScriptCache, &ch, 1, 0, &glyph);
+    }
+    if (ret != S_OK) {
+        glyph = 0;
     }
 
     mGlyphIDs->Put(aUnicode, glyph);
@@ -467,7 +460,7 @@ int32_t
 gfxGDIFont::GetGlyphWidth(gfxContext *aCtx, uint16_t aGID)
 {
     if (!mGlyphWidths) {
-        mGlyphWidths = new nsDataHashtable<nsUint32HashKey,int32_t>(200);
+        mGlyphWidths = new nsDataHashtable<nsUint32HashKey,int32_t>(128);
     }
 
     int32_t width;
@@ -480,8 +473,9 @@ gfxGDIFont::GetGlyphWidth(gfxContext *aCtx, uint16_t aGID)
 
     int devWidth;
     if (GetCharWidthI(dc, aGID, 1, nullptr, &devWidth)) {
-        // ensure width is positive, 16.16 fixed-point value
-        width = (devWidth & 0x7fff) << 16;
+        // clamp value to range [0..0x7fff], and convert to 16.16 fixed-point
+        devWidth = std::min(std::max(0, devWidth), 0x7fff);
+        width = devWidth << 16;
         mGlyphWidths->Put(aGID, width);
         return width;
     }

@@ -14,6 +14,7 @@
 #include "nsHashKeys.h"
 
 #include "cairo.h"
+#include "usp10.h"
 
 class gfxGDIFont : public gfxFont
 {
@@ -71,13 +72,12 @@ public:
 
 protected:
     /* override to ensure the cairo font is set up properly */
-    virtual bool ShapeText(gfxContext      *aContext,
+    virtual bool ShapeText(gfxContext     *aContext,
                            const char16_t *aText,
-                           uint32_t         aOffset,
-                           uint32_t         aLength,
-                           int32_t          aScript,
-                           gfxShapedText   *aShapedText,
-                           bool             aPreferPlatformShaping);
+                           uint32_t        aOffset,
+                           uint32_t        aLength,
+                           int32_t         aScript,
+                           gfxShapedText  *aShapedText);
 
     void Initialize(); // creates metrics and Cairo fonts
 
@@ -96,6 +96,7 @@ protected:
 
     // cache of glyph IDs (used for non-sfnt fonts only)
     nsAutoPtr<nsDataHashtable<nsUint32HashKey,uint32_t> > mGlyphIDs;
+    SCRIPT_CACHE          mScriptCache;
 
     // cache of glyph widths in 16.16 fixed-point pixels
     nsAutoPtr<nsDataHashtable<nsUint32HashKey,int32_t> > mGlyphWidths;

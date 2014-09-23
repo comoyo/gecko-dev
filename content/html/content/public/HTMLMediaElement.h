@@ -18,8 +18,26 @@
 #include "nsIAudioChannelAgent.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/AudioChannelBinding.h"
+#include "mozilla/dom/Promise.h"
 #include "mozilla/dom/TextTrackManager.h"
 #include "MediaDecoder.h"
+#ifdef MOZ_EME
+#include "mozilla/dom/MediaKeys.h"
+#endif
+
+// Something on Linux #defines None, which is an entry in the
+// MediaWaitingFor enum, so undef it here before including the binfing,
+// so that the build doesn't fail...
+#ifdef None
+#undef None
+#endif
+
+// X.h on Linux #defines CurrentTime as 0L, so we have to #undef it here.
+#ifdef CurrentTime
+#undef CurrentTime
+#endif
+
+#include "mozilla/dom/HTMLMediaElementBinding.h"
 
 // Define to output information on decoding and painting framerate
 /* #define DEBUG_FRAME_RATE 1 */
@@ -37,9 +55,11 @@ class MediaResource;
 class MediaDecoder;
 class VideoFrameContainer;
 namespace dom {
+class MediaKeys;
 class TextTrack;
 class TimeRanges;
 class WakeLock;
+class MediaTrack;
 }
 }
 
@@ -56,8 +76,11 @@ namespace dom {
 class MediaError;
 class MediaSource;
 class TextTrackList;
+class AudioTrackList;
+class VideoTrackList;
 
 class HTMLMediaElement : public nsGenericHTMLElement,
+                         public nsIDOMHTMLMediaElement,
                          public nsIObserver,
                          public MediaDecoderOwner,
                          public nsIAudioChannelAgentCallback
@@ -75,8 +98,7 @@ public:
     return mCORSMode;
   }
 
-  HTMLMediaElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
-  virtual ~HTMLMediaElement();
+  explicit HTMLMediaElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   /**
    * This is used when the browser is constructing a video element to play
@@ -137,10 +159,7 @@ public:
   // Called by the video decoder object, on the main thread,
   // when it has read the metadata containing video dimensions,
   // etc.
-  virtual void MetadataLoaded(int aChannels,
-                              int aRate,
-                              bool aHasAudio,
-                              bool aHasVideo,
+  virtual void MetadataLoaded(const MediaInfo* aInfo,
                               const MetadataTags* aTags) MOZ_FINAL MOZ_OVERRIDE;
 
   // Called by the video decoder object, on the main thread,
@@ -271,6 +290,8 @@ public:
    */
   void NotifyLoadError();
 
+  void NotifyMediaTrackEnabled(MediaTrack* aTrack);
+
   virtual bool IsNodeOfType(uint32_t aFlags) const MOZ_OVERRIDE;
 
   /**
@@ -342,10 +363,16 @@ public:
 
   // XPCOM GetCurrentSrc() is OK
 
-  // XPCOM GetCrossorigin() is OK
-  void SetCrossOrigin(const nsAString& aValue, ErrorResult& aRv)
+  void GetCrossOrigin(nsAString& aResult)
   {
-    SetHTMLAttr(nsGkAtoms::crossorigin, aValue, aRv);
+    // Null for both missing and invalid defaults is ok, since we
+    // always parse to an enum value, so we don't need an invalid
+    // default, and we _want_ the missing default to be null.
+    GetEnumAttr(nsGkAtoms::crossorigin, nullptr, aResult);
+  }
+  void SetCrossOrigin(const nsAString& aCrossOrigin, ErrorResult& aError)
+  {
+    SetOrRemoveNullableStringAttr(nsGkAtoms::crossorigin, aCrossOrigin, aError);
   }
 
   uint16_t NetworkState() const
@@ -467,6 +494,36 @@ public:
     SetHTMLBoolAttr(nsGkAtoms::muted, aMuted, aRv);
   }
 
+  bool MozMediaStatisticsShowing() const
+  {
+    return mStatsShowing;
+  }
+
+  void SetMozMediaStatisticsShowing(bool aShow)
+  {
+    mStatsShowing = aShow;
+  }
+
+  bool MozAllowCasting() const
+  {
+    return mAllowCasting;
+  }
+
+  void SetMozAllowCasting(bool aShow)
+  {
+    mAllowCasting = aShow;
+  }
+
+  bool MozIsCasting() const
+  {
+    return mIsCasting;
+  }
+
+  void SetMozIsCasting(bool aShow)
+  {
+    mIsCasting = aShow;
+  }
+
   already_AddRefed<DOMMediaStream> GetMozSrcObject() const;
 
   void SetMozSrcObject(DOMMediaStream& aValue);
@@ -477,6 +534,24 @@ public:
   }
 
   // XPCOM MozPreservesPitch() is OK
+
+#ifdef MOZ_EME
+  MediaKeys* GetMediaKeys() const;
+
+  already_AddRefed<Promise> SetMediaKeys(MediaKeys* mediaKeys,
+                                         ErrorResult& aRv);
+  
+  MediaWaitingFor WaitingFor() const;
+
+  mozilla::dom::EventHandlerNonNull* GetOnencrypted();
+  void SetOnencrypted(mozilla::dom::EventHandlerNonNull* listener);
+
+  void DispatchEncrypted(const nsTArray<uint8_t>& aInitData,
+                         const nsAString& aInitDataType);
+
+
+  bool IsEventAttributeName(nsIAtom* aName) MOZ_OVERRIDE;
+#endif // MOZ_EME
 
   bool MozAutoplayEnabled() const
   {
@@ -492,7 +567,8 @@ public:
     return mAudioCaptured;
   }
 
-  JSObject* MozGetMetadata(JSContext* aCx, ErrorResult& aRv);
+  void MozGetMetadata(JSContext* aCx, JS::MutableHandle<JSObject*> aResult,
+                      ErrorResult& aRv);
 
   double MozFragmentEnd();
 
@@ -502,6 +578,10 @@ public:
   }
 
   void SetMozAudioChannelType(AudioChannel aValue, ErrorResult& aRv);
+
+  AudioTrackList* AudioTracks();
+
+  VideoTrackList* VideoTracks();
 
   TextTrackList* TextTracks();
 
@@ -533,6 +613,8 @@ public:
   }
 
 protected:
+  virtual ~HTMLMediaElement();
+
   class MediaLoadListener;
   class StreamListener;
 
@@ -541,7 +623,7 @@ protected:
 
   class WakeLockBoolWrapper {
   public:
-    WakeLockBoolWrapper(bool val = false)
+    explicit WakeLockBoolWrapper(bool val = false)
       : mValue(val), mCanPlay(true), mOuter(nullptr) {}
 
     ~WakeLockBoolWrapper();
@@ -1010,6 +1092,11 @@ protected:
   // Range of time played.
   nsRefPtr<TimeRanges> mPlayed;
 
+#ifdef MOZ_EME
+  // Encrypted Media Extension media keys.
+  nsRefPtr<MediaKeys> mMediaKeys;
+#endif
+
   // Stores the time at the start of the current 'played' range.
   double mCurrentPlayRangeStart;
 
@@ -1043,10 +1130,23 @@ protected:
   enum MutedReasons {
     MUTED_BY_CONTENT               = 0x01,
     MUTED_BY_INVALID_PLAYBACK_RATE = 0x02,
-    MUTED_BY_AUDIO_CHANNEL         = 0x04
+    MUTED_BY_AUDIO_CHANNEL         = 0x04,
+    MUTED_BY_AUDIO_TRACK           = 0x08
   };
 
   uint32_t mMuted;
+
+  // True if the media statistics are currently being shown by the builtin
+  // video controls
+  bool mStatsShowing;
+
+  // The following two fields are here for the private storage of the builtin
+  // video controls, and control 'casting' of the video to external devices
+  // (TVs, projectors etc.)
+  // True if casting is currently allowed
+  bool mAllowCasting;
+  // True if currently casting this video
+  bool mIsCasting;
 
   // True if the sound is being captured.
   bool mAudioCaptured;
@@ -1056,6 +1156,10 @@ protected:
   // or was not actively playing before the current seek. Used to decide whether
   // to raise the 'waiting' event as per 4.7.1.8 in HTML 5 specification.
   bool mPlayingBeforeSeek;
+
+  // if TRUE then the seek started while content was in active playing state
+  // if FALSE then the seek started while the content was not playing.
+  bool mPlayingThroughTheAudioChannelBeforeSeek;
 
   // True iff this element is paused because the document is inactive or has
   // been suspended by the audio channel service.
@@ -1135,10 +1239,21 @@ protected:
   // Is this media element playing?
   bool mPlayingThroughTheAudioChannel;
 
+  // Disable the video playback by track selection. This flag might not be
+  // enough if we ever expand the ability of supporting multi-tracks video
+  // playback.
+  bool mDisableVideo;
+
   // An agent used to join audio channel service.
   nsCOMPtr<nsIAudioChannelAgent> mAudioChannelAgent;
 
   nsRefPtr<TextTrackManager> mTextTrackManager;
+
+  nsRefPtr<AudioTrackList> mAudioTrackList;
+
+  nsRefPtr<VideoTrackList> mVideoTrackList;
+
+  MediaWaitingFor mWaitingFor;
 };
 
 } // namespace dom

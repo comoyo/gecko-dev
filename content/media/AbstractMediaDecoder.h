@@ -8,6 +8,7 @@
 #define AbstractMediaDecoder_h_
 
 #include "mozilla/Attributes.h"
+#include "MediaInfo.h"
 #include "nsISupports.h"
 #include "nsDataHashtable.h"
 #include "nsThreadUtils.h"
@@ -24,6 +25,9 @@ class ReentrantMonitor;
 class VideoFrameContainer;
 class TimedMetadata;
 class MediaDecoderOwner;
+#ifdef MOZ_EME
+class CDMProxy;
+#endif
 
 typedef nsDataHashtable<nsCStringHashKey, nsCString> MetadataTags;
 
@@ -61,11 +65,6 @@ public:
   // Can be called on any thread.
   virtual void NotifyDecodedFrames(uint32_t aParsed, uint32_t aDecoded) = 0;
 
-  // Returns the end time of the last sample in the media. Note that a media
-  // can have a non-zero start time, so the end time may not necessarily be
-  // the same as the duration (i.e. duration is (end_time - start_time)).
-  virtual int64_t GetEndMediaTime() const = 0;
-
   // Return the duration of the media in microseconds.
   virtual int64_t GetMediaDuration() = 0;
 
@@ -80,9 +79,6 @@ public:
   // Set the media as being seekable or not.
   virtual void SetMediaSeekable(bool aMediaSeekable) = 0;
 
-  // Set the transport level as being seekable or not.
-  virtual void SetTransportSeekable(bool aTransportSeekable) = 0;
-
   virtual VideoFrameContainer* GetVideoFrameContainer() = 0;
   virtual mozilla::layers::ImageContainer* GetImageContainer() = 0;
 
@@ -92,8 +88,10 @@ public:
   // Return true if the transport layer supports seeking.
   virtual bool IsMediaSeekable() = 0;
 
-  virtual void MetadataLoaded(int aChannels, int aRate, bool aHasAudio, bool aHasVideo, MetadataTags* aTags) = 0;
-  virtual void QueueMetadata(int64_t aTime, int aChannels, int aRate, bool aHasAudio, bool aHasVideo, MetadataTags* aTags) = 0;
+  virtual void MetadataLoaded(MediaInfo* aInfo, MetadataTags* aTags) = 0;
+  virtual void QueueMetadata(int64_t aTime, MediaInfo* aInfo, MetadataTags* aTags) = 0;
+
+  virtual void RemoveMediaTracks() = 0;
 
   // Set the media end time in microseconds
   virtual void SetMediaEndTime(int64_t aTime) = 0;
@@ -116,8 +114,15 @@ public:
   // required to begin playback have been acquired. Can be called on any thread.
   virtual void NotifyWaitingForResourcesStatusChanged() = 0;
 
-  // Called by Reader if the current audio track can be offloaded
-  virtual void SetCanOffloadAudio(bool aCanOffloadAudio) {}
+  // Called by the reader's MediaResource as data arrives over the network.
+  // Must be called on the main thread.
+  virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset) = 0;
+
+  // Set by Reader if the current audio track can be offloaded
+  virtual void SetPlatformCanOffloadAudio(bool aCanOffloadAudio) {}
+
+  // Called by Decoder/State machine to check audio offload condtions are met
+  virtual bool CheckDecoderCanOffloadAudio() { return false; }
 
   // Called from HTMLMediaElement when owner document activity changes
   virtual void SetElementVisibility(bool aIsVisible) {}
@@ -137,35 +142,55 @@ public:
     uint32_t& mParsed;
     uint32_t& mDecoded;
   };
+
+#ifdef MOZ_EME
+  virtual nsresult SetCDMProxy(CDMProxy* aProxy) { return NS_ERROR_NOT_IMPLEMENTED; }
+  virtual CDMProxy* GetCDMProxy() { return nullptr; }
+#endif
 };
 
-class AudioMetadataEventRunner : public nsRunnable
+class MetadataEventRunner : public nsRunnable
 {
   private:
     nsRefPtr<AbstractMediaDecoder> mDecoder;
   public:
-    AudioMetadataEventRunner(AbstractMediaDecoder* aDecoder, int aChannels, int aRate, bool aHasAudio, bool aHasVideo, MetadataTags* aTags)
-      : mDecoder(aDecoder),
-        mChannels(aChannels),
-        mRate(aRate),
-        mHasAudio(aHasAudio),
-        mHasVideo(aHasVideo),
-        mTags(aTags)
+    MetadataEventRunner(AbstractMediaDecoder* aDecoder, MediaInfo* aInfo, MetadataTags* aTags)
+          : mDecoder(aDecoder),
+            mInfo(aInfo),
+            mTags(aTags)
   {}
 
   NS_IMETHOD Run() MOZ_OVERRIDE
   {
-    mDecoder->MetadataLoaded(mChannels, mRate, mHasAudio, mHasVideo, mTags);
+    mDecoder->MetadataLoaded(mInfo, mTags);
     return NS_OK;
   }
 
-  int mChannels;
-  int mRate;
-  bool mHasAudio;
-  bool mHasVideo;
+  // The ownership is transferred to MediaDecoder.
+  MediaInfo* mInfo;
+
+  // The ownership is transferred to its owning element.
   MetadataTags* mTags;
 };
 
+class RemoveMediaTracksEventRunner : public nsRunnable
+{
+public:
+  explicit RemoveMediaTracksEventRunner(AbstractMediaDecoder* aDecoder)
+    : mDecoder(aDecoder)
+  {}
+
+  NS_IMETHOD Run() MOZ_OVERRIDE
+  {
+    MOZ_ASSERT(NS_IsMainThread());
+
+    mDecoder->RemoveMediaTracks();
+    return NS_OK;
+  }
+
+private:
+  nsRefPtr<AbstractMediaDecoder> mDecoder;
+};
 
 }
 

@@ -41,7 +41,7 @@ Adts::ConvertEsdsToAdts(uint16_t aChannelCount, int8_t aFrequencyIndex,
   size_t newSize = aSample->size + kADTSHeaderSize;
 
   // ADTS header uses 13 bits for packet size.
-  if (newSize >= (1 << 13) || aChannelCount < 0 || aChannelCount > 15 ||
+  if (newSize >= (1 << 13) || aChannelCount > 15 ||
       aFrequencyIndex < 0 || aProfile < 1 || aProfile > 4)
     return false;
 
@@ -56,6 +56,14 @@ Adts::ConvertEsdsToAdts(uint16_t aChannelCount, int8_t aFrequencyIndex,
   header[6] = 0xfc;
 
   aSample->Prepend(&header[0], ArrayLength(header));
+  if (aSample->crypto.valid) {
+    if (aSample->crypto.plain_sizes.Length() == 0) {
+      aSample->crypto.plain_sizes.AppendElement(kADTSHeaderSize);
+      aSample->crypto.encrypted_sizes.AppendElement(aSample->size - kADTSHeaderSize);
+    } else {
+      aSample->crypto.plain_sizes[0] += kADTSHeaderSize;
+    }
+  }
 
   return true;
 }

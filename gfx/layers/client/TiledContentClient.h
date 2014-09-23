@@ -12,12 +12,12 @@
 #include "Layers.h"                     // for LayerManager, etc
 #include "TiledLayerBuffer.h"           // for TiledLayerBuffer
 #include "Units.h"                      // for CSSPoint
-#include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxTypes.h"
 #include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
 #include "mozilla/RefPtr.h"             // for RefPtr
 #include "mozilla/ipc/Shmem.h"          // for Shmem
 #include "mozilla/ipc/SharedMemory.h"   // for SharedMemory
+#include "mozilla/layers/AsyncCompositionManager.h"  // for ViewTransform
 #include "mozilla/layers/CompositableClient.h"  // for CompositableClient
 #include "mozilla/layers/CompositorTypes.h"  // for TextureInfo, etc
 #include "mozilla/layers/LayersMessages.h" // for TileDescriptor
@@ -31,6 +31,7 @@
 #include "nsRect.h"                     // for nsIntRect
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTArray.h"                   // for nsTArray, nsTArray_Impl, etc
+#include "nsExpirationTracker.h"
 #include "mozilla/layers/ISurfaceAllocator.h"
 #include "gfxReusableSurfaceWrapper.h"
 #include "pratom.h"                     // For PR_ATOMIC_INCREMENT/DECREMENT
@@ -71,8 +72,10 @@ class gfxMemorySharedReadLock : public gfxSharedReadLock {
 public:
   gfxMemorySharedReadLock();
 
+protected:
   ~gfxMemorySharedReadLock();
 
+public:
   virtual int32_t ReadLock() MOZ_OVERRIDE;
 
   virtual int32_t ReadUnlock() MOZ_OVERRIDE;
@@ -94,10 +97,12 @@ private:
   };
 
 public:
-  gfxShmSharedReadLock(ISurfaceAllocator* aAllocator);
+  explicit gfxShmSharedReadLock(ISurfaceAllocator* aAllocator);
 
+protected:
   ~gfxShmSharedReadLock();
 
+public:
   virtual int32_t ReadLock() MOZ_OVERRIDE;
 
   virtual int32_t ReadUnlock() MOZ_OVERRIDE;
@@ -150,6 +155,7 @@ struct TileClient
 {
   // Placeholder
   TileClient();
+  ~TileClient();
 
   TileClient(const TileClient& o);
 
@@ -168,6 +174,11 @@ struct TileClient
   void SetLayerManager(ClientLayerManager *aManager)
   {
     mManager = aManager;
+  }
+
+  void SetCompositableClient(CompositableClient* aCompositableClient)
+  {
+    mCompositableClient = aCompositableClient;
   }
 
   bool IsPlaceholderTile()
@@ -197,6 +208,8 @@ struct TileClient
     DiscardBackBuffer();
   }
 
+  nsExpirationState *GetExpirationState() { return &mExpirationState; }
+
   TileDescriptor GetTileDescriptor();
 
   /**
@@ -209,30 +222,59 @@ struct TileClient
   * data to the tile. This may flip the front-buffer to the back-buffer if
   * the front-buffer is still locked by the host, or does not have an
   * internal buffer (and so will always be locked).
+  *
+  * If getting the back buffer required copying pixels from the front buffer
+  * then the copied region is stored in aAddPaintedRegion so the host side
+  * knows to upload it.
+  *
+  * If nullptr is returned, aTextureClientOnWhite is undefined.
   */
   TextureClient* GetBackBuffer(const nsIntRegion& aDirtyRegion,
-                               TextureClientPool *aPool,
+                               gfxContentType aContent, SurfaceMode aMode,
                                bool *aCreatedTextureClient,
-                               bool aCanRerasterizeValidRegion);
+                               nsIntRegion& aAddPaintedRegion,
+                               bool aCanRerasterizeValidRegion,
+                               RefPtr<TextureClient>* aTextureClientOnWhite);
 
   void DiscardFrontBuffer();
 
   void DiscardBackBuffer();
 
-  RefPtr<TextureClient> mBackBuffer;
+  /* We wrap the back buffer in a class that disallows assignment
+   * so that we can track when ever it changes so that we can update
+   * the expiry tracker for expiring the back buffers */
+  class PrivateProtector {
+    public:
+      void Set(TileClient * container, RefPtr<TextureClient>);
+      void Set(TileClient * container, TextureClient*);
+      // Implicitly convert to TextureClient* because we can't chain
+      // implicit conversion that would happen on RefPtr<TextureClient>
+      operator TextureClient*() const { return mBuffer; }
+      RefPtr<TextureClient> operator ->() { return mBuffer; }
+    private:
+      PrivateProtector& operator=(const PrivateProtector &);
+      RefPtr<TextureClient> mBuffer;
+  } mBackBuffer;
+  RefPtr<TextureClient> mBackBufferOnWhite;
   RefPtr<TextureClient> mFrontBuffer;
+  RefPtr<TextureClient> mFrontBufferOnWhite;
   RefPtr<gfxSharedReadLock> mBackLock;
   RefPtr<gfxSharedReadLock> mFrontLock;
   RefPtr<ClientLayerManager> mManager;
+  CompositableClient* mCompositableClient;
 #ifdef GFX_TILEDLAYER_DEBUG_OVERLAY
   TimeStamp        mLastUpdate;
 #endif
   nsIntRegion mInvalidFront;
   nsIntRegion mInvalidBack;
+  nsExpirationState mExpirationState;
 
 private:
+  // Copies dirty pixels from the front buffer into the back buffer,
+  // and records the copied region in aAddPaintedRegion.
   void ValidateBackBufferFromFront(const nsIntRegion &aDirtyRegion,
-                                   bool aCanRerasterizeValidRegion);
+                                   bool aCanRerasterizeValidRegion,
+                                   nsIntRegion& aAddPaintedRegion);
 };
 
 /**
@@ -254,27 +296,19 @@ struct BasicTiledLayerPaintData {
   ParentLayerPoint mLastScrollOffset;
 
   /*
-   * The transform matrix to go from the display port layer's ParentLayer
-   * units to this layer's LayoutDevice units. The "display port layer" is
-   * the closest ancestor layer with a displayport.
+   * The transform matrix to go from this layer's Layer units to
+   * the scroll ancestor's ParentLayer units. The "scroll ancestor" is
+   * the closest ancestor layer which scrolls, and is used to obtain
+   * the composition bounds that are relevant for this layer.
    */
-  gfx3DMatrix mTransformDisplayPortToLayoutDevice;
+  gfx::Matrix4x4 mTransformToCompBounds;
 
   /*
    * The critical displayport of the content from the nearest ancestor layer
    * that represents scrollable content with a display port set. Empty if a
    * critical displayport is not set.
-   *
-   * This is in LayoutDevice coordinates, but is stored as an nsIntRect for
-   * convenience when intersecting with the layer's mValidRegion.
    */
-  nsIntRect mCriticalDisplayPort;
-
-  /*
-   * The viewport of the content from the nearest ancestor layer that
-   * represents scrollable content with a display port set.
-   */
-  LayoutDeviceRect mViewport;
+  LayerIntRect mCriticalDisplayPort;
 
   /*
    * The render resolution of the document that the content this layer
@@ -283,11 +317,11 @@ struct BasicTiledLayerPaintData {
   CSSToParentLayerScale mResolution;
 
   /*
-   * The composition bounds of the layer, in LayoutDevice coordinates. This is
+   * The composition bounds of the layer, in Layer coordinates. This is
    * used to make sure that tiled updates to regions that are visible to the
    * user are grouped coherently.
    */
-  LayoutDeviceRect mCompositionBounds;
+  LayerRect mCompositionBounds;
 
   /*
    * Low precision updates are always executed a tile at a time in repeated
@@ -322,20 +356,11 @@ public:
    * is useful for slow-to-render pages when the display-port starts lagging
    * behind enough that continuing to draw it is wasted effort.
    */
-  bool UpdateFromCompositorFrameMetrics(ContainerLayer* aLayer,
+  bool UpdateFromCompositorFrameMetrics(const LayerMetricsWrapper& aLayer,
                                         bool aHasPendingNewThebesContent,
                                         bool aLowPrecision,
-                                        ParentLayerRect& aCompositionBounds,
-                                        CSSToParentLayerScale& aZoom);
+                                        ViewTransform& aViewTransform);
 
-  /**
-   * When a shared FrameMetrics can not be found for a given layer,
-   * this function is used to find the first non-empty composition bounds
-   * by traversing up the layer tree.
-   */
-  void FindFallbackContentFrameMetrics(ContainerLayer* aLayer,
-                                       ParentLayerRect& aCompositionBounds,
-                                       CSSToParentLayerScale& aZoom);
   /**
    * Determines if the compositor's upcoming composition bounds has fallen
    * outside of the contents display port. If it has then the compositor
@@ -371,7 +396,8 @@ public:
     : mThebesLayer(nullptr)
     , mCompositableClient(nullptr)
     , mManager(nullptr)
-    , mLastPaintOpaque(false)
+    , mLastPaintContentType(gfxContentType::COLOR)
+    , mLastPaintSurfaceMode(SurfaceMode::SURFACE_OPAQUE)
     , mSharedFrameMetricsHelper(nullptr)
   {}
 
@@ -386,7 +412,7 @@ public:
 
   void Release();
 
-  void DiscardBackBuffers();
+  void DiscardBuffers();
 
   const CSSToParentLayerScale& GetFrameResolution() { return mFrameResolution; }
 
@@ -412,6 +438,10 @@ protected:
                           const nsIntPoint& aTileRect,
                           const nsIntRegion& dirtyRect);
 
+  void PostValidate(const nsIntRegion& aPaintRegion);
+
+  void UnlockTile(TileClient aTile);
+
   // If this returns true, we perform the paint operation into a single large
   // buffer and copy it out to the tiles instead of calling PaintThebes() on
   // each tile individually. Somewhat surprisingly, this turns out to be faster
@@ -425,20 +455,26 @@ protected:
   TileClient GetPlaceholderTile() const { return TileClient(); }
 
 private:
-  gfxContentType GetContentType() const;
+  gfxContentType GetContentType(SurfaceMode* aMode = nullptr) const;
   ClientTiledThebesLayer* mThebesLayer;
   CompositableClient* mCompositableClient;
   ClientLayerManager* mManager;
   LayerManager::DrawThebesLayerCallback mCallback;
   void* mCallbackData;
   CSSToParentLayerScale mFrameResolution;
-  bool mLastPaintOpaque;
+  gfxContentType mLastPaintContentType;
+  SurfaceMode mLastPaintSurfaceMode;
+
+  // The region that will be made valid during Update(). Once Update() is
+  // completed then this is identical to mValidRegion.
+  nsIntRegion mNewValidRegion;
 
   // The DrawTarget we use when UseSinglePaintBuffer() above is true.
   RefPtr<gfx::DrawTarget>       mSinglePaintDrawTarget;
   nsIntPoint                    mSinglePaintBufferOffset;
   SharedFrameMetricsHelper*  mSharedFrameMetricsHelper;
-
+  // When using Moz2D's CreateTiledDrawTarget we maintain a list of gfx::Tiles
+  std::vector<gfx::Tile> mMoz2DTiles;
   /**
    * Calculates the region to update in a single progressive update transaction.
    * This employs some heuristics to update the most 'sensible' region to
@@ -475,6 +511,7 @@ public:
   TiledContentClient(ClientTiledThebesLayer* aThebesLayer,
                      ClientLayerManager* aManager);
 
+protected:
   ~TiledContentClient()
   {
     MOZ_COUNT_DTOR(TiledContentClient);
@@ -483,6 +520,7 @@ public:
     mLowPrecisionTiledBuffer.Release();
   }
 
+public:
   virtual TextureInfo GetTextureInfo() const MOZ_OVERRIDE
   {
     return TextureInfo(CompositableType::BUFFER_TILED);

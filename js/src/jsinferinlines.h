@@ -13,10 +13,12 @@
 
 #include "mozilla/PodOperations.h"
 
+#include "builtin/SymbolObject.h"
 #include "vm/ArrayObject.h"
 #include "vm/BooleanObject.h"
 #include "vm/NumberObject.h"
 #include "vm/SharedArrayObject.h"
+#include "vm/SharedTypedArrayObject.h"
 #include "vm/StringObject.h"
 #include "vm/TypedArrayObject.h"
 
@@ -34,7 +36,6 @@ namespace types {
 inline jit::IonScript *
 CompilerOutput::ion() const
 {
-#ifdef JS_ION
     // Note: If type constraints are generated before compilation has finished
     // (i.e. after IonBuilder but before CodeGenerator::link) then a valid
     // CompilerOutput may not yet have an associated IonScript.
@@ -42,8 +43,6 @@ CompilerOutput::ion() const
     jit::IonScript *ion = jit::GetIonScript(script(), mode());
     JS_ASSERT(ion != ION_COMPILING_SCRIPT);
     return ion;
-#endif
-    MOZ_ASSUME_UNREACHABLE("Invalid kind of CompilerOutput");
 }
 
 inline CompilerOutput*
@@ -75,6 +74,36 @@ RecompileInfo::shouldSweep(TypeZone &types)
 /////////////////////////////////////////////////////////////////////
 // Types
 /////////////////////////////////////////////////////////////////////
+
+inline TypeObject *
+TypeObjectKey::asTypeObjectNoBarrier()
+{
+    JS_ASSERT(isTypeObject());
+    return (TypeObject *) this;
+}
+
+inline JSObject *
+TypeObjectKey::asSingleObjectNoBarrier()
+{
+    JS_ASSERT(isSingleObject());
+    return (JSObject *) (uintptr_t(this) & ~1);
+}
+
+inline TypeObject *
+TypeObjectKey::asTypeObject()
+{
+    TypeObject *res = asTypeObjectNoBarrier();
+    TypeObject::readBarrier(res);
+    return res;
+}
+
+inline JSObject *
+TypeObjectKey::asSingleObject()
+{
+    JSObject *res = asSingleObjectNoBarrier();
+    JSObject::readBarrier(res);
+    return res;
+}
 
 /* static */ inline Type
 Type::ObjectType(JSObject *obj)
@@ -109,10 +138,13 @@ GetValueType(const Value &val)
 }
 
 inline Type
-GetMaybeOptimizedOutValueType(const Value &val)
+GetMaybeUntrackedValueType(const Value &val)
 {
-    if (val.isMagic() && val.whyMagic() == JS_OPTIMIZED_OUT)
+    if (val.isMagic() && (val.whyMagic() == JS_OPTIMIZED_OUT ||
+                          val.whyMagic() == JS_UNINITIALIZED_LEXICAL))
+    {
         return Type::UnknownType();
+    }
     return GetValueType(val);
 }
 
@@ -132,10 +164,12 @@ PrimitiveTypeFlag(JSValueType type)
         return TYPE_FLAG_DOUBLE;
       case JSVAL_TYPE_STRING:
         return TYPE_FLAG_STRING;
+      case JSVAL_TYPE_SYMBOL:
+        return TYPE_FLAG_SYMBOL;
       case JSVAL_TYPE_MAGIC:
         return TYPE_FLAG_LAZYARGS;
       default:
-        MOZ_ASSUME_UNREACHABLE("Bad type");
+        MOZ_CRASH("Bad JSValueType");
     }
 }
 
@@ -155,10 +189,12 @@ TypeFlagPrimitive(TypeFlags flags)
         return JSVAL_TYPE_DOUBLE;
       case TYPE_FLAG_STRING:
         return JSVAL_TYPE_STRING;
+      case TYPE_FLAG_SYMBOL:
+        return JSVAL_TYPE_SYMBOL;
       case TYPE_FLAG_LAZYARGS:
         return JSVAL_TYPE_MAGIC;
       default:
-        MOZ_ASSUME_UNREACHABLE("Bad type");
+        MOZ_CRASH("Bad TypeFlags");
     }
 }
 
@@ -172,31 +208,9 @@ IdToTypeId(jsid id)
 {
     JS_ASSERT(!JSID_IS_EMPTY(id));
 
-    /*
-     * All integers must map to the aggregate property for index types, including
-     * negative integers.
-     */
-    if (JSID_IS_INT(id))
-        return JSID_VOID;
-
-    /*
-     * Check for numeric strings, as in js_StringIsIndex, but allow negative
-     * and overflowing integers.
-     */
-    if (JSID_IS_STRING(id)) {
-        JSAtom *atom = JSID_TO_ATOM(id);
-        JS::TwoByteChars cp = atom->range();
-        if (cp.length() > 0 && (JS7_ISDEC(cp[0]) || cp[0] == '-')) {
-            for (size_t i = 1; i < cp.length(); ++i) {
-                if (!JS7_ISDEC(cp[i]))
-                    return id;
-            }
-            return JSID_VOID;
-        }
-        return id;
-    }
-
-    return JSID_VOID;
+    // All properties which can be stored in an object's dense elements must
+    // map to the aggregate property for index types.
+    return JSID_IS_INT(id) ? JSID_VOID : id;
 }
 
 const char * TypeIdStringImpl(jsid id);
@@ -287,6 +301,8 @@ GetClassForProtoKey(JSProtoKey key)
         return &BooleanObject::class_;
       case JSProto_String:
         return &StringObject::class_;
+      case JSProto_Symbol:
+        return &SymbolObject::class_;
       case JSProto_RegExp:
         return &RegExpObject::class_;
 
@@ -301,6 +317,17 @@ GetClassForProtoKey(JSProtoKey key)
       case JSProto_Uint8ClampedArray:
         return &TypedArrayObject::classes[key - JSProto_Int8Array];
 
+      case JSProto_SharedInt8Array:
+      case JSProto_SharedUint8Array:
+      case JSProto_SharedInt16Array:
+      case JSProto_SharedUint16Array:
+      case JSProto_SharedInt32Array:
+      case JSProto_SharedUint32Array:
+      case JSProto_SharedFloat32Array:
+      case JSProto_SharedFloat64Array:
+      case JSProto_SharedUint8ClampedArray:
+        return &SharedTypedArrayObject::classes[key - JSProto_SharedInt8Array];
+
       case JSProto_ArrayBuffer:
         return &ArrayBufferObject::class_;
 
@@ -311,7 +338,7 @@ GetClassForProtoKey(JSProtoKey key)
         return &DataViewObject::class_;
 
       default:
-        MOZ_ASSUME_UNREACHABLE("Bad proto key");
+        MOZ_CRASH("Bad proto key");
     }
 }
 
@@ -397,6 +424,20 @@ CanHaveEmptyPropertyTypesForOwnProperty(JSObject *obj)
     // objects may be empty for 'own' properties if the global property still
     // has its initial undefined value.
     return obj->is<GlobalObject>();
+}
+
+inline bool
+PropertyHasBeenMarkedNonConstant(JSObject *obj, jsid id)
+{
+    // Non-constant properties are only relevant for singleton objects.
+    if (!obj->hasSingletonType())
+        return true;
+
+    // EnsureTrackPropertyTypes must have been called on this object.
+    if (obj->type()->unknownProperties())
+        return true;
+    HeapTypeSet *types = obj->type()->maybeGetProperty(IdToTypeId(id));
+    return types->nonConstantProperty();
 }
 
 inline bool
@@ -611,13 +652,9 @@ TypeScript::BytecodeTypes(JSScript *script, jsbytecode *pc, uint32_t *bytecodeMa
 TypeScript::BytecodeTypes(JSScript *script, jsbytecode *pc)
 {
     JS_ASSERT(CurrentThreadCanAccessRuntime(script->runtimeFromMainThread()));
-#ifdef JS_ION
     uint32_t *hint = script->baselineScript()->bytecodeTypeMap() + script->nTypeSets();
     return BytecodeTypes(script, pc, script->baselineScript()->bytecodeTypeMap(),
                          hint, script->types->typeArray());
-#else
-    MOZ_CRASH();
-#endif
 }
 
 struct AllocationSiteKey : public DefaultHasher<AllocationSiteKey> {
@@ -651,10 +688,9 @@ TypeScript::InitObject(JSContext *cx, JSScript *script, jsbytecode *pc, JSProtoK
 {
     JS_ASSERT(!UseNewTypeForInitializer(script, pc, kind));
 
-    /* :XXX: Limit script->length so we don't need to check the offset up front? */
     uint32_t offset = script->pcToOffset(pc);
 
-    if (!script->compileAndGo() || offset >= AllocationSiteKey::OFFSET_LIMIT)
+    if (offset >= AllocationSiteKey::OFFSET_LIMIT)
         return GetTypeNewObject(cx, kind);
 
     AllocationSiteKey key;
@@ -969,27 +1005,31 @@ inline TypeObjectKey *
 Type::objectKey() const
 {
     JS_ASSERT(isObject());
-    if (isTypeObject())
-        TypeObject::readBarrier((TypeObject *) data);
-    else
-        JSObject::readBarrier((JSObject *) (data ^ 1));
     return (TypeObjectKey *) data;
 }
 
 inline JSObject *
 Type::singleObject() const
 {
-    JS_ASSERT(isSingleObject());
-    JSObject::readBarrier((JSObject *) (data ^ 1));
-    return (JSObject *) (data ^ 1);
+    return objectKey()->asSingleObject();
 }
 
 inline TypeObject *
 Type::typeObject() const
 {
-    JS_ASSERT(isTypeObject());
-    TypeObject::readBarrier((TypeObject *) data);
-    return (TypeObject *) data;
+    return objectKey()->asTypeObject();
+}
+
+inline JSObject *
+Type::singleObjectNoBarrier() const
+{
+    return objectKey()->asSingleObjectNoBarrier();
+}
+
+inline TypeObject *
+Type::typeObjectNoBarrier() const
+{
+    return objectKey()->asTypeObjectNoBarrier();
 }
 
 inline bool
@@ -1060,6 +1100,16 @@ HeapTypeSet::setNonWritableProperty(ExclusiveContext *cx)
     newPropertyState(cx);
 }
 
+inline void
+HeapTypeSet::setNonConstantProperty(ExclusiveContext *cx)
+{
+    if (flags & TYPE_FLAG_NON_CONSTANT_PROPERTY)
+        return;
+
+    flags |= TYPE_FLAG_NON_CONSTANT_PROPERTY;
+    newPropertyState(cx);
+}
+
 inline unsigned
 TypeSet::getObjectCount() const
 {
@@ -1093,6 +1143,20 @@ TypeSet::getTypeObject(unsigned i) const
 {
     TypeObjectKey *key = getObject(i);
     return (key && key->isTypeObject()) ? key->asTypeObject() : nullptr;
+}
+
+inline JSObject *
+TypeSet::getSingleObjectNoBarrier(unsigned i) const
+{
+    TypeObjectKey *key = getObject(i);
+    return (key && key->isSingleObject()) ? key->asSingleObjectNoBarrier() : nullptr;
+}
+
+inline TypeObject *
+TypeSet::getTypeObjectNoBarrier(unsigned i) const
+{
+    TypeObjectKey *key = getObject(i);
+    return (key && key->isTypeObject()) ? key->asTypeObjectNoBarrier() : nullptr;
 }
 
 inline const Class *
@@ -1143,7 +1207,7 @@ TypeObject::getProperty(ExclusiveContext *cx, jsid id)
 {
     JS_ASSERT(cx->compartment()->activeAnalysis);
 
-    JS_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id));
+    JS_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id) || JSID_IS_SYMBOL(id));
     JS_ASSERT_IF(!JSID_IS_EMPTY(id), id == IdToTypeId(id));
     JS_ASSERT(!unknownProperties());
 
@@ -1184,7 +1248,7 @@ TypeObject::getProperty(ExclusiveContext *cx, jsid id)
 inline HeapTypeSet *
 TypeObject::maybeGetProperty(jsid id)
 {
-    JS_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id));
+    JS_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id) || JSID_IS_SYMBOL(id));
     JS_ASSERT_IF(!JSID_IS_EMPTY(id), id == IdToTypeId(id));
     JS_ASSERT(!unknownProperties());
 
@@ -1215,34 +1279,15 @@ TypeObject::getProperty(unsigned i)
 }
 
 inline void
-TypeObjectAddendum::writeBarrierPre(TypeObjectAddendum *type)
-{
-#ifdef JSGC_INCREMENTAL
-    if (!type)
-        return;
-
-    switch (type->kind) {
-      case NewScript:
-        return TypeNewScript::writeBarrierPre(type->asNewScript());
-
-      case TypedObject:
-        return TypeTypedObject::writeBarrierPre(type->asTypedObject());
-    }
-#endif
-}
-
-inline void
 TypeNewScript::writeBarrierPre(TypeNewScript *newScript)
 {
 #ifdef JSGC_INCREMENTAL
-    if (!newScript || !newScript->fun->runtimeFromAnyThread()->needsBarrier())
+    if (!newScript || !newScript->fun->runtimeFromAnyThread()->needsIncrementalBarrier())
         return;
 
     JS::Zone *zone = newScript->fun->zoneFromAnyThread();
-    if (zone->needsBarrier()) {
-        MarkObject(zone->barrierTracer(), &newScript->fun, "write barrier");
-        MarkObject(zone->barrierTracer(), &newScript->templateObject, "write barrier");
-    }
+    if (zone->needsIncrementalBarrier())
+        newScript->trace(zone->barrierTracer());
 #endif
 }
 
@@ -1260,7 +1305,6 @@ template <>
 struct GCMethods<const types::Type>
 {
     static types::Type initial() { return types::Type::UnknownType(); }
-    static ThingRootKind kind() { return THING_ROOT_TYPE; }
     static bool poisoned(const types::Type &v) {
         return (v.isTypeObject() && IsPoisonedPtr(v.typeObject()))
             || (v.isSingleObject() && IsPoisonedPtr(v.singleObject()));
@@ -1271,7 +1315,6 @@ template <>
 struct GCMethods<types::Type>
 {
     static types::Type initial() { return types::Type::UnknownType(); }
-    static ThingRootKind kind() { return THING_ROOT_TYPE; }
     static bool poisoned(const types::Type &v) {
         return (v.isTypeObject() && IsPoisonedPtr(v.typeObject()))
             || (v.isSingleObject() && IsPoisonedPtr(v.singleObject()));
@@ -1279,9 +1322,5 @@ struct GCMethods<types::Type>
 };
 
 } // namespace js
-
-namespace JS {
-template<> class AnchorPermitted<js::types::TypeObject *> { };
-}  // namespace JS
 
 #endif /* jsinferinlines_h */

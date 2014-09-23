@@ -90,9 +90,11 @@ TextureTargetForAndroidPixelFormat(android::PixelFormat aFormat)
 }
 
 GrallocTextureSourceOGL::GrallocTextureSourceOGL(CompositorOGL* aCompositor,
+                                                 GrallocTextureHostOGL* aTextureHost,
                                                  android::GraphicBuffer* aGraphicBuffer,
                                                  gfx::SurfaceFormat aFormat)
   : mCompositor(aCompositor)
+  , mTextureHost(aTextureHost)
   , mGraphicBuffer(aGraphicBuffer)
   , mEGLImage(0)
   , mFormat(aFormat)
@@ -142,6 +144,13 @@ GrallocTextureSourceOGL::BindTexture(GLenum aTextureUnit, gfx::Filter aFilter)
   }
 
   ApplyFilterToBoundTexture(gl(), aFilter, textureTarget);
+
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+  if (mTextureHost) {
+    // Wait until it's ready.
+    mTextureHost->WaitAcquireFenceSyncComplete();
+  }
+#endif
 }
 
 void GrallocTextureSourceOGL::Lock()
@@ -250,6 +259,11 @@ GrallocTextureSourceOGL::SetCompositableBackendSpecificData(CompositableBackendS
 
   gl()->fActiveTexture(LOCAL_GL_TEXTURE0);
   gl()->fBindTexture(textureTarget, tex);
+
+  // Setup texure parameters at the first binding.
+  gl()->fTexParameteri(textureTarget, LOCAL_GL_TEXTURE_WRAP_T, GetWrapMode());
+  gl()->fTexParameteri(textureTarget, LOCAL_GL_TEXTURE_WRAP_S, GetWrapMode());
+
   // create new EGLImage
   mEGLImage = EGLImageCreateFromNativeBuffer(gl(), mGraphicBuffer->getNativeBuffer());
   BindEGLImage();
@@ -296,23 +310,27 @@ GrallocTextureHostOGL::GrallocTextureHostOGL(TextureFlags aFlags,
     format =
       SurfaceFormatForAndroidPixelFormat(graphicBuffer->getPixelFormat(),
                                          aFlags & TextureFlags::RB_SWAPPED);
+    mTextureSource = new GrallocTextureSourceOGL(nullptr,
+                                                 this,
+                                                 graphicBuffer,
+                                                 format);
   } else {
-    NS_WARNING("gralloc buffer is nullptr");
+    printf_stderr("gralloc buffer is nullptr");
   }
-  mTextureSource = new GrallocTextureSourceOGL(nullptr,
-                                               graphicBuffer,
-                                               format);
 }
 
 GrallocTextureHostOGL::~GrallocTextureHostOGL()
 {
-  mTextureSource = nullptr;
+  MOZ_ASSERT(!mTextureSource || (mFlags & TextureFlags::DEALLOCATE_CLIENT),
+             "Leaking our buffer");
 }
 
 void
 GrallocTextureHostOGL::SetCompositor(Compositor* aCompositor)
 {
-  mTextureSource->SetCompositor(static_cast<CompositorOGL*>(aCompositor));
+  if (mTextureSource) {
+    mTextureSource->SetCompositor(static_cast<CompositorOGL*>(aCompositor));
+  }
 }
 
 bool
@@ -334,12 +352,18 @@ GrallocTextureHostOGL::Unlock()
 bool
 GrallocTextureHostOGL::IsValid() const
 {
+  if (!mTextureSource) {
+    return false;
+  }
   return mTextureSource->IsValid();
 }
 
 gfx::SurfaceFormat
 GrallocTextureHostOGL::GetFormat() const
 {
+  if (!mTextureSource) {
+    return gfx::SurfaceFormat::UNKNOWN;
+  }
   return mTextureSource->GetFormat();
 }
 
@@ -348,6 +372,7 @@ GrallocTextureHostOGL::DeallocateSharedData()
 {
   if (mTextureSource) {
     mTextureSource->ForgetBuffer();
+    mTextureSource = nullptr;
   }
   if (mGrallocHandle.buffer().type() != SurfaceDescriptor::Tnull_t) {
     MaybeMagicGrallocBufferHandle handle = mGrallocHandle.buffer();
@@ -359,7 +384,7 @@ GrallocTextureHostOGL::DeallocateSharedData()
       owner = handle.get_MagicGrallocBufferHandle().mRef.mOwner;
     }
 
-    SharedBufferManagerParent::GetInstance(owner)->DropGrallocBuffer(mGrallocHandle);
+    SharedBufferManagerParent::DropGrallocBuffer(owner, mGrallocHandle);
   }
 }
 
@@ -368,13 +393,16 @@ GrallocTextureHostOGL::ForgetSharedData()
 {
   if (mTextureSource) {
     mTextureSource->ForgetBuffer();
+    mTextureSource = nullptr;
   }
 }
 
 void
 GrallocTextureHostOGL::DeallocateDeviceData()
 {
-  mTextureSource->DeallocateDeviceData();
+  if (mTextureSource) {
+    mTextureSource->DeallocateDeviceData();
+  }
 }
 
 LayerRenderState

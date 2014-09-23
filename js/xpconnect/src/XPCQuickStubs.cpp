@@ -388,17 +388,6 @@ xpc_qsThrowBadSetterValue(JSContext *cx, nsresult rv, JSObject *obj,
 }
 
 bool
-xpc_qsGetterOnlyPropertyStub(JSContext *cx, HandleObject obj, HandleId id, bool strict,
-                             MutableHandleValue vp)
-{
-    return JS_ReportErrorFlagsAndNumber(cx,
-                                        JSREPORT_WARNING | JSREPORT_STRICT |
-                                        JSREPORT_STRICT_MODE_ERROR,
-                                        js_GetErrorMessage, nullptr,
-                                        JSMSG_GETTER_ONLY);
-}
-
-bool
 xpc_qsGetterOnlyNativeStub(JSContext *cx, unsigned argc, jsval *vp)
 {
     return JS_ReportErrorFlagsAndNumber(cx,
@@ -422,15 +411,9 @@ xpc_qsDOMString::xpc_qsDOMString(JSContext *cx, HandleValue v,
     if (!s)
         return;
 
-    size_t len;
-    const jschar *chars = JS_GetStringCharsZAndLength(cx, s, &len);
-    if (!chars) {
-        mValid = false;
-        return;
-    }
+    nsAutoString *str = new(mBuf) implementation_type();
 
-    new(mBuf) implementation_type(chars, len);
-    mValid = true;
+    mValid = AssignJSString(cx, *str, s);
 }
 
 xpc_qsACString::xpc_qsACString(JSContext *cx, HandleValue v,
@@ -471,14 +454,13 @@ xpc_qsAUTF8String::xpc_qsAUTF8String(JSContext *cx, HandleValue v, MutableHandle
     if (!s)
         return;
 
-    size_t len;
-    const char16_t *chars = JS_GetStringCharsZAndLength(cx, s, &len);
-    if (!chars) {
+    nsAutoJSString str;
+    if (!str.init(cx, s)) {
         mValid = false;
         return;
     }
 
-    new(mBuf) implementation_type(chars, len);
+    new(mBuf) implementation_type(str);
     mValid = true;
 }
 
@@ -527,18 +509,6 @@ getWrapper(JSContext *cx,
     // to js::CheckedUnwrap.
     if (js::IsWrapper(obj)) {
         JSObject* inner = js::CheckedUnwrap(obj, /* stopAtOuter = */ false);
-
-        // Hack - For historical reasons, wrapped chrome JS objects have been
-        // passable as native interfaces. We'd like to fix this, but it
-        // involves fixing the contacts API and PeerConnection to stop using
-        // COWs. This needs to happen, but for now just preserve the old
-        // behavior.
-        //
-        // Note that there is an identical hack in
-        // XPCConvert::JSObject2NativeInterface which should be removed if this
-        // one is.
-        if (!inner && MOZ_UNLIKELY(xpc::WrapperFactory::IsCOW(obj)))
-            inner = js::UncheckedUnwrap(obj);
 
         // The safe unwrap might have failed if we encountered an object that
         // we're not allowed to unwrap. If it didn't fail though, we should be
@@ -646,7 +616,7 @@ castNativeFromWrapper(JSContext *cx,
             native = nullptr;
         }
     } else if (cur && protoDepth >= 0) {
-        const mozilla::dom::DOMClass* domClass =
+        const mozilla::dom::DOMJSClass* domClass =
             mozilla::dom::GetDOMClass(cur);
         native = mozilla::dom::UnwrapDOMObject<nsISupports>(cur);
         if (native &&

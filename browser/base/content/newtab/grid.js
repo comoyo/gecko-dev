@@ -7,7 +7,7 @@
 /**
  * Define various fixed dimensions
  */
-const GRID_BOTTOM_EXTRA = 4; // title's line-height extends 4px past the margin
+const GRID_BOTTOM_EXTRA = 7; // title's line-height extends 7px past the margin
 const GRID_WIDTH_EXTRA = 1; // provide 1px buffer to allow for rounding error
 
 /**
@@ -161,14 +161,14 @@ let gGrid = {
     site.innerHTML =
       '<a class="newtab-link">' +
       '  <span class="newtab-thumbnail"/>' +
+      '  <span class="newtab-thumbnail enhanced-content"/>' +
       '  <span class="newtab-title"/>' +
       '</a>' +
       '<input type="button" title="' + newTabString("pin") + '"' +
       '       class="newtab-control newtab-control-pin"/>' +
       '<input type="button" title="' + newTabString("block") + '"' +
       '       class="newtab-control newtab-control-block"/>' +
-      '<input type="button" title="' + newTabString("sponsored") + '"' +
-      '       class="newtab-control newtab-control-sponsored"/>';
+      '<span class="newtab-sponsored">' + newTabString("sponsored.button") + '</span>';
 
     this._siteFragment = document.createDocumentFragment();
     this._siteFragment.appendChild(site);
@@ -202,18 +202,12 @@ let gGrid = {
     }
 
     let availSpace = document.documentElement.clientHeight - this._cellMargin -
-                     document.querySelector("#newtab-margin-undo-container").offsetHeight -
                      document.querySelector("#newtab-search-container").offsetHeight;
     let visibleRows = Math.floor(availSpace / this._cellHeight);
     this._node.style.height = this._computeHeight() + "px";
     this._node.style.maxHeight = this._computeHeight(visibleRows) + "px";
     this._node.style.maxWidth = gGridPrefs.gridColumns * this._cellWidth +
                                 GRID_WIDTH_EXTRA + "px";
-
-    // Resize the search bar.
-    let width = parseFloat(window.getComputedStyle(this._node).width);
-    let visibleCols = Math.floor(width / this._cellWidth);
-    gSearch.setWidth(visibleCols * this._cellWidth - this._cellMargin);
   },
 
   _shouldRenderGrid : function Grid_shouldRenderGrid() {

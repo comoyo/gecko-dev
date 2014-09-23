@@ -41,10 +41,6 @@
 #include "prnetdb.h"
 
 extern PRLogModuleInfo* gRtspLog;
-#define LOGI(msg, ...) PR_LOG(gRtspLog, PR_LOG_ALWAYS, ("RTSP" msg, ##__VA_ARGS__))
-#define LOGV(msg, ...) PR_LOG(gRtspLog, PR_LOG_DEBUG, (msg, ##__VA_ARGS__))
-#define LOGE(msg, ...) PR_LOG(gRtspLog, PR_LOG_ERROR, (msg, ##__VA_ARGS__))
-#define LOGW(msg, ...) PR_LOG(gRtspLog, PR_LOG_WARNING, (msg, ##__VA_ARGS__))
 
 // If no access units are received within 2 secs, assume that the rtp
 // stream has ended and signal end of stream.
@@ -57,19 +53,6 @@ static int64_t kPlayTimeoutUs = 10000000ll;
 static int64_t kDefaultKeepAliveTimeoutUs = 60000000ll;
 
 namespace android {
-
-static void MakeUserAgentString(AString *s) {
-    s->setTo("stagefright/1.1 (Linux;Android ");
-
-#if (PROPERTY_VALUE_MAX < 8)
-#error "PROPERTY_VALUE_MAX must be at least 8"
-#endif
-
-    char value[PROPERTY_VALUE_MAX];
-    property_get("ro.build.version.release", value, "Unknown");
-    s->append(value);
-    s->append(")");
-}
 
 static bool GetAttribute(const char *s, const char *key, AString *value) {
     value->clear();
@@ -114,9 +97,11 @@ struct RtspConnectionHandler : public AHandler {
 
     RtspConnectionHandler(
             const char *url,
+            const char *userAgent,
             const sp<AMessage> &notify,
             bool uidValid = false, uid_t uid = 0)
-        : mNotify(notify),
+        : mUserAgent(userAgent),
+          mNotify(notify),
           mUIDValid(uidValid),
           mUID(uid),
           mNetLooper(new ALooper),
@@ -165,6 +150,7 @@ struct RtspConnectionHandler : public AHandler {
         }
 
         mSessionHost = host;
+        mConn->MakeUserAgent(mUserAgent.c_str());
     }
 
     void connect() {
@@ -239,7 +225,7 @@ struct RtspConnectionHandler : public AHandler {
         setCheckPending(true);
         ++mCheckGeneration;
 
-        sp<AMessage> reply = new AMessage('pause', id());
+        sp<AMessage> reply = new AMessage('paus', id());
         mConn->sendRequest(request.c_str(), reply);
     }
 
@@ -257,7 +243,7 @@ struct RtspConnectionHandler : public AHandler {
 
         setCheckPending(false);
 
-        sp<AMessage> reply = new AMessage('resume', id());
+        sp<AMessage> reply = new AMessage('resu', id());
         mConn->sendRequest(request.c_str(), reply);
 
     }
@@ -276,7 +262,8 @@ struct RtspConnectionHandler : public AHandler {
         buf->setRange(0, buf->size() + 8);
     }
 
-    static void addSDES(PRFileDesc *s, const sp<ABuffer> &buffer) {
+    static void addSDES(PRFileDesc *s, const sp<ABuffer> &buffer,
+                        const char *userAgent) {
         PRNetAddr addr;
         CHECK_EQ(PR_GetSockName(s, &addr), PR_SUCCESS);
 
@@ -304,7 +291,7 @@ struct RtspConnectionHandler : public AHandler {
         data[offset++] = 6;  // TOOL
 
         AString tool;
-        MakeUserAgentString(&tool);
+        tool.setTo(userAgent);
 
         data[offset++] = tool.size();
 
@@ -404,7 +391,7 @@ struct RtspConnectionHandler : public AHandler {
         sp<ABuffer> buf = new ABuffer(65536);
         buf->setRange(0, 0);
         addRR(buf);
-        addSDES(rtpSocket, buf);
+        addSDES(rtpSocket, buf, mUserAgent.c_str());
 
         addr.inet.port = PR_htons(rtpPort);
 
@@ -741,7 +728,7 @@ struct RtspConnectionHandler : public AHandler {
                 }
                 break;
             }
-            case 'pause':
+            case 'paus':
             {
                 mPausePending = true;
                 LOGI("pause completed");
@@ -750,7 +737,7 @@ struct RtspConnectionHandler : public AHandler {
                 msg->post();
                 break;
             }
-            case 'resume':
+            case 'resu':
                  break;
             case 'play':
             {
@@ -835,7 +822,7 @@ struct RtspConnectionHandler : public AHandler {
                 break;
             }
 
-            case 'endofstream':
+            case 'eost':
             {
                 size_t trackIndex = 0;
                 msg->findSize("trackIndex", &trackIndex);
@@ -951,7 +938,7 @@ struct RtspConnectionHandler : public AHandler {
 
                 if (track->mNumAccessUnitsReceiveds == 0) {
                     LOGI("stream ended? aborting.");
-                    sp<AMessage> endStreamMsg = new AMessage('endofstream', id());
+                    sp<AMessage> endStreamMsg = new AMessage('eost', id());
                     endStreamMsg->setSize("trackIndex", trackIndex);
                     endStreamMsg->post();
                     break;
@@ -1385,6 +1372,7 @@ private:
         bool mCheckPendings;
     };
 
+    AString mUserAgent;
     sp<AMessage> mNotify;
     bool mUIDValid;
     uid_t mUID;

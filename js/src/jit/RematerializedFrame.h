@@ -7,8 +7,6 @@
 #ifndef jit_RematerializedFrame_h
 #define jit_RematerializedFrame_h
 
-#ifdef JS_ION
-
 #include "jsfun.h"
 
 #include "jit/JitFrameIterator.h"
@@ -30,6 +28,9 @@ class RematerializedFrame
     // The fp of the top frame associated with this possibly inlined frame.
     uint8_t *top_;
 
+    // The bytecode at the time of rematerialization.
+    jsbytecode *pc_;
+
     size_t frameNo_;
     unsigned numActualArgs_;
 
@@ -41,11 +42,25 @@ class RematerializedFrame
     Value thisValue_;
     Value slots_[1];
 
-    RematerializedFrame(ThreadSafeContext *cx, uint8_t *top, InlineFrameIterator &iter);
+    RematerializedFrame(ThreadSafeContext *cx, uint8_t *top, unsigned numActualArgs,
+                        InlineFrameIterator &iter);
 
   public:
     static RematerializedFrame *New(ThreadSafeContext *cx, uint8_t *top,
                                     InlineFrameIterator &iter);
+
+    // Rematerialize all remaining frames pointed to by |iter| into |frames|
+    // in older-to-younger order, e.g., frames[0] is the oldest frame.
+    static bool RematerializeInlineFrames(ThreadSafeContext *cx, uint8_t *top,
+                                          InlineFrameIterator &iter,
+                                          Vector<RematerializedFrame *> &frames);
+
+    // Free a vector of RematerializedFrames; takes care to call the
+    // destructor. Also clears the vector.
+    static void FreeInVector(Vector<RematerializedFrame *> &frames);
+
+    // Mark a vector of RematerializedFrames.
+    static void MarkInVector(JSTracer *trc, Vector<RematerializedFrame *> &frames);
 
     bool prevUpToDate() const {
         return prevUpToDate_;
@@ -56,6 +71,9 @@ class RematerializedFrame
 
     uint8_t *top() const {
         return top_;
+    }
+    jsbytecode *pc() const {
+        return pc_;
     }
     size_t frameNo() const {
         return frameNo_;
@@ -162,5 +180,4 @@ class RematerializedFrame
 } // namespace jit
 } // namespace js
 
-#endif // JS_ION
 #endif // jit_RematerializedFrame_h

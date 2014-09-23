@@ -8,6 +8,7 @@
 #define js_ProfilingStack_h
 
 #include "mozilla/NullPtr.h"
+#include "mozilla/TypedEnum.h"
 
 #include "jsbytecode.h"
 #include "jstypes.h"
@@ -46,11 +47,9 @@ class ProfileEntry
     int32_t volatile lineOrPc;
 
     // General purpose storage describing this frame.
-    uint32_t volatile flags;
+    uint32_t volatile flags_;
 
   public:
-    ProfileEntry(void) : flags(0) {}
-
     // These traits are bit masks. Make sure they're powers of 2.
     enum Flags {
         // Indicate whether a profile entry represents a CPP frame. If not set,
@@ -60,8 +59,30 @@ class ProfileEntry
 
         // Indicate that copying the frame label is not necessary when taking a
         // sample of the pseudostack.
-        FRAME_LABEL_COPY = 0x02
+        FRAME_LABEL_COPY = 0x02,
+
+        // This ProfileEntry was pushed immediately before calling into asm.js.
+        ASMJS = 0x04,
+
+        // Mask for removing all flags except the category information.
+        CATEGORY_MASK = ~IS_CPP_ENTRY & ~FRAME_LABEL_COPY & ~ASMJS
     };
+
+    // Keep these in sync with browser/devtools/profiler/utils/global.js
+    MOZ_BEGIN_NESTED_ENUM_CLASS(Category, uint32_t)
+        OTHER    = 0x08,
+        CSS      = 0x10,
+        JS       = 0x20,
+        GC       = 0x40,
+        CC       = 0x80,
+        NETWORK  = 0x100,
+        GRAPHICS = 0x200,
+        STORAGE  = 0x400,
+        EVENTS   = 0x800,
+
+        FIRST    = OTHER,
+        LAST     = EVENTS
+    MOZ_END_NESTED_ENUM_CLASS(Category)
 
     // All of these methods are marked with the 'volatile' keyword because SPS's
     // representation of the stack is stored such that all ProfileEntry
@@ -71,32 +92,39 @@ class ProfileEntry
     bool isCpp() const volatile { return hasFlag(IS_CPP_ENTRY); }
     bool isJs() const volatile { return !isCpp(); }
 
-    bool isCopyLabel() const volatile { return hasFlag(FRAME_LABEL_COPY); };
+    bool isCopyLabel() const volatile { return hasFlag(FRAME_LABEL_COPY); }
 
     void setLabel(const char *aString) volatile { string = aString; }
     const char *label() const volatile { return string; }
 
     void setJsFrame(JSScript *aScript, jsbytecode *aPc) volatile {
-        flags &= ~IS_CPP_ENTRY;
+        flags_ = 0;
         spOrScript = aScript;
         setPC(aPc);
     }
     void setCppFrame(void *aSp, uint32_t aLine) volatile {
-        flags |= IS_CPP_ENTRY;
+        flags_ = IS_CPP_ENTRY;
         spOrScript = aSp;
-        lineOrPc = aLine;
+        lineOrPc = static_cast<int32_t>(aLine);
     }
 
-    void setFlag(Flags flag) volatile {
+    void setFlag(uint32_t flag) volatile {
         MOZ_ASSERT(flag != IS_CPP_ENTRY);
-        flags |= flag;
+        flags_ |= flag;
     }
-    void unsetFlag(Flags flag) volatile {
+    void unsetFlag(uint32_t flag) volatile {
         MOZ_ASSERT(flag != IS_CPP_ENTRY);
-        flags &= ~flag;
+        flags_ &= ~flag;
     }
-    bool hasFlag(Flags flag) const volatile {
-        return bool(flags & uint32_t(flag));
+    bool hasFlag(uint32_t flag) const volatile {
+        return bool(flags_ & flag);
+    }
+
+    uint32_t flags() const volatile {
+        return flags_;
+    }
+    uint32_t category() const volatile {
+        return flags_ & CATEGORY_MASK;
     }
 
     void *stackAddress() const volatile {
@@ -109,7 +137,7 @@ class ProfileEntry
     }
     uint32_t line() const volatile {
         MOZ_ASSERT(!isJs());
-        return lineOrPc;
+        return static_cast<uint32_t>(lineOrPc);
     }
 
     // We can't know the layout of JSScript, so look in vm/SPSProfiler.cpp.
@@ -124,7 +152,7 @@ class ProfileEntry
     static size_t offsetOfLabel() { return offsetof(ProfileEntry, string); }
     static size_t offsetOfSpOrScript() { return offsetof(ProfileEntry, spOrScript); }
     static size_t offsetOfLineOrPc() { return offsetof(ProfileEntry, lineOrPc); }
-    static size_t offsetOfFlags() { return offsetof(ProfileEntry, flags); }
+    static size_t offsetOfFlags() { return offsetof(ProfileEntry, flags_); }
 };
 
 JS_FRIEND_API(void)

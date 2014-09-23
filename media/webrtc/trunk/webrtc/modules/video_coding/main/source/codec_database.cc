@@ -93,6 +93,8 @@ bool VCMCodecDataBase::Codec(int list_id,
       settings->maxFramerate = VCM_DEFAULT_FRAME_RATE;
       settings->width = VCM_DEFAULT_CODEC_WIDTH;
       settings->height = VCM_DEFAULT_CODEC_HEIGHT;
+      // consider using 2 to avoid deal with 'odd' downscales
+      settings->resolution_divisor = 1; // may not actually be needed
       settings->numberOfSimulcastStreams = 0;
       settings->qpMax = 56;
       settings->codecSpecific.VP8.resilience = kResilientStream;
@@ -119,6 +121,7 @@ bool VCMCodecDataBase::Codec(int list_id,
       settings->maxFramerate = VCM_DEFAULT_FRAME_RATE;
       settings->width = VCM_DEFAULT_CODEC_WIDTH;
       settings->height = VCM_DEFAULT_CODEC_HEIGHT;
+      settings->resolution_divisor = 1;
       settings->minBitrate = VCM_MIN_BITRATE;
       settings->numberOfSimulcastStreams = 0;
       return true;
@@ -332,6 +335,7 @@ bool VCMCodecDataBase::RequiresEncoderReset(const VideoCodec& new_send_codec) {
       new_send_codec.plType != send_codec_.plType ||
       new_send_codec.width != send_codec_.width ||
       new_send_codec.height != send_codec_.height ||
+      new_send_codec.resolution_divisor != send_codec_.resolution_divisor ||
       new_send_codec.maxBitrate != send_codec_.maxBitrate ||
       new_send_codec.minBitrate != send_codec_.minBitrate ||
       new_send_codec.qpMax != send_codec_.qpMax ||
@@ -352,12 +356,6 @@ bool VCMCodecDataBase::RequiresEncoderReset(const VideoCodec& new_send_codec) {
       }
       break;
     case kVideoCodecGeneric:
-      if (memcmp(&new_send_codec.codecSpecific.Generic,
-                 &send_codec_.codecSpecific.Generic,
-                 sizeof(new_send_codec.codecSpecific.Generic)) !=
-          0) {
-        return true;
-      }
       break;
     case kVideoCodecH261:
       if (memcmp(&new_send_codec.codecSpecific.H261,
@@ -372,6 +370,7 @@ bool VCMCodecDataBase::RequiresEncoderReset(const VideoCodec& new_send_codec) {
     case kVideoCodecRED:
     case kVideoCodecULPFEC:
     case kVideoCodecH264:
+      // TODO(jesup): analyze codec config for H264
       break;
     // Unknown codec type, reset just to be sure.
     case kVideoCodecUnknown:
@@ -585,6 +584,11 @@ bool VCMCodecDataBase::SupportsRenderScheduling() const {
   if (current_dec_is_external_) {
     const VCMExtDecoderMapItem* ext_item = FindExternalDecoderItem(
         receive_codec_.plType);
+    if (!ext_item) {
+      WEBRTC_TRACE(webrtc::kTraceError, webrtc::kTraceVideoCoding, VCMId(id_),
+                   "Unknown payload type: %u", receive_codec_.plType);
+      return false;
+    }
     render_timing = ext_item->internal_render_timing;
   }
   return render_timing;

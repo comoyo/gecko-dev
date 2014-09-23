@@ -1,4 +1,4 @@
-/* -*- Mode: JavaScript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -97,7 +97,7 @@ FrameWorker.prototype = {
 
     // Bug 798660 - XHR, WebSocket and Worker have issues in a sandbox and need
     // to be unwrapped to work
-    let needsWaive = ['XMLHttpRequest', 'WebSocket', 'Worker'];
+    let needsWaive = ['XMLHttpRequest', 'WebSocket', 'Worker' ];
     // Methods need to be bound with the proper |this|.
     let needsBind = ['atob', 'btoa', 'dump', 'setInterval', 'clearInterval',
                      'setTimeout', 'clearTimeout'];

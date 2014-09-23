@@ -21,11 +21,13 @@
       'include_dirs': [
         '../interface',
         '../../../interface',
+        '<(webrtc_root)',
       ],
       'direct_dependent_settings': {
         'include_dirs': [
           '../interface',
           '../../../interface',
+          '<(webrtc_root)',
         ],
       },
       'sources': [
@@ -44,6 +46,8 @@
         'acm_common_defs.h',
         'acm_dtmf_playout.cc',
         'acm_dtmf_playout.h',
+        'acm_g722.cc',
+        'acm_g722.h',
         'acm_g729.cc',
         'acm_g729.h',
         'acm_g7291.cc',
@@ -71,6 +75,8 @@
         'audio_coding_module.cc',
         'audio_coding_module_impl.cc',
         'audio_coding_module_impl.h',
+        'call_statistics.cc',
+        'call_statistics.h',
         'initial_delay_manager.cc',
         'initial_delay_manager.h',
         'nack.cc',

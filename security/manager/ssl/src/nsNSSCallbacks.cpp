@@ -136,6 +136,9 @@ nsHTTPDownloadEvent::Run()
   nsCOMPtr<nsIHttpChannel> hchan = do_QueryInterface(chan);
   NS_ENSURE_STATE(hchan);
 
+  rv = hchan->SetAllowSTS(false);
+  NS_ENSURE_SUCCESS(rv, rv);
+
   rv = hchan->SetRequestMethod(mRequestSession->mRequestMethod);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -583,16 +586,6 @@ void nsNSSHttpInterface::initTable()
   v1.freeFcn = freeFcn;
 }
 
-void nsNSSHttpInterface::registerHttpClient()
-{
-  SEC_RegisterDefaultHttpClient(&sNSSInterfaceTable);
-}
-
-void nsNSSHttpInterface::unregisterHttpClient()
-{
-  SEC_RegisterDefaultHttpClient(nullptr);
-}
-
 nsHTTPListener::nsHTTPListener()
 : mResultData(nullptr),
   mResultLen(0),
@@ -611,7 +604,7 @@ nsHTTPListener::~nsHTTPListener()
     send_done_signal();
 
   if (mResultData) {
-    NS_Free(const_cast<uint8_t *>(mResultData));
+    moz_free(const_cast<uint8_t *>(mResultData));
   }
 
   if (mLoader) {
@@ -905,6 +898,7 @@ PreliminaryHandshakeDone(PRFileDesc* fd)
       status->mCipherName.Assign(cipherInfo.cipherSuiteName);
       infoObject->SetKEAUsed(cipherInfo.keaType);
       infoObject->SetKEAKeyBits(channelInfo.keaKeyBits);
+      infoObject->SetMACAlgorithmUsed(cipherInfo.macAlgorithm);
     }
   }
 
@@ -1212,7 +1206,7 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
     nsContentUtils::LogSimpleConsoleError(msg, "SSL");
   }
 
-  mozilla::pkix::ScopedCERTCertificate serverCert(SSL_PeerCertificate(fd));
+  ScopedCERTCertificate serverCert(SSL_PeerCertificate(fd));
 
   /* Set the SSL Status information */
   RefPtr<nsSSLStatus> status(infoObject->SSLStatus());

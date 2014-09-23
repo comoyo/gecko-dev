@@ -10,7 +10,6 @@
 #include "nsDOMSettableTokenList.h"
 #include "nsFrameLoader.h"
 #include "nsElementFrameLoaderOwner.h"
-#include "nsIDocument.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMEventListener.h"
 #include "nsIFrameLoader.h"
@@ -20,11 +19,12 @@
 #include "SVGAnimatedPreserveAspectRatio.h"
 
 nsresult NS_NewSVGIFrameElement(nsIContent **aResult,
-                                already_AddRefed<nsINodeInfo>&& aNodeInfo,
+                                already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                                 mozilla::dom::FromParser aFromParser);
 
 typedef mozilla::dom::SVGGraphicsElement SVGIFrameElementBase;
 
+class nsIDocument;
 class nsSVGIFrameFrame;
 
 namespace mozilla {
@@ -36,12 +36,14 @@ class SVGIFrameElement MOZ_FINAL : public SVGIFrameElementBase,
 {
   friend class ::nsSVGIFrameFrame;
   friend nsresult (::NS_NewSVGIFrameElement(nsIContent **aResult,
-                                  already_AddRefed<nsINodeInfo>&& aNodeInfo,
+                                  already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                                   mozilla::dom::FromParser aFromParser));
 
-  SVGIFrameElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
+  SVGIFrameElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                    mozilla::dom::FromParser aFromParser);
   virtual JSObject* WrapNode(JSContext *aCx) MOZ_OVERRIDE;
+
+  ~SVGIFrameElement();
 
 public:
   // interface
@@ -72,7 +74,7 @@ public:
 
   virtual void DestroyContent() MOZ_OVERRIDE;
   nsresult CopyInnerTo(mozilla::dom::Element* aDest);
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
 
   // WebIDL
   already_AddRefed<SVGAnimatedLength> X();

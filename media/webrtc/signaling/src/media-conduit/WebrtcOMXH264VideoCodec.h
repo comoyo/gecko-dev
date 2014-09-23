@@ -11,6 +11,9 @@
 
 #include "AudioConduit.h"
 #include "VideoConduit.h"
+#include <foundation/ABase.h>
+#include <utils/RefBase.h>
+#include "OMXCodecWrapper.h"
 
 namespace android {
   class OMXVideoEncoder;
@@ -21,6 +24,9 @@ namespace mozilla {
 class WebrtcOMXDecoder;
 class OMXOutputDrain;
 
+// XXX see if we can reduce this
+#define WEBRTC_OMX_H264_MIN_DECODE_BUFFERS 10
+
 class WebrtcOMXH264VideoEncoder : public WebrtcVideoEncoder
 {
 public:
@@ -29,6 +35,8 @@ public:
   virtual ~WebrtcOMXH264VideoEncoder();
 
   // Implement VideoEncoder interface.
+  virtual const uint64_t PluginID() MOZ_OVERRIDE { return 0; }
+
   virtual int32_t InitEncode(const webrtc::VideoCodec* aCodecSettings,
                              int32_t aNumOfCores,
                              uint32_t aMaxPayloadSize) MOZ_OVERRIDE;
@@ -48,6 +56,8 @@ public:
 
 private:
   RefPtr<android::OMXVideoEncoder> mOMX;
+  android::sp<android::OMXCodecReservation> mReservation;
+
   webrtc::EncodedImageCallback* mCallback;
   RefPtr<OMXOutputDrain> mOutputDrain;
   uint32_t mWidth;
@@ -69,6 +79,8 @@ public:
   virtual ~WebrtcOMXH264VideoDecoder();
 
   // Implement VideoDecoder interface.
+  virtual const uint64_t PluginID() MOZ_OVERRIDE { return 0; }
+
   virtual int32_t InitDecode(const webrtc::VideoCodec* aCodecSettings,
                              int32_t aNumOfCores) MOZ_OVERRIDE;
   virtual int32_t Decode(const webrtc::EncodedImage& aInputImage,
@@ -85,6 +97,7 @@ public:
 private:
   webrtc::DecodedImageCallback* mCallback;
   RefPtr<WebrtcOMXDecoder> mOMX;
+  android::sp<android::OMXCodecReservation> mReservation;
 };
 
 }

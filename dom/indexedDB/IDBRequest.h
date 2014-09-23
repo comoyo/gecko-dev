@@ -27,7 +27,7 @@ class EventChainPostVisitor;
 class EventChainPreVisitor;
 namespace dom {
 class OwningIDBObjectStoreOrIDBIndexOrIDBCursor;
-class ErrorEventInit;
+struct ErrorEventInit;
 }
 }
 
@@ -86,8 +86,6 @@ public:
 
   DOMError* GetError(ErrorResult& aRv);
 
-  JSContext* GetJSContext();
-
   void
   SetActor(IndexedDBRequestParentBase* aActorParent)
   {
@@ -131,8 +129,15 @@ public:
     return GetOwner();
   }
 
-  JS::Value
-  GetResult(JSContext* aCx, ErrorResult& aRv) const;
+  void
+  GetResult(JS::MutableHandle<JS::Value> aResult, ErrorResult& aRv) const;
+
+  void
+  GetResult(JSContext* aCx, JS::MutableHandle<JS::Value> aResult,
+            ErrorResult& aRv) const
+  {
+    GetResult(aResult, aRv);
+  }
 
   IDBTransaction*
   GetTransaction() const
@@ -148,8 +153,8 @@ public:
   IMPL_EVENT_HANDLER(error);
 
 protected:
-  IDBRequest(IDBDatabase* aDatabase);
-  IDBRequest(nsPIDOMWindow* aOwner);
+  explicit IDBRequest(IDBDatabase* aDatabase);
+  explicit IDBRequest(nsPIDOMWindow* aOwner);
   ~IDBRequest();
 
   // At most one of these three fields can be non-null.
@@ -216,7 +221,7 @@ public:
   IMPL_EVENT_HANDLER(upgradeneeded);
 
 protected:
-  IDBOpenDBRequest(nsPIDOMWindow* aOwner);
+  explicit IDBOpenDBRequest(nsPIDOMWindow* aOwner);
   ~IDBOpenDBRequest();
 
   // Only touched on the main thread.

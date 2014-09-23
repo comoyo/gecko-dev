@@ -25,6 +25,7 @@
 #include "nsINIParser.h"
 
 #ifdef XP_WIN
+#define XRE_DONT_SUPPORT_XPSP2 // See https://bugzil.la/1023941#c32
 #include "nsWindowsWMain.cpp"
 #endif
 
@@ -49,7 +50,7 @@ static void Output(bool isError, const char *fmt, ... )
   va_start(ap, fmt);
 
 #if (defined(XP_WIN) && !MOZ_WINCONSOLE)
-  char16_t msg[2048];
+  wchar_t msg[2048];
   _vsnwprintf(msg, sizeof(msg)/sizeof(msg[0]), NS_ConvertUTF8toUTF16(fmt).get(), ap);
 
   UINT flags = MB_OK;

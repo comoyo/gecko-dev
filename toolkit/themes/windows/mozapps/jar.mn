@@ -61,6 +61,7 @@ toolkit.jar:
 #ifdef MOZ_PLACES
         skin/classic/mozapps/places/defaultFavicon.png             (places/defaultFavicon.png)
 #endif
+        skin/classic/mozapps/formautofill/requestAutocomplete.css  (../../shared/formautofill/requestAutocomplete.css)
         skin/classic/mozapps/plugins/pluginProblem.css             (../../shared/plugins/pluginProblem.css)
         skin/classic/mozapps/aboutNetworking.css                   (../../shared/aboutNetworking.css)
         skin/classic/mozapps/plugins/contentPluginActivate.png     (../../shared/plugins/contentPluginActivate.png)
@@ -78,7 +79,6 @@ toolkit.jar:
         skin/classic/mozapps/plugins/pluginBlocked-64.png          (plugins/pluginBlocked-64.png)
         skin/classic/mozapps/plugins/pluginGeneric-16.png          (plugins/pluginGeneric-16.png)
         skin/classic/mozapps/plugins/pluginHelp-16.png             (plugins/pluginHelp-16.png)
-        skin/classic/mozapps/plugins/pluginInstallerWizard.css     (plugins/pluginInstallerWizard.css)
         skin/classic/mozapps/profile/profileicon.png               (profile/profileicon.png)
         skin/classic/mozapps/profile/profileSelection.css          (profile/profileSelection.css)
         skin/classic/mozapps/update/downloadButtons.png            (update/downloadButtons.png)
@@ -144,6 +144,7 @@ toolkit.jar:
 #ifdef MOZ_PLACES
         skin/classic/aero/mozapps/places/defaultFavicon.png                (places/defaultFavicon.png)
 #endif
+        skin/classic/aero/mozapps/formautofill/requestAutocomplete.css     (../../shared/formautofill/requestAutocomplete.css)
         skin/classic/aero/mozapps/plugins/pluginProblem.css                (../../shared/plugins/pluginProblem.css)
         skin/classic/aero/mozapps/aboutNetworking.css                           (../../shared/aboutNetworking.css)
         skin/classic/aero/mozapps/plugins/contentPluginActivate.png        (../../shared/plugins/contentPluginActivate.png)
@@ -161,7 +162,6 @@ toolkit.jar:
         skin/classic/aero/mozapps/plugins/pluginBlocked-64.png             (plugins/pluginBlocked-64.png)
         skin/classic/aero/mozapps/plugins/pluginGeneric-16.png             (plugins/pluginGeneric-16-aero.png)
         skin/classic/aero/mozapps/plugins/pluginHelp-16.png                (plugins/pluginHelp-16.png)
-        skin/classic/aero/mozapps/plugins/pluginInstallerWizard.css        (plugins/pluginInstallerWizard.css)
         skin/classic/aero/mozapps/profile/profileicon.png                  (profile/profileicon-aero.png)
         skin/classic/aero/mozapps/profile/profileSelection.css             (profile/profileSelection.css)
         skin/classic/aero/mozapps/update/downloadButtons.png               (update/downloadButtons-aero.png)

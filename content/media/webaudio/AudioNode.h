@@ -16,6 +16,7 @@
 #include "MediaStreamGraph.h"
 #include "WebAudioUtils.h"
 #include "mozilla/MemoryReporting.h"
+#include "nsWeakReference.h"
 
 namespace mozilla {
 
@@ -82,7 +83,8 @@ private:
  * still alive, and will still be alive when it receives a message from the
  * engine.
  */
-class AudioNode : public DOMEventTargetHelper
+class AudioNode : public DOMEventTargetHelper,
+                  public nsSupportsWeakReference
 {
 protected:
   // You can only use refcounting to delete this object
@@ -102,10 +104,6 @@ public:
                                            DOMEventTargetHelper)
 
   virtual AudioBufferSourceNode* AsAudioBufferSourceNode() {
-    return nullptr;
-  }
-
-  virtual const DelayNode* AsDelayNode() const {
     return nullptr;
   }
 
@@ -132,6 +130,11 @@ public:
   // constant for the lifetime of the node. Both default to 1.
   virtual uint16_t NumberOfInputs() const { return 1; }
   virtual uint16_t NumberOfOutputs() const { return 1; }
+
+  uint32_t Id() const { return mId; }
+
+  bool PassThrough() const;
+  void SetPassThrough(bool aPassThrough);
 
   uint32_t ChannelCount() const { return mChannelCount; }
   virtual void SetChannelCount(uint32_t aChannelCount, ErrorResult& aRv)
@@ -266,6 +269,15 @@ private:
   uint32_t mChannelCount;
   ChannelCountMode mChannelCountMode;
   ChannelInterpretation mChannelInterpretation;
+  const uint32_t mId;
+  // Whether the node just passes through its input.  This is a devtools API that
+  // only works for some node types.
+  bool mPassThrough;
+#ifdef DEBUG
+  // In debug builds, check to make sure that the node demise notification has
+  // been properly sent before the node is destroyed.
+  bool mDemiseNotified;
+#endif
 };
 
 }

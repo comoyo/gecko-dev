@@ -461,6 +461,13 @@ sip_config_get_display_name (line_t line, char *buffer, int buffer_len)
 rtp_ptype
 sip_config_preferred_codec (void)
 {
+#if 1
+  uint32_t codec;
+
+  if(vcmGetVideoPreferredCodec((int32_t *) &codec) == 0) {
+    return (rtp_ptype) codec;
+  }
+#else
     key_table_entry_t cfg_preferred_codec;
 
     config_get_value(CFGID_PREFERRED_CODEC, &cfg_preferred_codec,
@@ -470,6 +477,7 @@ sip_config_preferred_codec (void)
         /* The configuration has preferred codec configured */
         return (cfg_preferred_codec.value);
     }
+#endif
     /* No preferred codec configured */
     return (RTP_NONE);
 }
@@ -593,6 +601,63 @@ config_get_video_max_fr(const rtp_ptype codec)
   return 0;
 }
 
+uint32_t
+config_get_video_max_mbps(const rtp_ptype codec)
+{
+  uint32_t max_mbps;
+
+  if(vcmGetVideoMaxMbps(codec, (int32_t *) &max_mbps) == 0) {
+    return max_mbps;
+  }
+  return 0;
+}
+
+uint32_t
+config_get_video_max_br(const rtp_ptype codec)
+{
+  uint32_t max_br;
+
+  if(vcmGetVideoMaxBr(codec, (int32_t *) &max_br) == 0) {
+    return max_br;
+  }
+  return 0;
+}
+
+uint16_t
+sip_config_video_add_codecs (rtp_ptype aSupportedCodecs[],
+                             uint16_t supportedCodecsLen,
+                             uint16_t codec_mask)
+{
+  uint16_t count = 0;
+
+  // All things being equal, prefer H261 > VP8 > H.264 p1 > H.264 p0 -> H.263
+  if ( codec_mask & VCM_CODEC_RESOURCE_H261) {
+    aSupportedCodecs[count] = RTP_H261;
+    count++;
+  }
+  if ( codec_mask & VCM_CODEC_RESOURCE_VP8) {
+    aSupportedCodecs[count] = RTP_VP8;
+    count++;
+  }
+  if ( codec_mask & VCM_CODEC_RESOURCE_H264) {
+    int modes = vcmGetH264SupportedPacketizationModes();
+    // prefer mode 1 to mode 0
+    if (modes & VCM_H264_MODE_1) {
+      aSupportedCodecs[count] = RTP_H264_P1;
+      count++;
+    }
+    if (modes & VCM_H264_MODE_0) {
+      aSupportedCodecs[count] = RTP_H264_P0;
+      count++;
+    }
+  }
+  if ( codec_mask & VCM_CODEC_RESOURCE_H263) {
+    aSupportedCodecs[count] = RTP_H263;
+    count++;
+  }
+  return count;
+}
+
 /*
  * sip_config_local_supported_codecs_get()
  *
@@ -603,7 +668,10 @@ sip_config_video_supported_codecs_get (rtp_ptype aSupportedCodecs[],
                           uint16_t supportedCodecsLen, boolean isOffer)
 {
     uint16_t count = 0;
+    rtp_ptype pref_codec;
     int codec_mask;
+    int hw_codec_mask = vcmGetVideoCodecList(VCM_DSP_FULLDUPLEX_HW);
+    int gmp_codec_mask = vcmGetVideoCodecList(VCM_DSP_FULLDUPLEX_GMP);
 
     if ( isOffer ) {
         codec_mask = vcmGetVideoCodecList(VCM_DSP_FULLDUPLEX);
@@ -613,43 +681,34 @@ sip_config_video_supported_codecs_get (rtp_ptype aSupportedCodecs[],
         //codec_mask = vcmGetVideoCodecList(DSP_ENCODEONLY);
         codec_mask = vcmGetVideoCodecList(VCM_DSP_IGNORE);
     }
-    if ( codec_mask & VCM_CODEC_RESOURCE_H261) {
-      aSupportedCodecs[count] = RTP_H261;
-      ++count;
-    }
-#ifdef WEBRTC_GONK
-    if ( codec_mask & VCM_CODEC_RESOURCE_H264) {
-      if (vcmGetVideoMaxSupportedPacketizationMode() == 1) {
-        aSupportedCodecs[count] = RTP_H264_P1;
-        count++;
-      }
-      aSupportedCodecs[count] = RTP_H264_P0;
-      count++;
-    }
-    if ( codec_mask & VCM_CODEC_RESOURCE_VP8) {
-      aSupportedCodecs[count] = RTP_VP8;
-      count++;
-    }
-#else
-    // Apply video codecs with VP8 first on non gonk
-    if ( codec_mask & VCM_CODEC_RESOURCE_VP8) {
-      aSupportedCodecs[count] = RTP_VP8;
-      count++;
-    }
-    if ( codec_mask & VCM_CODEC_RESOURCE_H264) {
-      if (vcmGetVideoMaxSupportedPacketizationMode() == 1) {
-        aSupportedCodecs[count] = RTP_H264_P1;
-        count++;
-      }
-      aSupportedCodecs[count] = RTP_H264_P0;
-      count++;
-    }
-#endif
-    if ( codec_mask & VCM_CODEC_RESOURCE_H263) {
-      aSupportedCodecs[count] = RTP_H263;
-      count++;
-    }
+    // prefer HW codecs over SW
+    count = sip_config_video_add_codecs(aSupportedCodecs,
+                                        supportedCodecsLen, hw_codec_mask);
+    // Now add any codecs that weren't in the initial list
+    codec_mask &= ~hw_codec_mask;
+    count += sip_config_video_add_codecs(&aSupportedCodecs[count],
+                                         supportedCodecsLen, codec_mask);
+    // Now add any GMP codecs that aren't already in
+    gmp_codec_mask &= ~(hw_codec_mask | codec_mask);
+    count += sip_config_video_add_codecs(&aSupportedCodecs[count],
+                                         supportedCodecsLen, gmp_codec_mask);
 
+    // Now promote the preferred codec if any
+    pref_codec = sip_config_preferred_codec();
+    if (pref_codec != RTP_NONE) {
+      int i,j;
+      for (i = 1; i < count; i++) {
+        if (aSupportedCodecs[i] == pref_codec) {
+          // bump it to the front; bump all the rest down
+          for (j = i; j > 0; j--) {
+            aSupportedCodecs[j] = aSupportedCodecs[j-1];
+          }
+          aSupportedCodecs[0] = pref_codec;
+          return count;
+        }
+      }
+      // preferred not found, oh well
+    }
     return count;
 }
 
@@ -680,6 +739,11 @@ config_set_current_codec_table (int codec_mask, rtp_ptype *codecs)
         idx++;
     }
 
+    if (codec_mask & VCM_CODEC_RESOURCE_G722) {
+        codecs[idx] = RTP_G722;
+        idx++;
+    }
+
     if (codec_mask & VCM_CODEC_RESOURCE_G711) {
         codecs[idx] = RTP_PCMU;
         idx++;
@@ -694,11 +758,6 @@ config_set_current_codec_table (int codec_mask, rtp_ptype *codecs)
 
     if (codec_mask & VCM_CODEC_RESOURCE_LINEAR) {
         codecs[idx] = RTP_L16;
-        idx++;
-    }
-
-    if (codec_mask & VCM_CODEC_RESOURCE_G722) {
-        codecs[idx] = RTP_G722;
         idx++;
     }
 

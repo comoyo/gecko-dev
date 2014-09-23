@@ -63,6 +63,7 @@ imgRequest::imgRequest(imgLoader* aLoader)
  , mValidator(nullptr)
  , mInnerWindowId(0)
  , mCORSMode(imgIRequest::CORS_NONE)
+ , mImageErrorCode(NS_OK)
  , mDecodeRequested(false)
  , mIsMultiPartChannel(false)
  , mGotData(false)
@@ -72,6 +73,9 @@ imgRequest::imgRequest(imgLoader* aLoader)
 
 imgRequest::~imgRequest()
 {
+  if (mLoader) {
+    mLoader->RemoveFromUncachedImages(this);
+  }
   if (mURI) {
     nsAutoCString spec;
     mURI->GetSpec(spec);
@@ -125,6 +129,10 @@ nsresult imgRequest::Init(nsIURI *aURI,
   return NS_OK;
 }
 
+void imgRequest::ClearLoader() {
+  mLoader = nullptr;
+}
+
 already_AddRefed<imgStatusTracker>
 imgRequest::GetStatusTracker()
 {
@@ -168,7 +176,9 @@ void imgRequest::AddProxy(imgRequestProxy *proxy)
   nsRefPtr<imgStatusTracker> statusTracker = GetStatusTracker();
   if (statusTracker->ConsumerCount() == 0) {
     NS_ABORT_IF_FALSE(mURI, "Trying to SetHasProxies without key uri.");
-    mLoader->SetHasProxies(mURI);
+    if (mLoader) {
+      mLoader->SetHasProxies(this);
+    }
   }
 
   statusTracker->AddConsumer(proxy);
@@ -198,7 +208,9 @@ nsresult imgRequest::RemoveProxy(imgRequestProxy *proxy, nsresult aStatus)
     if (mCacheEntry) {
       NS_ABORT_IF_FALSE(mURI, "Removing last observer without key uri.");
 
-      mLoader->SetHasNoProxies(mURI, mCacheEntry);
+      if (mLoader) {
+        mLoader->SetHasNoProxies(this, mCacheEntry);
+      }
     }
 #if defined(PR_LOGGING)
     else {
@@ -299,6 +311,47 @@ void imgRequest::ContinueCancel(nsresult aStatus)
   }
 }
 
+class imgRequestMainThreadEvict : public nsRunnable
+{
+public:
+  explicit imgRequestMainThreadEvict(imgRequest *aImgRequest)
+    : mImgRequest(aImgRequest)
+  {
+    MOZ_ASSERT(!NS_IsMainThread(), "Create me off main thread only!");
+    MOZ_ASSERT(aImgRequest);
+  }
+
+  NS_IMETHOD Run()
+  {
+    MOZ_ASSERT(NS_IsMainThread(), "I should be running on the main thread!");
+    mImgRequest->ContinueEvict();
+    return NS_OK;
+  }
+private:
+  nsRefPtr<imgRequest> mImgRequest;
+};
+
+// EvictFromCache() is written to allowed to get called from any thread
+void imgRequest::EvictFromCache()
+{
+  /* The EvictFromCache() method here should only be called by this class. */
+  LOG_SCOPE(GetImgLog(), "imgRequest::EvictFromCache");
+
+  if (NS_IsMainThread()) {
+    ContinueEvict();
+  } else {
+    NS_DispatchToMainThread(new imgRequestMainThreadEvict(this));
+  }
+}
+
+// Helper-method used by EvictFromCache()
+void imgRequest::ContinueEvict()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  RemoveFromCache();
+}
+
 nsresult imgRequest::GetURI(ImageURL **aURI)
 {
   MOZ_ASSERT(aURI);
@@ -312,6 +365,11 @@ nsresult imgRequest::GetURI(ImageURL **aURI)
   }
 
   return NS_ERROR_FAILURE;
+}
+
+nsresult imgRequest::GetImageErrorCode()
+{
+  return mImageErrorCode;
 }
 
 nsresult imgRequest::GetSecurityInfo(nsISupports **aSecurityInfo)
@@ -328,15 +386,22 @@ void imgRequest::RemoveFromCache()
 {
   LOG_SCOPE(GetImgLog(), "imgRequest::RemoveFromCache");
 
-  if (mIsInCache) {
+  if (mIsInCache && mLoader) {
     // mCacheEntry is nulled out when we have no more observers.
-    if (mCacheEntry)
+    if (mCacheEntry) {
       mLoader->RemoveFromCache(mCacheEntry);
-    else
+    } else {
       mLoader->RemoveFromCache(mURI);
+    }
   }
 
   mCacheEntry = nullptr;
+}
+
+bool imgRequest::HasConsumers()
+{
+  nsRefPtr<imgStatusTracker> statusTracker = GetStatusTracker();
+  return statusTracker && statusTracker->ConsumerCount() > 0;
 }
 
 int32_t imgRequest::Priority() const
@@ -556,6 +621,8 @@ NS_IMETHODIMP imgRequest::OnStartRequest(nsIRequest *aRequest, nsISupports *ctxt
   if (mpchan) {
     mIsMultiPartChannel = true;
     statusTracker->SetIsMultipart();
+  } else {
+    NS_ABORT_IF_FALSE(!mIsMultiPartChannel, "Something went wrong");
   }
 
   // If we're not multipart, we shouldn't have an image yet
@@ -603,8 +670,8 @@ NS_IMETHODIMP imgRequest::OnStartRequest(nsIRequest *aRequest, nsISupports *ctxt
   if (chan) {
     nsCOMPtr<nsIScriptSecurityManager> secMan = nsContentUtils::GetSecurityManager();
     if (secMan) {
-      nsresult rv = secMan->GetChannelPrincipal(chan,
-                                                getter_AddRefs(mPrincipal));
+      nsresult rv = secMan->GetChannelResultPrincipal(chan,
+                                                      getter_AddRefs(mPrincipal));
       if (NS_FAILED(rv)) {
         return rv;
       }
@@ -668,6 +735,12 @@ NS_IMETHODIMP imgRequest::OnStopRequest(nsIRequest *aRequest, nsISupports *ctxt,
   if (mpchan)
     mpchan->GetIsLastPart(&lastPart);
 
+  bool isPartial = false;
+  if (mImage && (status == NS_ERROR_NET_PARTIAL_TRANSFER)) {
+    isPartial = true;
+    status = NS_OK; // fake happy face
+  }
+
   // Tell the image that it has all of the source data. Note that this can
   // trigger a failure, since the image might be waiting for more non-optional
   // data and this is the point where we break the news that it's not coming.
@@ -684,12 +757,19 @@ NS_IMETHODIMP imgRequest::OnStopRequest(nsIRequest *aRequest, nsISupports *ctxt,
 
   // If the request went through, update the cache entry size. Otherwise,
   // cancel the request, which removes us from the cache.
-  if (mImage && NS_SUCCEEDED(status)) {
+  if (mImage && NS_SUCCEEDED(status) && !isPartial) {
     // We update the cache entry size here because this is where we finish
     // loading compressed source data, which is part of our size calculus.
     UpdateCacheEntrySize();
   }
+  else if (isPartial) {
+    // Remove the partial image from the cache.
+    this->EvictFromCache();
+  }
   else {
+    mImageErrorCode = status;
+
+    // if the error isn't "just" a partial transfer
     // stops animations, removes from cache
     this->Cancel(status);
   }

@@ -14,6 +14,12 @@
 
 class nsIDOMDOMRequest;
 
+namespace mozilla {
+namespace dom {
+class Promise;
+}
+}
+
 BEGIN_BLUETOOTH_NAMESPACE
 
 class BluetoothReply;
@@ -23,13 +29,17 @@ class BluetoothReplyRunnable : public nsRunnable
 public:
   NS_DECL_NSIRUNNABLE
 
-  BluetoothReplyRunnable(nsIDOMDOMRequest* aReq);
+  BluetoothReplyRunnable(nsIDOMDOMRequest* aReq,
+                         Promise* aPromise = nullptr,
+                         const nsAString& aName = EmptyString());
 
   void SetReply(BluetoothReply* aReply);
 
-  void SetError(const nsAString& aError)
+  void SetError(const nsAString& aErrorString,
+                const enum BluetoothStatus aErrorStatus = STATUS_FAIL)
   {
-    mErrorString = aError;
+    mErrorString = aErrorString;
+    mErrorStatus = aErrorStatus;
   }
 
   virtual void ReleaseMembers();
@@ -45,21 +55,36 @@ protected:
   nsAutoPtr<BluetoothReply> mReply;
 
 private:
-  nsresult FireReply(JS::Handle<JS::Value> aVal);
+  nsresult FireReplySuccess(JS::Handle<JS::Value> aVal);
   nsresult FireErrorString();
 
+  /**
+   * Either mDOMRequest or mPromise is not nullptr to reply applications
+   * success or error string. One special case is internal IPC that require
+   * neither mDOMRequest nor mPromise to reply applications.
+   * E.g., GetAdaptersTask triggered by BluetoothManager
+   *
+   * TODO: remove mDOMRequest once all methods adopt Promise.
+   */
   nsCOMPtr<nsIDOMDOMRequest> mDOMRequest;
+  nsRefPtr<Promise> mPromise;
+
+  BluetoothStatus mErrorStatus;
   nsString mErrorString;
+  nsString mName; // for debugging
 };
 
 class BluetoothVoidReplyRunnable : public BluetoothReplyRunnable
 {
 public:
-  BluetoothVoidReplyRunnable(nsIDOMDOMRequest* aReq);
+  BluetoothVoidReplyRunnable(nsIDOMDOMRequest* aReq,
+                             Promise* aPromise = nullptr,
+                             const nsAString& aName = EmptyString());
  ~BluetoothVoidReplyRunnable();
 
 protected:
-  virtual bool ParseSuccessfulReply(JS::MutableHandle<JS::Value> aValue) MOZ_OVERRIDE
+  virtual bool
+  ParseSuccessfulReply(JS::MutableHandle<JS::Value> aValue) MOZ_OVERRIDE
   {
     aValue.setUndefined();
     return true;

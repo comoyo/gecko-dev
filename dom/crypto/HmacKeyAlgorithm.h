@@ -33,16 +33,12 @@ public:
   {
     switch (mHash->Mechanism()) {
       case CKM_SHA_1: mMechanism = CKM_SHA_1_HMAC; break;
-      case CKM_SHA224: mMechanism = CKM_SHA224_HMAC; break;
       case CKM_SHA256: mMechanism = CKM_SHA256_HMAC; break;
       case CKM_SHA384: mMechanism = CKM_SHA384_HMAC; break;
       case CKM_SHA512: mMechanism = CKM_SHA512_HMAC; break;
       default: mMechanism = UNKNOWN_CK_MECHANISM; break;
     }
   }
-
-  ~HmacKeyAlgorithm()
-  {}
 
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 
@@ -56,11 +52,16 @@ public:
     return mLength;
   }
 
+  virtual nsString ToJwkAlg() const MOZ_OVERRIDE;
+
   virtual bool WriteStructuredClone(JSStructuredCloneWriter* aWriter) const MOZ_OVERRIDE;
   static KeyAlgorithm* Create(nsIGlobalObject* aGlobal,
                               JSStructuredCloneReader* aReader);
 
 protected:
+  ~HmacKeyAlgorithm()
+  {}
+
   nsRefPtr<KeyAlgorithm> mHash;
   uint32_t mLength;
 };

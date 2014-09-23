@@ -33,10 +33,33 @@ function asyncTest(generator) {
   return () => Task.spawn(generator).then(null, ok.bind(null, false)).then(finish);
 }
 
-function cleanup()
+/**
+ * Add a new test tab in the browser and load the given url.
+ * @param {String} url The url to be loaded in the new tab
+ * @return a promise that resolves to the tab object when the url is loaded
+ */
+function addTab(url) {
+  info("Adding a new tab with URL: '" + url + "'");
+  let def = promise.defer();
+
+  let tab = gBrowser.selectedTab = gBrowser.addTab();
+  gBrowser.selectedBrowser.addEventListener("load", function onload() {
+    gBrowser.selectedBrowser.removeEventListener("load", onload, true);
+    info("URL '" + url + "' loading complete");
+    def.resolve(tab);
+  }, true);
+  content.location = url;
+
+  return def.promise;
+}
+
+function* cleanup()
 {
   gPanelWindow = null;
   while (gBrowser.tabs.length > 1) {
+    let target = TargetFactory.forTab(gBrowser.selectedTab);
+    yield gDevTools.closeToolbox(target);
+
     gBrowser.removeCurrentTab();
   }
 }
@@ -45,9 +68,10 @@ function addTabAndOpenStyleEditors(count, callback, uri) {
   let deferred = promise.defer();
   let currentCount = 0;
   let panel;
-  addTabAndCheckOnStyleEditorAdded(p => panel = p, function () {
+  addTabAndCheckOnStyleEditorAdded(p => panel = p, function (editor) {
     currentCount++;
-    info(currentCount + " of " + count + " editors opened");
+    info(currentCount + " of " + count + " editors opened: "
+         + editor.styleSheet.href);
     if (currentCount == count) {
       if (callback) {
         callback(panel);

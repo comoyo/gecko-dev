@@ -9,6 +9,8 @@
 #include "nsSize.h"
 #include "VorbisUtils.h"
 #include "ImageContainer.h"
+#include "SharedThreadPool.h"
+#include "mozilla/Preferences.h"
 
 #include <stdint.h>
 
@@ -188,6 +190,44 @@ IsValidVideoRegion(const nsIntSize& aFrame, const nsIntRect& aPicture,
     aDisplay.height <= PlanarYCbCrImage::MAX_DIMENSION &&
     aDisplay.width * aDisplay.height <= MAX_VIDEO_WIDTH * MAX_VIDEO_HEIGHT &&
     aDisplay.width * aDisplay.height != 0;
+}
+
+TemporaryRef<SharedThreadPool> GetMediaDecodeThreadPool()
+{
+  return SharedThreadPool::Get(NS_LITERAL_CSTRING("Media Decode"),
+                               Preferences::GetUint("media.num-decode-threads", 25));
+}
+
+bool
+ExtractH264CodecDetails(const nsAString& aCodec,
+                        int16_t& aProfile,
+                        int16_t& aLevel)
+{
+  // H.264 codecs parameters have a type defined as avc1.PPCCLL, where
+  // PP = profile_idc, CC = constraint_set flags, LL = level_idc.
+  // We ignore the constraint_set flags, as it's not clear from any
+  // documentation what constraints the platform decoders support.
+  // See http://blog.pearce.org.nz/2013/11/what-does-h264avc1-codecs-parameters.html
+  // for more details.
+  if (aCodec.Length() != strlen("avc1.PPCCLL")) {
+    return false;
+  }
+
+  // Verify the codec starts with "avc1.".
+  const nsAString& sample = Substring(aCodec, 0, 5);
+  if (!sample.EqualsASCII("avc1.")) {
+    return false;
+  }
+
+  // Extract the profile_idc, constrains, and level_idc.
+  nsresult rv = NS_OK;
+  aProfile = PromiseFlatString(Substring(aCodec, 5, 2)).ToInteger(&rv, 16);
+  NS_ENSURE_SUCCESS(rv, false);
+
+  aLevel = PromiseFlatString(Substring(aCodec, 9, 2)).ToInteger(&rv, 16);
+  NS_ENSURE_SUCCESS(rv, false);
+
+  return true;
 }
 
 } // end namespace mozilla

@@ -33,7 +33,7 @@ const THUMBNAIL_DIRECTORY = "thumbnails";
 const THUMBNAIL_BG_COLOR = "#fff";
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/osfile/_PromiseWorker.jsm", this);
+Cu.import("resource://gre/modules/PromiseWorker.jsm", this);
 Cu.import("resource://gre/modules/Promise.jsm", this);
 Cu.import("resource://gre/modules/osfile.jsm", this);
 
@@ -179,7 +179,7 @@ this.PageThumbs = {
       return;
     }
 
-    let canvas = this._createCanvas();
+    let canvas = this.createCanvas();
     this.captureToCanvas(aWindow, canvas);
 
     // Fetch the canvas data on the next event loop tick so that we allow
@@ -203,7 +203,7 @@ this.PageThumbs = {
       return null;
     }
 
-    let canvas = this._createCanvas();
+    let canvas = this.createCanvas();
     this.captureToCanvas(aWindow, canvas);
 
     let deferred = Promise.defer();
@@ -295,7 +295,7 @@ this.PageThumbs = {
   captureAndStoreIfStale: function PageThumbs_captureAndStoreIfStale(aBrowser, aCallback) {
     let url = aBrowser.currentURI.spec;
     PageThumbsStorage.isFileRecentForURL(url).then(recent => {
-      if (!recent.ok &&
+      if (!recent &&
           // Careful, the call to PageThumbsStorage is async, so the browser may
           // have navigated away from the URL or even closed.
           aBrowser.currentURI &&
@@ -418,7 +418,7 @@ this.PageThumbs = {
    *                canvas.  If not given, the hidden window will be used.
    * @return The newly created canvas.
    */
-  _createCanvas: function PageThumbs_createCanvas(aWindow) {
+  createCanvas: function PageThumbs_createCanvas(aWindow) {
     let doc = (aWindow || Services.appShell.hiddenDOMWindow).document;
     let canvas = doc.createElementNS(HTML_NAMESPACE, "canvas");
     canvas.mozOpaque = true;
@@ -792,27 +792,10 @@ let PageThumbsExpiration = {
 /**
  * Interface to a dedicated thread handling I/O
  */
-
-let PageThumbsWorker = (function() {
-  let worker = new PromiseWorker("resource://gre/modules/PageThumbsWorker.js",
-    OS.Shared.LOG.bind("PageThumbs"));
-  return {
-    post: function post(...args) {
-      let promise = worker.post.apply(worker, args);
-      return promise.then(
-        null,
-        function onError(error) {
-          // Decode any serialized error
-          if (error instanceof PromiseWorker.WorkerError) {
-            throw OS.File.Error.fromMsg(error.data);
-          } else {
-            throw error;
-          }
-        }
-      );
-    }
-  };
-})();
+let PageThumbsWorker = new BasePromiseWorker("resource://gre/modules/PageThumbsWorker.js");
+// As the PageThumbsWorker performs I/O, we can receive instances of
+// OS.File.Error, so we need to install a decoder.
+PageThumbsWorker.ExceptionHandlers["OS.File.Error"] = OS.File.Error.fromMsg;
 
 let PageThumbsHistoryObserver = {
   onDeleteURI: function Thumbnails_onDeleteURI(aURI, aGUID) {

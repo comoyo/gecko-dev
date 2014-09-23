@@ -24,8 +24,6 @@ class nsDirectoryService MOZ_FINAL
   , public nsIDirectoryServiceProvider2
 {
 public:
-
-  // nsISupports interface
   NS_DECL_THREADSAFE_ISUPPORTS
 
   NS_DECL_NSIPROPERTIES
@@ -37,7 +35,6 @@ public:
   NS_DECL_NSIDIRECTORYSERVICEPROVIDER2
 
   nsDirectoryService();
-  ~nsDirectoryService();
 
   static void RealInit();
   void RegisterCategoryProviders();
@@ -48,6 +45,8 @@ public:
   static nsDirectoryService* gService;
 
 private:
+  ~nsDirectoryService();
+
   nsresult GetCurrentProcessDirectory(nsIFile** aFile);
 
   nsInterfaceHashtable<nsCStringHashKey, nsIFile> mHashtable;

@@ -4,9 +4,11 @@
 
 package org.mozilla.gecko.sync;
 
+import org.mozilla.gecko.R;
 import org.mozilla.gecko.background.common.GlobalConstants;
 import org.mozilla.gecko.sync.delegates.ClientsDataDelegate;
 
+import android.content.Context;
 import android.content.SharedPreferences;
 
 /**
@@ -15,9 +17,11 @@ import android.content.SharedPreferences;
  */
 public class SharedPreferencesClientsDataDelegate implements ClientsDataDelegate {
   protected final SharedPreferences sharedPreferences;
+  protected final Context context;
 
-  public SharedPreferencesClientsDataDelegate(SharedPreferences sharedPreferences) {
+  public SharedPreferencesClientsDataDelegate(SharedPreferences sharedPreferences, Context context) {
     this.sharedPreferences = sharedPreferences;
+    this.context = context;
   }
 
   @Override
@@ -30,12 +34,41 @@ public class SharedPreferencesClientsDataDelegate implements ClientsDataDelegate
     return accountGUID;
   }
 
+  /**
+   * Set client name.
+   *
+   * @param clientName to change to.
+   */
+  @Override
+  public synchronized void setClientName(String clientName, long now) {
+    sharedPreferences
+      .edit()
+      .putString(SyncConfiguration.PREF_CLIENT_NAME, clientName)
+      .putLong(SyncConfiguration.PREF_CLIENT_DATA_TIMESTAMP, now)
+      .commit();
+  }
+
+  @Override
+  public String getDefaultClientName() {
+    String name = GlobalConstants.MOZ_APP_DISPLAYNAME; // The display name is never translated.
+    // Change "Firefox Aurora" or similar into "Aurora".
+    if (name.contains("Aurora")) {
+        name = "Aurora";
+    } else if (name.contains("Beta")) {
+        name = "Beta";
+    } else if (name.contains("Nightly")) {
+        name = "Nightly";
+    }
+    return context.getResources().getString(R.string.sync_default_client_name, name, android.os.Build.MODEL);
+  }
+
   @Override
   public synchronized String getClientName() {
     String clientName = sharedPreferences.getString(SyncConfiguration.PREF_CLIENT_NAME, null);
     if (clientName == null) {
-      clientName = GlobalConstants.MOZ_APP_DISPLAYNAME + " on " + android.os.Build.MODEL;
-      sharedPreferences.edit().putString(SyncConfiguration.PREF_CLIENT_NAME, clientName).commit();
+      clientName = getDefaultClientName();
+      long now = System.currentTimeMillis();
+      setClientName(clientName, now);
     }
     return clientName;
   }
@@ -53,5 +86,10 @@ public class SharedPreferencesClientsDataDelegate implements ClientsDataDelegate
   @Override
   public synchronized int getClientsCount() {
     return (int) sharedPreferences.getLong(SyncConfiguration.PREF_NUM_CLIENTS, 0);
+  }
+
+  @Override
+  public long getLastModifiedTimestamp() {
+    return sharedPreferences.getLong(SyncConfiguration.PREF_CLIENT_DATA_TIMESTAMP, 0);
   }
 }

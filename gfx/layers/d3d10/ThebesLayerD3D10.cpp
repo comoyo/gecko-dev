@@ -291,22 +291,7 @@ ThebesLayerD3D10::GetLayer()
 void
 ThebesLayerD3D10::VerifyContentType(SurfaceMode aMode)
 {
-  if (mD2DSurface) {
-    gfxContentType type = aMode != SurfaceMode::SURFACE_SINGLE_CHANNEL_ALPHA ?
-      gfxContentType::COLOR : gfxContentType::COLOR_ALPHA;
-
-    if (type != mD2DSurface->GetContentType()) {  
-      mD2DSurface = new gfxD2DSurface(mTexture, type);
-
-      if (!mD2DSurface || mD2DSurface->CairoStatus()) {
-        NS_WARNING("Failed to create surface for ThebesLayerD3D10.");
-        mD2DSurface = nullptr;
-        return;
-      }
-
-      mValidRegion.SetEmpty();
-    }
-  } else if (mDrawTarget) {
+  if (mDrawTarget) {
     SurfaceFormat format = aMode != SurfaceMode::SURFACE_SINGLE_CHANNEL_ALPHA ?
       SurfaceFormat::B8G8R8X8 : SurfaceFormat::B8G8R8A8;
 
@@ -324,7 +309,6 @@ ThebesLayerD3D10::VerifyContentType(SurfaceMode aMode)
 
   if (aMode != SurfaceMode::SURFACE_COMPONENT_ALPHA && mTextureOnWhite) {
     // If we've transitioned away from component alpha, we can delete those resources.
-    mD2DSurfaceOnWhite = nullptr;
     mSRViewOnWhite = nullptr;
     mTextureOnWhite = nullptr;
     mValidRegion.SetEmpty();
@@ -365,7 +349,7 @@ ThebesLayerD3D10::FillTexturesBlackWhite(const nsIntRegion& aRegion, const nsInt
     device()->OMSetRenderTargets(2, views, nullptr);
 
     gfx3DMatrix transform;
-    transform.Translate(gfxPoint3D(-aOffset.x, -aOffset.y, 0));
+    transform.Translate(Point3D(-aOffset.x, -aOffset.y, 0));
     void* raw = &const_cast<gfx3DMatrix&>(transform)._11;
     effect()->GetVariableByName("mLayerTransform")->SetRawValue(raw, 0, 64);
 
@@ -400,24 +384,20 @@ ThebesLayerD3D10::DrawRegion(nsIntRegion &aRegion, SurfaceMode aMode)
 {
   nsIntRect visibleRect = mVisibleRegion.GetBounds();
 
-  if (!mD2DSurface && !mDrawTarget) {
+  if (!mDrawTarget) {
     return;
   }
 
   aRegion.SimplifyOutwardByArea(100 * 100);
 
-  nsRefPtr<gfxASurface> destinationSurface;
-  
   if (aMode == SurfaceMode::SURFACE_COMPONENT_ALPHA) {
     FillTexturesBlackWhite(aRegion, visibleRect.TopLeft());
-  } else {
-    destinationSurface = mD2DSurface;
   }
 
-  MOZ_ASSERT(mDrawTarget);
   nsRefPtr<gfxContext> context = new gfxContext(mDrawTarget);
 
-  context->Translate(gfxPoint(-visibleRect.x, -visibleRect.y));
+  context->SetMatrix(
+    context->CurrentMatrix().Translate(-visibleRect.x, -visibleRect.y));
   if (aMode == SurfaceMode::SURFACE_SINGLE_CHANNEL_ALPHA) {
     nsIntRegionRectIterator iter(aRegion);
     const nsIntRect *iterRect;

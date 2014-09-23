@@ -87,7 +87,9 @@ Decoder::InitSharedDecoder(uint8_t* imageData, uint32_t imageDataLength,
 void
 Decoder::Write(const char* aBuffer, uint32_t aCount, DecodeStrategy aStrategy)
 {
-  PROFILER_LABEL("ImageDecoder", "Write");
+  PROFILER_LABEL("ImageDecoder", "Write",
+    js::ProfileEntry::Category::GRAPHICS);
+
   MOZ_ASSERT(NS_IsMainThread() || aStrategy == DECODE_ASYNC);
 
   // We're strict about decoder errors
@@ -201,22 +203,22 @@ Decoder::AllocateFrame()
   MOZ_ASSERT(mNeedsNewFrame);
   MOZ_ASSERT(NS_IsMainThread());
 
-  MarkFrameDirty();
-
   nsresult rv;
-  imgFrame* frame = nullptr;
+  nsRefPtr<imgFrame> frame;
   if (mNewFrameData.mPaletteDepth) {
     rv = mImage.EnsureFrame(mNewFrameData.mFrameNum, mNewFrameData.mOffsetX,
                             mNewFrameData.mOffsetY, mNewFrameData.mWidth,
                             mNewFrameData.mHeight, mNewFrameData.mFormat,
                             mNewFrameData.mPaletteDepth,
                             &mImageData, &mImageDataLength,
-                            &mColormap, &mColormapSize, &frame);
+                            &mColormap, &mColormapSize,
+                            getter_AddRefs(frame));
   } else {
     rv = mImage.EnsureFrame(mNewFrameData.mFrameNum, mNewFrameData.mOffsetX,
                             mNewFrameData.mOffsetY, mNewFrameData.mWidth,
                             mNewFrameData.mHeight, mNewFrameData.mFormat,
-                            &mImageData, &mImageDataLength, &frame);
+                            &mImageData, &mImageDataLength,
+                            getter_AddRefs(frame));
   }
 
   if (NS_SUCCEEDED(rv)) {
@@ -419,7 +421,7 @@ Decoder::PostDecoderError(nsresult aFailureCode)
 void
 Decoder::NeedNewFrame(uint32_t framenum, uint32_t x_offset, uint32_t y_offset,
                       uint32_t width, uint32_t height,
-                      gfxImageFormat format,
+                      gfx::SurfaceFormat format,
                       uint8_t palette_depth /* = 0 */)
 {
   // Decoders should never call NeedNewFrame without yielding back to Write().
@@ -430,16 +432,6 @@ Decoder::NeedNewFrame(uint32_t framenum, uint32_t x_offset, uint32_t y_offset,
 
   mNewFrameData = NewFrameData(framenum, x_offset, y_offset, width, height, format, palette_depth);
   mNeedsNewFrame = true;
-}
-
-void
-Decoder::MarkFrameDirty()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-
-  if (mCurrentFrame) {
-    mCurrentFrame->ApplyDirtToSurfaces();
-  }
 }
 
 } // namespace image

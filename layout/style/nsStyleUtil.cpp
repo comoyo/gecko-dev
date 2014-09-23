@@ -13,6 +13,7 @@
 #include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsIURI.h"
+#include "nsPrintfCString.h"
 
 using namespace mozilla;
 
@@ -142,6 +143,60 @@ nsStyleUtil::AppendEscapedCSSIdent(const nsAString& aIdent, nsAString& aReturn)
   }
   return true;
 }
+
+// unquoted family names must be a sequence of idents
+// so escape any parts that require escaping
+static void
+AppendUnquotedFamilyName(const nsAString& aFamilyName, nsAString& aResult)
+{
+  const char16_t *p, *p_end;
+  aFamilyName.BeginReading(p);
+  aFamilyName.EndReading(p_end);
+
+   bool moreThanOne = false;
+   while (p < p_end) {
+     const char16_t* identStart = p;
+     while (++p != p_end && *p != ' ')
+       /* nothing */ ;
+
+     nsDependentSubstring ident(identStart, p);
+     if (!ident.IsEmpty()) {
+       if (moreThanOne) {
+         aResult.Append(' ');
+       }
+       nsStyleUtil::AppendEscapedCSSIdent(ident, aResult);
+       moreThanOne = true;
+     }
+
+     ++p;
+  }
+}
+
+/* static */ void
+nsStyleUtil::AppendEscapedCSSFontFamilyList(
+  const mozilla::FontFamilyList& aFamilyList,
+  nsAString& aResult)
+{
+  const nsTArray<FontFamilyName>& fontlist = aFamilyList.GetFontlist();
+  size_t i, len = fontlist.Length();
+  for (i = 0; i < len; i++) {
+    if (i != 0) {
+      aResult.Append(',');
+    }
+    const FontFamilyName& name = fontlist[i];
+    switch (name.mType) {
+      case eFamily_named:
+        AppendUnquotedFamilyName(name.mName, aResult);
+        break;
+      case eFamily_named_quoted:
+        AppendEscapedCSSString(name.mName, aResult);
+        break;
+      default:
+        name.AppendToString(aResult);
+    }
+  }
+}
+
 
 /* static */ void
 nsStyleUtil::AppendBitmaskCSSValue(nsCSSProperty aProperty,
@@ -407,6 +462,106 @@ nsStyleUtil::ComputeFunctionalAlternates(const nsCSSValueList* aList,
   }
 }
 
+// print all characters with at least four hex digits
+static void
+AppendSerializedUnicodePoint(uint32_t aCode, nsACString& aBuf)
+{
+  aBuf.Append(nsPrintfCString("%04X", aCode));
+}
+
+// A unicode-range: descriptor is represented as an array of integers,
+// to be interpreted as a sequence of pairs: min max min max ...
+// It is in source order.  (Possibly it should be sorted and overlaps
+// consolidated, but right now we don't do that.)
+/* static */ void
+nsStyleUtil::AppendUnicodeRange(const nsCSSValue& aValue, nsAString& aResult)
+{
+  NS_PRECONDITION(aValue.GetUnit() == eCSSUnit_Null ||
+                  aValue.GetUnit() == eCSSUnit_Array,
+                  "improper value unit for unicode-range:");
+  aResult.Truncate();
+  if (aValue.GetUnit() != eCSSUnit_Array)
+    return;
+
+  nsCSSValue::Array const & sources = *aValue.GetArrayValue();
+  nsAutoCString buf;
+
+  NS_ABORT_IF_FALSE(sources.Count() % 2 == 0,
+                    "odd number of entries in a unicode-range: array");
+
+  for (uint32_t i = 0; i < sources.Count(); i += 2) {
+    uint32_t min = sources[i].GetIntValue();
+    uint32_t max = sources[i+1].GetIntValue();
+
+    // We don't try to replicate the U+XX?? notation.
+    buf.AppendLiteral("U+");
+    AppendSerializedUnicodePoint(min, buf);
+
+    if (min != max) {
+      buf.Append('-');
+      AppendSerializedUnicodePoint(max, buf);
+    }
+    buf.AppendLiteral(", ");
+  }
+  buf.Truncate(buf.Length() - 2); // remove the last comma-space
+  CopyASCIItoUTF16(buf, aResult);
+}
+
+/* static */ void
+nsStyleUtil::AppendSerializedFontSrc(const nsCSSValue& aValue,
+                                     nsAString& aResult)
+{
+  // A src: descriptor is represented as an array value; each entry in
+  // the array can be eCSSUnit_URL, eCSSUnit_Local_Font, or
+  // eCSSUnit_Font_Format.  Blocks of eCSSUnit_Font_Format may appear
+  // only after one of the first two.  (css3-fonts only contemplates
+  // annotating URLs with formats, but we handle the general case.)
+
+  NS_PRECONDITION(aValue.GetUnit() == eCSSUnit_Array,
+                  "improper value unit for src:");
+
+  const nsCSSValue::Array& sources = *aValue.GetArrayValue();
+  size_t i = 0;
+
+  while (i < sources.Count()) {
+    nsAutoString formats;
+
+    if (sources[i].GetUnit() == eCSSUnit_URL) {
+      aResult.AppendLiteral("url(");
+      nsDependentString url(sources[i].GetOriginalURLValue());
+      nsStyleUtil::AppendEscapedCSSString(url, aResult);
+      aResult.Append(')');
+    } else if (sources[i].GetUnit() == eCSSUnit_Local_Font) {
+      aResult.AppendLiteral("local(");
+      nsDependentString local(sources[i].GetStringBufferValue());
+      nsStyleUtil::AppendEscapedCSSString(local, aResult);
+      aResult.Append(')');
+    } else {
+      NS_NOTREACHED("entry in src: descriptor with improper unit");
+      i++;
+      continue;
+    }
+
+    i++;
+    formats.Truncate();
+    while (i < sources.Count() &&
+           sources[i].GetUnit() == eCSSUnit_Font_Format) {
+      formats.Append('"');
+      formats.Append(sources[i].GetStringBufferValue());
+      formats.AppendLiteral("\", ");
+      i++;
+    }
+    if (formats.Length() > 0) {
+      formats.Truncate(formats.Length() - 2); // remove the last comma
+      aResult.AppendLiteral(" format(");
+      aResult.Append(formats);
+      aResult.Append(')');
+    }
+    aResult.AppendLiteral(", ");
+  }
+  aResult.Truncate(aResult.Length() - 2); // remove the last comma-space
+}
+
 /* static */ float
 nsStyleUtil::ColorComponentToFloat(uint8_t aAlpha)
 {
@@ -439,6 +594,29 @@ nsStyleUtil::IsSignificantChild(nsIContent* aChild, bool aTextIsSignificant,
   return aTextIsSignificant && isText && aChild->TextLength() != 0 &&
          (aWhitespaceIsSignificant ||
           !aChild->TextIsOnlyWhitespace());
+}
+
+/* static */ bool
+nsStyleUtil::IsFlexBasisMainSize(const nsStyleCoord& aFlexBasis,
+                                 bool aIsMainAxisHorizontal)
+{
+  // "main-size" is stored as an enumerated value; so if we're not enumerated,
+  // we're not "main-size".
+  if (aFlexBasis.GetUnit() != eStyleUnit_Enumerated) {
+    return false;
+  }
+
+  if (!aIsMainAxisHorizontal) {
+    // Special case for vertical flex items: We don't support any enumerated
+    // values (e.g. "-moz-max-content") for "height"-flavored properties
+    // yet. So, if our computed flex-basis is *any* enumerated value, we'll
+    // just behave as if it were "main-size" (the initial value of flex-basis).
+    // NOTE: Once we support intrinsic sizing keywords for "height",
+    // we can remove this special-case.
+    return true;
+  }
+
+  return aFlexBasis.GetIntValue() == NS_STYLE_FLEX_BASIS_MAIN_SIZE;
 }
 
 /* static */ bool

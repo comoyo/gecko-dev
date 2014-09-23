@@ -25,10 +25,11 @@ struct DOMPointInit;
 
 class DOMQuad MOZ_FINAL : public nsWrapperCache
 {
+  ~DOMQuad();
+
 public:
   DOMQuad(nsISupports* aParent, CSSPoint aPoints[4]);
-  DOMQuad(nsISupports* aParent);
-  ~DOMQuad();
+  explicit DOMQuad(nsISupports* aParent);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(DOMQuad)
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(DOMQuad)

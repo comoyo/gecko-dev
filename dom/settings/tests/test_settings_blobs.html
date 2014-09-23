@@ -22,11 +22,14 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=821630
 "use strict";
 
 if (SpecialPowers.isMainProcess()) {
-  SpecialPowers.Cu.import("resource://gre/modules/SettingsChangeNotifier.jsm");
+  SpecialPowers.Cu.import("resource://gre/modules/SettingsRequestManager.jsm");
 }
 
 SpecialPowers.addPermission("settings-read", true, document);
 SpecialPowers.addPermission("settings-write", true, document);
+SpecialPowers.addPermission("settings-api-read", true, document);
+SpecialPowers.addPermission("settings-api-write", true, document);
+SpecialPowers.addPermission("settings-clear", true, document);
 
 function onUnwantedSuccess() {
   ok(false, "onUnwantedSuccess: shouldn't get here");
@@ -45,7 +48,7 @@ function onFailure() {
 let mozSettings = window.navigator.mozSettings;
 let req;
 
-let storedBlob = new Blob([""], {"type": "text/xml"});
+let storedBlob = new Blob(['12345'], {"type": "text/plain"});
 
 function checkBlob(blob) {
   try {

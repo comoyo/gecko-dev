@@ -137,6 +137,8 @@ int H261EncoderImpl::InitEncode(const VideoCodec* inst,
       "media.peerconnection.video.h261_force_keyframes")) {
     force_keyframes_ = true;
   }
+  max_framerate_ = mozilla::Preferences::GetInt(
+      "media.peerconnection.video.h261_max_framerate", 0);
 #endif
 
   capture_width_ = capture_height_ = 0;
@@ -197,6 +199,9 @@ int H261EncoderImpl::Encode(const I420VideoFrame& input_image,
   }
   if (encoded_complete_callback_ == NULL) {
     return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
+  }
+  if (ShouldDropFrameToMaintainRate()) {
+    return WEBRTC_VIDEO_CODEC_LEVEL_EXCEEDED;
   }
   VideoFrameType frame_type = kDeltaFrame;
   // We only support one stream at the moment.
@@ -397,6 +402,22 @@ void H261EncoderImpl::SendPacket(uint32_t timestamp,
     encoded_image_info_.codecType = kVideoCodecH261;
 
     encoded_complete_callback_->Encoded(encoded_image_, &encoded_image_info_);
+}
+
+bool H261EncoderImpl::ShouldDropFrameToMaintainRate() {
+    if (!max_framerate_)
+        return false;
+
+    PRIntervalTime now = PR_IntervalNow();
+    uint32_t usBetweenFrames = 1000 * 1000 / max_framerate_;
+    PRIntervalTime timeSinceLastFrame = now - last_frame_time_;
+
+    if (PR_IntervalToMicroseconds(timeSinceLastFrame) < usBetweenFrames) {
+      return true;
+    }
+
+    last_frame_time_ = now;
+    return false;
 }
 
 int H261EncoderImpl::RegisterEncodeCompleteCallback(EncodedImageCallback* callback) {

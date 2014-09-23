@@ -15,6 +15,8 @@ const promise = Cu.import("resource://gre/modules/Promise.jsm", {}).Promise;
 const EventEmitter = require("devtools/toolkit/event-emitter");
 const { CallWatcherFront } = require("devtools/server/actors/call-watcher");
 const { CanvasFront } = require("devtools/server/actors/canvas");
+const Telemetry = require("devtools/shared/telemetry");
+const telemetry = new Telemetry();
 
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
   "resource://gre/modules/Task.jsm");
@@ -119,6 +121,7 @@ let EventsHandler = {
    * Listen for events emitted by the current tab target.
    */
   initialize: function() {
+    telemetry.toolOpened("canvasdebugger");
     this._onTabNavigated = this._onTabNavigated.bind(this);
     gTarget.on("will-navigate", this._onTabNavigated);
     gTarget.on("navigate", this._onTabNavigated);
@@ -128,6 +131,7 @@ let EventsHandler = {
    * Remove events emitted by the current tab target.
    */
   destroy: function() {
+    telemetry.toolClosed("canvasdebugger");
     gTarget.off("will-navigate", this._onTabNavigated);
     gTarget.off("navigate", this._onTabNavigated);
   },
@@ -203,8 +207,8 @@ let SnapshotsListView = Heritage.extend(WidgetMethods, {
 
     let thumbnail = document.createElementNS(HTML_NS, "canvas");
     thumbnail.className = "snapshot-item-thumbnail";
-    thumbnail.width = CanvasFront.THUMBNAIL_HEIGHT;
-    thumbnail.height = CanvasFront.THUMBNAIL_HEIGHT;
+    thumbnail.width = CanvasFront.THUMBNAIL_SIZE;
+    thumbnail.height = CanvasFront.THUMBNAIL_SIZE;
 
     let title = document.createElement("label");
     title.className = "plain snapshot-item-title";
@@ -708,14 +712,16 @@ let CallsListView = Heritage.extend(WidgetMethods, {
    *        A single "snapshot-image" instance received from the backend.
    */
   showScreenshot: function(screenshot) {
-    let { index, width, height, flipped, pixels } = screenshot;
+    let { index, width, height, scaling, flipped, pixels } = screenshot;
 
     let screenshotNode = $("#screenshot-image");
     screenshotNode.setAttribute("flipped", flipped);
     drawBackground("screenshot-rendering", width, height, pixels);
 
     let dimensionsNode = $("#screenshot-dimensions");
-    dimensionsNode.setAttribute("value", ~~width + " x " + ~~height);
+    let actualWidth = (width / scaling) | 0;
+    let actualHeight = (height / scaling) | 0;
+    dimensionsNode.setAttribute("value", actualWidth + " x " + actualHeight);
 
     window.emit(EVENTS.CALL_SCREENSHOT_DISPLAYED);
   },
@@ -750,8 +756,8 @@ let CallsListView = Heritage.extend(WidgetMethods, {
 
     let thumbnailNode = document.createElementNS(HTML_NS, "canvas");
     thumbnailNode.setAttribute("flipped", flipped);
-    thumbnailNode.width = Math.max(CanvasFront.THUMBNAIL_HEIGHT, width);
-    thumbnailNode.height = Math.max(CanvasFront.THUMBNAIL_HEIGHT, height);
+    thumbnailNode.width = Math.max(CanvasFront.THUMBNAIL_SIZE, width);
+    thumbnailNode.height = Math.max(CanvasFront.THUMBNAIL_SIZE, height);
     drawImage(thumbnailNode, width, height, pixels, { centered: true });
 
     thumbnailNode.className = "filmstrip-thumbnail";

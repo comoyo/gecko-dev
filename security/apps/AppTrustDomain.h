@@ -10,36 +10,47 @@
 #include "pkix/pkixtypes.h"
 #include "nsDebug.h"
 #include "nsIX509CertDB.h"
+#include "ScopedNSSTypes.h"
 
 namespace mozilla { namespace psm {
 
 class AppTrustDomain MOZ_FINAL : public mozilla::pkix::TrustDomain
 {
 public:
-  AppTrustDomain(void* pinArg);
+  typedef mozilla::pkix::Result Result;
+
+  AppTrustDomain(ScopedCERTCertList&, void* pinArg);
 
   SECStatus SetTrustedRoot(AppTrustedRoot trustedRoot);
 
-  SECStatus GetCertTrust(mozilla::pkix::EndEntityOrCA endEntityOrCA,
-                         const mozilla::pkix::CertPolicyId& policy,
-                         const CERTCertificate* candidateCert,
-                 /*out*/ mozilla::pkix::TrustLevel* trustLevel) MOZ_OVERRIDE;
-  SECStatus FindPotentialIssuers(const SECItem* encodedIssuerName,
-                                 PRTime time,
-                         /*out*/ mozilla::pkix::ScopedCERTCertList& results)
-                                 MOZ_OVERRIDE;
-  SECStatus VerifySignedData(const CERTSignedData* signedData,
-                             const CERTCertificate* cert) MOZ_OVERRIDE;
-  SECStatus CheckRevocation(mozilla::pkix::EndEntityOrCA endEntityOrCA,
-                            const CERTCertificate* cert,
-                            /*const*/ CERTCertificate* issuerCertToDup,
-                            PRTime time,
-                            /*optional*/ const SECItem* stapledOCSPresponse);
-  SECStatus IsChainValid(const CERTCertList* certChain) { return SECSuccess; }
+  virtual Result GetCertTrust(mozilla::pkix::EndEntityOrCA endEntityOrCA,
+                              const mozilla::pkix::CertPolicyId& policy,
+                              mozilla::pkix::Input candidateCertDER,
+                              /*out*/ mozilla::pkix::TrustLevel& trustLevel)
+                              MOZ_OVERRIDE;
+  virtual Result FindIssuer(mozilla::pkix::Input encodedIssuerName,
+                            IssuerChecker& checker,
+                            mozilla::pkix::Time time) MOZ_OVERRIDE;
+  virtual Result CheckRevocation(mozilla::pkix::EndEntityOrCA endEntityOrCA,
+                                 const mozilla::pkix::CertID& certID,
+                                 mozilla::pkix::Time time,
+                    /*optional*/ const mozilla::pkix::Input* stapledOCSPresponse,
+                    /*optional*/ const mozilla::pkix::Input* aiaExtension);
+  virtual Result IsChainValid(const mozilla::pkix::DERArray& certChain)
+                              MOZ_OVERRIDE;
+  virtual Result CheckPublicKey(mozilla::pkix::Input subjectPublicKeyInfo)
+                                MOZ_OVERRIDE;
+  virtual Result VerifySignedData(
+           const mozilla::pkix::SignedDataWithSignature& signedData,
+           mozilla::pkix::Input subjectPublicKeyInfo) MOZ_OVERRIDE;
+  virtual Result DigestBuf(mozilla::pkix::Input item,
+                           /*out*/ uint8_t* digestBuf,
+                           size_t digestBufLen) MOZ_OVERRIDE;
 
 private:
+  /*out*/ ScopedCERTCertList& mCertChain;
   void* mPinArg; // non-owning!
-  mozilla::pkix::ScopedCERTCertificate mTrustedRoot;
+  ScopedCERTCertificate mTrustedRoot;
 };
 
 } } // namespace mozilla::psm

@@ -5,26 +5,23 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 DIRS += ['ipc']
-TEST_DIRS += ['test']
-
-XPIDL_SOURCES += [
-    'nsIIndexedDatabaseManager.idl',
-]
-
-XPIDL_MODULE = 'dom_indexeddb'
+TEST_DIRS += ['test/extensions']
 
 EXPORTS.mozilla.dom.indexedDB += [
     'Client.h',
     'DatabaseInfo.h',
     'FileInfo.h',
     'FileManager.h',
+    'FileSnapshot.h',
     'IDBCursor.h',
     'IDBDatabase.h',
     'IDBEvents.h',
     'IDBFactory.h',
     'IDBFileHandle.h',
+    'IDBFileRequest.h',
     'IDBIndex.h',
     'IDBKeyRange.h',
+    'IDBMutableFile.h',
     'IDBObjectStore.h',
     'IDBRequest.h',
     'IDBTransaction.h',
@@ -42,11 +39,14 @@ UNIFIED_SOURCES += [
     'DatabaseInfo.cpp',
     'FileInfo.cpp',
     'FileManager.cpp',
+    'FileSnapshot.cpp',
     'IDBDatabase.cpp',
     'IDBEvents.cpp',
     'IDBFactory.cpp',
     'IDBFileHandle.cpp',
+    'IDBFileRequest.cpp',
     'IDBKeyRange.cpp',
+    'IDBMutableFile.cpp',
     'IDBRequest.cpp',
     'IDBTransaction.cpp',
     'IDBWrapperCache.cpp',
@@ -69,14 +69,21 @@ FAIL_ON_WARNINGS = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
-FINAL_LIBRARY = 'gklayout'
+FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
-    '/caps/include',
+    '/caps',
     '/content/base/src',
     '/db/sqlite3/src',
     '/dom/base',
     '/dom/quota',
-    '/dom/src/storage',
+    '/dom/storage',
     '/xpcom/build',
 ]
 
+MOCHITEST_MANIFESTS += [
+    'test/mochitest.ini',
+    'test/unit/mochitest.ini',
+]
+BROWSER_CHROME_MANIFESTS += ['test/browser.ini']
+MOCHITEST_CHROME_MANIFESTS += ['test/chrome.ini']
+XPCSHELL_TESTS_MANIFESTS += ['test/unit/xpcshell.ini']

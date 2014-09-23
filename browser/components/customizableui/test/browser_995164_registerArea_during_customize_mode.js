@@ -42,12 +42,12 @@ add_task(function*() {
   info("Check that removing the area registration from within customize mode works");
   CustomizableUI.unregisterArea(TOOLBARID);
   ok(CustomizableUI.inDefaultState, "Now that the toolbar is no longer registered, should be in default state.");
-  ok(!(new Set(gCustomizeMode.areas)).has(toolbar), "Toolbar shouldn't be known to customize mode.");
+  ok(!gCustomizeMode.areas.has(toolbar), "Toolbar shouldn't be known to customize mode.");
 
   CustomizableUI.registerArea(TOOLBARID, {legacy: true, defaultPlacements: []});
   CustomizableUI.registerToolbarNode(toolbar, []);
   ok(!CustomizableUI.inDefaultState, "Now that the toolbar is registered again, should no longer be in default state.");
-  ok((new Set(gCustomizeMode.areas)).has(toolbar), "Toolbar should be known to customize mode again.");
+  ok(gCustomizeMode.areas.has(toolbar), "Toolbar should be known to customize mode again.");
 
   simulateItemDrag(syncButton, toolbar);
   ok(CustomizableUI.getPlacementOfWidget("sync-button"), "Button moved out of palette");
@@ -85,7 +85,13 @@ add_task(function*() {
   ok(otherTB.querySelector("#sync-button"), "Sync button is on other toolbar, too.");
 
   let wasInformedCorrectlyOfAreaDisappearing = false;
-  let windowClosed = null;
+  //XXXgijs So we could be using promiseWindowClosed here. However, after
+  // repeated random oranges, I'm instead relying on onWindowClosed below to
+  // fire appropriately - it is linked to an unload event as well, and so
+  // reusing it prevents a potential race between unload handlers where the
+  // one from promiseWindowClosed could fire before the onWindowClosed
+  // (and therefore onAreaNodeRegistered) one, causing the test to fail.
+  let windowCloseDeferred = Promise.defer();
   listener = {
     onAreaNodeUnregistered: function(aArea, aNode, aReason) {
       if (aArea == TOOLBARID) {
@@ -96,8 +102,7 @@ add_task(function*() {
     },
     onWindowClosed: function(aWindow) {
       if (aWindow == otherWin) {
-        info("Got window closed notification for correct window.");
-        windowClosed = aWindow;
+        windowCloseDeferred.resolve(aWindow);
       } else {
         info("Other window was closed!");
         info("Other window title: " + (aWindow.document && aWindow.document.title));
@@ -106,13 +111,14 @@ add_task(function*() {
     },
   };
   CustomizableUI.addListener(listener);
-  yield promiseWindowClosed(otherWin);
+  otherWin.close();
+  let windowClosed = yield windowCloseDeferred.promise;
 
   is(windowClosed, otherWin, "Window should have sent onWindowClosed notification.");
   ok(wasInformedCorrectlyOfAreaDisappearing, "Should be told about window closing.");
   // Closing the other window should not be counted against this window's customize mode:
   is(syncButton.parentNode.localName, "toolbarpaletteitem", "Sync button's parent node should still be a wrapper.");
-  isnot(gCustomizeMode.areas.indexOf(toolbar), -1, "Toolbar should still be a customizable area for this customize mode instance.");
+  ok(gCustomizeMode.areas.has(toolbar), "Toolbar should still be a customizable area for this customize mode instance.");
 
   yield gCustomizeMode.reset();
 

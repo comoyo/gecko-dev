@@ -167,6 +167,11 @@ partial interface HTMLInputElement {
   readonly attribute HTMLInputElement? ownerNumberControl;
 
   boolean mozIsTextField(boolean aExcludePassword);
+
+  [ChromeOnly]
+  // This function will return null if @autocomplete is not defined for the
+  // current @type
+  AutocompleteInfo? getAutocompleteInfo();
 };
 
 partial interface HTMLInputElement {

@@ -145,16 +145,11 @@ const WorkerSandbox = EventEmitter.compose({
       wantGlobalProperties.push("XMLHttpRequest");
     }
 
-    // Instantiate trusted code in another Sandbox in order to prevent content
-    // script from messing with standard classes used by proxy and API code.
-    let apiSandbox = sandbox(principals, { wantXrays: true, sameZoneAs: window });
-    apiSandbox.console = console;
-
     // Create the sandbox and bind it to window in order for content scripts to
     // have access to all standard globals (window, document, ...)
     let content = this._sandbox = sandbox(principals, {
       sandboxPrototype: proto,
-      wantXrays: true,
+      wantXrays: !worker._injectInDocument,
       wantGlobalProperties: wantGlobalProperties,
       sameZoneAs: window,
       metadata: {
@@ -171,19 +166,23 @@ const WorkerSandbox = EventEmitter.compose({
       // We need "this === window === top" to be true in toplevel scope:
       get window() content,
       get top() top,
-      get parent() parent,
-      // Use the Greasemonkey naming convention to provide access to the
-      // unwrapped window object so the content script can access document
-      // JavaScript values.
-      // NOTE: this functionality is experimental and may change or go away
-      // at any time!
-      get unsafeWindow() window.wrappedJSObject
+      get parent() parent
     });
+    // Use the Greasemonkey naming convention to provide access to the
+    // unwrapped window object so the content script can access document
+    // JavaScript values.
+    // NOTE: this functionality is experimental and may change or go away
+    // at any time!
+    //
+    // Note that because waivers aren't propagated between origins, we
+    // need the unsafeWindow getter to live in the sandbox.
+    var unsafeWindowGetter =
+      new content.Function('return window.wrappedJSObject || window;');
+    Object.defineProperty(content, 'unsafeWindow', {get: unsafeWindowGetter});
+
 
     // Load trusted code that will inject content script API.
-    // We need to expose JS objects defined in same principal in order to
-    // avoid having any kind of wrapper.
-    load(apiSandbox, CONTENT_WORKER_URL);
+    let ContentWorker = load(content, CONTENT_WORKER_URL);
 
     // prepare a clean `self.options`
     let options = 'contentScriptOptions' in worker ?
@@ -223,8 +222,7 @@ const WorkerSandbox = EventEmitter.compose({
       }
     };
     let onEvent = this._onContentEvent.bind(this);
-    // `ContentWorker` is defined in CONTENT_WORKER_URL file
-    let result = apiSandbox.ContentWorker.inject(content, chromeAPI, onEvent, options);
+    let result = Cu.waiveXrays(ContentWorker).inject(content, chromeAPI, onEvent, options);
     this._emitToContent = result.emitToContent;
     this._hasListenerFor = result.hasListenerFor;
 
@@ -375,7 +373,7 @@ const WorkerSandbox = EventEmitter.compose({
    */
   _importScripts: function _importScripts(url) {
     let urls = Array.slice(arguments, 0);
-    for each (let contentScriptFile in urls) {
+    for (let contentScriptFile of urls) {
       try {
         let uri = URL(contentScriptFile);
         if (uri.scheme === 'resource')

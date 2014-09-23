@@ -11,13 +11,16 @@
 #include "jscompartment.h"
 
 #include "jsiter.h"
-#include "jsworkers.h"
 
 #include "builtin/Object.h"
 #include "jit/IonFrames.h"
 #include "vm/ForkJoin.h"
+#include "vm/HelperThreads.h"
 #include "vm/Interpreter.h"
 #include "vm/ProxyObject.h"
+#include "vm/Symbol.h"
+
+#include "gc/ForkJoinNursery-inl.h"
 
 namespace js {
 
@@ -123,19 +126,7 @@ class CompartmentChecker
             check(*p);
     }
 
-    void check(jsid id) {
-        if (JSID_IS_OBJECT(id))
-            check(JSID_TO_OBJECT(id));
-    }
-
-    void check(JSIdArray *ida) {
-        if (ida) {
-            for (int i = 0; i < ida->length; i++) {
-                if (JSID_IS_OBJECT(ida->vector[i]))
-                    check(ida->vector[i]);
-            }
-        }
-    }
+    void check(jsid id) {}
 
     void check(JSScript *script) {
         if (script)
@@ -144,6 +135,7 @@ class CompartmentChecker
 
     void check(InterpreterFrame *fp);
     void check(AbstractFramePtr frame);
+    void check(SavedStacks *stacks);
 };
 #endif /* JS_CRASH_DIAGNOSTICS */
 
@@ -292,7 +284,7 @@ CallJSNativeConstructor(JSContext *cx, Native native, const CallArgs &args)
      *
      * - (new Object(Object)) returns the callee.
      */
-    JS_ASSERT_IF(native != ProxyObject::callableClass_.construct &&
+    JS_ASSERT_IF(native != js::proxy_Construct &&
                  native != js::CallOrConstructBoundFunction &&
                  native != js::IteratorConstructor &&
                  (!callee->is<JSFunction>() || callee->as<JSFunction>().native() != obj_construct),
@@ -382,21 +374,10 @@ JSContext::setPendingException(js::Value v)
     JS_ASSERT_IF(v.isObject(), v.toObject().compartment() == compartment());
 }
 
-inline void
-JSContext::setDefaultCompartmentObject(JSObject *obj)
+inline bool
+JSContext::runningWithTrustedPrincipals() const
 {
-    JS_ASSERT(!options().noDefaultCompartmentObject());
-    defaultCompartmentObject_ = obj;
-}
-
-inline void
-JSContext::setDefaultCompartmentObjectIfUnset(JSObject *obj)
-{
-    if (!options().noDefaultCompartmentObject() &&
-        !defaultCompartmentObject_)
-    {
-        setDefaultCompartmentObject(obj);
-    }
+    return !compartment() || compartment()->principals == runtime()->trustedPrincipals();
 }
 
 inline void
@@ -473,7 +454,6 @@ JSContext::currentScript(jsbytecode **ppc,
 
     JS_ASSERT(act->cx() == this);
 
-#ifdef JS_ION
     if (act->isJit()) {
         JSScript *script = nullptr;
         js::jit::GetPcScript(const_cast<JSContext *>(this), &script, ppc);
@@ -484,7 +464,6 @@ JSContext::currentScript(jsbytecode **ppc,
 
     if (act->isAsmJS())
         return nullptr;
-#endif
 
     JS_ASSERT(act->isInterpreter());
 

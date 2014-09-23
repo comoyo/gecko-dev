@@ -50,6 +50,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <errno.h>
+#include <algorithm>
 
 #include "updatelogging.h"
 
@@ -165,7 +166,7 @@ crc32(const unsigned char *buf, unsigned int len)
 class AutoFile
 {
 public:
-  AutoFile(FILE* file = nullptr)
+  explicit AutoFile(FILE* file = nullptr)
     : mFile(file) {
   }
 
@@ -661,13 +662,13 @@ static int ensure_copy(const NS_tchar *path, const NS_tchar *dest)
   }
 #endif
 
-  AutoFile infile = ensure_open(path, NS_T("rb"), ss.st_mode);
+  AutoFile infile(ensure_open(path, NS_T("rb"), ss.st_mode));
   if (!infile) {
     LOG(("ensure_copy: failed to open the file for reading: " LOG_S ", err: %d",
          path, errno));
     return READ_ERROR;
   }
-  AutoFile outfile = ensure_open(dest, NS_T("wb"), ss.st_mode);
+  AutoFile outfile(ensure_open(dest, NS_T("wb"), ss.st_mode));
   if (!outfile) {
     LOG(("ensure_copy: failed to open the file for writing: " LOG_S ", err: %d",
          dest, errno));
@@ -1397,7 +1398,7 @@ PatchFile::Execute()
 {
   LOG(("EXECUTE PATCH " LOG_S, mFile));
 
-  AutoFile pfile = NS_tfopen(spath, NS_T("rb"));
+  AutoFile pfile(NS_tfopen(spath, NS_T("rb")));
   if (pfile == nullptr)
     return READ_ERROR;
 
@@ -1446,7 +1447,7 @@ PatchFile::Execute()
     return rv;
 
 #if defined(HAVE_POSIX_FALLOCATE)
-  AutoFile ofile = ensure_open(mFile, NS_T("wb+"), ss.st_mode);
+  AutoFile ofile(ensure_open(mFile, NS_T("wb+"), ss.st_mode));
   posix_fallocate(fileno((FILE *)ofile), 0, header.dlen);
 #elif defined(XP_WIN)
   bool shouldTruncate = true;
@@ -1474,9 +1475,9 @@ PatchFile::Execute()
     CloseHandle(hfile);
   }
 
-  AutoFile ofile = ensure_open(mFile, shouldTruncate ? NS_T("wb+") : NS_T("rb+"), ss.st_mode);
+  AutoFile ofile(ensure_open(mFile, shouldTruncate ? NS_T("wb+") : NS_T("rb+"), ss.st_mode));
 #elif defined(XP_MACOSX)
-  AutoFile ofile = ensure_open(mFile, NS_T("wb+"), ss.st_mode);
+  AutoFile ofile(ensure_open(mFile, NS_T("wb+"), ss.st_mode));
   // Modified code from FileUtils.cpp
   fstore_t store = {F_ALLOCATECONTIG, F_PEOFPOSMODE, 0, header.dlen};
   // Try to get a continous chunk of disk space
@@ -1491,7 +1492,7 @@ PatchFile::Execute()
     ftruncate(fileno((FILE *)ofile), header.dlen);
   }
 #else
-  AutoFile ofile = ensure_open(mFile, NS_T("wb+"), ss.st_mode);
+  AutoFile ofile(ensure_open(mFile, NS_T("wb+"), ss.st_mode));
 #endif
 
   if (ofile == nullptr) {
@@ -1786,7 +1787,7 @@ WriteStatusFile(const char* aStatus)
   if (ensure_parent_dir(filename))
     return false;
 
-  AutoFile file = NS_tfopen(filename, NS_T("wb+"));
+  AutoFile file(NS_tfopen(filename, NS_T("wb+")));
   if (file == nullptr)
     return false;
 
@@ -1833,7 +1834,7 @@ IsUpdateStatusPendingService()
   NS_tsnprintf(filename, sizeof(filename)/sizeof(filename[0]),
                NS_T("%s/update.status"), gSourcePath);
 
-  AutoFile file = NS_tfopen(filename, NS_T("rb"));
+  AutoFile file(NS_tfopen(filename, NS_T("rb")));
   if (file == nullptr)
     return false;
 
@@ -1867,7 +1868,7 @@ IsUpdateStatusSucceeded(bool &isSucceeded)
   NS_tsnprintf(filename, sizeof(filename)/sizeof(filename[0]),
                NS_T("%s/update.status"), gSourcePath);
 
-  AutoFile file = NS_tfopen(filename, NS_T("rb"));
+  AutoFile file(NS_tfopen(filename, NS_T("rb")));
   if (file == nullptr)
     return false;
 
@@ -2179,7 +2180,7 @@ GetUpdateFileName(NS_tchar *fileName, int maxChars)
   NS_tchar linkFileName[MAXPATHLEN];
   NS_tsnprintf(linkFileName, sizeof(linkFileName)/sizeof(linkFileName[0]),
                NS_T("%s/update.link"), gSourcePath);
-  AutoFile linkFile = NS_tfopen(linkFileName, NS_T("rb"));
+  AutoFile linkFile(NS_tfopen(linkFileName, NS_T("rb")));
   if (linkFile == nullptr) {
     NS_tsnprintf(fileName, maxChars,
                  NS_T("%s/update.mar"), gSourcePath);
@@ -2668,7 +2669,7 @@ int NS_main(int argc, NS_tchar **argv)
         return 1;
       }
 
-      char16_t *cmdLine = MakeCommandLine(argc - 1, argv + 1);
+      wchar_t *cmdLine = MakeCommandLine(argc - 1, argv + 1);
       if (!cmdLine) {
         CloseHandle(elevatedFileHandle);
         return 1;
@@ -2985,7 +2986,7 @@ int NS_main(int argc, NS_tchar **argv)
       size_t callbackPrefixLength = PathCommonPrefixW(argv[callbackIndex],
                                                       installDir,
                                                       nullptr);
-      NS_tstrncpy(p, argv[callbackIndex] + max(callbackPrefixLength, commonPrefixLength), bufferLeft);
+      NS_tstrncpy(p, argv[callbackIndex] + std::max(callbackPrefixLength, commonPrefixLength), bufferLeft);
       targetPath = buffer;
     }
     if (!GetLongPathNameW(targetPath, callbackLongPath,
@@ -3579,7 +3580,7 @@ int add_dir_entries(const NS_tchar *dirpath, ActionList *list)
 static NS_tchar*
 GetManifestContents(const NS_tchar *manifest)
 {
-  AutoFile mfile = NS_tfopen(manifest, NS_T("rb"));
+  AutoFile mfile(NS_tfopen(manifest, NS_T("rb")));
   if (mfile == nullptr) {
     LOG(("GetManifestContents: error opening manifest file: " LOG_S, manifest));
     return nullptr;

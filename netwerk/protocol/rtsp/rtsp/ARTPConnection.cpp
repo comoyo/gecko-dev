@@ -107,7 +107,12 @@ void ARTPConnection::removeStream(PRFileDesc *rtpSocket, PRFileDesc *rtcpSocket)
     sp<AMessage> msg = new AMessage(kWhatRemoveStream, id());
     msg->setPointer("rtp-socket", rtpSocket);
     msg->setPointer("rtcp-socket", rtcpSocket);
-    msg->post();
+
+    // Since the caller will close the sockets after this function
+    // returns, we need to use a blocking post to prevent from polling
+    // closed sockets.
+    sp<AMessage> response;
+    msg->postAndAwaitResponse(&response);
 }
 
 static void bumpSocketBufferSize(PRFileDesc *s) {
@@ -145,7 +150,7 @@ void ARTPConnection::MakePortPair(
     unsigned start = (unsigned)((rand() * 1000ll) / RAND_MAX) + 15550;
     start &= ~1;
 
-    for (uint16_t port = start; port < 65536; port += 2) {
+    for (uint32_t port = start; port < 65536; port += 2) {
         PRNetAddr addr;
         addr.inet.family = PR_AF_INET;
         addr.inet.ip = PR_htonl(PR_INADDR_ANY);
@@ -177,6 +182,10 @@ void ARTPConnection::onMessageReceived(const sp<AMessage> &msg) {
         case kWhatRemoveStream:
         {
             onRemoveStream(msg);
+            sp<AMessage> ack = new AMessage;
+            uint32_t replyID;
+            CHECK(msg->senderAwaitsResponse(&replyID));
+            ack->postReply(replyID);
             break;
         }
 
@@ -278,7 +287,7 @@ void ARTPConnection::onPollStreams() {
         moz_xcalloc(pollCount, sizeof(PRPollDesc));
 
     // |pollIndex| is used to map different RTP & RTCP socket pairs.
-    int numSocketsToPoll = 0, pollIndex = 0;
+    uint32_t numSocketsToPoll = 0, pollIndex = 0;
     for (List<StreamInfo>::iterator it = mStreams.begin();
          it != mStreams.end(); ++it, pollIndex += 2) {
         if (pollIndex >= pollCount) {

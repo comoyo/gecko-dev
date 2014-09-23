@@ -5,19 +5,21 @@
 
 package org.mozilla.gecko.gfx;
 
+import java.nio.IntBuffer;
+import java.util.ArrayList;
+
 import org.mozilla.gecko.AndroidGamepadManager;
+import org.mozilla.gecko.AppConstants.Versions;
+import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoAccessibility;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.PrefsHelper;
-import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
-import org.mozilla.gecko.TouchEventInterceptor;
 import org.mozilla.gecko.ZoomConstraints;
-import org.mozilla.gecko.mozglue.generatorannotations.WrapElementForJNI;
 import org.mozilla.gecko.mozglue.RobocopTarget;
-import org.mozilla.gecko.EventDispatcher;
+import org.mozilla.gecko.mozglue.generatorannotations.WrapElementForJNI;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -28,10 +30,8 @@ import android.graphics.Point;
 import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
-import android.os.Build;
 import android.os.Handler;
 import android.util.AttributeSet;
-import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -43,9 +43,6 @@ import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.FrameLayout;
-
-import java.nio.IntBuffer;
-import java.util.ArrayList;
 
 /**
  * A view rendered by the layer compositor.
@@ -71,8 +68,10 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
 
     private Listener mListener;
 
+    private PointF mInitialTouchPoint;
+    private boolean mGeckoIsReady;
+
     /* This should only be modified on the Java UI thread. */
-    private final ArrayList<TouchEventInterceptor> mTouchInterceptors;
     private final Overscroll mOverscroll;
 
     /* Flags used to determine when to show the painted surface. */
@@ -111,8 +110,7 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
         mBackgroundColor = Color.WHITE;
         mFullScreenState = FullScreenState.NONE;
 
-        mTouchInterceptors = new ArrayList<TouchEventInterceptor>();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+        if (Versions.feature14Plus) {
             mOverscroll = new OverscrollEdgeEffect(this);
         } else {
             mOverscroll = null;
@@ -140,18 +138,12 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
         setFocusableInTouchMode(true);
 
         GeckoAccessibility.setDelegate(this);
+        GeckoAccessibility.setAccessibilityStateChangeListener(getContext());
     }
 
-    private Point getEventRadius(MotionEvent event) {
-        if (Build.VERSION.SDK_INT >= 9) {
-            return new Point((int)event.getToolMajor()/2,
-                             (int)event.getToolMinor()/2);
-        }
-
-        float size = event.getSize();
-        DisplayMetrics displaymetrics = getContext().getResources().getDisplayMetrics();
-        size = size * Math.min(displaymetrics.heightPixels, displaymetrics.widthPixels);
-        return new Point((int)size, (int)size);
+    private static Point getEventRadius(MotionEvent event) {
+        return new Point((int)event.getToolMajor() / 2,
+                         (int)event.getToolMinor() / 2);
     }
 
     public void geckoConnected() {
@@ -165,43 +157,36 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
         });
 
         mLayerClient.notifyGeckoReady();
-        addTouchInterceptor(new TouchEventInterceptor() {
-            private PointF mInitialTouchPoint = null;
+        mInitialTouchPoint = null;
+        mGeckoIsReady = true;
+    }
 
-            @Override
-            public boolean onInterceptTouchEvent(View view, MotionEvent event) {
-                return false;
-            }
+    private boolean sendEventToGecko(MotionEvent event) {
+        if (!mGeckoIsReady) {
+            return false;
+        }
 
-            @Override
-            public boolean onTouch(View view, MotionEvent event) {
-                if (event == null) {
-                    return true;
-                }
+        int action = event.getActionMasked();
+        PointF point = new PointF(event.getX(), event.getY());
+        if (action == MotionEvent.ACTION_DOWN) {
+            mInitialTouchPoint = point;
+        }
 
-                int action = event.getActionMasked();
-                PointF point = new PointF(event.getX(), event.getY());
-                if (action == MotionEvent.ACTION_DOWN) {
-                    mInitialTouchPoint = point;
-                }
+        if (mInitialTouchPoint != null && action == MotionEvent.ACTION_MOVE) {
+            Point p = getEventRadius(event);
 
-                if (mInitialTouchPoint != null && action == MotionEvent.ACTION_MOVE) {
-                    Point p = getEventRadius(event);
-
-                    if (PointUtils.subtract(point, mInitialTouchPoint).length() <
-                        Math.max(PanZoomController.CLICK_THRESHOLD, Math.min(Math.min(p.x, p.y), PanZoomController.PAN_THRESHOLD))) {
-                        // Don't send the touchmove event if if the users finger hasn't moved far.
-                        // Necessary for Google Maps to work correctly. See bug 771099.
-                        return true;
-                    } else {
-                        mInitialTouchPoint = null;
-                    }
-                }
-
-                GeckoAppShell.sendEventToGecko(GeckoEvent.createMotionEvent(event, false));
+            if (PointUtils.subtract(point, mInitialTouchPoint).length() <
+                Math.max(PanZoomController.CLICK_THRESHOLD, Math.min(Math.min(p.x, p.y), PanZoomController.PAN_THRESHOLD))) {
+                // Don't send the touchmove event if if the users finger hasn't moved far.
+                // Necessary for Google Maps to work correctly. See bug 771099.
                 return true;
+            } else {
+                mInitialTouchPoint = null;
             }
-        });
+        }
+
+        GeckoAppShell.sendEventToGecko(GeckoEvent.createMotionEvent(event, false));
+        return true;
     }
 
     public void showSurface() {
@@ -224,37 +209,6 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
         Tabs.unregisterOnTabsChangedListener(this);
     }
 
-    public void addTouchInterceptor(final TouchEventInterceptor aTouchInterceptor) {
-        post(new Runnable() {
-            @Override
-            public void run() {
-                mTouchInterceptors.add(aTouchInterceptor);
-            }
-        });
-    }
-
-    public void removeTouchInterceptor(final TouchEventInterceptor aTouchInterceptor) {
-        post(new Runnable() {
-            @Override
-            public void run() {
-                mTouchInterceptors.remove(aTouchInterceptor);
-            }
-        });
-    }
-
-    private boolean runTouchInterceptors(MotionEvent event, boolean aOnTouch) {
-        boolean result = false;
-        for (TouchEventInterceptor i : mTouchInterceptors) {
-            if (aOnTouch) {
-                result |= i.onTouch(this, event);
-            } else {
-                result |= i.onInterceptTouchEvent(this, event);
-            }
-        }
-
-        return result;
-    }
-
     @Override
     public void dispatchDraw(final Canvas canvas) {
         super.dispatchDraw(canvas);
@@ -271,24 +225,18 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
             requestFocus();
         }
 
-        if (runTouchInterceptors(event, false)) {
+        if (mMarginsAnimator != null && mMarginsAnimator.onInterceptTouchEvent(event)) {
             return true;
         }
         if (mPanZoomController != null && mPanZoomController.onTouchEvent(event)) {
             return true;
         }
-        if (runTouchInterceptors(event, true)) {
-            return true;
-        }
-        return false;
+        return sendEventToGecko(event);
     }
 
     @Override
     public boolean onHoverEvent(MotionEvent event) {
-        if (runTouchInterceptors(event, true)) {
-            return true;
-        }
-        return false;
+        return sendEventToGecko(event);
     }
 
     @Override
@@ -667,9 +615,7 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
 
     @Override
     public void setOverScrollMode(int overscrollMode) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.GINGERBREAD) {
-            super.setOverScrollMode(overscrollMode);
-        }
+        super.setOverScrollMode(overscrollMode);
         if (mPanZoomController != null) {
             mPanZoomController.setOverScrollMode(overscrollMode);
         }
@@ -681,10 +627,7 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
             return mPanZoomController.getOverScrollMode();
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.GINGERBREAD) {
-            return super.getOverScrollMode();
-        }
-        return View.OVER_SCROLL_ALWAYS;
+        return super.getOverScrollMode();
     }
 
     @Override

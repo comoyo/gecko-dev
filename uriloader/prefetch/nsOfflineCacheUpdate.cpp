@@ -14,9 +14,6 @@
 #include "nsIApplicationCacheContainer.h"
 #include "nsIApplicationCacheChannel.h"
 #include "nsIApplicationCacheService.h"
-#include "nsICache.h"
-#include "nsICacheService.h"
-#include "nsICacheSession.h"
 #include "nsICachingChannel.h"
 #include "nsIContent.h"
 #include "mozilla/dom/Element.h"
@@ -43,6 +40,7 @@
 #include "nsIAsyncVerifyRedirectCallback.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Attributes.h"
+#include "nsContentUtils.h"
 
 #include "nsXULAppAPI.h"
 
@@ -144,6 +142,8 @@ public:
 
 private:
 
+    ~nsManifestCheck() {}
+
     static NS_METHOD ReadManifest(nsIInputStream *aInputStream,
                                   void *aClosure,
                                   const char *aFromSegment,
@@ -180,11 +180,16 @@ nsManifestCheck::Begin()
 
     rv = mManifestHash->Init(nsICryptoHash::MD5);
     NS_ENSURE_SUCCESS(rv, rv);
-
     rv = NS_NewChannel(getter_AddRefs(mChannel),
                        mURI,
-                       nullptr, nullptr, nullptr,
+                       nsContentUtils::GetSystemPrincipal(),
+                       nsILoadInfo::SEC_NORMAL,
+                       nsIContentPolicy::TYPE_OTHER,
+                       nullptr,   // aChannelPolicy
+                       nullptr,   // loadGroup
+                       nullptr,   // aCallbacks
                        nsIRequest::LOAD_BYPASS_CACHE);
+
     NS_ENSURE_SUCCESS(rv, rv);
 
     // configure HTTP specific stuff
@@ -375,8 +380,14 @@ nsOfflineCacheUpdateItem::OpenChannel(nsOfflineCacheUpdate *aUpdate)
 
     rv = NS_NewChannel(getter_AddRefs(mChannel),
                        mURI,
-                       nullptr, nullptr, this,
+                       nsContentUtils::GetSystemPrincipal(),
+                       nsILoadInfo::SEC_NORMAL,
+                       nsIContentPolicy::TYPE_OTHER,
+                       nullptr,  // aChannelPolicy
+                       nullptr,  // aLoadGroup
+                       this,     // aCallbacks
                        flags);
+
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIApplicationCacheChannel> appCacheChannel =
@@ -1985,13 +1996,27 @@ void
 nsOfflineCacheUpdate::SetOwner(nsOfflineCacheUpdateOwner *aOwner)
 {
     NS_ASSERTION(!mOwner, "Tried to set cache update owner twice.");
-    mOwner = aOwner->asWeakPtr();
+    mOwner = aOwner;
 }
 
 bool
 nsOfflineCacheUpdate::IsForGroupID(const nsCSubstring &groupID)
 {
     return mGroupID == groupID;
+}
+
+bool
+nsOfflineCacheUpdate::IsForProfile(nsIFile* aCustomProfileDir)
+{
+    if (!mCustomProfileDir && !aCustomProfileDir)
+        return true;
+    if (!mCustomProfileDir || !aCustomProfileDir)
+        return false;
+
+    bool equals;
+    nsresult rv = mCustomProfileDir->Equals(aCustomProfileDir, &equals);
+
+    return NS_SUCCEEDED(rv) && equals;
 }
 
 nsresult

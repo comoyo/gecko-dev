@@ -50,7 +50,8 @@ struct nsInheritedStyleData
                         nsStyleStructID_Inherited_Count> mStyleStructs;
 
   void* operator new(size_t sz, nsPresContext* aContext) CPP_THROW_NEW {
-    return aContext->AllocateFromShell(sz);
+    return aContext->PresShell()->
+      AllocateByObjectID(nsPresArena::nsInheritedStyleData_id, sz);
   }
 
   void DestroyStructs(uint64_t aBits, nsPresContext* aContext) {
@@ -68,7 +69,8 @@ struct nsInheritedStyleData
 
   void Destroy(uint64_t aBits, nsPresContext* aContext) {
     DestroyStructs(aBits, aContext);
-    aContext->FreeToShell(sizeof(nsInheritedStyleData), this);
+    aContext->PresShell()->
+      FreeByObjectID(nsPresArena::nsInheritedStyleData_id, this);
   }
 
   nsInheritedStyleData() {
@@ -95,7 +97,8 @@ struct nsResetStyleData
   }
 
   void* operator new(size_t sz, nsPresContext* aContext) CPP_THROW_NEW {
-    return aContext->AllocateFromShell(sz);
+    return aContext->PresShell()->
+      AllocateByObjectID(nsPresArena::nsResetStyleData_id, sz);
   }
 
   void Destroy(uint64_t aBits, nsPresContext* aContext) {
@@ -110,7 +113,8 @@ struct nsResetStyleData
 #undef STYLE_STRUCT_RESET
 #undef STYLE_STRUCT_INHERITED
 
-    aContext->FreeToShell(sizeof(nsResetStyleData), this);
+    aContext->PresShell()->
+      FreeByObjectID(nsPresArena::nsResetStyleData_id, this);
   }
 };
 
@@ -306,6 +310,12 @@ private:
                          const PLDHashEntryHdr *aHdr,
                          const void *aKey);
 
+  static PLDHashOperator
+  SweepHashEntry(PLDHashTable *table, PLDHashEntryHdr *hdr,
+                 uint32_t number, void *arg);
+  void SweepChildren(nsTArray<nsRuleNode*>& aSweepQueue);
+  bool DestroyIfNotMarked();
+
   static const PLDHashTableOps ChildrenHashOps;
 
   static PLDHashOperator
@@ -363,7 +373,7 @@ private:
                  "pointer not 2-byte aligned");
     mChildren.asHash = (PLDHashTable*)(intptr_t(aHashtable) | kHashType);
   }
-  void ConvertChildrenToHash();
+  void ConvertChildrenToHash(int32_t aNumKids);
 
   nsCachedStyleData mStyleData;   // Any data we cached on the rule node.
 
@@ -401,8 +411,7 @@ private:
   uint32_t mRefCnt;
 
 public:
-  // Overloaded new operator. Initializes the memory to 0 and relies on an arena
-  // (which comes from the presShell) to perform the allocation.
+  // Overloaded new operator that allocates from a presShell arena.
   void* operator new(size_t sz, nsPresContext* aContext) CPP_THROW_NEW;
   void Destroy() { DestroyInternal(nullptr); }
 
@@ -417,6 +426,8 @@ protected:
   void PropagateDependentBit(nsStyleStructID aSID, nsRuleNode* aHighestNode,
                              void* aStruct);
   void PropagateNoneBit(uint32_t aBit, nsRuleNode* aHighestNode);
+  static void PropagateGrandancestorBit(nsStyleContext* aContext,
+                                        nsStyleContext* aContextInheritedFrom);
 
   const void* SetDefaultOnRoot(const nsStyleStructID aSID,
                                nsStyleContext* aContext);
@@ -665,6 +676,7 @@ public:
 
   static void EnsureBlockDisplay(uint8_t& display,
                                  bool aConvertListItem = false);
+  static void EnsureInlineDisplay(uint8_t& display);
 
   // Transition never returns null; on out of memory it'll just return |this|.
   nsRuleNode* Transition(nsIStyleRule* aRule, uint8_t aLevel,
@@ -713,6 +725,8 @@ public:
    * ancestors until it reaches a marked one.  Sweep recursively sweeps
    * the children, destroys any that are unmarked, and clears marks,
    * returning true if the node on which it was called was destroyed.
+   * If children are hashed, the mNextSibling field on the children is
+   * temporarily used internally by Sweep.
    */
   void Mark();
   bool Sweep();

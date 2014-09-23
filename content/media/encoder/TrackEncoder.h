@@ -13,10 +13,9 @@
 #include "StreamBuffer.h"
 #include "TrackMetadataBase.h"
 #include "VideoSegment.h"
+#include "MediaStreamGraph.h"
 
 namespace mozilla {
-
-class MediaStreamGraph;
 
 /**
  * Base class of AudioTrackEncoder and VideoTrackEncoder. Lifetimes managed by
@@ -31,14 +30,7 @@ class MediaStreamGraph;
 class TrackEncoder
 {
 public:
-  TrackEncoder()
-    : mReentrantMonitor("media.TrackEncoder")
-    , mEncodingComplete(false)
-    , mEosSetInEncoder(false)
-    , mInitialized(false)
-    , mEndOfStream(false)
-    , mCanceled(false)
-  {}
+  TrackEncoder();
 
   virtual ~TrackEncoder() {}
 
@@ -56,7 +48,13 @@ public:
    * Notified by the same callback of MediaEncoder when it has been removed from
    * MediaStreamGraph. Called on the MediaStreamGraph thread.
    */
-  void NotifyRemoved(MediaStreamGraph* aGraph) { NotifyEndOfStream(); }
+  void NotifyEvent(MediaStreamGraph* aGraph,
+                   MediaStreamListener::MediaStreamGraphEvent event)
+  {
+    if (event == MediaStreamListener::MediaStreamGraphEvent::EVENT_REMOVED) {
+      NotifyEndOfStream();
+    }
+  }
 
   /**
    * Creates and sets up meta data for a specific codec, called on the worker
@@ -131,6 +129,12 @@ protected:
    * mReentrantMonitor.
    */
   bool mCanceled;
+
+#ifdef PR_LOGGING
+  // How many times we have tried to initialize the encoder.
+  uint32_t mAudioInitCounter;
+  uint32_t mVideoInitCounter;
+#endif
 };
 
 class AudioTrackEncoder : public TrackEncoder
@@ -164,6 +168,10 @@ public:
    */
   static void DeInterleaveTrackData(AudioDataValue* aInput, int32_t aDuration,
                                     int32_t aChannels, AudioDataValue* aOutput);
+  /**
+  * Measure size of mRawSegment
+  */
+  size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 protected:
   /**
@@ -237,6 +245,10 @@ public:
                                 TrackTicks aTrackOffset,
                                 uint32_t aTrackEvents,
                                 const MediaSegment& aQueuedMedia) MOZ_OVERRIDE;
+  /**
+  * Measure size of mRawSegment
+  */
+  size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 protected:
   /**
@@ -261,12 +273,6 @@ protected:
    * Called on the MediaStreamGraph thread.
    */
   virtual void NotifyEndOfStream() MOZ_OVERRIDE;
-
-  /**
-   * Create a buffer of black image in format of YUV:420. Called on the worker
-   * thread.
-   */
-  void CreateMutedFrame(nsTArray<uint8_t>* aOutputBuffer);
 
   /**
    * The width of source video frame, ceiled if the source width is odd.

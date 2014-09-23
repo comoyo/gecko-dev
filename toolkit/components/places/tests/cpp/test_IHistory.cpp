@@ -49,10 +49,12 @@ new_test_uri()
 
 class VisitURIObserver MOZ_FINAL : public nsIObserver
 {
+  ~VisitURIObserver() {}
+
 public:
   NS_DECL_ISUPPORTS
 
-  VisitURIObserver(int aExpectedVisits = 1) :
+  explicit VisitURIObserver(int aExpectedVisits = 1) :
     mVisits(0),
     mExpectedVisits(aExpectedVisits)
   {
@@ -305,6 +307,8 @@ namespace test_observer_topic_dispatched_helpers {
   #define URI_VISITED_RESOLUTION_TOPIC "visited-status-resolution"
   class statusObserver MOZ_FINAL : public nsIObserver
   {
+    ~statusObserver() {}
+
   public:
     NS_DECL_ISUPPORTS
 

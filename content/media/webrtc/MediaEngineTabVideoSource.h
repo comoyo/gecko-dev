@@ -24,37 +24,52 @@ class MediaEngineTabVideoSource : public MediaEngineVideoSource, nsIDOMEventList
                               const mozilla::MediaEnginePrefs&);
     virtual nsresult Deallocate();
     virtual nsresult Start(mozilla::SourceMediaStream*, mozilla::TrackID);
+    virtual void SetDirectListeners(bool aHasDirectListeners) {};
     virtual nsresult Snapshot(uint32_t, nsIDOMFile**);
     virtual void NotifyPull(mozilla::MediaStreamGraph*, mozilla::SourceMediaStream*, mozilla::TrackID, mozilla::StreamTime, mozilla::TrackTicks&);
     virtual nsresult Stop(mozilla::SourceMediaStream*, mozilla::TrackID);
     virtual nsresult Config(bool, uint32_t, bool, uint32_t, bool, uint32_t, int32_t);
     virtual bool IsFake();
+    virtual const MediaSourceType GetMediaSource() {
+      return MediaSourceType::Browser;
+    }
+
+    virtual nsresult TakePhoto(PhotoCallback* aCallback)
+    {
+      return NS_ERROR_NOT_IMPLEMENTED;
+    }
+
     void Draw();
 
     class StartRunnable : public nsRunnable {
     public:
-      StartRunnable(MediaEngineTabVideoSource *videoSource) : mVideoSource(videoSource) {}
+      explicit StartRunnable(MediaEngineTabVideoSource *videoSource) : mVideoSource(videoSource) {}
       NS_IMETHOD Run();
       nsRefPtr<MediaEngineTabVideoSource> mVideoSource;
     };
 
     class StopRunnable : public nsRunnable {
     public:
-    StopRunnable(MediaEngineTabVideoSource *videoSource) : mVideoSource(videoSource) {}
+      explicit StopRunnable(MediaEngineTabVideoSource *videoSource) : mVideoSource(videoSource) {}
       NS_IMETHOD Run();
       nsRefPtr<MediaEngineTabVideoSource> mVideoSource;
     };
 
     class InitRunnable : public nsRunnable {
     public:
-    InitRunnable(MediaEngineTabVideoSource *videoSource) : mVideoSource(videoSource) {}
+      explicit InitRunnable(MediaEngineTabVideoSource *videoSource) : mVideoSource(videoSource) {}
       NS_IMETHOD Run();
       nsRefPtr<MediaEngineTabVideoSource> mVideoSource;
     };
 
+protected:
+    ~MediaEngineTabVideoSource() {}
+
 private:
     int mBufW;
     int mBufH;
+    int64_t mWindowId;
+    bool mScrollWithPage;
     int mTimePerFrame;
     ScopedFreePtr<unsigned char> mData;
     nsCOMPtr<nsIDOMWindow> mWindow;

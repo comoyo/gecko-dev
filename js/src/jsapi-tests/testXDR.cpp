@@ -22,7 +22,7 @@ CompileScriptForPrincipalsVersionOrigin(JSContext *cx, JS::HandleObject obj,
     size_t nchars;
     if (!JS_DecodeBytes(cx, bytes, nbytes, nullptr, &nchars))
         return nullptr;
-    jschar *chars = static_cast<jschar *>(JS_malloc(cx, nchars * sizeof(jschar)));
+    char16_t *chars = static_cast<char16_t *>(JS_malloc(cx, nchars * sizeof(char16_t)));
     if (!chars)
         return nullptr;
     JS_ALWAYS_TRUE(JS_DecodeBytes(cx, bytes, nbytes, chars, &nchars));
@@ -30,7 +30,8 @@ CompileScriptForPrincipalsVersionOrigin(JSContext *cx, JS::HandleObject obj,
     options.setOriginPrincipals(originPrincipals)
            .setFileAndLine(filename, lineno)
            .setVersion(version);
-    JSScript *script = JS::Compile(cx, obj, options, chars, nchars);
+    JS::RootedScript script(cx);
+    JS::Compile(cx, obj, options, chars, nchars, &script);
     free(chars);
     return script;
 }
@@ -162,8 +163,8 @@ BEGIN_TEST(testXDR_bug506491)
     // compile
     JS::CompileOptions options(cx);
     options.setFileAndLine(__FILE__, __LINE__);
-    JS::RootedScript script(cx, JS_CompileScript(cx, global, s, strlen(s),
-                                                 options));
+    JS::RootedScript script(cx);
+    CHECK(JS_CompileScript(cx, global, s, strlen(s), options, &script));
     CHECK(script);
 
     script = FreezeThaw(cx, script);
@@ -189,7 +190,8 @@ BEGIN_TEST(testXDR_bug516827)
     // compile an empty script
     JS::CompileOptions options(cx);
     options.setFileAndLine(__FILE__, __LINE__);
-    JS::RootedScript script(cx, JS_CompileScript(cx, global, "", 0, options));
+    JS::RootedScript script(cx);
+    CHECK(JS_CompileScript(cx, global, "", 0, options, &script));
     CHECK(script);
 
     script = FreezeThaw(cx, script);
@@ -212,8 +214,8 @@ BEGIN_TEST(testXDR_source)
     for (const char **s = samples; *s; s++) {
         JS::CompileOptions options(cx);
         options.setFileAndLine(__FILE__, __LINE__);
-        JS::RootedScript script(cx, JS_CompileScript(cx, global, *s, strlen(*s),
-                                                     options));
+        JS::RootedScript script(cx);
+        CHECK(JS_CompileScript(cx, global, *s, strlen(*s), options, &script));
         CHECK(script);
         script = FreezeThaw(cx, script);
         CHECK(script);
@@ -238,11 +240,11 @@ BEGIN_TEST(testXDR_sourceMap)
     for (const char **sm = sourceMaps; *sm; sm++) {
         JS::CompileOptions options(cx);
         options.setFileAndLine(__FILE__, __LINE__);
-        script = JS_CompileScript(cx, global, "", 0, options);
+        CHECK(JS_CompileScript(cx, global, "", 0, options, &script));
         CHECK(script);
 
         size_t len = strlen(*sm);
-        jschar *expected = js::InflateString(cx, *sm, &len);
+        char16_t *expected = js::InflateString(cx, *sm, &len);
         CHECK(expected);
 
         // The script source takes responsibility of free'ing |expected|.
@@ -252,7 +254,7 @@ BEGIN_TEST(testXDR_sourceMap)
         CHECK(script->scriptSource());
         CHECK(script->scriptSource()->hasSourceMapURL());
 
-        const jschar *actual = script->scriptSource()->sourceMapURL();
+        const char16_t *actual = script->scriptSource()->sourceMapURL();
         CHECK(actual);
 
         while (*expected) {

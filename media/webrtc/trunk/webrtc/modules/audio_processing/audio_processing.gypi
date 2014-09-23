@@ -7,6 +7,13 @@
 # be found in the AUTHORS file in the root of the source tree.
 
 {
+  'variables': {
+    'audio_processing_dependencies': [
+      '<(webrtc_root)/common_audio/common_audio.gyp:common_audio',
+      '<(webrtc_root)/system_wrappers/source/system_wrappers.gyp:system_wrappers',
+    ],
+    'shared_generated_dir': '<(SHARED_INTERMEDIATE_DIR)/audio_processing/asm_offsets',
+  },
   'targets': [
     {
       'target_name': 'audio_processing',
@@ -14,29 +21,18 @@
       'variables': {
         # Outputs some low-level debug files.
         'aec_debug_dump%': 0,
+
+        # Disables the usual mode where we trust the reported system delay
+        # values the AEC receives. The corresponding define is set appropriately
+        # in the code, but it can be force-enabled here for testing.
+        'aec_untrusted_delay_for_testing%': 0,
       },
       'dependencies': [
-        '<(webrtc_root)/common_audio/common_audio.gyp:common_audio',
-        '<(webrtc_root)/system_wrappers/source/system_wrappers.gyp:system_wrappers',
-      ],
-      'include_dirs': [
-        '../interface',
-        'aec/include',
-        'aecm/include',
-        'agc/include',
-        'include',
-        'ns/include',
-        'utility',
+        '<@(audio_processing_dependencies)',
       ],
       'cflags_mozilla': [
         '$(NSPR_CFLAGS)',
       ],
-      'direct_dependent_settings': {
-        'include_dirs': [
-          '../interface',
-          'include',
-        ],
-      },
       'sources': [
         'aec/include/echo_cancellation.h',
         'aec/echo_cancellation.c',
@@ -75,10 +71,10 @@
         'level_estimator_impl.h',
         'noise_suppression_impl.cc',
         'noise_suppression_impl.h',
-        'splitting_filter.cc',
-        'splitting_filter.h',
         'processing_component.cc',
         'processing_component.h',
+        'typing_detection.cc',
+        'typing_detection.h',
         'utility/delay_estimator.c',
         'utility/delay_estimator.h',
         'utility/delay_estimator_internal.h',
@@ -95,6 +91,9 @@
         ['aec_debug_dump==1', {
           'defines': ['WEBRTC_AEC_DEBUG_DUMP',],
         }],
+        ['aec_untrusted_delay_for_testing==1', {
+          'defines': ['WEBRTC_UNTRUSTED_DELAY',],
+        }],
         ['enable_protobuf==1', {
           'dependencies': ['audioproc_debug_proto'],
           'defines': ['WEBRTC_AUDIOPROC_DEBUG_DUMP'],
@@ -107,6 +106,17 @@
             'ns/nsx_core.c',
             'ns/nsx_core.h',
             'ns/nsx_defines.h',
+          ],
+          'conditions': [
+            ['target_arch=="mipsel"', {
+              'sources': [
+                'ns/nsx_core_mips.c',
+              ],
+            }, {
+              'sources': [
+                'ns/nsx_core_c.c',
+              ],
+            }],
           ],
         }, {
           'defines': ['WEBRTC_NS_FLOAT'],
@@ -122,8 +132,17 @@
         ['target_arch=="ia32" or target_arch=="x64"', {
           'dependencies': ['audio_processing_sse2',],
         }],
-        ['(target_arch=="arm" and armv7==1) or target_arch=="armv7"', {
+        ['(target_arch=="arm" and arm_version==7) or target_arch=="armv7"', {
           'dependencies': ['audio_processing_neon',],
+        }],
+        ['target_arch=="mipsel"', {
+          'sources': [
+            'aecm/aecm_core_mips.c',
+          ],
+        }, {
+          'sources': [
+            'aecm/aecm_core_c.c',
+          ],
         }],
       ],
       # TODO(jschuh): Bug 1348: fix size_t to int truncations.
@@ -158,14 +177,18 @@
             'aec/aec_rdft_sse2.c',
           ],
           'cflags': ['-msse2',],
-          'cflags_mozilla': [ '-msse2', ],
+          'conditions': [
+            [ 'os_posix == 1', {
+              'cflags_mozilla': ['-msse2',],
+            }],
+          ],
           'xcode_settings': {
             'OTHER_CFLAGS': ['-msse2',],
           },
         },
       ],
     }],
-    ['(target_arch=="arm" and armv7==1) or target_arch=="armv7"', {
+    ['(target_arch=="arm" and arm_version==7) or target_arch=="armv7"', {
       'targets': [{
         'target_name': 'audio_processing_neon',
         'type': 'static_library',
@@ -179,15 +202,19 @@
         ],
         'conditions': [
           ['OS=="android" or OS=="ios"', {
-            'dependencies': [
-              'audio_processing_offsets',
-            ],
+	    # This also provokes it to try to invoke gypi's in libvpx
+            #'dependencies': [
+            #  '<(gen_core_neon_offsets_gyp):*',
+            #],
 	    #
 	    # We disable the ASM source, because our gyp->Makefile translator
 	    # does not support the build steps to get the asm offsets.
             'sources!': [
               'aecm/aecm_core_neon.S',
               'ns/nsx_core_neon.S',
+            ],
+            'include_dirs': [
+              '<(shared_generated_dir)',
             ],
             'sources': [
               'aecm/aecm_core_neon.c',
@@ -197,22 +224,6 @@
           }],
         ],
       }],
-      'conditions': [
-        ['OS=="android" or OS=="ios"', {
-          'targets': [{
-            'target_name': 'audio_processing_offsets',
-            'type': 'none',
-            'sources': [
-              'aecm/aecm_core_neon_offsets.c',
-              'ns/nsx_core_neon_offsets.c',
-            ],
-            'variables': {
-              'asm_header_dir': 'asm_offsets',
-            },
-            'includes': ['../../build/generate_asm_header.gypi',],
-          }],
-        }],
-      ],
     }],
   ],
 }

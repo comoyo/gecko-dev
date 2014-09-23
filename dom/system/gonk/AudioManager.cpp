@@ -28,16 +28,19 @@
 
 #include "mozilla/Hal.h"
 #include "mozilla/Services.h"
+#include "mozilla/StaticPtr.h"
+#include "mozilla/ClearOnShutdown.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "base/message_loop.h"
 
 #include "BluetoothCommon.h"
 #include "BluetoothHfpManagerBase.h"
 
 #include "nsJSUtils.h"
-#include "nsCxPusher.h"
 #include "nsThreadUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "nsComponentManagerUtils.h"
+#include "nsXULAppAPI.h"
 
 using namespace mozilla::dom::gonk;
 using namespace android;
@@ -75,6 +78,7 @@ static int sMaxStreamVolumeTbl[AUDIO_STREAM_CNT] = {
 static int sHeadsetState;
 static const int kBtSampleRate = 8000;
 static bool sSwitchDone = true;
+static bool sA2dpSwitchDone = true;
 
 namespace mozilla {
 namespace dom {
@@ -193,6 +197,19 @@ static void ProcessDelayedAudioRoute(SwitchState aState)
   sSwitchDone = true;
 }
 
+static void ProcessDelayedA2dpRoute(audio_policy_dev_state_t aState, const char *aAddress)
+{
+  if (sA2dpSwitchDone)
+    return;
+  AudioSystem::setDeviceConnectionState(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                                        aState, aAddress);
+  String8 cmd("bluetooth_enabled=false");
+  AudioSystem::setParameters(0, cmd);
+  cmd.setTo("A2dpSuspended=true");
+  AudioSystem::setParameters(0, cmd);
+  sA2dpSwitchDone = true;
+}
+
 NS_IMPL_ISUPPORTS(AudioManager, nsIAudioManager, nsIObserver)
 
 static void
@@ -259,18 +276,18 @@ AudioManager::HandleBluetoothStatusChanged(nsISupports* aSubject,
         SetForceForUse(nsIAudioManager::USE_COMMUNICATION, nsIAudioManager::FORCE_NONE);
     }
   } else if (!strcmp(aTopic, BLUETOOTH_A2DP_STATUS_CHANGED_ID)) {
-    AudioSystem::setDeviceConnectionState(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
-                                          audioState, aAddress.get());
-    if (audioState == AUDIO_POLICY_DEVICE_STATE_AVAILABLE) {
+    if (audioState == AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE && sA2dpSwitchDone) {
+      MessageLoop::current()->PostDelayedTask(
+        FROM_HERE, NewRunnableFunction(&ProcessDelayedA2dpRoute, audioState, aAddress.get()), 1000);
+      sA2dpSwitchDone = false;
+    } else {
+      AudioSystem::setDeviceConnectionState(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                                            audioState, aAddress.get());
       String8 cmd("bluetooth_enabled=true");
       AudioSystem::setParameters(0, cmd);
       cmd.setTo("A2dpSuspended=false");
       AudioSystem::setParameters(0, cmd);
-    } else {
-      String8 cmd("bluetooth_enabled=false");
-      AudioSystem::setParameters(0, cmd);
-      cmd.setTo("A2dpSuspended=true");
-      AudioSystem::setParameters(0, cmd);
+      sA2dpSwitchDone = true;
     }
   } else if (!strcmp(aTopic, BLUETOOTH_HFP_STATUS_CHANGED_ID)) {
     AudioSystem::setDeviceConnectionState(AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET,
@@ -299,8 +316,8 @@ AudioManager::HandleAudioChannelProcessChanged()
     return;
   }
 
-  AudioChannelService *service = AudioChannelService::GetAudioChannelService();
-  NS_ENSURE_TRUE_VOID(service);
+  AudioChannelService *service = AudioChannelService::GetOrCreateAudioChannelService();
+  MOZ_ASSERT(service);
 
   bool telephonyChannelIsActive = service->TelephonyChannelIsActive();
   telephonyChannelIsActive ? SetPhoneState(PHONE_STATE_IN_COMMUNICATION) :
@@ -352,7 +369,7 @@ AudioManager::Observe(nsISupports* aSubject,
     if (!jsKey) {
       return NS_OK;
     }
-    nsDependentJSString keyStr;
+    nsAutoJSString keyStr;
     if (!keyStr.init(cx, jsKey) || !keyStr.EqualsLiteral("audio.volume.bt_sco")) {
       return NS_OK;
     }
@@ -494,6 +511,26 @@ AudioManager::~AudioManager() {
   if (NS_FAILED(obs->RemoveObserver(this,  AUDIO_CHANNEL_PROCESS_CHANGED))) {
     NS_WARNING("Failed to remove audio-channel-process-changed!");
   }
+}
+
+static StaticRefPtr<AudioManager> sAudioManager;
+
+already_AddRefed<AudioManager>
+AudioManager::GetInstance()
+{
+  // Avoid createing AudioManager from content process.
+  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    MOZ_CRASH("Non-chrome processes should not get here.");
+  }
+
+  // Avoid createing multiple AudioManager instance inside main process.
+  if (!sAudioManager) {
+    sAudioManager = new AudioManager();
+    ClearOnShutdown(&sAudioManager);
+  }
+
+  nsRefPtr<AudioManager> audioMgr = sAudioManager.get();
+  return audioMgr.forget();
 }
 
 NS_IMETHODIMP

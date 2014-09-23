@@ -230,9 +230,9 @@ class ParticularProcessPriorityManager MOZ_FINAL
   , public nsITimerCallback
   , public nsSupportsWeakReference
 {
-public:
-  ParticularProcessPriorityManager(ContentParent* aContentParent);
   ~ParticularProcessPriorityManager();
+public:
+  explicit ParticularProcessPriorityManager(ContentParent* aContentParent);
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
@@ -502,9 +502,9 @@ ProcessPriorityManagerImpl::ObserveContentParentCreated(
 {
   // Do nothing; it's sufficient to get the PPPM.  But assign to nsRefPtr so we
   // don't leak the already_AddRefed object.
-  nsCOMPtr<nsIObserver> cp = do_QueryInterface(aContentParent);
+  nsCOMPtr<nsIContentParent> cp = do_QueryInterface(aContentParent);
   nsRefPtr<ParticularProcessPriorityManager> pppm =
-    GetParticularProcessPriorityManager(static_cast<ContentParent*>(cp.get()));
+    GetParticularProcessPriorityManager(cp->AsContentParent());
 }
 
 static PLDHashOperator
@@ -816,6 +816,7 @@ ParticularProcessPriorityManager::OnRemoteBrowserFrameShown(nsISupports* aSubjec
   fl->GetTabParent(getter_AddRefs(tp));
   NS_ENSURE_TRUE_VOID(tp);
 
+  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
   if (static_cast<TabParent*>(tp.get())->Manager() != mContentParent) {
     return;
   }
@@ -829,6 +830,7 @@ ParticularProcessPriorityManager::OnTabParentDestroyed(nsISupports* aSubject)
   nsCOMPtr<nsITabParent> tp = do_QueryInterface(aSubject);
   NS_ENSURE_TRUE_VOID(tp);
 
+  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
   if (static_cast<TabParent*>(tp.get())->Manager() != mContentParent) {
     return;
   }
@@ -848,6 +850,7 @@ ParticularProcessPriorityManager::OnFrameloaderVisibleChanged(nsISupports* aSubj
     return;
   }
 
+  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
   if (static_cast<TabParent*>(tp.get())->Manager() != mContentParent) {
     return;
   }
@@ -982,7 +985,7 @@ ParticularProcessPriorityManager::ComputePriority()
   }
 
   if (isVisible) {
-    return HasAppType("keyboard") ?
+    return HasAppType("inputmethod") ?
       PROCESS_PRIORITY_FOREGROUND_KEYBOARD :
       PROCESS_PRIORITY_FOREGROUND;
   }
@@ -992,7 +995,7 @@ ParticularProcessPriorityManager::ComputePriority()
     return PROCESS_PRIORITY_BACKGROUND_PERCEIVABLE;
   }
 
-  AudioChannelService* service = AudioChannelService::GetAudioChannelService();
+  AudioChannelService* service = AudioChannelService::GetOrCreateAudioChannelService();
   if (service->ProcessContentOrNormalChannelIsActive(ChildID())) {
     return PROCESS_PRIORITY_BACKGROUND_PERCEIVABLE;
   }
@@ -1037,17 +1040,17 @@ ParticularProcessPriorityManager::SetPriorityNow(ProcessPriority aPriority,
                                                  ProcessCPUPriority aCPUPriority,
                                                  uint32_t aBackgroundLRU)
 {
-  if (aPriority == PROCESS_PRIORITY_UNKNOWN) {
-    MOZ_ASSERT(false);
-    return;
-  }
-
 #ifdef MOZ_NUWA_PROCESS
   // Do not attempt to change the priority of the Nuwa process
   if (mContentParent->IsNuwaProcess()) {
     return;
   }
 #endif
+
+  if (aPriority == PROCESS_PRIORITY_UNKNOWN) {
+    MOZ_ASSERT(false);
+    return;
+  }
 
   if (aBackgroundLRU > 0 &&
       aPriority == PROCESS_PRIORITY_BACKGROUND &&

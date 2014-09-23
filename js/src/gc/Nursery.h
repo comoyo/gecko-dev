@@ -33,9 +33,10 @@ class HeapSlot;
 void SetGCZeal(JSRuntime *, uint8_t, uint32_t);
 
 namespace gc {
-class Cell;
+struct Cell;
 class Collector;
 class MinorCollectionTracer;
+class ForkJoinNursery;
 } /* namespace gc */
 
 namespace types {
@@ -52,25 +53,27 @@ class BaselineCompiler;
 class Nursery
 {
   public:
-    static const int NumNurseryChunks = 16;
-    static const int LastNurseryChunk = NumNurseryChunks - 1;
     static const size_t Alignment = gc::ChunkSize;
     static const size_t ChunkShift = gc::ChunkShift;
-    static const size_t NurserySize = gc::ChunkSize * NumNurseryChunks;
 
     explicit Nursery(JSRuntime *rt)
       : runtime_(rt),
         position_(0),
-        heapStart_(0),
-        heapEnd_(0),
         currentStart_(0),
         currentEnd_(0),
+        heapStart_(0),
+        heapEnd_(0),
         currentChunk_(0),
-        numActiveChunks_(0)
+        numActiveChunks_(0),
+        numNurseryChunks_(0)
     {}
     ~Nursery();
 
-    bool init();
+    bool init(uint32_t numNurseryChunks);
+
+    bool exists() const { return numNurseryChunks_ != 0; }
+    size_t numChunks() const { return numNurseryChunks_; }
+    size_t nurserySize() const { return numNurseryChunks_ << ChunkShift; }
 
     void enable();
     void disable();
@@ -95,24 +98,21 @@ class Nursery
     JSObject *allocateObject(JSContext *cx, size_t size, size_t numDynamic);
 
     /* Allocate a slots array for the given object. */
-    HeapSlot *allocateSlots(JSContext *cx, JSObject *obj, uint32_t nslots);
+    HeapSlot *allocateSlots(JSObject *obj, uint32_t nslots);
 
     /* Allocate an elements vector for the given object. */
-    ObjectElements *allocateElements(JSContext *cx, JSObject *obj, uint32_t nelems);
+    ObjectElements *allocateElements(JSObject *obj, uint32_t nelems);
 
     /* Resize an existing slots array. */
-    HeapSlot *reallocateSlots(JSContext *cx, JSObject *obj, HeapSlot *oldSlots,
+    HeapSlot *reallocateSlots(JSObject *obj, HeapSlot *oldSlots,
                               uint32_t oldCount, uint32_t newCount);
 
     /* Resize an existing elements vector. */
-    ObjectElements *reallocateElements(JSContext *cx, JSObject *obj, ObjectElements *oldHeader,
+    ObjectElements *reallocateElements(JSObject *obj, ObjectElements *oldHeader,
                                        uint32_t oldCount, uint32_t newCount);
 
     /* Free a slots array. */
-    void freeSlots(JSContext *cx, HeapSlot *slots);
-
-    /* Add a slots to our tracking list if it is out-of-line. */
-    void notifyInitialSlots(gc::Cell *cell, HeapSlot *slots);
+    void freeSlots(HeapSlot *slots);
 
     typedef Vector<types::TypeObject *, 0, SystemAllocPolicy> TypeObjectList;
 
@@ -133,11 +133,13 @@ class Nursery
     /* Forward a slots/elements pointer stored in an Ion frame. */
     void forwardBufferPointer(HeapSlot **pSlotsElems);
 
+    static void forwardBufferPointer(JSTracer* trc, HeapSlot **pSlotsElems);
+
     size_t sizeOfHeapCommitted() const {
         return numActiveChunks_ * gc::ChunkSize;
     }
     size_t sizeOfHeapDecommitted() const {
-        return (NumNurseryChunks - numActiveChunks_) * gc::ChunkSize;
+        return (numNurseryChunks_ - numActiveChunks_) * gc::ChunkSize;
     }
     size_t sizeOfHugeSlots(mozilla::MallocSizeOf mallocSizeOf) const {
         size_t total = 0;
@@ -155,25 +157,13 @@ class Nursery
         return heapEnd_;
     }
 
+    static bool IsMinorCollectionTracer(JSTracer *trc) {
+        return trc->callback == MinorGCCallback;
+    }
+
 #ifdef JS_GC_ZEAL
-    /*
-     * In debug and zeal builds, these bytes indicate the state of an unused
-     * segment of nursery-allocated memory.
-     */
-    void enterZealMode() {
-        if (isEnabled())
-            numActiveChunks_ = NumNurseryChunks;
-    }
-    void leaveZealMode() {
-        if (isEnabled()) {
-            JS_ASSERT(isEmpty());
-            setCurrentChunk(0);
-            currentStart_ = start();
-        }
-    }
-#else
-    void enterZealMode() {}
-    void leaveZealMode() {}
+    void enterZealMode();
+    void leaveZealMode();
 #endif
 
   private:
@@ -187,21 +177,24 @@ class Nursery
     /* Pointer to the first unallocated byte in the nursery. */
     uintptr_t position_;
 
-    /* Pointer to first and last address of the total nursery allocation. */
-    uintptr_t heapStart_;
-    uintptr_t heapEnd_;
-
     /* Pointer to the logical start of the Nursery. */
     uintptr_t currentStart_;
 
     /* Pointer to the last byte of space in the current chunk. */
     uintptr_t currentEnd_;
 
+    /* Pointer to first and last address of the total nursery allocation. */
+    uintptr_t heapStart_;
+    uintptr_t heapEnd_;
+
     /* The index of the chunk that is currently being allocated from. */
     int currentChunk_;
 
     /* The index after the last chunk that we will allocate from. */
     int numActiveChunks_;
+
+    /* Number of chunks allocated for the nursery. */
+    int numNurseryChunks_;
 
     /*
      * The set of externally malloced slots potentially kept live by objects
@@ -226,7 +219,7 @@ class Nursery
     static_assert(sizeof(NurseryChunkLayout) == gc::ChunkSize,
                   "Nursery chunk size must match gc::Chunk size.");
     NurseryChunkLayout &chunk(int index) const {
-        JS_ASSERT(index < NumNurseryChunks);
+        JS_ASSERT(index < numNurseryChunks_);
         JS_ASSERT(start());
         return reinterpret_cast<NurseryChunkLayout *>(start())[index];
     }
@@ -234,12 +227,12 @@ class Nursery
     MOZ_ALWAYS_INLINE void initChunk(int chunkno) {
         NurseryChunkLayout &c = chunk(chunkno);
         c.trailer.storeBuffer = JS::shadow::Runtime::asShadowRuntime(runtime())->gcStoreBufferPtr();
-        c.trailer.location = gc::ChunkLocationNursery;
+        c.trailer.location = gc::ChunkLocationBitNursery;
         c.trailer.runtime = runtime();
     }
 
     MOZ_ALWAYS_INLINE void setCurrentChunk(int chunkno) {
-        JS_ASSERT(chunkno < NumNurseryChunks);
+        JS_ASSERT(chunkno < numNurseryChunks_);
         JS_ASSERT(chunkno < numActiveChunks_);
         currentChunk_ = chunkno;
         position_ = chunk(chunkno).start();
@@ -252,10 +245,6 @@ class Nursery
     MOZ_ALWAYS_INLINE uintptr_t allocationEnd() const {
         JS_ASSERT(numActiveChunks_ > 0);
         return chunk(numActiveChunks_ - 1).end();
-    }
-
-    MOZ_ALWAYS_INLINE bool isFullyGrown() const {
-        return numActiveChunks_ == NumNurseryChunks;
     }
 
     MOZ_ALWAYS_INLINE uintptr_t currentEnd() const {
@@ -274,7 +263,7 @@ class Nursery
     JSRuntime *runtime() const { return runtime_; }
 
     /* Allocates and registers external slots with the nursery. */
-    HeapSlot *allocateHugeSlots(JSContext *cx, size_t nslots);
+    HeapSlot *allocateHugeSlots(JS::Zone *zone, size_t nslots);
 
     /* Allocates a new GC thing from the tenured generation during minor GC. */
     void *allocateFromTenured(JS::Zone *zone, gc::AllocKind thingKind);
@@ -305,13 +294,13 @@ class Nursery
                                       uint32_t nelems);
 
     /* Free malloced pointers owned by freed things in the nursery. */
-    void freeHugeSlots(JSRuntime *rt);
+    void freeHugeSlots();
 
     /*
      * Frees all non-live nursery-allocated things at the end of a minor
      * collection.
      */
-    void sweep(JSRuntime *rt);
+    void sweep();
 
     /* Change the allocable space provided by the nursery. */
     void growAllocableSpace();

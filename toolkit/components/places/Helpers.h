@@ -216,11 +216,12 @@ bool GetHiddenState(bool aIsRedirect,
 class PlacesEvent : public nsRunnable
 {
 public:
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIRUNNABLE
 
-  PlacesEvent(const char* aTopic);
+  explicit PlacesEvent(const char* aTopic);
 protected:
+  ~PlacesEvent() {}
   void Notify();
 
   const char* const mTopic;
@@ -232,7 +233,7 @@ protected:
 class AsyncStatementCallbackNotifier : public AsyncStatementCallback
 {
 public:
-  AsyncStatementCallbackNotifier(const char* aTopic)
+  explicit AsyncStatementCallbackNotifier(const char* aTopic)
     : mTopic(aTopic)
   {
   }
@@ -249,8 +250,8 @@ private:
 class AsyncStatementTelemetryTimer : public AsyncStatementCallback
 {
 public:
-  AsyncStatementTelemetryTimer(Telemetry::ID aHistogramId,
-                               TimeStamp aStart = TimeStamp::Now())
+  explicit AsyncStatementTelemetryTimer(Telemetry::ID aHistogramId,
+                                        TimeStamp aStart = TimeStamp::Now())
     : mHistogramId(aHistogramId)
     , mStart(aStart)
   {

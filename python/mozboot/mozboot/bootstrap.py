@@ -59,7 +59,7 @@ class Bootstrapper(object):
                     cls = UbuntuBootstrapper
             elif distro == 'Ubuntu':
                 cls = UbuntuBootstrapper
-            elif distro == 'Elementary':
+            elif distro in ('Elementary OS', 'Elementary'):
                 cls = UbuntuBootstrapper
             else:
                 raise NotImplementedError('Bootstrap support for this Linux '
@@ -79,9 +79,11 @@ class Bootstrapper(object):
             cls = OpenBSDBootstrapper
             args['version'] = platform.uname()[2]
 
-        elif sys.platform.startswith('freebsd'):
+        elif sys.platform.startswith('dragonfly') or \
+             sys.platform.startswith('freebsd'):
             cls = FreeBSDBootstrapper
             args['version'] = platform.release()
+            args['flavor']  = platform.system()
 
         if cls is None:
             raise NotImplementedError('Bootstrap support is not yet available '

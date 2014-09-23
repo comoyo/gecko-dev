@@ -12,7 +12,6 @@
 #include "nsIChannelEventSink.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsILoadGroup.h"
-#include "nsINodeInfo.h"
 #include "nsIParser.h"
 #include "nsCharsetSource.h"
 #include "nsIRequestObserver.h"
@@ -94,6 +93,8 @@ private:
     bool mCheckedForXML;
 
 protected:
+    ~txStylesheetSink() {}
+
     // This exists solely to suppress a warning from nsDerivedSafe
     txStylesheetSink();
 };
@@ -455,7 +456,12 @@ txCompileObserver::startLoad(nsIURI* aUri, txStylesheetCompiler* aCompiler,
                              nsIPrincipal* aReferrerPrincipal)
 {
     nsCOMPtr<nsIChannel> channel;
-    nsresult rv = NS_NewChannel(getter_AddRefs(channel), aUri);
+    nsresult rv = NS_NewChannel(getter_AddRefs(channel),
+                                aUri,
+                                aReferrerPrincipal,
+                                nsILoadInfo::SEC_NORMAL,
+                                nsIContentPolicy::TYPE_STYLESHEET);
+
     NS_ENSURE_SUCCESS(rv, rv);
 
     channel->SetLoadGroup(mLoadGroup);
@@ -559,7 +565,7 @@ handleNode(nsINode* aNode, txStylesheetCompiler* aCompiler)
             }
         }
 
-        nsINodeInfo *ni = element->NodeInfo();
+        mozilla::dom::NodeInfo *ni = element->NodeInfo();
 
         rv = aCompiler->startElement(ni->NamespaceID(),
                                      ni->NameAtom(),
@@ -603,7 +609,7 @@ handleNode(nsINode* aNode, txStylesheetCompiler* aCompiler)
 class txSyncCompileObserver MOZ_FINAL : public txACompileObserver
 {
 public:
-    txSyncCompileObserver(txMozillaXSLTProcessor* aProcessor);
+    explicit txSyncCompileObserver(txMozillaXSLTProcessor* aProcessor);
 
     TX_DECL_ACOMPILEOBSERVER
     NS_INLINE_DECL_REFCOUNTING(txSyncCompileObserver)

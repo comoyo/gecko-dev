@@ -26,8 +26,6 @@ class OutOfLineCode;
 class CodeGenerator;
 class MacroAssembler;
 class IonCache;
-class OutOfLineAbortPar;
-class OutOfLinePropagateAbortPar;
 
 template <class ArgSeq, class StoreOutputTo>
 class OutOfLineCallVM;
@@ -99,10 +97,31 @@ class CodeGeneratorShared : public LInstructionVisitor
     js::Vector<CodeOffsetLabel, 0, SystemAllocPolicy> patchableTLScripts_;
 #endif
 
+  public:
+    struct NativeToBytecode {
+        CodeOffsetLabel nativeOffset;
+        InlineScriptTree *tree;
+        jsbytecode *pc;
+    };
+
+  protected:
+    js::Vector<NativeToBytecode, 0, SystemAllocPolicy> nativeToBytecodeList_;
+    uint8_t *nativeToBytecodeMap_;
+    uint32_t nativeToBytecodeMapSize_;
+    uint32_t nativeToBytecodeTableOffset_;
+    uint32_t nativeToBytecodeNumRegions_;
+
+    JSScript **nativeToBytecodeScriptList_;
+    uint32_t nativeToBytecodeScriptListLength_;
+
     // When profiling is enabled, this is the instrumentation manager which
     // maintains state of what script is currently being generated (for inline
     // scripts) and when instrumentation needs to be emitted or skipped.
     IonInstrumentation sps_;
+
+    bool isNativeToBytecodeMapEnabled() {
+        return gen->isNativeToBytecodeMapEnabled();
+    }
 
   protected:
     // The offset of the first instruction of the OSR entry block from the
@@ -139,10 +158,22 @@ class CodeGeneratorShared : public LInstructionVisitor
     void dropArguments(unsigned argc);
 
   protected:
+#ifdef CHECK_OSIPOINT_REGISTERS
+    // See js_JitOptions.checkOsiPointRegisters. We set this here to avoid
+    // races when enableOsiPointRegisterChecks is called while we're generating
+    // code off-thread.
+    bool checkOsiPointRegisters;
+#endif
+
     // The initial size of the frame in bytes. These are bytes beyond the
     // constant header present for every Ion frame, used for pre-determined
     // spills.
     int32_t frameDepth_;
+
+    // In some cases, we force stack alignment to platform boundaries, see
+    // also CodeGeneratorShared constructor. This value records the adjustment
+    // we've done.
+    int32_t frameInitialAdjustment_;
 
     // Frame class this frame's size falls into (see IonFrame.h).
     FrameSizeClass frameClass_;
@@ -150,7 +181,7 @@ class CodeGeneratorShared : public LInstructionVisitor
     // For arguments to the current function.
     inline int32_t ArgToStackOffset(int32_t slot) const {
         return masm.framePushed() +
-               (gen->compilingAsmJS() ? NativeFrameSize : sizeof(IonJSFrameLayout)) +
+               (gen->compilingAsmJS() ? sizeof(AsmJSFrame) : sizeof(IonJSFrameLayout)) +
                slot;
     }
 
@@ -161,7 +192,7 @@ class CodeGeneratorShared : public LInstructionVisitor
 
     inline int32_t SlotToStackOffset(int32_t slot) const {
         JS_ASSERT(slot > 0 && slot <= int32_t(graph.localSlotCount()));
-        int32_t offset = masm.framePushed() - slot;
+        int32_t offset = masm.framePushed() - frameInitialAdjustment_ - slot;
         JS_ASSERT(offset >= 0);
         return offset;
     }
@@ -169,10 +200,10 @@ class CodeGeneratorShared : public LInstructionVisitor
         // See: SlotToStackOffset. This is used to convert pushed arguments
         // to a slot index that safepoints can use.
         //
-        // offset = framePushed - slot
-        // offset + slot = framePushed
-        // slot = framePushed - offset
-        return masm.framePushed() - offset;
+        // offset = framePushed - frameInitialAdjustment - slot
+        // offset + slot = framePushed - frameInitialAdjustment
+        // slot = framePushed - frameInitialAdjustement - offset
+        return masm.framePushed() - frameInitialAdjustment_ - offset;
     }
 
     // For argument construction for calls. Argslots are Value-sized.
@@ -220,7 +251,14 @@ class CodeGeneratorShared : public LInstructionVisitor
     void verifyOsiPointRegs(LSafepoint *safepoint);
 #endif
 
+    bool addNativeToBytecodeEntry(const BytecodeSite &site);
+    void dumpNativeToBytecodeEntries();
+    void dumpNativeToBytecodeEntry(uint32_t idx);
+
   public:
+    MIRGenerator &mirGen() const {
+        return *gen;
+    }
 
     // When appending to runtimeData_, the vector might realloc, leaving pointers
     // int the origianl vector stale and unusable. DataPtr acts like a pointer,
@@ -283,6 +321,11 @@ class CodeGeneratorShared : public LInstructionVisitor
     // safepoint offsets.
     void encodeSafepoints();
 
+    // Fixup offsets of native-to-bytecode map.
+    bool createNativeToBytecodeScriptList(JSContext *cx);
+    bool generateCompactNativeToBytecodeMap(JSContext *cx, JitCode *code);
+    void verifyCompactNativeToBytecodeMap(JitCode *code);
+
     // Mark the safepoint on |ins| as corresponding to the current assembler location.
     // The location should be just after a call.
     bool markSafepoint(LInstruction *ins);
@@ -301,12 +344,14 @@ class CodeGeneratorShared : public LInstructionVisitor
     //      an invalidation marker.
     void ensureOsiSpace();
 
-    OutOfLineCode *oolTruncateDouble(FloatRegister src, Register dest);
-    bool emitTruncateDouble(FloatRegister src, Register dest);
-    bool emitTruncateFloat32(FloatRegister src, Register dest);
+    OutOfLineCode *oolTruncateDouble(FloatRegister src, Register dest, MInstruction *mir);
+    bool emitTruncateDouble(FloatRegister src, Register dest, MInstruction *mir);
+    bool emitTruncateFloat32(FloatRegister src, Register dest, MInstruction *mir);
 
-    void emitPreBarrier(Register base, const LAllocation *index, MIRType type);
-    void emitPreBarrier(Address address, MIRType type);
+    void emitAsmJSCall(LAsmJSCall *ins);
+
+    void emitPreBarrier(Register base, const LAllocation *index);
+    void emitPreBarrier(Address address);
 
     // We don't emit code for trivial blocks, so if we want to branch to the
     // given block, and it's trivial, return the ultimate block we should
@@ -432,7 +477,8 @@ class CodeGeneratorShared : public LInstructionVisitor
     ReciprocalMulConstants computeDivisionConstants(int d);
 
   protected:
-    bool addOutOfLineCode(OutOfLineCode *code);
+    bool addOutOfLineCode(OutOfLineCode *code, const MInstruction *mir);
+    bool addOutOfLineCode(OutOfLineCode *code, const BytecodeSite &site);
     bool hasOutOfLineCode() { return !outOfLineCode_.empty(); }
     bool generateOutOfLineCode();
 
@@ -463,28 +509,6 @@ class CodeGeneratorShared : public LInstructionVisitor
 
     bool omitOverRecursedCheck() const;
 
-  public:
-    bool callTraceLIR(uint32_t blockIndex, LInstruction *lir, const char *bailoutName = nullptr);
-
-    // Parallel aborts:
-    //
-    //    Parallel aborts work somewhat differently from sequential
-    //    bailouts.  When an abort occurs, we first invoke
-    //    ReportAbortPar() and then we return JS_ION_ERROR.  Each
-    //    call on the stack will check for this error return and
-    //    propagate it upwards until the C++ code that invoked the ion
-    //    code is reached.
-    //
-    //    The snapshot that is provided to `oolAbortPar` is currently
-    //    only used for error reporting, so that we can provide feedback
-    //    to the user about which instruction aborted and (perhaps) why.
-    OutOfLineAbortPar *oolAbortPar(ParallelBailoutCause cause, MBasicBlock *basicBlock,
-                                   jsbytecode *bytecode);
-    OutOfLineAbortPar *oolAbortPar(ParallelBailoutCause cause, LInstruction *lir);
-    OutOfLinePropagateAbortPar *oolPropagateAbortPar(LInstruction *lir);
-    virtual bool visitOutOfLineAbortPar(OutOfLineAbortPar *ool) = 0;
-    virtual bool visitOutOfLinePropagateAbortPar(OutOfLinePropagateAbortPar *ool) = 0;
-
 #ifdef JS_TRACE_LOGGING
   protected:
     bool emitTracelogScript(bool isStart);
@@ -512,14 +536,12 @@ class OutOfLineCode : public TempObject
     Label entry_;
     Label rejoin_;
     uint32_t framePushed_;
-    jsbytecode *pc_;
-    JSScript *script_;
+    BytecodeSite site_;
 
   public:
     OutOfLineCode()
       : framePushed_(0),
-        pc_(nullptr),
-        script_(nullptr)
+        site_()
     { }
 
     virtual bool generate(CodeGeneratorShared *codegen) = 0;
@@ -539,15 +561,17 @@ class OutOfLineCode : public TempObject
     uint32_t framePushed() const {
         return framePushed_;
     }
-    void setSource(JSScript *script, jsbytecode *pc) {
-        script_ = script;
-        pc_ = pc;
+    void setBytecodeSite(const BytecodeSite &site) {
+        site_ = site;
     }
-    jsbytecode *pc() {
-        return pc_;
+    const BytecodeSite &bytecodeSite() const {
+        return site_;
     }
-    JSScript *script() {
-        return script_;
+    jsbytecode *pc() const {
+        return site_.pc();
+    }
+    JSScript *script() const {
+        return site_.script();
     }
 };
 
@@ -743,8 +767,11 @@ inline OutOfLineCode *
 CodeGeneratorShared::oolCallVM(const VMFunction &fun, LInstruction *lir, const ArgSeq &args,
                                const StoreOutputTo &out)
 {
+    JS_ASSERT(lir->mirRaw());
+    JS_ASSERT(lir->mirRaw()->isInstruction());
+
     OutOfLineCode *ool = new(alloc()) OutOfLineCallVM<ArgSeq, StoreOutputTo>(lir, fun, args, out);
-    if (!addOutOfLineCode(ool))
+    if (!addOutOfLineCode(ool, lir->mirRaw()->toInstruction()))
         return nullptr;
     return ool;
 }
@@ -764,55 +791,6 @@ CodeGeneratorShared::visitOutOfLineCallVM(OutOfLineCallVM<ArgSeq, StoreOutputTo>
     masm.jump(ool->rejoin());
     return true;
 }
-
-// Initiate a parallel abort.  The snapshot is used to record the
-// cause.
-class OutOfLineAbortPar : public OutOfLineCode
-{
-  private:
-    ParallelBailoutCause cause_;
-    MBasicBlock *basicBlock_;
-    jsbytecode *bytecode_;
-
-  public:
-    OutOfLineAbortPar(ParallelBailoutCause cause, MBasicBlock *basicBlock, jsbytecode *bytecode)
-      : cause_(cause),
-        basicBlock_(basicBlock),
-        bytecode_(bytecode)
-    { }
-
-    ParallelBailoutCause cause() {
-        return cause_;
-    }
-
-    MBasicBlock *basicBlock() {
-        return basicBlock_;
-    }
-
-    jsbytecode *bytecode() {
-        return bytecode_;
-    }
-
-    bool generate(CodeGeneratorShared *codegen);
-};
-
-// Used when some callee has aborted.
-class OutOfLinePropagateAbortPar : public OutOfLineCode
-{
-  private:
-    LInstruction *lir_;
-
-  public:
-    explicit OutOfLinePropagateAbortPar(LInstruction *lir)
-      : lir_(lir)
-    { }
-
-    LInstruction *lir() { return lir_; }
-
-    bool generate(CodeGeneratorShared *codegen);
-};
-
-extern const VMFunction InterruptCheckInfo;
 
 } // namespace jit
 } // namespace js

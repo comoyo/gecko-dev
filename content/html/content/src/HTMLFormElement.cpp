@@ -10,6 +10,7 @@
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventStateManager.h"
 #include "mozilla/EventStates.h"
+#include "mozilla/dom/AutocompleteErrorEvent.h"
 #include "mozilla/dom/HTMLFormControlsCollection.h"
 #include "mozilla/dom/HTMLFormElementBinding.h"
 #include "mozilla/Move.h"
@@ -28,6 +29,7 @@
 #include "nsAutoPtr.h"
 #include "nsTArray.h"
 #include "nsIMutableArray.h"
+#include "nsIFormAutofillContentService.h"
 
 // form submission
 #include "nsIFormSubmitObserver.h"
@@ -46,6 +48,7 @@
 // radio buttons
 #include "mozilla/dom/HTMLInputElement.h"
 #include "nsIRadioVisitor.h"
+#include "RadioNodeList.h"
 
 #include "nsLayoutUtils.h"
 
@@ -61,21 +64,7 @@
 #include "mozilla/dom/HTMLImageElement.h"
 
 // construction, destruction
-nsGenericHTMLElement*
-NS_NewHTMLFormElement(already_AddRefed<nsINodeInfo>&& aNodeInfo,
-                      mozilla::dom::FromParser aFromParser)
-{
-  mozilla::dom::HTMLFormElement* it = new mozilla::dom::HTMLFormElement(aNodeInfo);
-
-  nsresult rv = it->Init();
-
-  if (NS_FAILED(rv)) {
-    delete it;
-    return nullptr;
-  }
-
-  return it;
-}
+NS_IMPL_NS_NEW_HTML_ELEMENT(Form)
 
 namespace mozilla {
 namespace dom {
@@ -94,11 +83,12 @@ static const nsAttrValue::EnumTable* kFormDefaultAutocomplete = &kFormAutocomple
 bool HTMLFormElement::gFirstFormSubmitted = false;
 bool HTMLFormElement::gPasswordManagerInitialized = false;
 
-HTMLFormElement::HTMLFormElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+HTMLFormElement::HTMLFormElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : nsGenericHTMLElement(aNodeInfo),
-    mSelectedRadioButtons(4),
-    mRequiredRadioButtonCounts(4),
-    mValueMissingRadioGroups(4),
+    mControls(new HTMLFormControlsCollection(MOZ_THIS_IN_INITIALIZER_LIST())),
+    mSelectedRadioButtons(2),
+    mRequiredRadioButtonCounts(2),
+    mValueMissingRadioGroups(2),
     mGeneratingSubmit(false),
     mGeneratingReset(false),
     mIsSubmitting(false),
@@ -112,8 +102,8 @@ HTMLFormElement::HTMLFormElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
     mDefaultSubmitElement(nullptr),
     mFirstSubmitInElements(nullptr),
     mFirstSubmitNotInElements(nullptr),
-    mImageNameLookupTable(FORM_CONTROL_LIST_HASHTABLE_SIZE),
-    mPastNameLookupTable(FORM_CONTROL_LIST_HASHTABLE_SIZE),
+    mImageNameLookupTable(FORM_CONTROL_LIST_HASHTABLE_LENGTH),
+    mPastNameLookupTable(FORM_CONTROL_LIST_HASHTABLE_LENGTH),
     mInvalidElementsCount(0),
     mEverTriedInvalidSubmit(false)
 {
@@ -127,14 +117,6 @@ HTMLFormElement::~HTMLFormElement()
 
   Clear();
 }
-
-nsresult
-HTMLFormElement::Init()
-{
-  mControls = new HTMLFormControlsCollection(this);
-  return NS_OK;
-}
-
 
 // nsISupports
 
@@ -188,7 +170,7 @@ NS_INTERFACE_TABLE_TAIL_INHERITING(nsGenericHTMLElement)
 
 // nsIDOMHTMLFormElement
 
-NS_IMPL_ELEMENT_CLONE_WITH_INIT(HTMLFormElement)
+NS_IMPL_ELEMENT_CLONE(HTMLFormElement)
 
 nsIHTMLCollection*
 HTMLFormElement::Elements()
@@ -265,7 +247,6 @@ void
 HTMLFormElement::Submit(ErrorResult& aRv)
 {
   // Send the submit event
-  nsRefPtr<nsPresContext> presContext = GetPresContext();
   if (mPendingSubmission) {
     // aha, we have a pending submission that was not flushed
     // (this happens when form.submit() is called twice)
@@ -298,6 +279,31 @@ HTMLFormElement::CheckValidity(bool* retVal)
 {
   *retVal = CheckValidity();
   return NS_OK;
+}
+
+void
+HTMLFormElement::RequestAutocomplete()
+{
+  bool dummy;
+  nsCOMPtr<nsIDOMWindow> window =
+    do_QueryInterface(OwnerDoc()->GetScriptHandlingObject(dummy));
+  nsCOMPtr<nsIFormAutofillContentService> formAutofillContentService =
+    do_GetService("@mozilla.org/formautofill/content-service;1");
+
+  if (!formAutofillContentService || !window) {
+    AutocompleteErrorEventInit init;
+    init.mBubbles = true;
+    init.mCancelable = false;
+    init.mReason = AutoCompleteErrorReason::Disabled;
+
+    nsRefPtr<AutocompleteErrorEvent> event =
+      AutocompleteErrorEvent::Constructor(this, NS_LITERAL_STRING("autocompleteerror"), init);
+
+    (new AsyncEventDispatcher(this, event))->PostDOMEvent();
+    return;
+  }
+
+  formAutofillContentService->RequestAutocomplete(this, window);
 }
 
 bool
@@ -1681,7 +1687,7 @@ HTMLFormElement::ImplicitSubmissionIsDisabled() const
       numDisablingControlsFound++;
     }
   }
-  return numDisablingControlsFound > 1;
+  return numDisablingControlsFound != 1;
 }
 
 NS_IMETHODIMP
@@ -2255,7 +2261,7 @@ HTMLFormElement::AddElementToTableInternal(
 
       // Found an element, create a list, add the element to the list and put
       // the list in the hash
-      nsSimpleContentList *list = new nsSimpleContentList(this);
+      RadioNodeList *list = new RadioNodeList(this);
 
       // If an element has a @form, we can assume it *might* be able to not have
       // a parent and still be in the form.
@@ -2279,8 +2285,8 @@ HTMLFormElement::AddElementToTableInternal(
       NS_ENSURE_TRUE(nodeList, NS_ERROR_FAILURE);
 
       // Upcast, uggly, but it works!
-      nsSimpleContentList *list =
-        static_cast<nsSimpleContentList*>(nodeList.get());
+      RadioNodeList *list =
+        static_cast<RadioNodeList*>(nodeList.get());
 
       NS_ASSERTION(list->Length() > 1,
                    "List should have been converted back to a single element");

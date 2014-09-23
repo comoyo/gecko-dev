@@ -67,9 +67,11 @@
 #include "GeckoProfiler.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Atomics.h"
+#include "mozilla/LinuxSignal.h"
 #include "ProfileEntry.h"
 #include "nsThreadUtils.h"
 #include "TableTicker.h"
+#include "ThreadResponsiveness.h"
 #include "UnwinderThread2.h"
 #if defined(__ARM_EABI__) && defined(MOZ_WIDGET_GONK)
  // Should also work on other Android and ARM Linux, but not tested there yet.
@@ -208,7 +210,10 @@ static void SetSampleContext(TickSample* sample, void* context)
 #else
 #define V8_HOST_ARCH_X64 1
 #endif
-static void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
+
+namespace {
+
+void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
   if (!Sampler::GetActiveSampler()) {
     sem_post(&sSignalHandlingDone);
     return;
@@ -218,15 +223,14 @@ static void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
   TickSample* sample = &sample_obj;
   sample->context = context;
 
-#ifdef ENABLE_SPS_LEAF_DATA
   // If profiling, we extract the current pc and sp.
   if (Sampler::GetActiveSampler()->IsProfiling()) {
     SetSampleContext(sample, context);
   }
-#endif
   sample->threadProfile = sCurrentThreadProfile;
   sample->timestamp = mozilla::TimeStamp::Now();
   sample->rssMemory = sample->threadProfile->mRssMemory;
+  sample->ussMemory = sample->threadProfile->mUssMemory;
 
   Sampler::GetActiveSampler()->Tick(sample);
 
@@ -234,13 +238,17 @@ static void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
   sem_post(&sSignalHandlingDone);
 }
 
+} // namespace
+
 static void ProfilerSignalThread(ThreadProfile *profile,
                                  bool isFirstProfiledThread)
 {
   if (isFirstProfiledThread && Sampler::GetActiveSampler()->ProfileMemory()) {
     profile->mRssMemory = nsMemoryReporterManager::ResidentFast();
+    profile->mUssMemory = nsMemoryReporterManager::ResidentUnique();
   } else {
     profile->mRssMemory = 0;
+    profile->mUssMemory = 0;
   }
 }
 
@@ -314,6 +322,8 @@ static void* SignalSender(void* arg) {
           continue;
         }
 
+        info->Profile()->GetThreadResponsiveness()->Update();
+
         // We use sCurrentThreadProfile the ThreadProfile for the
         // thread we're profiling to the signal handler
         sCurrentThreadProfile = info->Profile();
@@ -385,7 +395,7 @@ void Sampler::Start() {
   // Request profiling signals.
   LOG("Request signal");
   struct sigaction sa;
-  sa.sa_sigaction = ProfilerSignalHandler;
+  sa.sa_sigaction = MOZ_SIGNAL_TRAMPOLINE(ProfilerSignalHandler);
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART | SA_SIGINFO;
   if (sigaction(SIGPROF, &sa, &old_sigprof_signal_handler_) != 0) {
@@ -621,19 +631,26 @@ void TickSample::PopulateContext(void* aContext)
   }
 }
 
-// WARNING: Works with values up to 1 second
 void OS::SleepMicro(int microseconds)
 {
+  if (MOZ_UNLIKELY(microseconds >= 1000000)) {
+    // Use usleep for larger intervals, because the nanosleep
+    // code below only supports intervals < 1 second.
+    MOZ_ALWAYS_TRUE(!::usleep(microseconds));
+    return;
+  }
+
   struct timespec ts;
   ts.tv_sec  = 0;
   ts.tv_nsec = microseconds * 1000UL;
 
-  while (true) {
-    // in the case of interrupt we keep waiting
-    // nanosleep puts the remaining to back into ts
-    if (!nanosleep(&ts, &ts) || errno != EINTR) {
-      return;
-    }
-  }
-}
+  int rv = ::nanosleep(&ts, &ts);
 
+  while (rv != 0 && errno == EINTR) {
+    // Keep waiting in case of interrupt.
+    // nanosleep puts the remaining time back into ts.
+    rv = ::nanosleep(&ts, &ts);
+  }
+
+  MOZ_ASSERT(!rv, "nanosleep call failed");
+}

@@ -76,6 +76,7 @@ const FAKE_EXPERIMENTS_1 = [
     description: "experiment 1",
     active: true,
     detailUrl: "https://dummy/experiment1",
+    branch: "foo",
   },
 ];
 
@@ -87,6 +88,7 @@ const FAKE_EXPERIMENTS_2 = [
     active: false,
     endDate: new Date(2014, 2, 11, 2, 4, 35, 42).getTime(),
     detailUrl: "https://dummy/experiment2",
+    branch: null,
   },
   {
     id: "id1",
@@ -95,6 +97,7 @@ const FAKE_EXPERIMENTS_2 = [
     active: false,
     endDate: new Date(2014, 2, 10, 0, 0, 0, 0).getTime(),
     detailURL: "https://dummy/experiment1",
+    branch: null,
   },
 ];
 
@@ -115,12 +118,6 @@ function getReporter(name, uri, inspected) {
 function removeCacheFile() {
   let path = OS.Path.join(OS.Constants.Path.profileDir, "experiments.json");
   return OS.File.remove(path);
-}
-
-function disableCertificateChecks() {
-  let pref = "experiments.manifest.cert.checkAttributes";
-  Services.prefs.setBoolPref(pref, false);
-  do_register_cleanup(() => Services.prefs.clearUserPref(pref));
 }
 
 function patchPolicy(policy, data) {

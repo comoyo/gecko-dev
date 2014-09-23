@@ -40,16 +40,17 @@ class ImageURL;
 } // namespace image
 } // namespace mozilla
 
-class imgRequest : public nsIStreamListener,
-                   public nsIThreadRetargetableStreamListener,
-                   public nsIChannelEventSink,
-                   public nsIInterfaceRequestor,
-                   public nsIAsyncVerifyRedirectCallback
+class imgRequest MOZ_FINAL : public nsIStreamListener,
+                             public nsIThreadRetargetableStreamListener,
+                             public nsIChannelEventSink,
+                             public nsIInterfaceRequestor,
+                             public nsIAsyncVerifyRedirectCallback
 {
+  virtual ~imgRequest();
+
 public:
   typedef mozilla::image::ImageURL ImageURL;
-  imgRequest(imgLoader* aLoader);
-  virtual ~imgRequest();
+  explicit imgRequest(imgLoader* aLoader);
 
   NS_DECL_THREADSAFE_ISUPPORTS
 
@@ -61,6 +62,8 @@ public:
                 void *aLoadId,
                 nsIPrincipal* aLoadingPrincipal,
                 int32_t aCORSMode);
+
+  void ClearLoader();
 
   // Callers must call imgRequestProxy::Notify later.
   void AddProxy(imgRequestProxy *proxy);
@@ -74,6 +77,9 @@ public:
 
   // Called or dispatched by cancel for main thread only execution.
   void ContinueCancel(nsresult aStatus);
+
+  // Called or dispatched by EvictFromCache for main thread only execution.
+  void ContinueEvict();
 
   // Methods that get forwarded to the Image, or deferred until it's
   // instantiated.
@@ -132,6 +138,8 @@ public:
   // OK to use on any thread.
   nsresult GetURI(ImageURL **aURI);
 
+  nsresult GetImageErrorCode(void);
+
 private:
   friend class imgCacheEntry;
   friend class imgRequestProxy;
@@ -145,6 +153,7 @@ private:
     mLoadId = aLoadId;
   }
   void Cancel(nsresult aStatus);
+  void EvictFromCache();
   void RemoveFromCache();
 
   nsresult GetSecurityInfo(nsISupports **aSecurityInfo);
@@ -182,6 +191,8 @@ private:
 
   bool IsBlockingOnload() const;
   void SetBlockingOnload(bool block) const;
+
+  bool HasConsumers();
 
 public:
   NS_DECL_NSISTREAMLISTENER
@@ -237,6 +248,8 @@ private:
   // The CORS mode (defined in imgIRequest) this image was loaded with. By
   // default, imgIRequest::CORS_NONE.
   int32_t mCORSMode;
+
+  nsresult mImageErrorCode;
 
   // Sometimes consumers want to do things before the image is ready. Let them,
   // and apply the action when the image becomes available.

@@ -19,7 +19,7 @@
 #endif
 
 #if defined(OS_POSIX)
-#include "base/ref_counted.h"
+#include "nsAutoPtr.h"
 #endif
 
 namespace base {
@@ -204,6 +204,10 @@ class Message : public Pickle {
     name_ = name;
   }
 
+#if defined(OS_POSIX)
+  uint32_t num_fds() const;
+#endif
+
   template<class T>
   static bool Dispatch(const Message* msg, T* obj, void (T::*func)()) {
     (obj->*func)();
@@ -358,7 +362,7 @@ class Message : public Pickle {
 
 #if defined(OS_POSIX)
   // The set of file descriptors associated with this message.
-  scoped_refptr<FileDescriptorSet> file_descriptor_set_;
+  nsRefPtr<FileDescriptorSet> file_descriptor_set_;
 
   // Ensure that a FileDescriptorSet is allocated
   void EnsureFileDescriptorSet();

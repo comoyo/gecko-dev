@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -288,7 +289,8 @@ nsLinebreakConverter::ConvertLineBreaks(const char* aSrc,
 
   char* resultString;
   if (aSrcBreaks == eLinebreakAny) {
-    resultString = ConvertUnknownBreaks(aSrc, sourceLen, GetLinebreakString(aDestBreaks));
+    resultString = ConvertUnknownBreaks(aSrc, sourceLen,
+                                        GetLinebreakString(aDestBreaks));
   } else
     resultString = ConvertBreaks(aSrc, sourceLen,
                                  GetLinebreakString(aSrcBreaks),
@@ -375,7 +377,8 @@ nsLinebreakConverter::ConvertUnicharLineBreaks(const char16_t* aSrc,
 
   char16_t* resultString;
   if (aSrcBreaks == eLinebreakAny) {
-    resultString = ConvertUnknownBreaks(aSrc, bufLen, GetLinebreakString(aDestBreaks));
+    resultString = ConvertUnknownBreaks(aSrc, bufLen,
+                                        GetLinebreakString(aDestBreaks));
   } else
     resultString = ConvertBreaks(aSrc, bufLen, GetLinebreakString(aSrcBreaks),
                                  GetLinebreakString(aDestBreaks));

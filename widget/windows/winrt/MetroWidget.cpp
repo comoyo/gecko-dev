@@ -39,6 +39,7 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
 #include "mozilla/MiscEvents.h"
+#include "gfxPrefs.h"
 
 using namespace Microsoft::WRL;
 using namespace Microsoft::WRL::Wrappers;
@@ -77,7 +78,7 @@ UINT sDefaultBrowserMsgId = RegisterWindowMessageW(L"DefaultBrowserClosing");
 } }
 
 // WM_GETOBJECT id pulled from uia headers
-#define UiaRootObjectId -25
+#define MOZOBJID_UIAROOT -25
 
 namespace mozilla {
 namespace widget {
@@ -650,8 +651,8 @@ bool
 MetroWidget::DispatchScrollEvent(mozilla::WidgetGUIEvent* aEvent)
 {
   WidgetGUIEvent* newEvent = nullptr;
-  switch(aEvent->eventStructType) {
-    case NS_WHEEL_EVENT:
+  switch(aEvent->mClass) {
+    case eWheelEventClass:
     {
       WidgetWheelEvent* oldEvent = aEvent->AsWheelEvent();
       WidgetWheelEvent* wheelEvent =
@@ -660,7 +661,7 @@ MetroWidget::DispatchScrollEvent(mozilla::WidgetGUIEvent* aEvent)
       newEvent = static_cast<WidgetGUIEvent*>(wheelEvent);
     }
     break;
-    case NS_CONTENT_COMMAND_EVENT:
+    case eContentCommandEventClass:
     {
       WidgetContentCommandEvent* oldEvent = aEvent->AsContentCommandEvent();
       WidgetContentCommandEvent* cmdEvent =
@@ -892,7 +893,7 @@ MetroWidget::WindowProcedure(HWND aWnd, UINT aMsg, WPARAM aWParam, LPARAM aLPara
       // UiaReturnRawElementProvider passing the return result from FrameworkView
       // OnAutomationProviderRequested as the hwnd (me scratches head) which results in
       // GetLastError always being set to invalid handle (6) after CallWindowProc returns.
-      if (dwObjId == UiaRootObjectId && gProviderRoot) {
+      if (dwObjId == MOZOBJID_UIAROOT && gProviderRoot) {
         ComPtr<IRawElementProviderSimple> simple;
         gProviderRoot.As(&simple);
         if (simple) {
@@ -997,7 +998,8 @@ MetroWidget::ShouldUseOffMainThreadCompositing()
     return false;
   }
   // toolkit or test widgets can't use omtc, they don't have ICoreWindow.
-  return (CompositorParent::CompositorLoop() && mWindowType == eWindowType_toplevel);
+  return gfxPlatform::UsesOffMainThreadCompositing() &&
+         mWindowType == eWindowType_toplevel;
 }
 
 bool
@@ -1007,7 +1009,8 @@ MetroWidget::ShouldUseMainThreadD3D10Manager()
   if (!mView) {
     return false;
   }
-  return (!CompositorParent::CompositorLoop() && mWindowType == eWindowType_toplevel);
+  return !gfxPlatform::UsesOffMainThreadCompositing() &&
+         mWindowType == eWindowType_toplevel;
 }
 
 bool
@@ -1020,18 +1023,13 @@ MetroWidget::ShouldUseBasicManager()
 bool
 MetroWidget::ShouldUseAPZC()
 {
-  const char* kPrefName = "layers.async-pan-zoom.enabled";
-  return ShouldUseOffMainThreadCompositing() &&
-         Preferences::GetBool(kPrefName, false);
+  return gfxPrefs::AsyncPanZoomEnabled();
 }
 
 void
 MetroWidget::SetWidgetListener(nsIWidgetListener* aWidgetListener)
 {
   mWidgetListener = aWidgetListener;
-  if (mController) {
-    mController->SetWidgetListener(aWidgetListener);
-  }
 }
 
 CompositorParent* MetroWidget::NewCompositorParent(int aSurfaceWidth, int aSurfaceHeight)
@@ -1042,7 +1040,6 @@ CompositorParent* MetroWidget::NewCompositorParent(int aSurfaceWidth, int aSurfa
     mRootLayerTreeId = compositor->RootLayerTreeId();
 
     mController = new APZController();
-    mController->SetWidgetListener(mWidgetListener);
 
     CompositorParent::SetControllerForLayerTree(mRootLayerTreeId, mController);
 
@@ -1135,6 +1132,12 @@ MetroWidget::ApzReceiveInputEvent(WidgetInputEvent* aEvent,
     return nsEventStatus_eIgnore;
   }
   return mController->ReceiveInputEvent(aEvent, aOutTargetGuid);
+}
+
+void
+MetroWidget::SetApzPendingResponseFlusher(APZPendingResponseFlusher* aFlusher)
+{
+  mController->SetPendingResponseFlusher(aFlusher);
 }
 
 LayerManager*
@@ -1539,6 +1542,7 @@ NS_IMETHODIMP_(void)
 MetroWidget::SetInputContext(const InputContext& aContext,
                              const InputContextAction& aAction)
 {
+  // XXX This should set mInputContext.mNativeIMEContext properly
   mInputContext = aContext;
   nsTextStore::SetInputContext(this, mInputContext, aAction);
   bool enable = (mInputContext.mIMEState.mEnabled == IMEState::ENABLED ||
@@ -1567,17 +1571,17 @@ MetroWidget::NotifyIME(const IMENotification& aIMENotification)
       nsTextStore::CommitComposition(true);
       return NS_OK;
     case NOTIFY_IME_OF_FOCUS:
-      return nsTextStore::OnFocusChange(true, this,
-                                        mInputContext.mIMEState.mEnabled);
+      return nsTextStore::OnFocusChange(true, this, mInputContext);
     case NOTIFY_IME_OF_BLUR:
-      return nsTextStore::OnFocusChange(false, this,
-                                        mInputContext.mIMEState.mEnabled);
+      return nsTextStore::OnFocusChange(false, this, mInputContext);
     case NOTIFY_IME_OF_SELECTION_CHANGE:
       return nsTextStore::OnSelectionChange();
     case NOTIFY_IME_OF_TEXT_CHANGE:
       return nsTextStore::OnTextChange(aIMENotification);
     case NOTIFY_IME_OF_POSITION_CHANGE:
       return nsTextStore::OnLayoutChange();
+    case NOTIFY_IME_OF_MOUSE_BUTTON_EVENT:
+      return nsTextStore::OnMouseButtonEvent(aIMENotification);
     default:
       return NS_ERROR_NOT_IMPLEMENTED;
   }

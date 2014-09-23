@@ -155,6 +155,10 @@ if test "x${ac_cv_big_endian}" = "x1" ; then
   AC_DEFINE_UNQUOTED([JEMALLOC_BIG_ENDIAN], [ ])
 fi
 
+if test "x${je_cv_msvc}" = "xyes" -a "x${ac_cv_header_inttypes_h}" = "xno"; then
+  CPPFLAGS="$CPPFLAGS -I${srcroot}/include/msvc_compat/C99"
+fi
+
 AC_CHECK_SIZEOF([void *])
 if test "x${ac_cv_sizeof_void_p}" = "x8" ; then
   LG_SIZEOF_PTR=3
@@ -547,15 +551,15 @@ dnl jemalloc_protos_jet.h easy.
 je_="je_"
 AC_SUBST([je_])
 
-cfgoutputs_in="${srcroot}Makefile.in"
-cfgoutputs_in="${cfgoutputs_in} ${srcroot}doc/html.xsl.in"
-cfgoutputs_in="${cfgoutputs_in} ${srcroot}doc/manpages.xsl.in"
-cfgoutputs_in="${cfgoutputs_in} ${srcroot}doc/jemalloc.xml.in"
-cfgoutputs_in="${cfgoutputs_in} ${srcroot}include/jemalloc/jemalloc_macros.h.in"
-cfgoutputs_in="${cfgoutputs_in} ${srcroot}include/jemalloc/jemalloc_protos.h.in"
-cfgoutputs_in="${cfgoutputs_in} ${srcroot}include/jemalloc/internal/jemalloc_internal.h.in"
-cfgoutputs_in="${cfgoutputs_in} ${srcroot}test/test.sh.in"
-cfgoutputs_in="${cfgoutputs_in} ${srcroot}test/include/test/jemalloc_test.h.in"
+cfgoutputs_in="Makefile.in"
+cfgoutputs_in="${cfgoutputs_in} doc/html.xsl.in"
+cfgoutputs_in="${cfgoutputs_in} doc/manpages.xsl.in"
+cfgoutputs_in="${cfgoutputs_in} doc/jemalloc.xml.in"
+cfgoutputs_in="${cfgoutputs_in} include/jemalloc/jemalloc_macros.h.in"
+cfgoutputs_in="${cfgoutputs_in} include/jemalloc/jemalloc_protos.h.in"
+cfgoutputs_in="${cfgoutputs_in} include/jemalloc/internal/jemalloc_internal.h.in"
+cfgoutputs_in="${cfgoutputs_in} test/test.sh.in"
+cfgoutputs_in="${cfgoutputs_in} test/include/test/jemalloc_test.h.in"
 
 cfgoutputs_out="Makefile"
 cfgoutputs_out="${cfgoutputs_out} doc/html.xsl"
@@ -577,18 +581,18 @@ cfgoutputs_tup="${cfgoutputs_tup} include/jemalloc/internal/jemalloc_internal.h"
 cfgoutputs_tup="${cfgoutputs_tup} test/test.sh:test/test.sh.in"
 cfgoutputs_tup="${cfgoutputs_tup} test/include/test/jemalloc_test.h:test/include/test/jemalloc_test.h.in"
 
-cfghdrs_in="${srcroot}include/jemalloc/jemalloc_defs.h.in"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/internal/jemalloc_internal_defs.h.in"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/internal/private_namespace.sh"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/internal/private_unnamespace.sh"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/internal/private_symbols.txt"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/internal/public_namespace.sh"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/internal/public_unnamespace.sh"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/internal/size_classes.sh"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/jemalloc_rename.sh"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/jemalloc_mangle.sh"
-cfghdrs_in="${cfghdrs_in} ${srcroot}include/jemalloc/jemalloc.sh"
-cfghdrs_in="${cfghdrs_in} ${srcroot}test/include/test/jemalloc_test_defs.h.in"
+cfghdrs_in="include/jemalloc/jemalloc_defs.h.in"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/internal/jemalloc_internal_defs.h.in"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/internal/private_namespace.sh"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/internal/private_unnamespace.sh"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/internal/private_symbols.txt"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/internal/public_namespace.sh"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/internal/public_unnamespace.sh"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/internal/size_classes.sh"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/jemalloc_rename.sh"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/jemalloc_mangle.sh"
+cfghdrs_in="${cfghdrs_in} include/jemalloc/jemalloc.sh"
+cfghdrs_in="${cfghdrs_in} test/include/test/jemalloc_test_defs.h.in"
 
 cfghdrs_out="include/jemalloc/jemalloc_defs.h"
 cfghdrs_out="${cfghdrs_out} include/jemalloc/jemalloc${install_suffix}.h"
@@ -606,8 +610,8 @@ cfghdrs_out="${cfghdrs_out} include/jemalloc/internal/jemalloc_internal_defs.h"
 cfghdrs_out="${cfghdrs_out} test/include/test/jemalloc_test_defs.h"
 
 cfghdrs_tup="include/jemalloc/jemalloc_defs.h:include/jemalloc/jemalloc_defs.h.in"
-cfghdrs_tup="${cfghdrs_tup} include/jemalloc/internal/jemalloc_internal_defs.h:${srcroot}include/jemalloc/internal/jemalloc_internal_defs.h.in"
-cfghdrs_tup="${cfghdrs_tup} test/include/test/jemalloc_test_defs.h:${srcroot}test/include/test/jemalloc_test_defs.h.in"
+cfghdrs_tup="${cfghdrs_tup} include/jemalloc/internal/jemalloc_internal_defs.h:include/jemalloc/internal/jemalloc_internal_defs.h.in"
+cfghdrs_tup="${cfghdrs_tup} test/include/test/jemalloc_test_defs.h:test/include/test/jemalloc_test_defs.h.in"
 
 dnl Do not silence irrelevant compiler warnings by default, since enabling this
 dnl option incurs a performance penalty.
@@ -1161,22 +1165,43 @@ elif test "x${force_tls}" = "x1" ; then
 fi
 
 dnl ============================================================================
-dnl Check for ffsl(3), and fail if not found.  This function exists on all
-dnl platforms that jemalloc currently has a chance of functioning on without
-dnl modification.
-JE_COMPILABLE([a program using ffsl], [
+dnl Check for  __builtin_ffsl(), then ffsl(3), and fail if neither are found.
+dnl One of those two functions should (theoretically) exist on all platforms
+dnl that jemalloc currently has a chance of functioning on without modification.
+dnl We additionally assume ffs() or __builtin_ffs() are defined if
+dnl ffsl() or __builtin_ffsl() are defined, respectively.
+JE_COMPILABLE([a program using __builtin_ffsl], [
 #include <stdio.h>
 #include <strings.h>
 #include <string.h>
 ], [
 	{
+		int rv = __builtin_ffsl(0x08);
+		printf("%d\n", rv);
+	}
+], [je_cv_gcc_builtin_ffsl])
+if test "x${je_cv_gcc_builtin_ffsl}" == "xyes" ; then
+  AC_DEFINE([JEMALLOC_INTERNAL_FFSL], [__builtin_ffsl])
+  AC_DEFINE([JEMALLOC_INTERNAL_FFS], [__builtin_ffs])
+else
+  JE_COMPILABLE([a program using ffsl], [
+  #include <stdio.h>
+  #include <strings.h>
+  #include <string.h>
+  ], [
+	{
 		int rv = ffsl(0x08);
 		printf("%d\n", rv);
 	}
-], [je_cv_function_ffsl])
-if test "x${je_cv_function_ffsl}" != "xyes" ; then
-   AC_MSG_ERROR([Cannot build without ffsl(3)])
+  ], [je_cv_function_ffsl])
+  if test "x${je_cv_function_ffsl}" == "xyes" ; then
+    AC_DEFINE([JEMALLOC_INTERNAL_FFSL], [ffsl])
+    AC_DEFINE([JEMALLOC_INTERNAL_FFS], [ffs])
+  else
+    AC_MSG_ERROR([Cannot build without ffsl(3) or __builtin_ffsl()])
+  fi
 fi
+
 
 dnl ============================================================================
 dnl Check for atomic(9) operations as provided on FreeBSD.

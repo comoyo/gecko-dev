@@ -31,6 +31,7 @@
 #include "nsHostObjectProtocolHandler.h"
 #include <algorithm>
 #include "nsProxyRelease.h"
+#include "nsIContentPolicy.h"
 
 #ifdef PR_LOGGING
 PRLogModuleInfo* gMediaResourceLog;
@@ -348,7 +349,6 @@ ChannelMediaResource::OnStartRequest(nsIRequest* aRequest)
 
     mDecoder->SetInfinite(!dataIsBounded);
   }
-  mDecoder->SetTransportSeekable(seekable);
   mCacheStream.SetTransportSeekable(seekable);
 
   {
@@ -535,7 +535,7 @@ ChannelMediaResource::OnDataAvailable(nsIRequest* aRequest,
   CopySegmentClosure closure;
   nsIScriptSecurityManager* secMan = nsContentUtils::GetSecurityManager();
   if (secMan && mChannel) {
-    secMan->GetChannelPrincipal(mChannel, getter_AddRefs(closure.mPrincipal));
+    secMan->GetChannelResultPrincipal(mChannel, getter_AddRefs(closure.mPrincipal));
   }
   closure.mResource = this;
 
@@ -933,10 +933,14 @@ ChannelMediaResource::RecreateChannel()
 
   nsresult rv = NS_NewChannel(getter_AddRefs(mChannel),
                               mURI,
-                              nullptr,
+                              element,
+                              nsILoadInfo::SEC_NORMAL,
+                              nsIContentPolicy::TYPE_MEDIA,
+                              nullptr,   // aChannelPolicy
                               loadGroup,
-                              nullptr,
+                              nullptr,  // aCallbacks
                               loadFlags);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   // We have cached the Content-Type, which should not change. Give a hint to
   // the channel to avoid a sniffing failure, which would be expected because we
@@ -1035,8 +1039,7 @@ ChannelMediaResource::CacheClientSeek(int64_t aOffset, bool aResume)
   }
 
   nsresult rv = RecreateChannel();
-  if (NS_FAILED(rv))
-    return rv;
+  NS_ENSURE_SUCCESS(rv, rv);
 
   return OpenChannel(nullptr);
 }
@@ -1407,7 +1410,7 @@ already_AddRefed<nsIPrincipal> FileMediaResource::GetCurrentPrincipal()
   nsIScriptSecurityManager* secMan = nsContentUtils::GetSecurityManager();
   if (!secMan || !mChannel)
     return nullptr;
-  secMan->GetChannelPrincipal(mChannel, getter_AddRefs(principal));
+  secMan->GetChannelResultPrincipal(mChannel, getter_AddRefs(principal));
   return principal.forget();
 }
 
@@ -1435,7 +1438,14 @@ already_AddRefed<MediaResource> FileMediaResource::CloneData(MediaDecoder* aDeco
 
   nsCOMPtr<nsIChannel> channel;
   nsresult rv =
-    NS_NewChannel(getter_AddRefs(channel), mURI, nullptr, loadGroup, nullptr, 0);
+    NS_NewChannel(getter_AddRefs(channel),
+                  mURI,
+                  element,
+                  nsILoadInfo::SEC_NORMAL,
+                  nsIContentPolicy::TYPE_MEDIA,
+                  nullptr,   // aChannelPolicy
+                  loadGroup);
+
   if (NS_FAILED(rv))
     return nullptr;
 
@@ -1640,11 +1650,13 @@ public:
     MOZ_COUNT_CTOR(DispatchBytesConsumedEvent);
   }
 
+protected:
   ~DispatchBytesConsumedEvent()
   {
     MOZ_COUNT_DTOR(DispatchBytesConsumedEvent);
   }
 
+public:
   NS_IMETHOD Run() {
     mDecoder->NotifyBytesConsumed(mNumBytes, mOffset);
     // Drop ref to decoder on main thread, just in case this reference

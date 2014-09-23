@@ -36,6 +36,7 @@ static char *RCSSTRING __UNUSED__="$Id: ice_peer_ctx.c,v 1.2 2008/04/28 17:59:01
 
 #include <string.h>
 #include <assert.h>
+#include <registry.h>
 #include <nr_api.h>
 #include "ice_ctx.h"
 #include "ice_peer_ctx.h"
@@ -43,6 +44,7 @@ static char *RCSSTRING __UNUSED__="$Id: ice_peer_ctx.c,v 1.2 2008/04/28 17:59:01
 #include "ice_util.h"
 #include "nr_crypto.h"
 #include "async_timer.h"
+#include "ice_reg.h"
 
 static void nr_ice_peer_ctx_destroy_cb(NR_SOCKET s, int how, void *cb_arg);
 static int nr_ice_peer_ctx_parse_stream_attributes_int(nr_ice_peer_ctx *pctx, nr_ice_media_stream *stream, nr_ice_media_stream *pstream, char **attrs, int attr_ct);
@@ -66,15 +68,10 @@ int nr_ice_peer_ctx_create(nr_ice_ctx *ctx, nr_ice_handler *handler,char *label,
 
     /* Decide controlling vs. controlled */
     if(ctx->flags & NR_ICE_CTX_FLAGS_LITE){
-      if(pctx->peer_lite){
-        r_log(LOG_ICE,LOG_ERR,"Both sides are ICE-Lite");
-        ABORT(R_BAD_DATA);
-      }
-
       pctx->controlling=0;
     }
     else{
-      if(pctx->peer_lite || (ctx->flags & NR_ICE_CTX_FLAGS_OFFERER))
+      if(ctx->flags & NR_ICE_CTX_FLAGS_OFFERER)
         pctx->controlling=1;
       else if(ctx->flags & NR_ICE_CTX_FLAGS_ANSWERER)
         pctx->controlling=0;
@@ -323,11 +320,52 @@ int nr_ice_peer_ctx_parse_trickle_candidate(nr_ice_peer_ctx *pctx, nr_ice_media_
   }
 
 
+static void nr_ice_peer_ctx_trickle_wait_cb(NR_SOCKET s, int how, void *cb_arg)
+  {
+    nr_ice_peer_ctx *pctx=cb_arg;
+    nr_ice_media_stream *stream;
+    nr_ice_component *comp;
+
+    pctx->trickle_grace_period_timer=0;
+
+    r_log(LOG_ICE,LOG_INFO,"ICE(%s): peer (%s) Trickle grace period is over; marking every component with only failed pairs as failed.",pctx->ctx->label,pctx->label);
+
+    stream=STAILQ_FIRST(&pctx->peer_streams);
+    while(stream){
+      comp=STAILQ_FIRST(&stream->components);
+      while(comp){
+        nr_ice_component_check_if_failed(comp);
+        comp=STAILQ_NEXT(comp,entry);
+      }
+      stream=STAILQ_NEXT(stream,entry);
+    }
+  }
+
+static void nr_ice_peer_ctx_start_trickle_timer(nr_ice_peer_ctx *pctx)
+  {
+    UINT4 grace_period_timeout=0;
+
+    NR_reg_get_uint4(NR_ICE_REG_TRICKLE_GRACE_PERIOD,&grace_period_timeout);
+
+    if (grace_period_timeout) {
+      /* If we're doing trickle, we need to allow a grace period for new
+       * trickle candidates to arrive in case the pairs we have fail quickly. */
+       NR_ASYNC_TIMER_SET(grace_period_timeout,nr_ice_peer_ctx_trickle_wait_cb,pctx,&pctx->trickle_grace_period_timer);
+    }
+  }
+
 int nr_ice_peer_ctx_pair_candidates(nr_ice_peer_ctx *pctx)
   {
     nr_ice_media_stream *stream;
     int r,_status;
 
+    if(pctx->peer_lite && !pctx->controlling) {
+      if(pctx->ctx->flags & NR_ICE_CTX_FLAGS_LITE){
+        r_log(LOG_ICE,LOG_ERR,"Both sides are ICE-Lite");
+        ABORT(R_BAD_DATA);
+      }
+      nr_ice_peer_ctx_switch_controlling_role(pctx);
+    }
 
     r_log(LOG_ICE,LOG_DEBUG,"ICE(%s): peer (%s) pairing candidates",pctx->ctx->label,pctx->label);
 
@@ -339,6 +377,9 @@ int nr_ice_peer_ctx_pair_candidates(nr_ice_peer_ctx *pctx)
     /* Set this first; if we fail partway through, we do not want to end
      * up in UNPAIRED after creating some pairs. */
     pctx->state = NR_ICE_PEER_STATE_PAIRED;
+
+    /* Start grace period timer for incoming trickle candidates */
+    nr_ice_peer_ctx_start_trickle_timer(pctx);
 
     stream=STAILQ_FIRST(&pctx->peer_streams);
     while(stream){
@@ -414,6 +455,11 @@ static void nr_ice_peer_ctx_destroy_cb(NR_SOCKET s, int how, void *cb_arg)
     assert(pctx->ctx);
     if (pctx->ctx)
       STAILQ_REMOVE(&pctx->ctx->peers, pctx, nr_ice_peer_ctx_, entry);
+
+    if(pctx->trickle_grace_period_timer) {
+      NR_async_timer_cancel(pctx->trickle_grace_period_timer);
+      pctx->trickle_grace_period_timer=0;
+    }
 
     RFREE(pctx);
   }
@@ -523,6 +569,17 @@ int nr_ice_peer_ctx_start_checks2(nr_ice_peer_ctx *pctx, int allow_non_first)
     _status=0;
   abort:
     return(_status);
+  }
+
+void nr_ice_peer_ctx_stream_started_checks(nr_ice_peer_ctx *pctx, nr_ice_media_stream *stream)
+  {
+    if (!pctx->checks_started) {
+      r_log(LOG_ICE,LOG_NOTICE,"ICE(%s): peer (%s) is now checking",pctx->ctx->label,pctx->label);
+      pctx->checks_started = 1;
+      if (pctx->handler && pctx->handler->vtbl->ice_checking) {
+        pctx->handler->vtbl->ice_checking(pctx->handler->obj, pctx);
+      }
+    }
   }
 
 #ifndef NDEBUG
@@ -679,4 +736,31 @@ int nr_ice_peer_ctx_deliver_packet_maybe(nr_ice_peer_ctx *pctx, nr_ice_component
     return(_status);
   }
 
+void nr_ice_peer_ctx_switch_controlling_role(nr_ice_peer_ctx *pctx)
+  {
+    int controlling = !(pctx->controlling);
+    if(pctx->controlling_conflict_resolved) {
+      r_log(LOG_ICE,LOG_WARNING,"ICE(%s): peer (%s) %s called more than once; "
+            "this probably means the peer is confused. Not switching roles.",
+            pctx->ctx->label,pctx->label,__FUNCTION__);
+      return;
+    }
+
+    r_log(LOG_ICE,LOG_INFO,"ICE-PEER(%s): detected "
+          "role conflict. Switching to %s",
+          pctx->label,
+          controlling ? "controlling" : "controlled");
+
+    pctx->controlling = controlling;
+    pctx->controlling_conflict_resolved = 1;
+
+    if(pctx->state == NR_ICE_PEER_STATE_PAIRED) {
+      /*  We have formed candidate pairs. We need to inform them. */
+      nr_ice_media_stream *pstream=STAILQ_FIRST(&pctx->peer_streams);
+      while(pstream) {
+        nr_ice_media_stream_role_change(pstream);
+        pstream = STAILQ_NEXT(pstream, entry);
+      }
+    }
+  }
 

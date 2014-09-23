@@ -65,13 +65,12 @@ public:
   NS_DECL_NSIOBSERVER
 
   nsExternalHelperAppService();
-  virtual ~nsExternalHelperAppService();
 
   /**
    * Initializes internal state. Will be called automatically when
    * this service is first instantiated.
    */
-  NS_HIDDEN_(nsresult) Init();
+  nsresult Init();
  
   /**
    * Given a mimetype and an extension, looks up a mime info from the OS.
@@ -109,10 +108,12 @@ public:
   virtual nsresult GetFileTokenForPath(const char16_t * platformAppPath,
                                        nsIFile ** aFile);
 
-  virtual NS_HIDDEN_(nsresult) OSProtocolHandlerExists(const char *aScheme,
+  virtual nsresult OSProtocolHandlerExists(const char *aScheme,
                                                        bool *aExists) = 0;
 
 protected:
+  virtual ~nsExternalHelperAppService();
+
   /**
    * Searches the "extra" array of MIMEInfo objects for an object
    * with a specific type. If found, it will modify the passed-in
@@ -121,7 +122,7 @@ protected:
    * @param aContentType The type to search for.
    * @param aMIMEInfo    [inout] The mime info, if found
    */
-  NS_HIDDEN_(nsresult) FillMIMEInfoForMimeTypeFromExtras(
+  nsresult FillMIMEInfoForMimeTypeFromExtras(
     const nsACString& aContentType, nsIMIMEInfo * aMIMEInfo);
   /**
    * Searches the "extra" array of MIMEInfo objects for an object
@@ -131,7 +132,7 @@ protected:
    *
    * @see FillMIMEInfoForMimeTypeFromExtras
    */
-  NS_HIDDEN_(nsresult) FillMIMEInfoForExtensionFromExtras(
+  nsresult FillMIMEInfoForExtensionFromExtras(
     const nsACString& aExtension, nsIMIMEInfo * aMIMEInfo);
 
   /**
@@ -140,7 +141,7 @@ protected:
    * @param aMIMEType [out] The found MIME type.
    * @return true if the extension was found, false otherwise.
    */
-  NS_HIDDEN_(bool) GetTypeFromExtras(const nsACString& aExtension,
+  bool GetTypeFromExtras(const nsACString& aExtension,
                                        nsACString& aMIMEType);
 
 #ifdef PR_LOGGING
@@ -185,6 +186,14 @@ protected:
    * added during the private browsing mode)
    */
   nsCOMArray<nsIFile> mTemporaryPrivateFilesList;
+
+private:
+  nsresult DoContentContentProcessHelper(const nsACString& aMimeContentType,
+                                         nsIRequest *aRequest,
+                                         nsIInterfaceRequestor *aContentContext,
+                                         bool aForceSave,
+                                         nsIInterfaceRequestor *aWindowContext,
+                                         nsIStreamListener ** aStreamListener);
 };
 
 /**
@@ -210,23 +219,26 @@ public:
   NS_DECL_NSIBACKGROUNDFILESAVEROBSERVER
 
   /**
-   * @param aMIMEInfo      MIMEInfo object, representing the type of the
-   *                       content that should be handled
-   * @param aFileExtension The extension we need to append to our temp file,
-   *                       INCLUDING the ".". e.g. .mp3
-   * @param aWindowContext Window context, as passed to DoContent
-   * @param mExtProtSvc    nsExternalHelperAppService on creation
-   * @param aFileName      The filename to use
-   * @param aReason        A constant from nsIHelperAppLauncherDialog indicating
-   *                       why the request is handled by a helper app.
+   * @param aMIMEInfo       MIMEInfo object, representing the type of the
+   *                        content that should be handled
+   * @param aFileExtension  The extension we need to append to our temp file,
+   *                        INCLUDING the ".". e.g. .mp3
+   * @param aContentContext dom Window context, as passed to DoContent.
+   * @param aWindowContext  Top level window context used in dialog parenting,
+   *                        as passed to DoContent. This parameter may be null,
+   *                        in which case dialogs will be parented to
+   *                        aContentContext.
+   * @param mExtProtSvc     nsExternalHelperAppService on creation
+   * @param aFileName       The filename to use
+   * @param aReason         A constant from nsIHelperAppLauncherDialog indicating
+   *                        why the request is handled by a helper app.
    */
   nsExternalAppHandler(nsIMIMEInfo * aMIMEInfo, const nsCSubstring& aFileExtension,
+                       nsIInterfaceRequestor * aContentContext,
                        nsIInterfaceRequestor * aWindowContext,
                        nsExternalHelperAppService * aExtProtSvc,
                        const nsAString& aFilename,
                        uint32_t aReason, bool aForceSave);
-
-  ~nsExternalAppHandler();
 
   /**
    * Clean up after the request was diverted to the parent process.
@@ -234,6 +246,12 @@ public:
   void DidDivertRequest(nsIRequest *request);
 
 protected:
+  ~nsExternalAppHandler();
+
+  nsIInterfaceRequestor* GetDialogParent() {
+    return mWindowContext ? mWindowContext : mContentContext;
+  }
+
   nsCOMPtr<nsIFile> mTempFile;
   nsCOMPtr<nsIURI> mSourceUrl;
   nsString mTempFileExtension;
@@ -243,6 +261,16 @@ protected:
    * The MIME Info for this load. Will never be null.
    */
   nsCOMPtr<nsIMIMEInfo> mMimeInfo;
+
+  /**
+   * The dom window associated with this request to handle content.
+   */
+  nsCOMPtr<nsIInterfaceRequestor> mContentContext;
+
+  /**
+   * If set, the parent window helper app dialogs and file pickers
+   * should use in parenting. If null, we use mContentContext.
+   */
   nsCOMPtr<nsIInterfaceRequestor> mWindowContext;
 
   /**

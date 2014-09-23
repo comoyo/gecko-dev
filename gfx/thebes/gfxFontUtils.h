@@ -33,7 +33,7 @@ private:
 
     struct Block {
         Block(const Block& aBlock) { memcpy(mBits, aBlock.mBits, sizeof(mBits)); }
-        Block(unsigned char memsetValue = 0) { memset(mBits, memsetValue, BLOCK_SIZE); }
+        explicit Block(unsigned char memsetValue = 0) { memset(mBits, memsetValue, BLOCK_SIZE); }
         uint8_t mBits[BLOCK_SIZE];
     };
 
@@ -336,7 +336,7 @@ struct AutoSwap_PRUint16 {
         return *this;
     }
 #else
-    AutoSwap_PRUint16(uint16_t aValue)
+    MOZ_IMPLICIT AutoSwap_PRUint16(uint16_t aValue)
     {
         value = mozilla::NativeEndian::swapToBigEndian(aValue);
     }
@@ -368,7 +368,7 @@ struct AutoSwap_PRInt16 {
         return *this;
     }
 #else
-    AutoSwap_PRInt16(int16_t aValue)
+    MOZ_IMPLICIT AutoSwap_PRInt16(int16_t aValue)
     {
         value = mozilla::NativeEndian::swapToBigEndian(aValue);
     }
@@ -395,7 +395,7 @@ struct AutoSwap_PRUint32 {
         return *this;
     }
 #else
-    AutoSwap_PRUint32(uint32_t aValue)
+    MOZ_IMPLICIT AutoSwap_PRUint32(uint32_t aValue)
     {
         value = mozilla::NativeEndian::swapToBigEndian(aValue);
     }
@@ -417,7 +417,7 @@ struct AutoSwap_PRInt32 {
         return *this;
     }
 #else
-    AutoSwap_PRInt32(int32_t aValue)
+    MOZ_IMPLICIT AutoSwap_PRInt32(int32_t aValue)
     {
         value = mozilla::NativeEndian::swapToBigEndian(aValue);
     }
@@ -439,7 +439,7 @@ struct AutoSwap_PRUint64 {
         return *this;
     }
 #else
-    AutoSwap_PRUint64(uint64_t aValue)
+    MOZ_IMPLICIT AutoSwap_PRUint64(uint64_t aValue)
     {
         value = mozilla::NativeEndian::swapToBigEndian(aValue);
     }
@@ -771,6 +771,10 @@ public:
     }
 
     static nsresult
+    ReadCMAPTableFormat10(const uint8_t *aBuf, uint32_t aLength,
+                          gfxSparseBitSet& aCharacterMap);
+
+    static nsresult
     ReadCMAPTableFormat12(const uint8_t *aBuf, uint32_t aLength, 
                           gfxSparseBitSet& aCharacterMap);
 
@@ -795,6 +799,9 @@ public:
 
     static uint32_t
     MapCharToGlyphFormat4(const uint8_t *aBuf, char16_t aCh);
+
+    static uint32_t
+    MapCharToGlyphFormat10(const uint8_t *aBuf, uint32_t aCh);
 
     static uint32_t
     MapCharToGlyphFormat12(const uint8_t *aBuf, uint32_t aCh);
@@ -934,8 +941,17 @@ public:
         // otherwise we know this char cannot trigger bidi reordering
         return false;
     }
-    
-    // for a given font list pref name, set up a list of font names
+
+    // parse a simple list of font family names into
+    // an array of strings
+    static void ParseFontList(const nsAString& aFamilyList,
+                              nsTArray<nsString>& aFontList);
+
+    // for a given font list pref name, append list of font names
+    static void AppendPrefsFontList(const char *aPrefName,
+                                    nsTArray<nsString>& aFontList);
+
+    // for a given font list pref name, initialize a list of font names
     static void GetPrefsFontList(const char *aPrefName, 
                                  nsTArray<nsString>& aFontList);
 

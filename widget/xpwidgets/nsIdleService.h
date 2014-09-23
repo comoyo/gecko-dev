@@ -46,7 +46,7 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
 
-  nsIdleServiceDaily(nsIIdleService* aIdleService);
+  explicit nsIdleServiceDaily(nsIIdleService* aIdleService);
 
   /**
    * Initializes the daily idle observer.
@@ -55,9 +55,9 @@ public:
    */
   void Init();
 
+private:
   virtual ~nsIdleServiceDaily();
 
-private:
   /**
    * StageIdleDaily is the interim call made when an idle-daily event is due.
    * However we don't want to fire idle-daily until the user is idle for this

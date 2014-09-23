@@ -27,31 +27,9 @@ members = [
     #
     # (And nsIDOMModalContentWindow.returnValue is an attribute of type
     # nsIVariant, which qsgen.py can't handle.)
-    #
-    # nsLocationSH has ~ALLOW_PROP_MODS_TO_PROTOTYPE, so don't try.
-    #'nsIDOMLocation.hostname',
-    #'nsIDOMLocation.href',
-
-    # dom/interfaces/storage
-    'nsIDOMStorage.setItem',
-    'nsIDOMStorage.length',
-    'nsIDOMStorage.getItem',
-    'nsIDOMStorage.key',
-    'nsIDOMStorage.removeItem',
-    'nsIDOMStorage.clear',
 
     # dom/interfaces/xpath
-    'nsIDOMXPathExpression.evaluate',
     'nsIDOMXPathNSResolver.lookupNamespaceURI',
-    'nsIDOMXPathResult.snapshotItem',
-    'nsIDOMXPathResult.iterateNext',
-    'nsIDOMXPathResult.snapshotLength',
-    'nsIDOMXPathResult.resultType',
-    'nsIDOMXPathResult.numberValue',
-    'nsIDOMXPathResult.stringValue',
-    'nsIDOMXPathResult.booleanValue',
-    'nsIDOMXPathResult.singleNodeValue',
-    'nsIDOMNSXPathExpression.evaluateWithContext',
 
     # layout/xul/base/public
     'nsIBoxObject.x',
@@ -61,13 +39,6 @@ members = [
     'nsIBoxObject.width',
     'nsIBoxObject.height',
 
-    # dom/indexedDB
-    'nsIIndexedDatabaseManager.*',
-
-    # dom/quota
-    'nsIQuotaManager.*',
-    'nsIQuotaRequest.*',
-    'nsIUsageCallback.*',
     ]
 
 # Most interfaces can be found by searching the includePath; to find
@@ -79,31 +50,15 @@ members = [
 irregularFilenames = {
     # stowaways
     'nsIDOMBlob': 'nsIDOMFile',
-    'nsIIndexedDatabaseUsageCallback': 'nsIIndexedDatabaseManager',
-    'nsITelephoneCallback': 'nsITelephone',
     }
 
 customIncludes = [
     'mozilla/dom/BindingUtils.h',
     'mozilla/dom/EventTargetBinding.h',
-    'mozilla/dom/WindowBinding.h',
     ]
-
-nsIDOMStorage_Clear_customMethodCallCode = """
-    rv = self->Clear();
-    if (NS_SUCCEEDED(rv))
-        JS_ClearNonGlobalObject(cx, obj);
-"""
-
-customMethodCalls = {
-    'nsIDOMStorage_Clear': {
-        'code': nsIDOMStorage_Clear_customMethodCallCode
-        },
-    }
 
 newBindingProperties = {
     # Once the last entry here goes away, we can make the sNativePropertyHooks
     # of bindings static.
     'nsIDOMEventTarget': '&mozilla::dom::EventTargetBinding::sNativePropertyHooks->mNativeProperties',
-    'nsIDOMWindow': '&mozilla::dom::WindowBinding::sNativePropertyHooks->mNativeProperties',
     }

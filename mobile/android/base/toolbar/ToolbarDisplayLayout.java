@@ -5,47 +5,42 @@
 
 package org.mozilla.gecko.toolbar;
 
+import java.util.Arrays;
+import java.util.EnumSet;
+import java.util.List;
+
 import org.mozilla.gecko.AboutPages;
-import org.mozilla.gecko.animation.PropertyAnimator;
-import org.mozilla.gecko.animation.ViewHelper;
+import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.BrowserApp;
+import org.mozilla.gecko.NewTabletUI;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.SiteIdentity;
 import org.mozilla.gecko.SiteIdentity.SecurityMode;
 import org.mozilla.gecko.Tab;
-import org.mozilla.gecko.Tabs;
-import org.mozilla.gecko.toolbar.BrowserToolbar.ForwardButtonAnimation;
+import org.mozilla.gecko.animation.PropertyAnimator;
+import org.mozilla.gecko.animation.ViewHelper;
+import org.mozilla.gecko.toolbar.BrowserToolbarTabletBase.ForwardButtonAnimation;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.widget.ThemedLinearLayout;
 import org.mozilla.gecko.widget.ThemedTextView;
 
-import org.json.JSONObject;
-
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
-import android.os.Build;
 import android.os.SystemClock;
-import android.text.style.ForegroundColorSpan;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
-import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.animation.Animation;
-import android.view.animation.AnimationUtils;
 import android.view.animation.AlphaAnimation;
+import android.view.animation.Animation;
 import android.view.animation.TranslateAnimation;
 import android.widget.Button;
 import android.widget.ImageButton;
-import android.widget.LinearLayout.LayoutParams;
-
-import java.util.Arrays;
-import java.util.EnumSet;
-import java.util.List;
 
 /**
 * {@code ToolbarDisplayLayout} is the UI for when the toolbar is in
@@ -99,9 +94,11 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
 
     private UIMode mUiMode;
 
+    private boolean mIsAttached;
+
     private ThemedTextView mTitle;
     private int mTitlePadding;
-    private ToolbarTitlePrefs mTitlePrefs;
+    private ToolbarPrefs mPrefs;
     private OnTitleChangeListener mTitleChangeListener;
 
     private ImageButton mSiteSecurity;
@@ -150,10 +147,16 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
         mPrivateDomainColor = new ForegroundColorSpan(res.getColor(R.color.url_bar_domaintext_private));
 
         mFavicon = (ImageButton) findViewById(R.id.favicon);
-        if (Build.VERSION.SDK_INT >= 16) {
-            mFavicon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        if (NewTabletUI.isEnabled(context)) {
+            // We don't show favicons in the toolbar on new tablet.
+            // TODO: removeView(mFavicon);
+            mFavicon.setVisibility(View.GONE);
+        } else {
+            if (Versions.feature16Plus) {
+                mFavicon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            }
+            mFaviconSize = Math.round(res.getDimension(R.dimen.browser_toolbar_favicon_size));
         }
-        mFaviconSize = Math.round(res.getDimension(R.dimen.browser_toolbar_favicon_size));
 
         mSiteSecurity = (ImageButton) findViewById(R.id.site_security);
         mSiteSecurityVisible = (mSiteSecurity.getVisibility() == View.VISIBLE);
@@ -167,7 +170,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
 
     @Override
     public void onAttachedToWindow() {
-        mTitlePrefs = new ToolbarTitlePrefs();
+        mIsAttached = true;
 
         Button.OnClickListener faviconListener = new Button.OnClickListener() {
             @Override
@@ -220,7 +223,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
 
     @Override
     public void onDetachedFromWindow() {
-        mTitlePrefs.close();
+        mIsAttached = false;
     }
 
     @Override
@@ -259,7 +262,17 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
         mPageActionLayout.setNextFocusDownId(nextId);
     }
 
+    void setToolbarPrefs(final ToolbarPrefs prefs) {
+        mPrefs = prefs;
+    }
+
     void updateFromTab(Tab tab, EnumSet<UpdateFlags> flags) {
+        // Several parts of ToolbarDisplayLayout's state depends
+        // on the views being attached to the view tree.
+        if (!mIsAttached) {
+            return;
+        }
+
         if (flags.contains(UpdateFlags.TITLE)) {
             updateTitle(tab);
         }
@@ -317,13 +330,13 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
         }
 
         // If the pref to show the URL isn't set, just use the tab's display title.
-        if (!mTitlePrefs.shouldShowUrl() || url == null) {
+        if (!mPrefs.shouldShowUrl(mActivity) || url == null) {
             setTitle(tab.getDisplayTitle());
             return;
         }
 
         CharSequence title = url;
-        if (mTitlePrefs.shouldTrimUrls()) {
+        if (mPrefs.shouldTrimUrls()) {
             title = StringUtils.stripCommonSubdomains(StringUtils.stripScheme(url));
         }
 
@@ -345,6 +358,11 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
     }
 
     private void updateFavicon(Tab tab) {
+        if (NewTabletUI.isEnabled(getContext())) {
+            // We don't display favicons in the toolbar for the new Tablet UI.
+            return;
+        }
+
         if (tab == null) {
             mFavicon.setImageDrawable(null);
             return;
@@ -483,7 +501,11 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
     }
 
     View getDoorHangerAnchor() {
-        return mFavicon;
+        if (!NewTabletUI.isEnabled(getContext())) {
+            return mFavicon;
+        } else {
+            return mSiteSecurity;
+        }
     }
 
     void prepareForwardAnimation(PropertyAnimator anim, ForwardButtonAnimation animation, int width) {

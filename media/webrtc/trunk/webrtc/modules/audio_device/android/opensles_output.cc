@@ -8,20 +8,21 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#ifdef WEBRTC_ANDROID_OPENSLES_OUTPUT
+
 #include "webrtc/modules/audio_device/android/opensles_output.h"
 
 #include <assert.h>
 #include <dlfcn.h>
 
+#include "OpenSLESProvider.h"
+#include "webrtc/modules/audio_device/android/opensles_common.h"
 #include "webrtc/modules/audio_device/android/fine_audio_buffer.h"
 #include "webrtc/modules/audio_device/android/single_rw_fifo.h"
 #include "webrtc/modules/audio_device/audio_device_buffer.h"
 #include "webrtc/system_wrappers/interface/critical_section_wrapper.h"
 #include "webrtc/system_wrappers/interface/thread_wrapper.h"
 #include "webrtc/system_wrappers/interface/trace.h"
-
-using webrtc_opensl::kDefaultSampleRate;
-using webrtc_opensl::kNumChannels;
 
 #define VOID_RETURN
 #define OPENSL_RETURN_ON_FAILURE(op, ret_val)                    \
@@ -73,6 +74,17 @@ OpenSlesOutput::OpenSlesOutput(const int32_t id)
 OpenSlesOutput::~OpenSlesOutput() {
 }
 
+int32_t OpenSlesOutput::SetAndroidAudioDeviceObjects(void* javaVM,
+                                                     void* env,
+                                                     void* context) {
+  AudioManagerJni::SetAndroidAudioDeviceObjects(javaVM, env, context);
+  return 0;
+}
+
+void OpenSlesOutput::ClearAndroidAudioDeviceObjects() {
+  AudioManagerJni::ClearAndroidAudioDeviceObjects();
+}
+
 int32_t OpenSlesOutput::Init() {
   assert(!initialized_);
 
@@ -105,12 +117,20 @@ int32_t OpenSlesOutput::Init() {
   }
 
   // Set up OpenSl engine.
+#ifndef MOZILLA_INTERNAL_API
   OPENSL_RETURN_ON_FAILURE(f_slCreateEngine(&sles_engine_, 1, kOption, 0,
-                                          NULL, NULL),
+                                            NULL, NULL),
                            -1);
+#else
+  OPENSL_RETURN_ON_FAILURE(mozilla_get_sles_engine(&sles_engine_, 1, kOption), -1);
+#endif
+#ifndef MOZILLA_INTERNAL_API
   OPENSL_RETURN_ON_FAILURE((*sles_engine_)->Realize(sles_engine_,
                                                     SL_BOOLEAN_FALSE),
                            -1);
+#else
+  OPENSL_RETURN_ON_FAILURE(mozilla_realize_sles_engine(sles_engine_), -1);
+#endif
   OPENSL_RETURN_ON_FAILURE((*sles_engine_)->GetInterface(sles_engine_,
                                                          SL_IID_ENGINE_,
                                                          &sles_engine_itf_),
@@ -140,7 +160,11 @@ int32_t OpenSlesOutput::Terminate() {
   // It is assumed that the caller has stopped recording before terminating.
   assert(!playing_);
   (*sles_output_mixer_)->Destroy(sles_output_mixer_);
+#ifndef MOZILLA_INTERNAL_API
   (*sles_engine_)->Destroy(sles_engine_);
+#else
+  mozilla_destroy_sles_engine(&sles_engine_);
+#endif
   initialized_ = false;
   speaker_initialized_ = false;
   play_initialized_ = false;
@@ -170,7 +194,6 @@ int32_t OpenSlesOutput::PlayoutIsAvailable(bool& available) {  // NOLINT
 
 int32_t OpenSlesOutput::InitPlayout() {
   assert(initialized_);
-  assert(!play_initialized_);
   play_initialized_ = true;
   return 0;
 }
@@ -207,6 +230,7 @@ int32_t OpenSlesOutput::StartPlayout() {
 int32_t OpenSlesOutput::StopPlayout() {
   StopCbThreads();
   DestroyAudioPlayer();
+  playing_ = false;
   return 0;
 }
 
@@ -594,3 +618,5 @@ bool OpenSlesOutput::CbThreadImpl() {
 }
 
 }  // namespace webrtc
+
+#endif

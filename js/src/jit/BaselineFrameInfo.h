@@ -7,8 +7,6 @@
 #ifndef jit_BaselineFrameInfo_h
 #define jit_BaselineFrameInfo_h
 
-#ifdef JS_ION
-
 #include "mozilla/Alignment.h"
 
 #include "jit/BaselineFrame.h"
@@ -178,11 +176,17 @@ class FrameInfo
 
     bool init(TempAllocator &alloc);
 
-    uint32_t nlocals() const {
+    size_t nlocals() const {
         return script->nfixed();
     }
-    uint32_t nargs() const {
+    size_t nargs() const {
         return script->functionNonDelazifying()->nargs();
+    }
+    size_t nvars() const {
+        return script->nfixedvars();
+    }
+    size_t nlexicals() const {
+        return script->fixedLexicalEnd() - script->fixedLexicalBegin();
     }
 
   private:
@@ -271,7 +275,7 @@ class FrameInfo
     Address addressOfThis() const {
         return Address(BaselineFrameReg, BaselineFrame::offsetOfThis());
     }
-    Address addressOfCallee() const {
+    Address addressOfCalleeToken() const {
         return Address(BaselineFrameReg, BaselineFrame::offsetOfCalleeToken());
     }
     Address addressOfScopeChain() const {
@@ -317,7 +321,5 @@ class FrameInfo
 
 } // namespace jit
 } // namespace js
-
-#endif // JS_ION
 
 #endif /* jit_BaselineFrameInfo_h */

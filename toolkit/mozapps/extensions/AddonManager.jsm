@@ -463,6 +463,7 @@ var gCheckUpdateSecurity = gCheckUpdateSecurityDefault;
 var gUpdateEnabled = true;
 var gAutoUpdateDefault = true;
 var gHotfixID = null;
+var gShutdownBarrier = null;
 
 /**
  * This is the real manager, kept here rather than in AddonManager to keep its
@@ -741,8 +742,9 @@ var AddonManagerInternal = {
       }
 
       // Register our shutdown handler with the AsyncShutdown manager
+      gShutdownBarrier = new AsyncShutdown.Barrier("AddonManager: Waiting for clients to shut down.");
       AsyncShutdown.profileBeforeChange.addBlocker("AddonManager: shutting down providers",
-                                                   this.shutdown.bind(this));
+                                                   this.shutdownManager.bind(this));
 
       // Once we start calling providers we must allow all normal methods to work.
       gStarted = true;
@@ -930,7 +932,7 @@ var AddonManagerInternal = {
    * @return Promise{null} that resolves when all providers and dependent modules
    *                       have finished shutting down
    */
-  shutdown: function AMI_shutdown() {
+  shutdownManager: function() {
     logger.debug("shutdown");
     // Clean up listeners
     Services.prefs.removeObserver(PREF_EM_CHECK_COMPATIBILITY, this);
@@ -944,7 +946,9 @@ var AddonManagerInternal = {
     // AddonRepository after providers (if any).
     let shuttingDown = null;
     if (gStarted) {
-      shuttingDown = this.callProvidersAsync("shutdown")
+      shuttingDown = gShutdownBarrier.wait()
+        .then(null, err => logger.error("Failure during wait for shutdown barrier", err))
+        .then(() => this.callProvidersAsync("shutdown"))
         .then(null,
               err => logger.error("Failure during async provider shutdown", err))
         .then(() => AddonRepository.shutdown());
@@ -953,8 +957,8 @@ var AddonManagerInternal = {
       shuttingDown = AddonRepository.shutdown();
     }
 
-      shuttingDown.then(val => logger.debug("Async provider shutdown done"),
-                        err => logger.error("Failure during AddonRepository shutdown", err))
+    shuttingDown.then(val => logger.debug("Async provider shutdown done"),
+                      err => logger.error("Failure during AddonRepository shutdown", err))
       .then(() => {
         this.managerListeners.splice(0, this.managerListeners.length);
         this.installListeners.splice(0, this.installListeners.length);
@@ -964,7 +968,9 @@ var AddonManagerInternal = {
           delete this.startupChanges[type];
         gStarted = false;
         gStartupComplete = false;
+        gShutdownBarrier = null;
       });
+
     return shuttingDown;
   },
 
@@ -1141,17 +1147,14 @@ var AddonManagerInternal = {
       throw Components.Exception("AddonManager is not initialized",
                                  Cr.NS_ERROR_NOT_INITIALIZED);
 
-    logger.debug("Background update check beginning");
-
-    return Task.spawn(function* backgroundUpdateTask() {
+    let buPromise = Task.spawn(function* backgroundUpdateTask() {
       let hotfixID = this.hotfixID;
 
       let checkHotfix = hotfixID &&
                         Services.prefs.getBoolPref(PREF_APP_UPDATE_ENABLED) &&
                         Services.prefs.getBoolPref(PREF_APP_UPDATE_AUTO);
 
-      if (!this.updateEnabled && !checkHotfix)
-        return;
+      logger.debug("Background update check beginning");
 
       Services.obs.notifyObservers(null, "addons-background-update-start", null);
 
@@ -1289,6 +1292,9 @@ var AddonManagerInternal = {
                                    "addons-background-update-complete",
                                    null);
     }.bind(this));
+    // Fork the promise chain so we can log the error and let our caller see it too.
+    buPromise.then(null, e => logger.warn("Error in background update", e));
+    return buPromise;
   },
 
   /**
@@ -1815,8 +1821,8 @@ var AddonManagerInternal = {
       throw Components.Exception("aMimetype must be a non-empty string",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    if (aSource && !(aSource instanceof Ci.nsIDOMWindow))
-      throw Components.Exception("aSource must be a nsIDOMWindow or null",
+    if (aSource && !(aSource instanceof Ci.nsIDOMWindow) && !(aSource instanceof Ci.nsIDOMNode))
+      throw Components.Exception("aSource must be a nsIDOMWindow, a XUL element, or null",
                                  Cr.NS_ERROR_INVALID_ARG);
 
     if (aURI && !(aURI instanceof Ci.nsIURI))
@@ -2330,6 +2336,20 @@ this.AddonManagerPrivate = {
     return AddonManagerInternal.backgroundUpdateCheck();
   },
 
+  backgroundUpdateTimerHandler() {
+    // Don't call through to the real update check if no checks are enabled.
+    let checkHotfix = this.hotfixID &&
+                      Services.prefs.getBoolPref(PREF_APP_UPDATE_ENABLED) &&
+                      Services.prefs.getBoolPref(PREF_APP_UPDATE_AUTO);
+
+    if (!this.updateEnabled && !checkHotfix) {
+      logger.info("Skipping background update check");
+      return;
+    }
+    // Don't return the promise here, since the caller doesn't care.
+    AddonManagerInternal.backgroundUpdateCheck();
+  },
+
   addStartupChange: function AMP_addStartupChange(aType, aID) {
     AddonManagerInternal.addStartupChange(aType, aID);
   },
@@ -2411,9 +2431,9 @@ this.AddonManagerPrivate = {
   // Start a timer, record a simple measure of the time interval when
   // timer.done() is called
   simpleTimer: function(aName) {
-    let startTime = Date.now();
+    let startTime = Cu.now();
     return {
-      done: () => this.recordSimpleMeasure(aName, Date.now() - startTime)
+      done: () => this.recordSimpleMeasure(aName, Math.round(Cu.now() - startTime))
     };
   },
 
@@ -2799,7 +2819,11 @@ this.AddonManager = {
 
   escapeAddonURI: function AM_escapeAddonURI(aAddon, aUri, aAppVersion) {
     return AddonManagerInternal.escapeAddonURI(aAddon, aUri, aAppVersion);
-  }
+  },
+
+  get shutdown() {
+    return gShutdownBarrier.client;
+  },
 };
 
 // load the timestamps module into AddonManagerInternal

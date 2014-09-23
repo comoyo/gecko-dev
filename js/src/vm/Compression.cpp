@@ -10,7 +10,6 @@
 
 using namespace js;
 
-#if USE_ZLIB
 static void *
 zlib_alloc(void *cx, uInt items, uInt size)
 {
@@ -107,6 +106,12 @@ bool
 js::DecompressString(const unsigned char *inp, size_t inplen, unsigned char *out, size_t outlen)
 {
     JS_ASSERT(inplen <= UINT32_MAX);
+
+    // Mark the memory we pass to zlib as initialized for MSan.
+#ifdef MOZ_MSAN
+    __msan_unpoison(out, outlen);
+#endif
+
     z_stream zs;
     zs.zalloc = zlib_alloc;
     zs.zfree = zlib_free;
@@ -127,5 +132,3 @@ js::DecompressString(const unsigned char *inp, size_t inplen, unsigned char *out
     JS_ASSERT(ret == Z_OK);
     return true;
 }
-#endif /* USE_ZLIB */
-

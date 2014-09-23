@@ -49,9 +49,13 @@ SimpleTextureClientPool::WaitForCompositorRecycleCallback(TextureClient* aClient
 }
 
 SimpleTextureClientPool::SimpleTextureClientPool(gfx::SurfaceFormat aFormat, gfx::IntSize aSize,
+                                                 uint32_t aMaxTextureClients,
+                                                 uint32_t aShrinkTimeoutMsec,
                                                  ISurfaceAllocator *aAllocator)
   : mFormat(aFormat)
   , mSize(aSize)
+  , mMaxTextureClients(aMaxTextureClients)
+  , mShrinkTimeoutMsec(aShrinkTimeoutMsec)
   , mSurfaceAllocator(aAllocator)
 {
   mTimer = do_CreateInstance("@mozilla.org/timer;1");
@@ -64,21 +68,22 @@ SimpleTextureClientPool::GetTextureClient(bool aAutoRecycle)
   RefPtr<TextureClient> textureClient;
   if (mAvailableTextureClients.size()) {
     textureClient = mAvailableTextureClients.top();
-    textureClient->WaitForBufferOwnership();
     mAvailableTextureClients.pop();
     RECYCLE_LOG("%s Skip allocate (%i left), returning %p\n", (mFormat == SurfaceFormat::B8G8R8A8?"poolA":"poolX"), mAvailableTextureClients.size(), textureClient.get());
 
   } else {
     // No unused clients in the pool, create one
     if (gfxPrefs::ForceShmemTiles()) {
-      textureClient = TextureClient::CreateBufferTextureClient(mSurfaceAllocator,
-        mFormat, TextureFlags::IMMEDIATE_UPLOAD | TextureFlags::RECYCLE, gfx::BackendType::NONE);
+      textureClient = TextureClient::CreateForRawBufferAccess(mSurfaceAllocator,
+        mFormat, mSize, gfx::BackendType::NONE,
+        TextureFlags::IMMEDIATE_UPLOAD | TextureFlags::RECYCLE, ALLOC_DEFAULT);
     } else {
-      textureClient = TextureClient::CreateTextureClientForDrawing(mSurfaceAllocator,
-        mFormat, TextureFlags::DEFAULT | TextureFlags::RECYCLE, gfx::BackendType::NONE, mSize);
+      textureClient = TextureClient::CreateForDrawing(mSurfaceAllocator,
+        mFormat, mSize, gfx::BackendType::NONE, TextureFlags::DEFAULT | TextureFlags::RECYCLE);
     }
-    if (!textureClient->AllocateForSurface(mSize, ALLOC_DEFAULT)) {
-      NS_WARNING("TextureClient::AllocateForSurface failed!");
+    if (!textureClient) {
+      NS_WARNING("Failed to allocate a TextureClient!");
+      return nullptr;
     }
     RECYCLE_LOG("%s Must allocate (0 left), returning %p\n", (mFormat == SurfaceFormat::B8G8R8A8?"poolA":"poolX"), textureClient.get());
   }
@@ -99,7 +104,7 @@ SimpleTextureClientPool::ReturnTextureClient(TextureClient *aClient)
   }
 
   // If we haven't hit our max cached client limit, add this one
-  if (mAvailableTextureClients.size() < sMaxTextureClients) {
+  if (mAvailableTextureClients.size() < mMaxTextureClients) {
     mAvailableTextureClients.push(aClient);
     RECYCLE_LOG("%s recycled %p (have %d)\n", (mFormat == SurfaceFormat::B8G8R8A8?"poolA":"poolX"), aClient, mAvailableTextureClients.size());
   } else {
@@ -109,7 +114,7 @@ SimpleTextureClientPool::ReturnTextureClient(TextureClient *aClient)
   // Kick off the pool shrinking timer if there are still more unused texture
   // clients than our desired minimum cache size.
   if (mAvailableTextureClients.size() > sMinCacheSize) {
-    mTimer->InitWithFuncCallback(SimpleTextureClientPool::ShrinkCallback, this, sShrinkTimeout,
+    mTimer->InitWithFuncCallback(SimpleTextureClientPool::ShrinkCallback, this, mShrinkTimeoutMsec,
                                  nsITimer::TYPE_ONE_SHOT);
   }
 

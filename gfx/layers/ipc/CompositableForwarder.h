@@ -24,7 +24,7 @@ namespace layers {
 
 class CompositableClient;
 class AsyncTransactionTracker;
-class TextureFactoryIdentifier;
+struct TextureFactoryIdentifier;
 class SurfaceDescriptor;
 class SurfaceDescriptorTiles;
 class ThebesBufferData;
@@ -106,6 +106,11 @@ public:
   virtual void UpdatePictureRect(CompositableClient* aCompositable,
                                  const nsIntRect& aRect) = 0;
 
+#ifdef MOZ_WIDGET_GONK
+  virtual void UseOverlaySource(CompositableClient* aCompositabl,
+                                const OverlaySource& aOverlay) = 0;
+#endif
+
   /**
    * Tell the CompositableHost on the compositor side to remove the texture
    * from the CompositableHost.
@@ -184,6 +189,11 @@ public:
                               TextureClient* aTexture,
                               nsIntRegion* aRegion) = 0;
 
+
+  virtual void SendFenceHandle(AsyncTransactionTracker* aTracker,
+                               PTextureChild* aTexture,
+                               const FenceHandle& aFence) = 0;
+
   void IdentifyTextureHost(const TextureFactoryIdentifier& aIdentifier);
 
   virtual int32_t GetMaxTextureSize() const MOZ_OVERRIDE
@@ -192,8 +202,6 @@ public:
   }
 
   bool IsOnCompositorSide() const MOZ_OVERRIDE { return false; }
-
-  virtual bool IsImageBridgeChild() const { return false; }
 
   /**
    * Returns the type of backend that is used off the main thread.

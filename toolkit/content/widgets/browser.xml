@@ -297,8 +297,18 @@
                 readonly="true"/>
 
       <property name="messageManager"
-                onget="return this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner).frameLoader.messageManager;"
-                readonly="true"/>
+                readonly="true">
+        <getter>
+          <![CDATA[
+            var owner = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
+            if (!owner.frameLoader) {
+              return null;
+            }
+            return owner.frameLoader.messageManager;
+          ]]>
+        </getter>
+
+      </property>
 
       <field name="_webNavigation">null</field>
 
@@ -392,12 +402,16 @@
                 readonly="true"
                 onget="return this._contentWindow || (this._contentWindow = this.docShell.QueryInterface(Components.interfaces.nsIInterfaceRequestor).getInterface(Components.interfaces.nsIDOMWindow));"/>
 
+      <property name="contentWindowAsCPOW"
+                readonly="true"
+                onget="return this.contentWindow;"/>
+
       <property name="sessionHistory"
                 onget="return this.webNavigation.sessionHistory;"
                 readonly="true"/>
 
       <property name="markupDocumentViewer"
-                onget="return this.docShell.contentViewer.QueryInterface(Components.interfaces.nsIMarkupDocumentViewer);"
+                onget="return this.docShell.contentViewer;"
                 readonly="true"/>
 
       <property name="contentViewerEdit"
@@ -412,12 +426,24 @@
                 onget="return this.webNavigation.document;"
                 readonly="true"/>
 
+      <property name="contentDocumentAsCPOW"
+                onget="return this.contentDocument;"
+                readonly="true"/>
+
       <property name="contentTitle"
                 onget="return this.contentDocument.title;"
                 readonly="true"/>
 
       <property name="characterSet"
-                onget="return this.contentDocument.characterSet;"
+                onget="return this.docShell.charset;">
+        <setter><![CDATA[
+          this.docShell.charset = val;
+          this.docShell.gatherCharsetMenuTelemetry();
+        ]]></setter>
+      </property>
+
+      <property name="mayEnableCharacterEncodingMenu"
+                onget="return this.docShell.mayEnableCharacterEncodingMenu;"
                 readonly="true"/>
 
       <property name="contentPrincipal"
@@ -585,15 +611,8 @@
       </method>
 
       <method name="updateBlockedPopups">
-        <parameter name="aBlockedPopups"/>
-        <parameter name="aFreshPopup"/>
         <body>
           <![CDATA[
-            this.blockedPopups = aBlockedPopups;
-            if (aFreshPopup) {
-              this.blockedPopups.reported = false;
-            }
-
             var event = document.createEvent("Events");
             event.initEvent("DOMUpdatePageReport", true, true);
             this.dispatchEvent(event);
@@ -832,9 +851,21 @@
         <body><![CDATA[
           let data = aMessage.data;
           switch (aMessage.name) {
-	    case "PopupBlocking:UpdateBlockedPopups":
-              this.updateBlockedPopups(data.blockedPopups, data.freshPopup);
+            case "PopupBlocking:UpdateBlockedPopups": {
+              this.blockedPopups = data.blockedPopups;
+              if (this.blockedPopups) {
+                for (let i = 0; i < this.blockedPopups.length; i++) {
+                  let scope = Components.utils.import("resource://gre/modules/BrowserUtils.jsm", {});
+                  let uri = scope.BrowserUtils.makeURI(this.blockedPopups[i].popupWindowURI);
+                  this.blockedPopups[i].popupWindowURI = uri;
+                }
+                if (data.freshPopup) {
+                  this.blockedPopups.reported = false;
+                }
+              }
+              this.updateBlockedPopups();
               break;
+            }
             case "Autoscroll:Start": {
               if (!this.autoscrollEnabled) {
                 return false;
@@ -1100,7 +1131,11 @@
           if (event.defaultPrevented || !event.isTrusted)
             return;
 
-          var isEnabled = this.mPrefs.getBoolPref("accessibility.browsewithcaret_shortcut.enabled");
+          const kPrefShortcutEnabled = "accessibility.browsewithcaret_shortcut.enabled";
+          const kPrefWarnOnEnable    = "accessibility.warn_on_browsewithcaret";
+          const kPrefCaretBrowsingOn = "accessibility.browsewithcaret";
+
+          var isEnabled = this.mPrefs.getBoolPref(kPrefShortcutEnabled);
           if (!isEnabled)
             return;
 
@@ -1109,12 +1144,12 @@
           var warn = true;
 
           try {
-            warn = this.mPrefs.getBoolPref("accessibility.warn_on_browsewithcaret");
+            warn = this.mPrefs.getBoolPref(kPrefWarnOnEnable);
           } catch (ex) {
           }
 
           try {
-            browseWithCaretOn = this.mPrefs.getBoolPref("accessibility.browsewithcaret");
+            browseWithCaretOn = this.mPrefs.getBoolPref(kPrefCaretBrowsingOn);
           } catch (ex) {
           }
           if (warn && !browseWithCaretOn) {
@@ -1125,14 +1160,22 @@
             var buttonPressed = promptService.confirmEx(window,
               this.mStrBundle.GetStringFromName('browsewithcaret.checkWindowTitle'),
               this.mStrBundle.GetStringFromName('browsewithcaret.checkLabel'),
-              promptService.STD_YES_NO_BUTTONS,
+              // Make "No" the default:
+              promptService.STD_YES_NO_BUTTONS | promptService.BUTTON_POS_1_DEFAULT,
               null, null, null, this.mStrBundle.GetStringFromName('browsewithcaret.checkMsg'),
               checkValue);
-            if (buttonPressed != 0)
+            if (buttonPressed != 0) {
+              if (checkValue.value) {
+                try {
+                  this.mPrefs.setBoolPref(kPrefShortcutEnabled, false);
+                } catch (ex) {
+                }
+              }
               return;
+            }
             if (checkValue.value) {
               try {
-                this.mPrefs.setBoolPref("accessibility.warn_on_browsewithcaret", false);
+                this.mPrefs.setBoolPref(kPrefWarnOnEnable, false);
               }
               catch (ex) {
               }
@@ -1141,7 +1184,7 @@
 
           // Toggle the pref
           try {
-            this.mPrefs.setBoolPref("accessibility.browsewithcaret",!browseWithCaretOn);
+            this.mPrefs.setBoolPref(kPrefCaretBrowsingOn, !browseWithCaretOn);
           } catch (ex) {
           }
         ]]>

@@ -14,16 +14,23 @@ const XMLHttpRequest =
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
   "resource://gre/modules/NetUtil.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "NewTabUtils",
+  "resource://gre/modules/NewTabUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
   "resource://gre/modules/osfile.jsm")
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
   "resource://gre/modules/Promise.jsm");
+XPCOMUtils.defineLazyGetter(this, "gTextDecoder", () => {
+  return new TextDecoder();
+});
 
 // The filename where directory links are stored locally
 const DIRECTORY_LINKS_FILE = "directoryLinks.json";
+const DIRECTORY_LINKS_TYPE = "application/json";
 
 // The preference that tells whether to match the OS locale
 const PREF_MATCH_OS_LOCALE = "intl.locale.matchOS";
@@ -32,16 +39,22 @@ const PREF_MATCH_OS_LOCALE = "intl.locale.matchOS";
 const PREF_SELECTED_LOCALE = "general.useragent.locale";
 
 // The preference that tells where to obtain directory links
-const PREF_DIRECTORY_SOURCE = "browser.newtabpage.directorySource";
+const PREF_DIRECTORY_SOURCE = "browser.newtabpage.directory.source";
+
+// The preference that tells where to send click/view pings
+const PREF_DIRECTORY_PING = "browser.newtabpage.directory.ping";
+
+// The preference that tells if newtab is enhanced
+const PREF_NEWTAB_ENHANCED = "browser.newtabpage.enhanced";
 
 // The frecency of a directory link
 const DIRECTORY_FRECENCY = 1000;
 
-const LINK_TYPES = Object.freeze([
-  "sponsored",
-  "affiliate",
-  "organic",
-]);
+// Divide frecency by this amount for pings
+const PING_SCORE_DIVISOR = 10000;
+
+// Allowed ping actions remotely stored as columns: case-insensitive [a-z0-9_]
+const PING_ACTIONS = ["block", "click", "pin", "sponsored", "sponsored_link", "unpin", "view"];
 
 /**
  * Singleton that serves as the provider of directory links.
@@ -52,9 +65,21 @@ let DirectoryLinksProvider = {
 
   __linksURL: null,
 
-  _observers: [],
+  _observers: new Set(),
+
+  // links download deferred, resolved upon download completion
+  _downloadDeferred: null,
+
+  // download default interval is 24 hours in milliseconds
+  _downloadIntervalMS: 86400000,
+
+  /**
+   * A mapping from eTLD+1 to an enhanced link objects
+   */
+  _enhancedLinks: new Map(),
 
   get _observedPrefs() Object.freeze({
+    enhanced: PREF_NEWTAB_ENHANCED,
     linksURL: PREF_DIRECTORY_SOURCE,
     matchOSLocale: PREF_MATCH_OS_LOCALE,
     prefSelectedLocale: PREF_SELECTED_LOCALE,
@@ -104,14 +129,42 @@ let DirectoryLinksProvider = {
     return "en-US";
   },
 
-  get linkTypes() LINK_TYPES,
+  /**
+   * Set appropriate default ping behavior controlled by enhanced pref
+   */
+  _setDefaultEnhanced: function DirectoryLinksProvider_setDefaultEnhanced() {
+    if (!Services.prefs.prefHasUserValue(PREF_NEWTAB_ENHANCED)) {
+      let enhanced = true;
+      try {
+        // Default to not enhanced if DNT is set to tell websites to not track
+        if (Services.prefs.getBoolPref("privacy.donottrackheader.enabled") &&
+            Services.prefs.getIntPref("privacy.donottrackheader.value") == 1) {
+          enhanced = false;
+        }
+      }
+      catch(ex) {}
+      Services.prefs.setBoolPref(PREF_NEWTAB_ENHANCED, enhanced);
+    }
+  },
 
   observe: function DirectoryLinksProvider_observe(aSubject, aTopic, aData) {
     if (aTopic == "nsPref:changed") {
-      if (aData == this._observedPrefs["linksURL"]) {
-        delete this.__linksURL;
+      switch (aData) {
+        // Re-set the default in case the user clears the pref
+        case this._observedPrefs.enhanced:
+          this._setDefaultEnhanced();
+          break;
+
+        case this._observedPrefs.linksURL:
+          delete this.__linksURL;
+          // fallthrough
+
+        // Force directory download on changes to fetch related prefs
+        case this._observedPrefs.matchOSLocale:
+        case this._observedPrefs.prefSelectedLocale:
+          this._fetchAndCacheLinksIfNecessary(true);
+          break;
       }
-      this._callObservers("onManyLinksChanged");
     }
   },
 
@@ -129,42 +182,9 @@ let DirectoryLinksProvider = {
     }
   },
 
-  /**
-   * Fetches the current set of directory links.
-   * @param aCallback a callback that is provided a set of links.
-   */
-  _fetchLinks: function DirectoryLinksProvider_fetchLinks(aCallback) {
-    try {
-      NetUtil.asyncFetch(this._linksURL, (aInputStream, aResult, aRequest) => {
-        let output;
-        if (Components.isSuccessCode(aResult)) {
-          try {
-            let json = NetUtil.readInputStreamToString(aInputStream,
-                                                       aInputStream.available(),
-                                                       {charset: "UTF-8"});
-            let locale = this.locale;
-            output = JSON.parse(json)[locale];
-          }
-          catch (e) {
-            Cu.reportError(e);
-          }
-        }
-        else {
-          Cu.reportError(new Error("the fetch of " + this._linksURL + "was unsuccessful"));
-        }
-        aCallback(output || []);
-      });
-    }
-    catch (e) {
-      Cu.reportError(e);
-      aCallback([]);
-    }
-  },
-
   _fetchAndCacheLinks: function DirectoryLinksProvider_fetchAndCacheLinks(uri) {
     let deferred = Promise.defer();
     let xmlHttp = new XMLHttpRequest();
-    xmlHttp.overrideMimeType("application/json");
 
     let self = this;
     xmlHttp.onload = function(aResponse) {
@@ -172,11 +192,9 @@ let DirectoryLinksProvider = {
       if (this.status && this.status != 200) {
         json = "{}";
       }
-      let directoryLinksFilePath = OS.Path.join(OS.Constants.Path.localProfileDir, DIRECTORY_LINKS_FILE);
-      OS.File.writeAtomic(directoryLinksFilePath, json, {tmpPath: directoryLinksFilePath + ".tmp"})
+      OS.File.writeAtomic(self._directoryFilePath, json, {tmpPath: self._directoryFilePath + ".tmp"})
         .then(() => {
           deferred.resolve();
-          self._callObservers("onManyLinksChanged");
         },
         () => {
           deferred.reject("Error writing uri data in profD.");
@@ -189,7 +207,13 @@ let DirectoryLinksProvider = {
 
     try {
       xmlHttp.open('POST', uri);
-      xmlHttp.send(JSON.stringify({ locale: this.locale }));
+      // Override the type so XHR doesn't complain about not well-formed XML
+      xmlHttp.overrideMimeType(DIRECTORY_LINKS_TYPE);
+      // Set the appropriate request type for servers that require correct types
+      xmlHttp.setRequestHeader("Content-Type", DIRECTORY_LINKS_TYPE);
+      xmlHttp.send(JSON.stringify({
+        locale: this.locale,
+      }));
     } catch (e) {
       deferred.reject("Error fetching " + uri);
       Cu.reportError(e);
@@ -198,13 +222,159 @@ let DirectoryLinksProvider = {
   },
 
   /**
+   * Downloads directory links if needed
+   * @return promise resolved immediately if no download needed, or upon completion
+   */
+  _fetchAndCacheLinksIfNecessary: function DirectoryLinksProvider_fetchAndCacheLinksIfNecessary(forceDownload=false) {
+    if (this._downloadDeferred) {
+      // fetching links already - just return the promise
+      return this._downloadDeferred.promise;
+    }
+
+    if (forceDownload || this._needsDownload) {
+      this._downloadDeferred = Promise.defer();
+      this._fetchAndCacheLinks(this._linksURL).then(() => {
+        // the new file was successfully downloaded and cached, so update a timestamp
+        this._lastDownloadMS = Date.now();
+        this._downloadDeferred.resolve();
+        this._downloadDeferred = null;
+        this._callObservers("onManyLinksChanged")
+      },
+      error => {
+        this._downloadDeferred.resolve();
+        this._downloadDeferred = null;
+        this._callObservers("onDownloadFail");
+      });
+      return this._downloadDeferred.promise;
+    }
+
+    // download is not needed
+    return Promise.resolve();
+  },
+
+  /**
+   * @return true if download is needed, false otherwise
+   */
+  get _needsDownload () {
+    // fail if last download occured less then 24 hours ago
+    if ((Date.now() - this._lastDownloadMS) > this._downloadIntervalMS) {
+      return true;
+    }
+    return false;
+  },
+
+  /**
+   * Reads directory links file and parses its content
+   * @return a promise resolved to valid list of links or [] if read or parse fails
+   */
+  _readDirectoryLinksFile: function DirectoryLinksProvider_readDirectoryLinksFile() {
+    return OS.File.read(this._directoryFilePath).then(binaryData => {
+      let output;
+      try {
+        let locale = this.locale;
+        let json = gTextDecoder.decode(binaryData);
+        let list = JSON.parse(json);
+        output = list[locale];
+      }
+      catch (e) {
+        Cu.reportError(e);
+      }
+      return output || [];
+    },
+    error => {
+      Cu.reportError(error);
+      return [];
+    });
+  },
+
+  /**
+   * Report some action on a newtab page (view, click)
+   * @param sites Array of sites shown on newtab page
+   * @param action String of the behavior to report
+   * @param triggeringSiteIndex optional Int index of the site triggering action
+   * @return download promise
+   */
+  reportSitesAction: function DirectoryLinksProvider_reportSitesAction(sites, action, triggeringSiteIndex) {
+    let newtabEnhanced = false;
+    let pingEndPoint = "";
+    try {
+      newtabEnhanced = Services.prefs.getBoolPref(PREF_NEWTAB_ENHANCED);
+      pingEndPoint = Services.prefs.getCharPref(PREF_DIRECTORY_PING);
+    }
+    catch (ex) {}
+
+    // Only send pings when enhancing tiles with an endpoint and valid action
+    let invalidAction = PING_ACTIONS.indexOf(action) == -1;
+    if (!newtabEnhanced || pingEndPoint == "" || invalidAction) {
+      return Promise.resolve();
+    }
+
+    let actionIndex;
+    let data = {
+      locale: this.locale,
+      tiles: sites.reduce((tiles, site, pos) => {
+        // Only add data for non-empty tiles
+        if (site) {
+          // Remember which tiles data triggered the action
+          let {link} = site;
+          let tilesIndex = tiles.length;
+          if (triggeringSiteIndex == pos) {
+            actionIndex = tilesIndex;
+          }
+
+          // Make the payload in a way so keys can be excluded when stringified
+          let id = link.directoryId;
+          tiles.push({
+            id: id || site.enhancedId,
+            pin: site.isPinned() ? 1 : undefined,
+            pos: pos != tilesIndex ? pos : undefined,
+            score: Math.round(link.frecency / PING_SCORE_DIVISOR) || undefined,
+            url: site.enhancedId && "",
+          });
+        }
+        return tiles;
+      }, []),
+    };
+
+    // Provide a direct index to the tile triggering the action
+    if (actionIndex !== undefined) {
+      data[action] = actionIndex;
+    }
+
+    // Package the data to be sent with the ping
+    let ping = new XMLHttpRequest();
+    ping.open("POST", pingEndPoint + (action == "view" ? "view" : "click"));
+    ping.send(JSON.stringify(data));
+
+    // Use this as an opportunity to potentially fetch new links
+    return this._fetchAndCacheLinksIfNecessary();
+  },
+
+  /**
+   * Get the enhanced link object for a link (whether history or directory)
+   */
+  getEnhancedLink: function DirectoryLinksProvider_getEnhancedLink(link) {
+    // Use the provided link if it's already enhanced
+    return link.enhancedImageURI && link ||
+           this._enhancedLinks.get(NewTabUtils.extractSite(link.url));
+  },
+
+  /**
    * Gets the current set of directory links.
    * @param aCallback The function that the array of links is passed to.
    */
   getLinks: function DirectoryLinksProvider_getLinks(aCallback) {
-    this._fetchLinks(rawLinks => {
+    this._readDirectoryLinksFile().then(rawLinks => {
+      // Reset the cache of enhanced images for this new set of links
+      this._enhancedLinks.clear();
+
       // all directory links have a frecency of DIRECTORY_FRECENCY
       aCallback(rawLinks.map((link, position) => {
+        // Stash the enhanced image for the site
+        if (link.enhancedImageURI) {
+          this._enhancedLinks.set(NewTabUtils.extractSite(link.url), link);
+        }
+
         link.frecency = DIRECTORY_FRECENCY;
         link.lastVisitDate = rawLinks.length - position;
         return link;
@@ -213,7 +383,21 @@ let DirectoryLinksProvider = {
   },
 
   init: function DirectoryLinksProvider_init() {
+    this._setDefaultEnhanced();
     this._addPrefsObserver();
+    // setup directory file path and last download timestamp
+    this._directoryFilePath = OS.Path.join(OS.Constants.Path.localProfileDir, DIRECTORY_LINKS_FILE);
+    this._lastDownloadMS = 0;
+    return Task.spawn(function() {
+      // get the last modified time of the links file if it exists
+      let doesFileExists = yield OS.File.exists(this._directoryFilePath);
+      if (doesFileExists) {
+        let fileInfo = yield OS.File.stat(this._directoryFilePath);
+        this._lastDownloadMS = Date.parse(fileInfo.lastModificationDate);
+      }
+      // fetch directory on startup without force
+      yield this._fetchAndCacheLinksIfNecessary();
+    }.bind(this));
   },
 
   /**
@@ -226,7 +410,11 @@ let DirectoryLinksProvider = {
   },
 
   addObserver: function DirectoryLinksProvider_addObserver(aObserver) {
-    this._observers.push(aObserver);
+    this._observers.add(aObserver);
+  },
+
+  removeObserver: function DirectoryLinksProvider_removeObserver(aObserver) {
+    this._observers.delete(aObserver);
   },
 
   _callObservers: function DirectoryLinksProvider__callObservers(aMethodName, aArg) {
@@ -242,8 +430,6 @@ let DirectoryLinksProvider = {
   },
 
   _removeObservers: function() {
-    while (this._observers.length) {
-      this._observers.pop();
-    }
+    this._observers.clear();
   }
 };

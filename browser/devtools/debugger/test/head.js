@@ -13,7 +13,7 @@ let gEnableLogging = Services.prefs.getBoolPref("devtools.debugger.log");
 Services.prefs.setBoolPref("devtools.debugger.log", false);
 
 let { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
-let { Promise: promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
+let { Promise: promise } = Cu.import("resource://gre/modules/devtools/deprecated-sync-thenables.js", {});
 let { gDevTools } = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
 let { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 let { require } = devtools;
@@ -51,7 +51,10 @@ registerCleanupFunction(function() {
 
 // Import the GCLI test helper
 let testDir = gTestPath.substr(0, gTestPath.lastIndexOf("/"));
-Services.scriptloader.loadSubScript(testDir + "../../../commandline/test/helpers.js", this);
+testDir = testDir.replace(/\/\//g, '/');
+testDir = testDir.replace("chrome:/mochitest", "chrome://mochitest");
+let helpersjs = testDir + "/../../commandline/test/helpers.js";
+Services.scriptloader.loadSubScript(helpersjs, this);
 
 // Redeclare dbg_assert with a fatal behavior.
 function dbg_assert(cond, e) {
@@ -749,6 +752,13 @@ function getBlackBoxButton(aPanel) {
   return aPanel.panelWin.document.getElementById("black-box");
 }
 
+/**
+ * Returns the node that has the black-boxed class applied to it.
+ */
+function getSelectedSourceElement(aPanel) {
+    return aPanel.panelWin.DebuggerView.Sources.selectedItem.prebuiltNode;
+}
+
 function toggleBlackBoxing(aPanel, aSource = null) {
   function clickBlackBoxButton() {
     getBlackBoxButton(aPanel).click();
@@ -916,3 +926,14 @@ function doInterrupt(aPanel) {
   return rdpInvoke(threadClient, threadClient.interrupt);
 }
 
+function pushPrefs(...aPrefs) {
+  let deferred = promise.defer();
+  SpecialPowers.pushPrefEnv({"set": aPrefs}, deferred.resolve);
+  return deferred.promise;
+}
+
+function popPrefs() {
+  let deferred = promise.defer();
+  SpecialPowers.popPrefEnv(deferred.resolve);
+  return deferred.promise;
+}

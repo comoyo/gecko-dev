@@ -36,7 +36,7 @@ public final class ThreadUtils {
     // this out at compile time.
     public static Handler sGeckoHandler;
     public static MessageQueue sGeckoQueue;
-    public static Thread sGeckoThread;
+    public static volatile Thread sGeckoThread;
 
     // Delayed Runnable that resets the Gecko thread priority.
     private static final Runnable sPriorityResetRunnable = new Runnable() {
@@ -129,6 +129,14 @@ public final class ThreadUtils {
         assertOnThread(sGeckoThread, AssertBehavior.THROW);
     }
 
+    public static void assertNotOnGeckoThread() {
+        if (sGeckoThread == null) {
+            // Cannot be on Gecko thread if Gecko thread is not live yet.
+            return;
+        }
+        assertNotOnThread(sGeckoThread, AssertBehavior.THROW);
+    }
+
     public static void assertOnBackgroundThread() {
         assertOnThread(getBackgroundThread(), AssertBehavior.THROW);
     }
@@ -154,10 +162,16 @@ public final class ThreadUtils {
             return;
         }
 
-        final String message = "Expected thread " +
-                               expectedThreadId + " (\"" + expectedThread.getName() +
-                               "\"), but running on thread " +
-                               currentThreadId + " (\"" + currentThread.getName() + ")";
+        final String message;
+        if (expected) {
+            message = "Expected thread " + expectedThreadId +
+                      " (\"" + expectedThread.getName() + "\"), but running on thread " +
+                      currentThreadId + " (\"" + currentThread.getName() + "\")";
+        } else {
+            message = "Expected anything but " + expectedThreadId +
+                      " (\"" + expectedThread.getName() + "\"), but running there.";
+        }
+
         final IllegalThreadStateException e = new IllegalThreadStateException(message);
 
         switch (behavior) {
@@ -166,6 +180,13 @@ public final class ThreadUtils {
         default:
             Log.e(LOGTAG, "Method called on wrong thread!", e);
         }
+    }
+
+    public static boolean isOnGeckoThread() {
+        if (sGeckoThread != null) {
+            return isOnThread(sGeckoThread);
+        }
+        return false;
     }
 
     public static boolean isOnUiThread() {
@@ -194,7 +215,13 @@ public final class ThreadUtils {
      * @param timeout Timeout in ms after which the priority will be reset
      */
     public static void reduceGeckoPriority(long timeout) {
-        if (!sIsGeckoPriorityReduced) {
+        if (Runtime.getRuntime().availableProcessors() > 1) {
+            // Don't reduce priority for multicore devices. We use availableProcessors()
+            // for its fast performance. It may give false negatives (i.e. multicore
+            // detected as single-core), but we can tolerate this behavior.
+            return;
+        }
+        if (!sIsGeckoPriorityReduced && sGeckoThread != null) {
             sIsGeckoPriorityReduced = true;
             sGeckoThread.setPriority(Thread.MIN_PRIORITY);
             getUiHandler().postDelayed(sPriorityResetRunnable, timeout);

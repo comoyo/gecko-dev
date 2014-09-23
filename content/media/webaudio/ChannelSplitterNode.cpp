@@ -17,7 +17,7 @@ NS_IMPL_ISUPPORTS_INHERITED0(ChannelSplitterNode, AudioNode)
 class ChannelSplitterNodeEngine : public AudioNodeEngine
 {
 public:
-  ChannelSplitterNodeEngine(ChannelSplitterNode* aNode)
+  explicit ChannelSplitterNodeEngine(ChannelSplitterNode* aNode)
     : AudioNodeEngine(aNode)
   {
     MOZ_ASSERT(NS_IsMainThread());
@@ -62,6 +62,10 @@ ChannelSplitterNode::ChannelSplitterNode(AudioContext* aContext,
 {
   mStream = aContext->Graph()->CreateAudioNodeStream(new ChannelSplitterNodeEngine(this),
                                                      MediaStreamGraph::INTERNAL_STREAM);
+}
+
+ChannelSplitterNode::~ChannelSplitterNode()
+{
 }
 
 JSObject*

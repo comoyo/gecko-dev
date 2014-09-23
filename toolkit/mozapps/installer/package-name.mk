@@ -80,9 +80,8 @@ MOZ_PKG_APPNAME = $(MOZ_APP_DISPLAYNAME)
 endif
 MOZ_PKG_APPNAME_LC = $(shell echo $(MOZ_PKG_APPNAME) | tr '[A-Z]' '[a-z]')
 
-
 ifndef MOZ_PKG_LONGVERSION
-MOZ_PKG_LONGVERSION = $(shell echo $(MOZ_PKG_VERSION))
+MOZ_PKG_LONGVERSION = $(MOZ_PKG_VERSION)
 endif
 
 ifeq (,$(filter-out Darwin, $(OS_ARCH))) # Mac
@@ -126,6 +125,9 @@ endif # MOZ_PKG_PRETTYNAMES
 SYMBOL_FULL_ARCHIVE_BASENAME = $(PKG_BASENAME).crashreporter-symbols-full
 SYMBOL_ARCHIVE_BASENAME = $(PKG_BASENAME).crashreporter-symbols
 
+# Code coverage package naming
+CODE_COVERAGE_ARCHIVE_BASENAME = $(PKG_BASENAME).code-coverage-gcno
+
 # Test package naming
 TEST_PACKAGE = $(PKG_BASENAME).tests.zip
 
@@ -146,10 +148,13 @@ MOZ_SOURCE_STAMP = $(firstword $(shell hg -R $(MOZILLA_DIR) parent --template="{
 # bug: 746277 - preserve existing functionality.
 # MOZILLA_DIR="": cd $(SPACE); hg # succeeds if ~/.hg exists
 ###########################################################################
+ifdef MOZILLA_OFFICIAL
 MOZ_SOURCE_REPO = $(call getSourceRepo,$(MOZILLA_DIR)$(NULL) $(NULL))
+endif
 
 MOZ_SOURCESTAMP_FILE = $(DIST)/$(PKG_PATH)/$(MOZ_INFO_BASENAME).txt
 MOZ_BUILDINFO_FILE = $(DIST)/$(PKG_PATH)/$(MOZ_INFO_BASENAME).json
+MOZ_MOZINFO_FILE = $(DIST)/$(PKG_PATH)/$(MOZ_INFO_BASENAME).mozinfo.json
 
 # JavaScript Shell
 PKG_JSSHELL = $(DIST)/jsshell-$(MOZ_PKG_PLATFORM).zip

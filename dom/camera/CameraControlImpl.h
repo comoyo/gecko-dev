@@ -30,7 +30,7 @@ class RecorderProfileManager;
 class CameraControlImpl : public ICameraControl
 {
 public:
-  CameraControlImpl(uint32_t aCameraId);
+  explicit CameraControlImpl(uint32_t aCameraId);
   virtual void AddListener(CameraControlListener* aListener) MOZ_OVERRIDE;
   virtual void RemoveListener(CameraControlListener* aListener) MOZ_OVERRIDE;
 
@@ -67,6 +67,7 @@ protected:
   void OnFacesDetected(const nsTArray<Face>& aFaces);
   void OnTakePictureComplete(uint8_t* aData, uint32_t aLength, const nsAString& aMimeType);
 
+  void OnRateLimitPreview(bool aLimit);
   bool OnNewPreviewFrame(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight);
   void OnRecorderStateChange(CameraControlListener::RecorderState aState,
                              int32_t aStatus = -1, int32_t aTrackNumber = -1);

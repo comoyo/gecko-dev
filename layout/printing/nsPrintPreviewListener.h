@@ -34,8 +34,7 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIDOMEVENTLISTENER
 
-  nsPrintPreviewListener(mozilla::dom::EventTarget* aTarget);
-  ~nsPrintPreviewListener();
+  explicit nsPrintPreviewListener(mozilla::dom::EventTarget* aTarget);
 
   // Add/remove the relevant listeners, based on what interfaces
   // the embedding chrome implements.
@@ -43,6 +42,7 @@ public:
   nsresult RemoveListeners();
 
 private:
+  ~nsPrintPreviewListener();
 
   nsCOMPtr<mozilla::dom::EventTarget> mEventTarget;
 

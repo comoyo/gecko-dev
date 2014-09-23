@@ -1,4 +1,4 @@
-﻿<!DOCTYPE HTML>
+<!DOCTYPE HTML>
 <html>
 <head>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
@@ -16,12 +16,12 @@
     title: "Simple offer media constraint test with video/audio"
   });
 
-  runTest(function() {
+  runNetworkTest(function() {
     var test = new PeerConnectionTest();
-    test.setOfferConstraints({ mandatory: {
-      OfferToReceiveVideo: true,
-      OfferToReceiveAudio: true
-    }});
+    test.setOfferOptions({
+      offerToReceiveVideo: true,
+      offerToReceiveAudio: true
+    });
     test.run();
   });
 </script>

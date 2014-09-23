@@ -30,18 +30,21 @@ public:
   typedef RotatedContentBuffer::PaintState PaintState;
   typedef RotatedContentBuffer::ContentType ContentType;
 
-  BasicThebesLayer(BasicLayerManager* aLayerManager) :
+  explicit BasicThebesLayer(BasicLayerManager* aLayerManager) :
     ThebesLayer(aLayerManager,
                 static_cast<BasicImplData*>(MOZ_THIS_IN_INITIALIZER_LIST())),
     mContentClient(nullptr)
   {
     MOZ_COUNT_CTOR(BasicThebesLayer);
   }
+
+protected:
   virtual ~BasicThebesLayer()
   {
     MOZ_COUNT_DTOR(BasicThebesLayer);
   }
 
+public:
   virtual void SetVisibleRegion(const nsIntRegion& aRegion)
   {
     NS_ASSERTION(BasicManager()->InConstruction(),

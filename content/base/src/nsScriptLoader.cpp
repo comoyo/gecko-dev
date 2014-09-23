@@ -33,7 +33,6 @@
 #include "nsIDOMHTMLScriptElement.h"
 #include "nsIDocShell.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
 #include "nsUnicharUtils.h"
 #include "nsAutoPtr.h"
 #include "nsIXPConnect.h"
@@ -49,12 +48,11 @@
 #include "nsCrossSiteListenerProxy.h"
 #include "nsSandboxFlags.h"
 #include "nsContentTypeParser.h"
-#include "nsINetworkSeer.h"
+#include "nsINetworkPredictor.h"
 #include "mozilla/dom/EncodingUtils.h"
 
 #include "mozilla/CORSMode.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/Telemetry.h"
 #include "mozilla/unused.h"
 
 #ifdef PR_LOGGING
@@ -69,6 +67,11 @@ using namespace mozilla::dom;
 //////////////////////////////////////////////////////////////
 
 class nsScriptLoadRequest MOZ_FINAL : public nsISupports {
+  ~nsScriptLoadRequest()
+  {
+    js_free(mScriptTextBuf);
+  }
+
 public:
   nsScriptLoadRequest(nsIScriptElement* aElement,
                       uint32_t aVersion,
@@ -83,11 +86,6 @@ public:
       mLineNo(1),
       mCORSMode(aCORSMode)
   {
-  }
-
-  ~nsScriptLoadRequest()
-  {
-    js_free(mScriptTextBuf);
   }
 
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -111,7 +109,7 @@ public:
   bool mIsInline;         // Is the script inline or loaded?
   bool mHasSourceMapURL;  // Does the HTTP header have a source map url?
   nsString mSourceMapURL; // Holds source map url for loaded scripts
-  jschar* mScriptTextBuf;   // Holds script text for non-inline scripts. Don't
+  char16_t* mScriptTextBuf; // Holds script text for non-inline scripts. Don't
   size_t mScriptTextLength; // use nsString so we can give ownership to jsapi.
   uint32_t mJSVersion;
   nsCOMPtr<nsIURI> mURI;
@@ -321,18 +319,32 @@ nsScriptLoader::StartLoad(nsScriptLoadRequest *aRequest, const nsAString &aType,
 
   nsCOMPtr<nsIChannel> channel;
   rv = NS_NewChannel(getter_AddRefs(channel),
-                     aRequest->mURI, nullptr, loadGroup, prompter,
-                     nsIRequest::LOAD_NORMAL | nsIChannel::LOAD_CLASSIFY_URI,
-                     channelPolicy);
+                     aRequest->mURI,
+                     mDocument,
+                     nsILoadInfo::SEC_NORMAL,
+                     nsIContentPolicy::TYPE_SCRIPT,
+                     channelPolicy,
+                     loadGroup,
+                     prompter,
+                     nsIRequest::LOAD_NORMAL |
+                     nsIChannel::LOAD_CLASSIFY_URI);
+
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsIScriptElement *script = aRequest->mElement;
-  if (aScriptFromHead &&
-      !(script && (script->GetScriptAsync() || script->GetScriptDeferred()))) {
-    nsCOMPtr<nsIHttpChannelInternal>
-      internalHttpChannel(do_QueryInterface(channel));
-    if (internalHttpChannel)
+  nsCOMPtr<nsIHttpChannelInternal>
+    internalHttpChannel(do_QueryInterface(channel));
+
+  if (internalHttpChannel) {
+    if (aScriptFromHead &&
+        !(script && (script->GetScriptAsync() || script->GetScriptDeferred()))) {
+      // synchronous head scripts block lading of most other non js/css
+      // content such as images
       internalHttpChannel->SetLoadAsBlocking(true);
+    } else if (!(script && script->GetScriptDeferred())) {
+      // other scripts are neither blocked nor prioritized unless marked deferred
+      internalHttpChannel->SetLoadUnblocked(true);
+    }
   }
 
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(channel));
@@ -345,8 +357,8 @@ nsScriptLoader::StartLoad(nsScriptLoadRequest *aRequest, const nsAString &aType,
   }
 
   nsCOMPtr<nsILoadContext> loadContext(do_QueryInterface(docshell));
-  mozilla::net::SeerLearn(aRequest->mURI, mDocument->GetDocumentURI(),
-      nsINetworkSeer::LEARN_LOAD_SUBRESOURCE, loadContext);
+  mozilla::net::PredictorLearn(aRequest->mURI, mDocument->GetDocumentURI(),
+      nsINetworkPredictor::LEARN_LOAD_SUBRESOURCE, loadContext);
 
   // Set the initiator type
   nsCOMPtr<nsITimedChannel> timedChannel(do_QueryInterface(httpChannel));
@@ -539,43 +551,6 @@ CSPAllowsInlineScript(nsIScriptElement *aElement, nsIDocument *aDocument)
   return true;
 }
 
-static void
-AccumulateJavaScriptVersionTelemetry(nsIScriptElement* aElement,
-                                     JSVersion aVersion)
-{
-  uint32_t minorVersion;
-  switch (aVersion) {
-    case JSVERSION_DEFAULT: minorVersion = 5; break;
-    case JSVERSION_1_6:     minorVersion = 6; break;
-    case JSVERSION_1_7:     minorVersion = 7; break;
-    case JSVERSION_1_8:     minorVersion = 8; break;
-    default:                MOZ_ASSERT_UNREACHABLE("Unexpected JSVersion");
-    case JSVERSION_UNKNOWN: minorVersion = 0; break;
-  }
-
-  // Only report SpiderMonkey's nonstandard JS versions: 1.6, 1.7, and 1.8.
-  if (minorVersion < 6) {
-    return;
-  }
-
-  nsCOMPtr<nsIURI> scriptURI = aElement->GetScriptURI();
-  if (!scriptURI) {
-    return;
-  }
-
-  // We only care about web content, not chrome or add-on JS versions.
-  bool chrome = false;
-  scriptURI->SchemeIs("chrome", &chrome);
-  if (!chrome) {
-    scriptURI->SchemeIs("resource", &chrome);
-  }
-  if (chrome) {
-    return;
-  }
-
-  Telemetry::Accumulate(Telemetry::JS_MINOR_VERSION, minorVersion);
-}
-
 bool
 nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
 {
@@ -604,7 +579,6 @@ nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
   aElement->GetScriptType(type);
   if (!type.IsEmpty()) {
     NS_ENSURE_TRUE(ParseTypeAttribute(type, &version), false);
-    AccumulateJavaScriptVersionTelemetry(aElement, version);
   } else {
     // no 'type=' element
     // "language" is a deprecated attribute of HTML, so we check it only for
@@ -887,18 +861,15 @@ nsScriptLoader::AttemptAsyncScriptParse(nsScriptLoadRequest* aRequest)
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIScriptContext> context = globalObject->GetScriptContext();
-  if (!context) {
+  AutoJSAPI jsapi;
+  if (!jsapi.InitWithLegacyErrorReporting(globalObject)) {
     return NS_ERROR_FAILURE;
   }
 
-  AutoJSAPIWithErrorsReportedToWindow jsapi(context);
   JSContext* cx = jsapi.cx();
   JS::Rooted<JSObject*> global(cx, globalObject->GetGlobalJSObject());
-  JSAutoCompartment ac(cx, global);
-
   JS::CompileOptions options(cx);
-  FillCompileOptionsForRequest(aRequest, global, &options);
+  FillCompileOptionsForRequest(jsapi, aRequest, global, &options);
 
   if (!JS::CanCompileOffThread(cx, options, aRequest->mScriptTextLength)) {
     return NS_ERROR_FAILURE;
@@ -934,7 +905,7 @@ nsScriptLoader::ProcessRequest(nsScriptLoadRequest* aRequest, void **aOffThreadT
 
   NS_ENSURE_ARG(aRequest);
   nsAutoString textData;
-  const jschar* scriptBuf = nullptr;
+  const char16_t* scriptBuf = nullptr;
   size_t scriptLength = 0;
   JS::SourceBufferHolder::Ownership giveScriptOwnership =
     JS::SourceBufferHolder::NoOwnership;
@@ -1069,7 +1040,8 @@ nsScriptLoader::GetScriptGlobalObject()
 }
 
 void
-nsScriptLoader::FillCompileOptionsForRequest(nsScriptLoadRequest *aRequest,
+nsScriptLoader::FillCompileOptionsForRequest(const AutoJSAPI &jsapi,
+                                             nsScriptLoadRequest *aRequest,
                                              JS::Handle<JSObject *> aScopeChain,
                                              JS::CompileOptions *aOptions)
 {
@@ -1088,15 +1060,9 @@ nsScriptLoader::FillCompileOptionsForRequest(nsScriptLoadRequest *aRequest,
     aOptions->setOriginPrincipals(nsJSPrincipals::get(aRequest->mOriginPrincipal));
   }
 
-  AutoJSContext cx;
+  JSContext* cx = jsapi.cx();
   JS::Rooted<JS::Value> elementVal(cx);
   MOZ_ASSERT(aRequest->mElement);
-  // XXXbz this is super-fragile, because the code that _uses_ the
-  // JS::CompileOptions is nowhere near us, but we have to coordinate
-  // compartments with it... and in particular, it will compile in the
-  // compartment of aScopeChain, so we want to wrap into that compartment as
-  // well.
-  JSAutoCompartment ac(cx, aScopeChain);
   if (NS_SUCCEEDED(nsContentUtils::WrapNative(cx, aRequest->mElement,
                                               &elementVal,
                                               /* aAllowWrapping = */ true))) {
@@ -1163,12 +1129,12 @@ nsScriptLoader::EvaluateScript(nsScriptLoadRequest* aRequest,
       // execution currentScript of the master should refer to this
       // script. So let's update the mCurrentScript of the ScriptLoader
       // of the master document too.
-      masterScriptUpdater.construct(master->ScriptLoader(),
-                                    aRequest->mElement);
+      masterScriptUpdater.emplace(master->ScriptLoader(),
+                                  aRequest->mElement);
     }
 
     JS::CompileOptions options(entryScript.cx());
-    FillCompileOptionsForRequest(aRequest, global, &options);
+    FillCompileOptionsForRequest(entryScript, aRequest, global, &options);
     rv = nsJSUtils::EvaluateString(entryScript.cx(), aSrcBuf, global, options,
                                    aOffThreadToken);
   }
@@ -1319,7 +1285,7 @@ DetectByteOrderMark(const unsigned char* aBytes, int32_t aLen, nsCString& oChars
 nsScriptLoader::ConvertToUTF16(nsIChannel* aChannel, const uint8_t* aData,
                                uint32_t aLength, const nsAString& aHintCharset,
                                nsIDocument* aDocument,
-                               jschar*& aBufOut, size_t& aLengthOut)
+                               char16_t*& aBufOut, size_t& aLengthOut)
 {
   if (!aLength) {
     aBufOut = nullptr;
@@ -1376,7 +1342,7 @@ nsScriptLoader::ConvertToUTF16(nsIChannel* aChannel, const uint8_t* aData,
                                  aLength, &unicodeLength);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  aBufOut = static_cast<jschar*>(js_malloc(unicodeLength * sizeof(jschar)));
+  aBufOut = static_cast<char16_t*>(js_malloc(unicodeLength * sizeof(char16_t)));
   if (!aBufOut) {
     aLengthOut = 0;
     return NS_ERROR_OUT_OF_MEMORY;
@@ -1410,6 +1376,16 @@ nsScriptLoader::OnStreamComplete(nsIStreamLoader* aLoader,
   nsresult rv = PrepareLoadedRequest(request, aLoader, aStatus, aStringLen,
                                      aString);
   if (NS_FAILED(rv)) {
+    /*
+     * Handle script not loading error because source was a tracking URL.
+     * We make a note of this script node by including it in a dedicated
+     * array of blocked tracking nodes under its parent document.
+     */
+    if (rv == NS_ERROR_TRACKING_URI) {
+      nsCOMPtr<nsIContent> cont = do_QueryInterface(request->mElement);
+      mDocument->AddBlockedTrackingNode(cont);
+    }
+
     if (mDeferRequests.RemoveElement(request) ||
         mAsyncRequests.RemoveElement(request) ||
         mNonAsyncExternalScriptInsertedRequests.RemoveElement(request) ||
@@ -1425,7 +1401,7 @@ nsScriptLoader::OnStreamComplete(nsIStreamLoader* aLoader,
     }
     rv = NS_OK;
   } else {
-    NS_Free(const_cast<uint8_t *>(aString));
+    moz_free(const_cast<uint8_t *>(aString));
     rv = NS_SUCCESS_ADOPTED_DATA;
   }
 
@@ -1479,9 +1455,11 @@ nsScriptLoader::PrepareLoadedRequest(nsScriptLoadRequest* aRequest,
     }
 
     nsAutoCString sourceMapURL;
-    httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("X-SourceMap"), sourceMapURL);
-    aRequest->mHasSourceMapURL = true;
-    aRequest->mSourceMapURL = NS_ConvertUTF8toUTF16(sourceMapURL);
+    rv = httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("X-SourceMap"), sourceMapURL);
+    if (NS_SUCCEEDED(rv)) {
+      aRequest->mHasSourceMapURL = true;
+      aRequest->mSourceMapURL = NS_ConvertUTF8toUTF16(sourceMapURL);
+    }
   }
 
   nsCOMPtr<nsIChannel> channel = do_QueryInterface(req);
@@ -1490,7 +1468,7 @@ nsScriptLoader::PrepareLoadedRequest(nsScriptLoadRequest* aRequest,
   // principal as the origin principal
   if (aRequest->mCORSMode == CORS_NONE) {
     rv = nsContentUtils::GetSecurityManager()->
-      GetChannelPrincipal(channel, getter_AddRefs(aRequest->mOriginPrincipal));
+      GetChannelResultPrincipal(channel, getter_AddRefs(aRequest->mOriginPrincipal));
     NS_ENSURE_SUCCESS(rv, rv);
   }
 

@@ -10,6 +10,8 @@
 #include "jsprf.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/Preferences.h"
+#include "nsIAddonInterposition.h"
+#include "AddonWrapper.h"
 
 using namespace mozilla;
 using namespace JS;
@@ -305,7 +307,7 @@ DefinePropertyIfFound(XPCCallContext& ccx,
             if (!funobj)
                 return false;
 
-            propFlags |= JSPROP_GETTER;
+            propFlags |= JSPROP_GETTER | JSPROP_SHARED;
             propFlags &= ~JSPROP_ENUMERATE;
 
             AutoResolveName arn(ccx, id);
@@ -352,6 +354,20 @@ DefinePropertyIfFound(XPCCallContext& ccx,
                JS_DefinePropertyById(ccx, obj, id, val, propFlags);
     }
 
+    if (scope->HasInterposition()) {
+        Rooted<JSPropertyDescriptor> desc(ccx);
+        if (!xpc::Interpose(ccx, obj, iface->GetIID(), id, &desc))
+            return false;
+
+        if (desc.object()) {
+            AutoResolveName arn(ccx, id);
+            if (resolved)
+                *resolved = true;
+            return JS_DefinePropertyById(ccx, obj, id, desc.value(), desc.attributes(),
+                                         desc.getter(), desc.setter());
+        }
+    }
+
     if (id == rt->GetStringID(XPCJSRuntime::IDX_TO_STRING) ||
         id == rt->GetStringID(XPCJSRuntime::IDX_TO_SOURCE) ||
         (scriptableInfo &&
@@ -375,15 +391,15 @@ DefinePropertyIfFound(XPCCallContext& ccx,
     MOZ_ASSERT(member->IsAttribute(), "way broken!");
 
     propFlags |= JSPROP_GETTER | JSPROP_SHARED;
+    propFlags &= ~JSPROP_READONLY;
     JSObject* funobj = funval.toObjectOrNull();
     JSPropertyOp getter = JS_DATA_TO_FUNC_PTR(JSPropertyOp, funobj);
     JSStrictPropertyOp setter;
     if (member->IsWritableAttribute()) {
         propFlags |= JSPROP_SETTER;
-        propFlags &= ~JSPROP_READONLY;
         setter = JS_DATA_TO_FUNC_PTR(JSStrictPropertyOp, funobj);
     } else {
-        setter = js_GetterOnlyPropertyStub;
+        setter = nullptr;
     }
 
     AutoResolveName arn(ccx, id);
@@ -557,6 +573,17 @@ WrappedNativeFinalize(js::FreeOp *fop, JSObject *obj, WNHelperType helperType)
 }
 
 static void
+WrappedNativeObjectMoved(JSObject *obj, const JSObject *old)
+{
+    nsISupports* p = static_cast<nsISupports*>(xpc_GetJSPrivate(obj));
+    if (!p)
+        return;
+
+    XPCWrappedNative* wrapper = static_cast<XPCWrappedNative*>(p);
+    wrapper->FlatJSObjectMoved(obj, old);
+}
+
+static void
 XPC_WN_NoHelper_Finalize(js::FreeOp *fop, JSObject *obj)
 {
     WrappedNativeFinalize(fop, obj, WN_NOHELPER);
@@ -613,42 +640,6 @@ XPC_WN_NoHelper_Resolve(JSContext *cx, HandleObject obj, HandleId id)
                                  JSPROP_PERMANENT, nullptr);
 }
 
-static JSObject *
-XPC_WN_OuterObject(JSContext *cx, HandleObject objArg)
-{
-    JSObject *obj = objArg;
-
-    XPCWrappedNative *wrapper = XPCWrappedNative::Get(obj);
-    if (!wrapper) {
-        Throw(NS_ERROR_XPC_BAD_OP_ON_WN_PROTO, cx);
-
-        return nullptr;
-    }
-
-    if (!wrapper->IsValid()) {
-        Throw(NS_ERROR_XPC_HAS_BEEN_SHUTDOWN, cx);
-
-        return nullptr;
-    }
-
-    XPCNativeScriptableInfo* si = wrapper->GetScriptableInfo();
-    if (si && si->GetFlags().WantOuterObject()) {
-        RootedObject newThis(cx);
-        nsresult rv =
-            si->GetCallback()->OuterObject(wrapper, cx, obj, newThis.address());
-
-        if (NS_FAILED(rv)) {
-            Throw(rv, cx);
-
-            return nullptr;
-        }
-
-        obj = newThis;
-    }
-
-    return obj;
-}
-
 const XPCWrappedNativeJSClass XPC_WN_NoHelper_JSClass = {
   { // base
     "XPCWrappedNative_NoHelper",    // name;
@@ -678,7 +669,9 @@ const XPCWrappedNativeJSClass XPC_WN_NoHelper_JSClass = {
         nullptr, // outerObject
         nullptr, // innerObject
         nullptr, // iteratorObject
-        true,   // isWrappedNative
+        true,    // isWrappedNative
+        nullptr, // weakmapKeyDelegateOp
+        WrappedNativeObjectMoved
     },
 
     // ObjectOps
@@ -697,8 +690,7 @@ const XPCWrappedNativeJSClass XPC_WN_NoHelper_JSClass = {
         nullptr, // setElement
         nullptr, // getGenericAttributes
         nullptr, // setGenericAttributes
-        nullptr, // deleteProperty
-        nullptr, // deleteElement
+        nullptr, // deleteGeneric
         nullptr, nullptr, // watch/unwatch
         nullptr, // slice
         XPC_WN_JSOp_Enumerate,
@@ -1157,24 +1149,8 @@ XPCNativeScriptableShared::PopulateJSClass()
     // We have to figure out resolve strategy at call time
     mJSClass.base.resolve = (JSResolveOp) XPC_WN_Helper_NewResolve;
 
-    // We need to respect content-defined toString() hooks on Window objects.
-    // In particular, js::DefaultValue checks for a convert stub, and the one
-    // we would install below ignores anything implemented in JS.
-    //
-    // We've always had this behavior for most XPCWrappedNative-implemented
-    // objects. However, Window was special, because the outer-window proxy
-    // had a null convert hook, which means that we'd end up with the default
-    // JS-engine behavior (which respects toString() overrides). We've fixed
-    // the convert hook on the outer-window proxy to invoke the defaultValue
-    // hook on the proxy, which in this case invokes js::DefaultValue on the
-    // target. So now we need to special-case this for Window to maintain
-    // consistent behavior. This can go away once Window is on WebIDL bindings.
-    //
-    // Note that WantOuterObject() is true if and only if this is a Window object.
     if (mFlags.WantConvert())
         mJSClass.base.convert = XPC_WN_Helper_Convert;
-    else if (mFlags.WantOuterObject())
-        mJSClass.base.convert = JS_ConvertStub;
     else
         mJSClass.base.convert = XPC_WN_Shared_Convert;
 
@@ -1201,10 +1177,8 @@ XPCNativeScriptableShared::PopulateJSClass()
     else
         mJSClass.base.trace = XPCWrappedNative::Trace;
 
-    if (mFlags.WantOuterObject())
-        mJSClass.base.ext.outerObject = XPC_WN_OuterObject;
-
     mJSClass.base.ext.isWrappedNative = true;
+    mJSClass.base.ext.objectMovedOp = WrappedNativeObjectMoved;
 }
 
 /***************************************************************************/

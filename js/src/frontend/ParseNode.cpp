@@ -407,6 +407,7 @@ Parser<FullParseHandler>::cloneParseTree(ParseNode *opn)
             Definition *dn = pn->pn_lexdef;
 
             pn->pn_link = dn->dn_uses;
+            pn->pn_dflags = opn->pn_dflags;
             dn->dn_uses = pn;
         } else if (opn->pn_expr) {
             NULLCHECK(pn->pn_expr = cloneParseTree(opn->pn_expr));
@@ -459,20 +460,32 @@ Parser<FullParseHandler>::cloneLeftHandSide(ParseNode *opn)
         for (ParseNode *opn2 = opn->pn_head; opn2; opn2 = opn2->pn_next) {
             ParseNode *pn2;
             if (opn->isKind(PNK_OBJECT)) {
-                JS_ASSERT(opn2->isArity(PN_BINARY));
-                JS_ASSERT(opn2->isKind(PNK_COLON));
+                if (opn2->isKind(PNK_MUTATEPROTO)) {
+                    ParseNode *target = cloneLeftHandSide(opn2->pn_kid);
+                    if (!target)
+                        return nullptr;
+                    pn2 = handler.new_<UnaryNode>(PNK_MUTATEPROTO, JSOP_NOP, opn2->pn_pos, target);
+                } else {
+                    JS_ASSERT(opn2->isArity(PN_BINARY));
+                    JS_ASSERT(opn2->isKind(PNK_COLON) || opn2->isKind(PNK_SHORTHAND));
 
-                ParseNode *tag = cloneParseTree(opn2->pn_left);
-                if (!tag)
-                    return nullptr;
-                ParseNode *target = cloneLeftHandSide(opn2->pn_right);
-                if (!target)
-                    return nullptr;
+                    ParseNode *tag = cloneParseTree(opn2->pn_left);
+                    if (!tag)
+                        return nullptr;
+                    ParseNode *target = cloneLeftHandSide(opn2->pn_right);
+                    if (!target)
+                        return nullptr;
 
-                pn2 = handler.new_<BinaryNode>(PNK_COLON, JSOP_INITPROP, opn2->pn_pos, tag, target);
+                    pn2 = handler.new_<BinaryNode>(opn2->getKind(), JSOP_INITPROP, opn2->pn_pos, tag, target);
+                }
             } else if (opn2->isArity(PN_NULLARY)) {
                 JS_ASSERT(opn2->isKind(PNK_ELISION));
                 pn2 = cloneParseTree(opn2);
+            } else if (opn2->isKind(PNK_SPREAD)) {
+                ParseNode *target = cloneLeftHandSide(opn2->pn_kid);
+                if (!target)
+                    return nullptr;
+                pn2 = handler.new_<UnaryNode>(PNK_SPREAD, JSOP_NOP, opn2->pn_pos, target);
             } else {
                 pn2 = cloneLeftHandSide(opn2);
             }
@@ -501,7 +514,7 @@ Parser<FullParseHandler>::cloneLeftHandSide(ParseNode *opn)
         if (opn->isDefn()) {
             /* We copied some definition-specific state into pn. Clear it out. */
             pn->pn_cookie.makeFree();
-            pn->pn_dflags &= ~PND_BOUND;
+            pn->pn_dflags &= ~(PND_LET | PND_BOUND);
             pn->setDefn(false);
 
             handler.linkUseToDef(pn, (Definition *) opn);
@@ -601,7 +614,7 @@ NullaryNode::dump()
       }
 
       case PNK_STRING:
-        JSString::dumpChars(pn_atom->chars(), pn_atom->length());
+        pn_atom->dumpCharsNoNewline();
         break;
 
       default:
@@ -685,6 +698,24 @@ ListNode::dump(int indent)
     fprintf(stderr, "])");
 }
 
+template <typename CharT>
+static void
+DumpName(const CharT *s, size_t len)
+{
+    if (len == 0)
+        fprintf(stderr, "#<zero-length name>");
+
+    for (size_t i = 0; i < len; i++) {
+        char16_t c = s[i];
+        if (c > 32 && c < 127)
+            fputc(c, stderr);
+        else if (c <= 255)
+            fprintf(stderr, "\\x%02x", unsigned(c));
+        else
+            fprintf(stderr, "\\u%04x", unsigned(c));
+    }
+}
+
 void
 NameNode::dump(int indent)
 {
@@ -695,18 +726,11 @@ NameNode::dump(int indent)
         if (!pn_atom) {
             fprintf(stderr, "#<null name>");
         } else {
-            const jschar *s = pn_atom->chars();
-            size_t len = pn_atom->length();
-            if (len == 0)
-                fprintf(stderr, "#<zero-length name>");
-            for (size_t i = 0; i < len; i++) {
-                if (s[i] > 32 && s[i] < 127)
-                    fputc(s[i], stderr);
-                else if (s[i] <= 255)
-                    fprintf(stderr, "\\x%02x", (unsigned int) s[i]);
-                else
-                    fprintf(stderr, "\\u%04x", (unsigned int) s[i]);
-            }
+            JS::AutoCheckCannotGC nogc;
+            if (pn_atom->hasLatin1Chars())
+                DumpName(pn_atom->latin1Chars(nogc), pn_atom->length());
+            else
+                DumpName(pn_atom->twoByteChars(nogc), pn_atom->length());
         }
 
         if (isKind(PNK_DOT)) {

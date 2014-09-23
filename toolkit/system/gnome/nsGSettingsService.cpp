@@ -83,11 +83,11 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIGSETTINGSCOLLECTION
 
-  nsGSettingsCollection(GSettings* aSettings) : mSettings(aSettings),
-                                                mKeys(nullptr) {}
+  explicit nsGSettingsCollection(GSettings* aSettings) : mSettings(aSettings),
+                                                         mKeys(nullptr) {}
+private:
   ~nsGSettingsCollection();
 
-private:
   bool KeyExists(const nsACString& aKey);
   bool SetValue(const nsACString& aKey,
                   GVariant *aValue);

@@ -15,6 +15,7 @@
 #include "mozilla/layers/Effects.h"
 #include "nsWindowsHelpers.h"
 #include "gfxPrefs.h"
+#include "gfxCrashReporterUtils.h"
 
 #include "mozilla/EnumeratedArray.h"
 
@@ -106,6 +107,10 @@ CompositorD3D11::~CompositorD3D11()
 bool
 CompositorD3D11::Initialize()
 {
+  bool force = gfxPrefs::LayersAccelerationForceEnabled();
+
+  ScopedGfxFeatureReporter reporter("D3D11 Layers", force);
+
   if (!gfxPlatform::CanUseDirect3D11()) {
     NS_WARNING("Direct3D 11-accelerated layers are not supported on this system.");
     return false;
@@ -355,6 +360,7 @@ CompositorD3D11::Initialize()
                                        DXGI_MWA_NO_WINDOW_CHANGES);
   }
 
+  reporter.SetSuccessful();
   return true;
 }
 
@@ -445,7 +451,7 @@ CompositorD3D11::CreateRenderTargetFromSource(const gfx::IntRect &aRect,
     srcBox.front = 0;
     srcBox.right = aSourcePoint.x + aRect.width;
     srcBox.bottom = aSourcePoint.y + aRect.height;
-    srcBox.back = 0;
+    srcBox.back = 1;
 
     const IntSize& srcSize = sourceD3D11->GetSize();
     MOZ_ASSERT(srcSize.width >= 0 && srcSize.height >= 0,
@@ -477,7 +483,7 @@ CompositorD3D11::SetRenderTarget(CompositingRenderTarget* aRenderTarget)
   ID3D11RenderTargetView* view = newRT->mRTView;
   mCurrentRT = newRT;
   mContext->OMSetRenderTargets(1, &view, nullptr);
-  PrepareViewport(newRT->GetSize(), gfx::Matrix());
+  PrepareViewport(newRT->GetSize());
 }
 
 void
@@ -732,7 +738,6 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
 void
 CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
                             const Rect* aClipRectIn,
-                            const gfx::Matrix& aTransform,
                             const Rect& aRenderBounds,
                             Rect* aClipRectOut,
                             Rect* aRenderBoundsOut)
@@ -810,8 +815,7 @@ CompositorD3D11::EndFrame()
 }
 
 void
-CompositorD3D11::PrepareViewport(const gfx::IntSize& aSize,
-                                 const gfx::Matrix& aWorldTransform)
+CompositorD3D11::PrepareViewport(const gfx::IntSize& aSize)
 {
   D3D11_VIEWPORT viewport;
   viewport.MaxDepth = 1.0f;
@@ -823,12 +827,9 @@ CompositorD3D11::PrepareViewport(const gfx::IntSize& aSize,
 
   mContext->RSSetViewports(1, &viewport);
 
-  Matrix viewMatrix;
-  viewMatrix.Translate(-1.0, 1.0);
-  viewMatrix.Scale(2.0f / float(aSize.width), 2.0f / float(aSize.height));
-  viewMatrix.Scale(1.0f, -1.0f);
-
-  viewMatrix = aWorldTransform * viewMatrix;
+  Matrix viewMatrix = Matrix::Translation(-1.0, 1.0);
+  viewMatrix.PreScale(2.0f / float(aSize.width), 2.0f / float(aSize.height));
+  viewMatrix.PreScale(1.0f, -1.0f);
 
   Matrix4x4 projection = Matrix4x4::From2D(viewMatrix);
   projection._33 = 0.0f;

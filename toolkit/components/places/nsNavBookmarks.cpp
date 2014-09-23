@@ -19,9 +19,9 @@
 
 #include "GeckoProfiler.h"
 
-#define BOOKMARKS_TO_KEYWORDS_INITIAL_CACHE_SIZE 64
-#define RECENT_BOOKMARKS_INITIAL_CACHE_SIZE 10
-// Threashold to expire old bookmarks if the initial cache size is exceeded.
+#define BOOKMARKS_TO_KEYWORDS_INITIAL_CACHE_LENGTH 32
+#define RECENT_BOOKMARKS_INITIAL_CACHE_LENGTH 10
+// Threshold to expire old bookmarks if the initial cache size is exceeded.
 #define RECENT_BOOKMARKS_THRESHOLD PRTime((int64_t)1 * 60 * PR_USEC_PER_SEC)
 
 #define BEGIN_CRITICAL_BOOKMARK_CACHE_SECTION(_itemId_) \
@@ -169,7 +169,7 @@ ExpireNonrecentBookmarksCallback(BookmarkKeyClass* aKey,
 static void
 ExpireNonrecentBookmarks(nsTHashtable<BookmarkKeyClass>* hashTable)
 {
-  if (hashTable->Count() > RECENT_BOOKMARKS_INITIAL_CACHE_SIZE) {
+  if (hashTable->Count() > RECENT_BOOKMARKS_INITIAL_CACHE_LENGTH) {
     int64_t threshold = PR_Now() - RECENT_BOOKMARKS_THRESHOLD;
     (void)hashTable->EnumerateEntries(ExpireNonrecentBookmarksCallback,
                                       reinterpret_cast<void*>(&threshold));
@@ -208,10 +208,10 @@ nsNavBookmarks::nsNavBookmarks()
   , mCanNotify(false)
   , mCacheObservers("bookmark-observers")
   , mBatching(false)
-  , mBookmarkToKeywordHash(BOOKMARKS_TO_KEYWORDS_INITIAL_CACHE_SIZE)
+  , mBookmarkToKeywordHash(BOOKMARKS_TO_KEYWORDS_INITIAL_CACHE_LENGTH)
   , mBookmarkToKeywordHashInitialized(false)
-  , mRecentBookmarksCache(RECENT_BOOKMARKS_INITIAL_CACHE_SIZE)
-  , mUncachableBookmarks(RECENT_BOOKMARKS_INITIAL_CACHE_SIZE)
+  , mRecentBookmarksCache(RECENT_BOOKMARKS_INITIAL_CACHE_LENGTH)
+  , mUncachableBookmarks(RECENT_BOOKMARKS_INITIAL_CACHE_LENGTH)
 {
   NS_ASSERTION(!gBookmarksService,
                "Attempting to create two instances of the service!");
@@ -657,7 +657,9 @@ nsNavBookmarks::InsertBookmark(int64_t aFolder,
 NS_IMETHODIMP
 nsNavBookmarks::RemoveItem(int64_t aItemId)
 {
-  PROFILER_LABEL("bookmarks", "RemoveItem");
+  PROFILER_LABEL("nsNavBookmarks", "RemoveItem",
+    js::ProfileEntry::Category::OTHER);
+
   NS_ENSURE_ARG(!IsRoot(aItemId));
 
   BookmarkData bookmark;
@@ -1153,7 +1155,9 @@ nsNavBookmarks::GetDescendantChildren(int64_t aFolderId,
 NS_IMETHODIMP
 nsNavBookmarks::RemoveFolderChildren(int64_t aFolderId)
 {
-  PROFILER_LABEL("bookmarks", "RemoveFolderChilder");
+  PROFILER_LABEL("nsNavBookmarks", "RemoveFolderChilder",
+    js::ProfileEntry::Category::OTHER);
+
   NS_ENSURE_ARG_MIN(aFolderId, 1);
   NS_ENSURE_ARG(aFolderId != mRoot);
 
@@ -2661,7 +2665,9 @@ nsNavBookmarks::EnsureKeywordsHash() {
 NS_IMETHODIMP
 nsNavBookmarks::RunInBatchMode(nsINavHistoryBatchCallback* aCallback,
                                nsISupports* aUserData) {
-  PROFILER_LABEL("bookmarks", "RunInBatchMode");
+  PROFILER_LABEL("nsNavBookmarks", "RunInBatchMode",
+    js::ProfileEntry::Category::OTHER);
+
   NS_ENSURE_ARG(aCallback);
 
   mBatching = true;

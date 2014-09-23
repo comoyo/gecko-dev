@@ -24,7 +24,13 @@ const EXAMPLE_URL = "http://example.com/browser/browser/devtools/webaudioeditor/
 const SIMPLE_CONTEXT_URL = EXAMPLE_URL + "doc_simple-context.html";
 const COMPLEX_CONTEXT_URL = EXAMPLE_URL + "doc_complex-context.html";
 const SIMPLE_NODES_URL = EXAMPLE_URL + "doc_simple-node-creation.html";
+const MEDIA_NODES_URL = EXAMPLE_URL + "doc_media-node-creation.html";
 const BUFFER_AND_ARRAY_URL = EXAMPLE_URL + "doc_buffer-and-array.html";
+const DESTROY_NODES_URL = EXAMPLE_URL + "doc_destroy-nodes.html";
+const CONNECT_TOGGLE_URL = EXAMPLE_URL + "doc_connect-toggle.html";
+const CONNECT_PARAM_URL = EXAMPLE_URL + "doc_connect-param.html";
+const CONNECT_MULTI_PARAM_URL = EXAMPLE_URL + "doc_connect-multi-param.html";
+const IFRAME_CONTEXT_URL = EXAMPLE_URL + "doc_iframe-context.html";
 
 // All tests are asynchronous.
 waitForExplicitFinish();
@@ -145,7 +151,7 @@ function initWebAudioEditor(aUrl) {
     Services.prefs.setBoolPref("devtools.webaudioeditor.enabled", true);
     let toolbox = yield gDevTools.showToolbox(target, "webaudioeditor");
     let panel = toolbox.getCurrentPanel();
-    return [target, debuggee, panel];
+    return [target, debuggee, panel, toolbox];
   });
 }
 
@@ -200,11 +206,15 @@ function getNSpread (front, eventName, count) { return getN(front, eventName, co
  * resolves when the graph was rendered with the correct count of
  * nodes and edges.
  */
-function waitForGraphRendered (front, nodeCount, edgeCount) {
+function waitForGraphRendered (front, nodeCount, edgeCount, paramEdgeCount) {
   let deferred = Promise.defer();
   let eventName = front.EVENTS.UI_GRAPH_RENDERED;
-  front.on(eventName, function onGraphRendered (_, nodes, edges) {
-    if (nodes === nodeCount && edges === edgeCount) {
+  front.on(eventName, function onGraphRendered (_, nodes, edges, pEdges) {
+    info(nodes);
+    info(edges)
+    info(pEdges);
+    let paramEdgesDone = paramEdgeCount ? paramEdgeCount === pEdges : true;
+    if (nodes === nodeCount && edges === edgeCount && paramEdgesDone) {
       front.off(eventName, onGraphRendered);
       deferred.resolve();
     }
@@ -216,6 +226,16 @@ function checkVariableView (view, index, hash, description = "") {
   info("Checking Variable View");
   let scope = view.getScopeAtIndex(index);
   let variables = Object.keys(hash);
+
+  // If node shouldn't display any properties, ensure that the 'empty' message is
+  // visible
+  if (!variables.length) {
+    ok(isVisible(scope.window.$("#properties-tabpanel-content-empty")),
+      description + " should show the empty properties tab.");
+    return;
+  }
+
+  // Otherwise, iterate over expected properties
   variables.forEach(variable => {
     let aVar = scope.get(variable);
     is(aVar.target.querySelector(".name").getAttribute("value"), variable,
@@ -276,8 +296,11 @@ function modifyVariableView (win, view, index, prop, value) {
   return deferred.promise;
 }
 
-function findGraphEdge (win, source, target) {
+function findGraphEdge (win, source, target, param) {
   let selector = ".edgePaths .edgePath[data-source='" + source + "'][data-target='" + target + "']";
+  if (param) {
+    selector += "[data-param='" + param + "']";
+  }
   return win.document.querySelector(selector);
 }
 
@@ -362,11 +385,25 @@ function countGraphObjects (win) {
 }
 
 /**
+* Forces cycle collection and GC, used in AudioNode destruction tests.
+*/
+function forceCC () {
+  SpecialPowers.DOMWindowUtils.cycleCollect();
+  SpecialPowers.DOMWindowUtils.garbageCollect();
+  SpecialPowers.DOMWindowUtils.garbageCollect();
+}
+
+/**
  * List of audio node properties to test against expectations of the AudioNode actor
  */
 
 const NODE_DEFAULT_VALUES = {
   "AudioDestinationNode": {},
+  "MediaElementAudioSourceNode": {},
+  "MediaStreamAudioSourceNode": {},
+  "MediaStreamAudioDestinationNode": {
+    "stream": "MediaStream"
+  },
   "AudioBufferSourceNode": {
     "playbackRate": 1,
     "loop": false,

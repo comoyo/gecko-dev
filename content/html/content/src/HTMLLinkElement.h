@@ -24,8 +24,7 @@ class HTMLLinkElement MOZ_FINAL : public nsGenericHTMLElement,
                                   public Link
 {
 public:
-  HTMLLinkElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
-  virtual ~HTMLLinkElement();
+  explicit HTMLLinkElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
@@ -51,7 +50,7 @@ public:
                      EventChainPostVisitor& aVisitor) MOZ_OVERRIDE;
 
   // nsINode
-  virtual nsresult Clone(nsINodeInfo* aNodeInfo, nsINode** aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult) const MOZ_OVERRIDE;
   virtual JSObject* WrapNode(JSContext* aCx) MOZ_OVERRIDE;
 
   // nsIContent
@@ -91,10 +90,16 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::href, aHref, aRv);
   }
-  // XPCOM GetCrossOrigin is fine.
-  void SetCrossOrigin(const nsAString& aCrossOrigin, ErrorResult& aRv)
+  void GetCrossOrigin(nsAString& aResult)
   {
-    SetHTMLAttr(nsGkAtoms::crossorigin, aCrossOrigin, aRv);
+    // Null for both missing and invalid defaults is ok, since we
+    // always parse to an enum value, so we don't need an invalid
+    // default, and we _want_ the missing default to be null.
+    GetEnumAttr(nsGkAtoms::crossorigin, nullptr, aResult);
+  }
+  void SetCrossOrigin(const nsAString& aCrossOrigin, ErrorResult& aError)
+  {
+    SetOrRemoveNullableStringAttr(nsGkAtoms::crossorigin, aCrossOrigin, aError);
   }
   // XPCOM GetRel is fine.
   void SetRel(const nsAString& aRel, ErrorResult& aRv)
@@ -144,6 +149,8 @@ public:
   }
 
 protected:
+  virtual ~HTMLLinkElement();
+
   // nsStyleLinkElement
   virtual already_AddRefed<nsIURI> GetStyleSheetURL(bool* aIsInline) MOZ_OVERRIDE;
   virtual void GetStyleSheetInfo(nsAString& aTitle,

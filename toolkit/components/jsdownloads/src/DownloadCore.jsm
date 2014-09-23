@@ -1,4 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80 filetype=javascript: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -1391,8 +1391,18 @@ this.DownloadSaver.prototype = {
     // The start time is always available when we reach this point.
     let startPRTime = this.download.startTime.getTime() * 1000;
 
-    gDownloadHistory.addDownload(sourceUri, referrerUri, startPRTime,
-                                 targetUri);
+    try {
+      gDownloadHistory.addDownload(sourceUri, referrerUri, startPRTime,
+                                   targetUri);
+    }
+    catch(ex if ex instanceof Components.Exception &&
+                ex.result == Cr.NS_ERROR_NOT_AVAILABLE) {
+      //
+      // Under normal operation the download history service may not
+      // be available. We don't want all downloads that are public to fail
+      // when this happens so we'll ignore this error and this error only!
+      //
+    }
   },
 
   /**

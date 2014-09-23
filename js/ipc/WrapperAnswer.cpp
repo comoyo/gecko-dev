@@ -12,7 +12,6 @@
 #include "nsContentUtils.h"
 #include "xpcprivate.h"
 #include "jsfriendapi.h"
-#include "nsCxPusher.h"
 
 using namespace JS;
 using namespace mozilla;
@@ -277,7 +276,7 @@ WrapperAnswer::AnswerHasOwn(const ObjectId &objId, const nsString &id, ReturnSta
 }
 
 bool
-WrapperAnswer::AnswerGet(const ObjectId &objId, const ObjectId &receiverId, const nsString &id,
+WrapperAnswer::AnswerGet(const ObjectId &objId, const ObjectVariant &receiverVar, const nsString &id,
 			 ReturnStatus *rs, JSVariant *result)
 {
     AutoSafeJSContext cx;
@@ -291,11 +290,11 @@ WrapperAnswer::AnswerGet(const ObjectId &objId, const ObjectId &receiverId, cons
     if (!obj)
         return fail(cx, rs);
 
-    RootedObject receiver(cx, findObjectById(cx, receiverId));
+    JSAutoCompartment comp(cx, obj);
+
+    RootedObject receiver(cx, fromObjectVariant(cx, receiverVar));
     if (!receiver)
         return fail(cx, rs);
-
-    JSAutoCompartment comp(cx, obj);
 
     RootedId internedId(cx);
     if (!convertGeckoStringToId(cx, id, &internedId))
@@ -314,7 +313,7 @@ WrapperAnswer::AnswerGet(const ObjectId &objId, const ObjectId &receiverId, cons
 }
 
 bool
-WrapperAnswer::AnswerSet(const ObjectId &objId, const ObjectId &receiverId, const nsString &id,
+WrapperAnswer::AnswerSet(const ObjectId &objId, const ObjectVariant &receiverVar, const nsString &id,
 			 const bool &strict, const JSVariant &value, ReturnStatus *rs,
 			 JSVariant *result)
 {
@@ -329,11 +328,11 @@ WrapperAnswer::AnswerSet(const ObjectId &objId, const ObjectId &receiverId, cons
     if (!obj)
         return fail(cx, rs);
 
-    RootedObject receiver(cx, findObjectById(cx, receiverId));
+    JSAutoCompartment comp(cx, obj);
+
+    RootedObject receiver(cx, fromObjectVariant(cx, receiverVar));
     if (!receiver)
         return fail(cx, rs);
-
-    JSAutoCompartment comp(cx, obj);
 
     LOG("set %s[%s] = %s", ReceiverObj(objId), id, InVariant(value));
 
@@ -381,8 +380,12 @@ WrapperAnswer::AnswerIsExtensible(const ObjectId &objId, ReturnStatus *rs, bool 
 }
 
 bool
-WrapperAnswer::AnswerCall(const ObjectId &objId, const nsTArray<JSParam> &argv, ReturnStatus *rs,
-			  JSVariant *result, nsTArray<JSParam> *outparams)
+WrapperAnswer::AnswerCallOrConstruct(const ObjectId &objId,
+                                     const nsTArray<JSParam> &argv,
+                                     const bool &construct,
+                                     ReturnStatus *rs,
+                                     JSVariant *result,
+                                     nsTArray<JSParam> *outparams)
 {
     AutoSafeJSContext cx;
     JSAutoRequest request(cx);
@@ -434,7 +437,11 @@ WrapperAnswer::AnswerCall(const ObjectId &objId, const nsTArray<JSParam> &argv, 
         ContextOptionsRef(cx).setDontReportUncaught(true);
 
         HandleValueArray args = HandleValueArray::subarray(vals, 2, vals.length() - 2);
-        bool success = JS::Call(cx, vals[1], vals[0], args, &rval);
+        bool success;
+        if (construct)
+            success = JS::Construct(cx, vals[0], args, &rval);
+        else
+            success = JS::Call(cx, vals[1], vals[0], args, &rval);
         if (!success)
             return fail(cx, rs);
     }
@@ -475,6 +482,30 @@ WrapperAnswer::AnswerCall(const ObjectId &objId, const nsTArray<JSParam> &argv, 
     }
 
     LOG("%s.call(%s) = %s", ReceiverObj(objId), argv, OutVariant(*result));
+
+    return ok(rs);
+}
+
+bool
+WrapperAnswer::AnswerHasInstance(const ObjectId &objId, const JSVariant &vVar, ReturnStatus *rs, bool *bp)
+{
+    AutoSafeJSContext cx;
+    JSAutoRequest request(cx);
+
+    RootedObject obj(cx, findObjectById(cx, objId));
+    if (!obj)
+        return fail(cx, rs);
+
+    JSAutoCompartment comp(cx, obj);
+
+    LOG("%s.hasInstance(%s)", ReceiverObj(objId), InVariant(vVar));
+
+    RootedValue val(cx);
+    if (!fromVariant(cx, vVar, &val))
+        return fail(cx, rs);
+
+    if (!JS_HasInstance(cx, obj, val, bp))
+        return fail(cx, rs);
 
     return ok(rs);
 }

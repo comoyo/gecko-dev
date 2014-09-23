@@ -122,7 +122,7 @@ public:
 
   /* return the row ascent
    */
-  nscoord GetRowBaseline();
+  nscoord GetRowBaseline(mozilla::WritingMode aWritingMode);
  
   /** returns the ordinal position of this row in its table */
   virtual int32_t GetRowIndex() const;
@@ -237,14 +237,14 @@ protected:
   /** protected constructor.
     * @see NewFrame
     */
-  nsTableRowFrame(nsStyleContext *aContext);
+  explicit nsTableRowFrame(nsStyleContext *aContext);
 
   void InitChildReflowState(nsPresContext&         aPresContext,
                             const nsSize&           aAvailSize,
                             bool                    aBorderCollapse,
                             nsTableCellReflowState& aReflowState);
   
-  virtual int GetLogicalSkipSides(const nsHTMLReflowState* aReflowState = nullptr) const MOZ_OVERRIDE;
+  virtual LogicalSides GetLogicalSkipSides(const nsHTMLReflowState* aReflowState = nullptr) const MOZ_OVERRIDE;
 
   // row-specific methods
 

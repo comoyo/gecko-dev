@@ -12,10 +12,13 @@ import org.mozilla.gecko.FennecMochitestAssert;
 import org.mozilla.gecko.FennecNativeDriver;
 import org.mozilla.gecko.FennecTalosAssert;
 
+import org.mozilla.gecko.AppConstants;
+
 import android.app.Activity;
 import android.test.ActivityInstrumentationTestCase2;
 import android.util.Log;
 
+@SuppressWarnings("unchecked")
 public abstract class BaseRobocopTest extends ActivityInstrumentationTestCase2<Activity> {
     public enum Type {
         MOCHITEST,
@@ -23,6 +26,25 @@ public abstract class BaseRobocopTest extends ActivityInstrumentationTestCase2<A
     }
 
     private static final String DEFAULT_ROOT_PATH = "/mnt/sdcard/tests";
+
+    /**
+     * The Java Class instance that launches the browser.
+     * <p>
+     * This should always agree with {@link AppConstants#BROWSER_INTENT_CLASS_NAME}.
+     */
+    public static final Class<? extends Activity> BROWSER_INTENT_CLASS;
+
+    // Use reflection here so we don't have to preprocess this file.
+    static {
+        Class<? extends Activity> cl;
+        try {
+            cl = (Class<? extends Activity>) Class.forName(AppConstants.BROWSER_INTENT_CLASS_NAME);
+        } catch (ClassNotFoundException e) {
+            // Oh well.
+            cl = Activity.class;
+        }
+        BROWSER_INTENT_CLASS = cl;
+    }
 
     protected Assert mAsserter;
     protected String mLogFile;
@@ -39,9 +61,8 @@ public abstract class BaseRobocopTest extends ActivityInstrumentationTestCase2<A
      * specify a different activity class to the one-argument constructor. To do
      * as little as possible, specify <code>Activity.class</code>.
      */
-    @SuppressWarnings("unchecked")
     public BaseRobocopTest() {
-        this((Class<Activity>) TestConstants.BROWSER_INTENT_CLASS);
+        this((Class<Activity>) BROWSER_INTENT_CLASS);
     }
 
     /**
@@ -75,7 +96,7 @@ public abstract class BaseRobocopTest extends ActivityInstrumentationTestCase2<A
         }
         String configFile = FennecNativeDriver.getFile(mRootPath + "/robotium.config");
         mConfig = FennecNativeDriver.convertTextToTable(configFile);
-        mLogFile = (String) mConfig.get("logfile");
+        mLogFile = mConfig.get("logfile");
 
         // Initialize the asserter.
         if (getTestType() == Type.TALOS) {
@@ -84,6 +105,6 @@ public abstract class BaseRobocopTest extends ActivityInstrumentationTestCase2<A
             mAsserter = new FennecMochitestAssert();
         }
         mAsserter.setLogFile(mLogFile);
-        mAsserter.setTestName(this.getClass().getName());
+        mAsserter.setTestName(getClass().getName());
     }
 }

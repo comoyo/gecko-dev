@@ -168,7 +168,8 @@ class JSFunction : public JSObject
 
     /* Returns the strictness of this function, which must be interpreted. */
     bool strict() const {
-        return nonLazyScript()->strict();
+        MOZ_ASSERT(isInterpreted());
+        return isInterpretedLazy() ? lazyScript()->strict() : nonLazyScript()->strict();
     }
 
     void setFlags(uint16_t flags) {
@@ -301,7 +302,7 @@ class JSFunction : public JSObject
             MOZ_ASSERT(fun);
             JSScript *script = fun->nonLazyScript();
 
-            if (shadowZone()->needsBarrier())
+            if (shadowZone()->needsIncrementalBarrier())
                 js::LazyScript::writeBarrierPre(lazy);
 
             flags_ &= ~INTERPRETED_LAZY;
@@ -460,7 +461,7 @@ class JSFunction : public JSObject
   public:
     inline bool isExtended() const {
         JS_STATIC_ASSERT(FinalizeKind != ExtendedFinalizeKind);
-        JS_ASSERT_IF(isTenured(), !!(flags() & EXTENDED) == (tenuredGetAllocKind() == ExtendedFinalizeKind));
+        JS_ASSERT_IF(isTenured(), !!(flags() & EXTENDED) == (asTenured()->getAllocKind() == ExtendedFinalizeKind));
         return !!(flags() & EXTENDED);
     }
 
@@ -483,7 +484,7 @@ class JSFunction : public JSObject
         js::gc::AllocKind kind = FinalizeKind;
         if (isExtended())
             kind = ExtendedFinalizeKind;
-        JS_ASSERT_IF(isTenured(), kind == tenuredGetAllocKind());
+        JS_ASSERT_IF(isTenured(), kind == asTenured()->getAllocKind());
         return kind;
     }
 };
@@ -532,8 +533,8 @@ FunctionHasResolveHook(const JSAtomState &atomState, PropertyName *name);
 extern bool
 fun_resolve(JSContext *cx, HandleObject obj, HandleId id, MutableHandleObject objp);
 
-// ES6 9.2.5 IsConstructor
-bool IsConstructor(const Value &v);
+extern bool
+fun_toString(JSContext *cx, unsigned argc, Value *vp);
 
 /*
  * Function extended with reserved slots for use by various kinds of functions.
@@ -570,8 +571,8 @@ CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent,
 
 
 extern bool
-FindBody(JSContext *cx, HandleFunction fun, ConstTwoByteChars chars, size_t length,
-         size_t *bodyStart, size_t *bodyEnd);
+FindBody(JSContext *cx, HandleFunction fun, HandleLinearString src, size_t *bodyStart,
+         size_t *bodyEnd);
 
 } // namespace js
 

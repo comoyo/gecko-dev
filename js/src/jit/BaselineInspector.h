@@ -7,8 +7,6 @@
 #ifndef jit_BaselineInspector_h
 #define jit_BaselineInspector_h
 
-#ifdef JS_ION
-
 #include "jit/BaselineIC.h"
 #include "jit/BaselineJIT.h"
 #include "jit/MIR.h"
@@ -109,7 +107,7 @@ class BaselineInspector
     bool hasSeenNegativeIndexGetElement(jsbytecode *pc);
     bool hasSeenAccessedGetter(jsbytecode *pc);
     bool hasSeenDoubleResult(jsbytecode *pc);
-    bool hasSeenNonStringIterNext(jsbytecode *pc);
+    bool hasSeenNonStringIterMore(jsbytecode *pc);
 
     JSObject *getTemplateObject(jsbytecode *pc);
     JSObject *getTemplateObjectForNative(jsbytecode *pc, Native native);
@@ -123,7 +121,5 @@ class BaselineInspector
 
 } // namespace jit
 } // namespace js
-
-#endif // JS_ION
 
 #endif /* jit_BaselineInspector_h */

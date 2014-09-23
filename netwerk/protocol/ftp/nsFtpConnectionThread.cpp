@@ -94,6 +94,7 @@ nsFtpState::nsFtpState()
     , mServerIsIPv6(false)
     , mUseUTF8(false)
     , mControlStatus(NS_OK)
+    , mDoomCache(false)
     , mDeferredCallbackPending(false)
 {
     LOG_ALWAYS(("FTP:(%x) nsFtpState created", this));
@@ -1951,10 +1952,12 @@ public:
     {
         MOZ_COUNT_CTOR(nsFtpAsyncAlert);
     }
+protected:
     virtual ~nsFtpAsyncAlert()
     {
         MOZ_COUNT_DTOR(nsFtpAsyncAlert);
     }
+public:
     NS_IMETHOD Run()
     {
         if (mPrompter) {

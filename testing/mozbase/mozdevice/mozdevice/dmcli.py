@@ -18,7 +18,9 @@ import argparse
 class DMCli(object):
 
     def __init__(self):
-        self.commands = { 'install': { 'function': self.install,
+        self.commands = { 'deviceroot': { 'function': self.deviceroot,
+                                          'help': 'get device root directory for storing temporary files' },
+                          'install': { 'function': self.install,
                                        'args': [ { 'name': 'file' } ],
                                        'help': 'push this package file to the device and install it' },
                           'uninstall': { 'function': self.uninstall,
@@ -153,7 +155,7 @@ class DMCli(object):
     def add_options(self, parser):
         parser.add_argument("-v", "--verbose", action="store_true",
                             help="Verbose output from DeviceManager",
-                            default=False)
+                            default=bool(os.environ.get('VERBOSE')))
         parser.add_argument("--host", action="store",
                             help="Device hostname (only if using TCP/IP, " \
                                 "defaults to TEST_DEVICE environment " \
@@ -219,6 +221,9 @@ class DMCli(object):
         else:
             self.parser.error("Unknown device manager type: %s" % type)
 
+    def deviceroot(self, args):
+        print self.dm.deviceRoot
+
     def push(self, args):
         (src, dest) = (args.local_file, args.remote_file)
         if os.path.isdir(src):
@@ -244,7 +249,7 @@ class DMCli(object):
 
     def install(self, args):
         basename = os.path.basename(args.file)
-        app_path_on_device = posixpath.join(self.dm.getDeviceRoot(),
+        app_path_on_device = posixpath.join(self.dm.deviceRoot,
                                             basename)
         self.dm.pushFile(args.file, app_path_on_device)
         self.dm.installApp(app_path_on_device)

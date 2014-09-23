@@ -59,8 +59,7 @@ class SpeechRecognition MOZ_FINAL : public DOMEventTargetHelper,
 {
 public:
   MOZ_DECLARE_REFCOUNTED_TYPENAME(SpeechRecognition)
-  SpeechRecognition(nsPIDOMWindow* aOwnerWindow);
-  virtual ~SpeechRecognition() {};
+  explicit SpeechRecognition(nsPIDOMWindow* aOwnerWindow);
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -97,7 +96,7 @@ public:
 
   void SetServiceURI(const nsAString& aArg, ErrorResult& aRv);
 
-  void Start(ErrorResult& aRv);
+  void Start(const Optional<NonNull<DOMMediaStream>>& aStream, ErrorResult& aRv);
 
   void Stop();
 
@@ -131,7 +130,7 @@ public:
   uint32_t FillSamplesBuffer(const int16_t* aSamples, uint32_t aSampleCount);
   uint32_t SplitSamplesBuffer(const int16_t* aSamplesBuffer, uint32_t aSampleCount, nsTArray<nsRefPtr<SharedBuffer>>& aResult);
   AudioSegment* CreateAudioSegment(nsTArray<nsRefPtr<SharedBuffer>>& aChunks);
-  void FeedAudioData(already_AddRefed<SharedBuffer> aSamples, uint32_t aDuration, MediaStreamListener* aProvider);
+  void FeedAudioData(already_AddRefed<SharedBuffer> aSamples, uint32_t aDuration, MediaStreamListener* aProvider, TrackRate aTrackRate);
 
   static struct TestConfig
   {
@@ -162,6 +161,8 @@ public:
 
   friend class SpeechEvent;
 private:
+  virtual ~SpeechRecognition() {};
+
   enum FSMState {
     STATE_IDLE,
     STATE_STARTING,
@@ -181,13 +182,13 @@ private:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIDOMGETUSERMEDIASUCCESSCALLBACK
 
-    GetUserMediaSuccessCallback(SpeechRecognition* aRecognition)
+    explicit GetUserMediaSuccessCallback(SpeechRecognition* aRecognition)
       : mRecognition(aRecognition)
     {}
 
+  private:
     virtual ~GetUserMediaSuccessCallback() {}
 
-  private:
     nsRefPtr<SpeechRecognition> mRecognition;
   };
 
@@ -197,20 +198,20 @@ private:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIDOMGETUSERMEDIAERRORCALLBACK
 
-    GetUserMediaErrorCallback(SpeechRecognition* aRecognition)
+    explicit GetUserMediaErrorCallback(SpeechRecognition* aRecognition)
       : mRecognition(aRecognition)
     {}
 
+  private:
     virtual ~GetUserMediaErrorCallback() {}
 
-  private:
     nsRefPtr<SpeechRecognition> mRecognition;
   };
 
   NS_IMETHOD StartRecording(DOMMediaStream* aDOMStream);
   NS_IMETHOD StopRecording();
 
-  uint32_t ProcessAudioSegment(AudioSegment* aSegment);
+  uint32_t ProcessAudioSegment(AudioSegment* aSegment, TrackRate aTrackRate);
   void NotifyError(SpeechEvent* aEvent);
 
   void ProcessEvent(SpeechEvent* aEvent);
@@ -265,6 +266,7 @@ public:
   , mError(0)
   , mRecognition(aRecognition)
   , mType(aType)
+  , mTrackRate(0)
   {
   }
 
@@ -285,6 +287,7 @@ private:
   // event gets processed.
   nsRefPtr<MediaStreamListener> mProvider;
   SpeechRecognition::EventType mType;
+  TrackRate mTrackRate;
 };
 
 } // namespace dom

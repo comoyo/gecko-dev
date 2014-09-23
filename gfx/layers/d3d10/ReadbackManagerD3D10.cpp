@@ -39,6 +39,7 @@ struct ReadbackTask {
 // destroyed by the main thread.
 class ReadbackResultWriter MOZ_FINAL : public nsIRunnable
 {
+  ~ReadbackResultWriter() {}
   NS_DECL_THREADSAFE_ISUPPORTS
 public:
   ReadbackResultWriter(ReadbackTask *aTask) : mTask(aTask) {}
@@ -79,7 +80,8 @@ public:
                                              update->mSequenceCounter);
 
     if (ctx) {
-      ctx->Translate(gfxPoint(offset.x, offset.y));
+      ctx->SetMatrix(
+        ctx->CurrentMatrix().Translate(offset.x, offset.y));
       ctx->SetSource(sourceSurface, gfxPoint(mTask->mOrigin.x,
                                              mTask->mOrigin.y));
       ctx->Paint();

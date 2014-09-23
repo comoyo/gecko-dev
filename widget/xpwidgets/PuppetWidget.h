@@ -15,6 +15,8 @@
 #ifndef mozilla_widget_PuppetWidget_h__
 #define mozilla_widget_PuppetWidget_h__
 
+#include "mozilla/gfx/2D.h"
+#include "mozilla/RefPtr.h"
 #include "nsBaseScreen.h"
 #include "nsBaseWidget.h"
 #include "nsIScreenManager.h"
@@ -33,20 +35,25 @@ class TabChild;
 
 namespace widget {
 
-class AutoCacheNativeKeyCommands;
+struct AutoCacheNativeKeyCommands;
 
-class PuppetWidget : public nsBaseWidget, public nsSupportsWeakReference
+class PuppetWidget MOZ_FINAL : public nsBaseWidget,
+                               public nsSupportsWeakReference
 {
   typedef mozilla::dom::TabChild TabChild;
+  typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef nsBaseWidget Base;
 
   // The width and height of the "widget" are clamped to this.
   static const size_t kMaxDimension;
 
 public:
-  PuppetWidget(TabChild* aTabChild);
+  explicit PuppetWidget(TabChild* aTabChild);
+
+protected:
   virtual ~PuppetWidget();
 
+public:
   NS_DECL_ISUPPORTS_INHERITED
 
   NS_IMETHOD Create(nsIWidget*        aParent,
@@ -138,7 +145,7 @@ public:
                           DoCommandCallback aCallback,
                           void* aCallbackData) MOZ_OVERRIDE;
 
-  friend class AutoCacheNativeKeyCommands;
+  friend struct AutoCacheNativeKeyCommands;
 
   //
   // nsBaseWidget methods we override
@@ -158,7 +165,6 @@ public:
                   LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
                   LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT,
                   bool* aAllowRetaining = nullptr);
-  virtual gfxASurface*      GetThebesSurface();
 
   NS_IMETHOD NotifyIME(const IMENotification& aIMENotification) MOZ_OVERRIDE;
   NS_IMETHOD_(void) SetInputContext(const InputContext& aContext,
@@ -199,11 +205,12 @@ private:
   nsresult NotifyIMEOfSelectionChange(const IMENotification& aIMENotification);
   nsresult NotifyIMEOfUpdateComposition();
   nsresult NotifyIMEOfTextChange(const IMENotification& aIMENotification);
+  nsresult NotifyIMEOfMouseButtonEvent(const IMENotification& aIMENotification);
 
   class PaintTask : public nsRunnable {
   public:
     NS_DECL_NSIRUNNABLE
-    PaintTask(PuppetWidget* widget) : mWidget(widget) {}
+    explicit PaintTask(PuppetWidget* widget) : mWidget(widget) {}
     void Revoke() { mWidget = nullptr; }
   private:
     PuppetWidget* mWidget;
@@ -225,7 +232,7 @@ private:
   bool mVisible;
   // XXX/cjones: keeping this around until we teach LayerManager to do
   // retained-content-only transactions
-  nsRefPtr<gfxASurface> mSurface;
+  mozilla::RefPtr<DrawTarget> mDrawTarget;
   // IME
   nsIMEUpdatePreference mIMEPreferenceOfParent;
   bool mIMEComposing;
@@ -251,7 +258,7 @@ private:
 
 struct AutoCacheNativeKeyCommands
 {
-  AutoCacheNativeKeyCommands(PuppetWidget* aWidget)
+  explicit AutoCacheNativeKeyCommands(PuppetWidget* aWidget)
     : mWidget(aWidget)
   {
     mSavedValid = mWidget->mNativeKeyCommandsValid;
@@ -297,9 +304,10 @@ private:
 class PuppetScreen : public nsBaseScreen
 {
 public:
-    PuppetScreen(void* nativeScreen);
+    explicit PuppetScreen(void* nativeScreen);
     ~PuppetScreen();
 
+    NS_IMETHOD GetId(uint32_t* aId) MOZ_OVERRIDE;
     NS_IMETHOD GetRect(int32_t* aLeft, int32_t* aTop, int32_t* aWidth, int32_t* aHeight) MOZ_OVERRIDE;
     NS_IMETHOD GetAvailRect(int32_t* aLeft, int32_t* aTop, int32_t* aWidth, int32_t* aHeight) MOZ_OVERRIDE;
     NS_IMETHOD GetPixelDepth(int32_t* aPixelDepth) MOZ_OVERRIDE;
@@ -310,9 +318,10 @@ public:
 
 class PuppetScreenManager MOZ_FINAL : public nsIScreenManager
 {
+    ~PuppetScreenManager();
+
 public:
     PuppetScreenManager();
-    ~PuppetScreenManager();
 
     NS_DECL_ISUPPORTS
     NS_DECL_NSISCREENMANAGER

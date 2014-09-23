@@ -40,7 +40,7 @@
 #include "nsIPrincipal.h"
 #include "nsWildCard.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
+#include "mozilla/dom/ScriptSettings.h"
 
 #include "nsIXPConnect.h"
 
@@ -250,6 +250,11 @@ nsNPAPIPlugin::PluginCrashed(const nsAString& pluginDumpID,
 bool
 nsNPAPIPlugin::RunPluginOOP(const nsPluginTag *aPluginTag)
 {
+#if (MOZ_WIDGET_GTK == 3)
+  // We force OOP on Linux/GTK3 because some plugins use GTK2 and both GTK
+  // libraries can't be loaded in the same process.
+  return true;
+#else
   if (PR_GetEnv("MOZ_DISABLE_OOP_PLUGINS")) {
     return false;
   }
@@ -376,6 +381,7 @@ nsNPAPIPlugin::RunPluginOOP(const nsPluginTag *aPluginTag)
   }
 
   return oopPluginsEnabled;
+#endif
 }
 
 inline PluginLibrary*
@@ -404,8 +410,6 @@ nsNPAPIPlugin::CreatePlugin(nsPluginTag *aPluginTag, nsNPAPIPlugin** aResult)
   CheckClassInitialized();
 
   nsRefPtr<nsNPAPIPlugin> plugin = new nsNPAPIPlugin();
-  if (!plugin)
-    return NS_ERROR_OUT_OF_MEMORY;
 
   PluginLibrary* pluginLib = GetNewPluginLibrary(aPluginTag);
   if (!pluginLib) {
@@ -415,6 +419,7 @@ nsNPAPIPlugin::CreatePlugin(nsPluginTag *aPluginTag, nsNPAPIPlugin** aResult)
 #if defined(XP_MACOSX) || defined(MOZ_WIDGET_ANDROID)
   if (!pluginLib->HasRequiredFunctions()) {
     NS_WARNING("Not all necessary functions exposed by plugin, it will not load.");
+    delete pluginLib;
     return NS_ERROR_FAILURE;
   }
 #endif
@@ -635,27 +640,6 @@ GetDocumentFromNPP(NPP npp)
   owner->GetDocument(getter_AddRefs(doc));
 
   return doc;
-}
-
-static JSContext *
-GetJSContextFromDoc(nsIDocument *doc)
-{
-  nsCOMPtr<nsIScriptGlobalObject> sgo = do_QueryInterface(doc->GetWindow());
-  NS_ENSURE_TRUE(sgo, nullptr);
-
-  nsIScriptContext *scx = sgo->GetContext();
-  NS_ENSURE_TRUE(scx, nullptr);
-
-  return scx->GetNativeContext();
-}
-
-static JSContext *
-GetJSContextFromNPP(NPP npp)
-{
-  nsIDocument *doc = GetDocumentFromNPP(npp);
-  NS_ENSURE_TRUE(doc, nullptr);
-
-  return GetJSContextFromDoc(doc);
 }
 
 static already_AddRefed<nsIChannel>
@@ -881,7 +865,7 @@ _geturl(NPP npp, const char* relativeURL, const char* target)
       (strncmp(relativeURL, "ftp:", 4) != 0)) {
     nsNPAPIPluginInstance *inst = (nsNPAPIPluginInstance *) npp->ndata;
 
-    
+
     const char *name = nullptr;
     nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst();
     host->GetPluginName(inst, &name);
@@ -1233,9 +1217,16 @@ _getpluginelement(NPP npp)
   if (!element)
     return nullptr;
 
-  AutoPushJSContext cx(GetJSContextFromNPP(npp));
-  NS_ENSURE_TRUE(cx, nullptr);
-  JSAutoRequest ar(cx); // Unnecessary once bug 868130 lands.
+  nsIDocument *doc = GetDocumentFromNPP(npp);
+  if (NS_WARN_IF(!doc)) {
+    return nullptr;
+  }
+
+  dom::AutoJSAPI jsapi;
+  if (NS_WARN_IF(!jsapi.Init(doc->GetInnerWindow()))) {
+    return nullptr;
+  }
+  JSContext* cx = jsapi.cx();
 
   nsCOMPtr<nsIXPConnect> xpc(do_GetService(nsIXPConnect::GetCID()));
   NS_ENSURE_TRUE(xpc, nullptr);
@@ -1310,10 +1301,10 @@ _utf8fromidentifier(NPIdentifier id)
   }
 
   JSString *str = NPIdentifierToString(id);
+  nsAutoString autoStr;
+  AssignJSFlatString(autoStr, JS_ASSERT_STRING_IS_FLAT(str));
 
-  return
-    ToNewUTF8String(nsDependentString(::JS_GetInternedStringChars(str),
-                                      ::JS_GetStringLength(str)));
+  return ToNewUTF8String(autoStr);
 }
 
 int32_t
@@ -1490,8 +1481,8 @@ _evaluate(NPP npp, NPObject* npobj, NPString *script, NPVariant *result)
     return false;
   }
 
-  AutoSafeJSContext cx;
-  JSAutoCompartment ac(cx, win->FastGetGlobalJSObject());
+  dom::AutoEntryScript aes(win);
+  JSContext* cx = aes.cx();
 
   JS::Rooted<JSObject*> obj(cx, nsNPObjWrapper::GetNewOrUsed(npp, cx, npobj));
 
@@ -2104,14 +2095,14 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
 #ifndef NP_NO_QUICKDRAW
   case NPNVsupportsQuickDrawBool: {
     *(NPBool*)result = false;
-    
+
     return NPERR_NO_ERROR;
   }
 #endif
 
   case NPNVsupportsCoreGraphicsBool: {
     *(NPBool*)result = true;
-    
+
     return NPERR_NO_ERROR;
   }
 
@@ -2181,14 +2172,14 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
       InitMatrixInterface(i);
       return NPERR_NO_ERROR;
     }
-      
+
     case kPathInterfaceV0_ANPGetValue: {
       LOG("get path interface");
       ANPPathInterfaceV0 *i = (ANPPathInterfaceV0 *) result;
       InitPathInterface(i);
       return NPERR_NO_ERROR;
     }
-      
+
     case kTypefaceInterfaceV0_ANPGetValue: {
       LOG("get typeface interface");
       ANPTypefaceInterfaceV0 *i = (ANPTypefaceInterfaceV0 *) result;
@@ -2244,7 +2235,7 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
       InitSurfaceInterface(i);
       return NPERR_NO_ERROR;
     }
-      
+
     case kSupportedDrawingModel_ANPGetValue: {
       LOG("get supported drawing model");
       uint32_t* bits = reinterpret_cast<uint32_t*>(result);

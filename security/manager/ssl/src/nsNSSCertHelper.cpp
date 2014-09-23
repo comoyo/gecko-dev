@@ -2,10 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/UniquePtr.h"
+
 #include "prerror.h"
 #include "prprf.h"
 
-#include "ScopedNSSTypes.h"
 #include "nsNSSCertHelper.h"
 #include "nsCOMPtr.h"
 #include "nsNSSCertificate.h"
@@ -284,39 +285,6 @@ GetOIDText(SECItem *oid, nsINSSComponent *nssComponent, nsAString &text)
     break;
   case SEC_OID_PKCS1_RSA_PSS_SIGNATURE:
     bundlekey = "CertDumpRSAPSSSignature";
-    break;
-  case SEC_OID_NS_CERT_EXT_CERT_TYPE:
-    bundlekey = "CertDumpCertType";
-    break;
-  case SEC_OID_NS_CERT_EXT_BASE_URL:
-    bundlekey = "CertDumpNSCertExtBaseUrl";
-    break;
-  case SEC_OID_NS_CERT_EXT_REVOCATION_URL:
-    bundlekey = "CertDumpNSCertExtRevocationUrl";
-    break;
-  case SEC_OID_NS_CERT_EXT_CA_REVOCATION_URL:
-    bundlekey = "CertDumpNSCertExtCARevocationUrl";
-    break;
-  case SEC_OID_NS_CERT_EXT_CERT_RENEWAL_URL:
-    bundlekey = "CertDumpNSCertExtCertRenewalUrl";
-    break;
-  case SEC_OID_NS_CERT_EXT_CA_POLICY_URL:
-    bundlekey = "CertDumpNSCertExtCAPolicyUrl";
-    break;
-  case SEC_OID_NS_CERT_EXT_SSL_SERVER_NAME:
-    bundlekey = "CertDumpNSCertExtSslServerName";
-    break;
-  case SEC_OID_NS_CERT_EXT_COMMENT:
-    bundlekey = "CertDumpNSCertExtComment";
-    break;
-  case SEC_OID_NS_CERT_EXT_LOST_PASSWORD_URL:
-    bundlekey = "CertDumpNSCertExtLostPasswordUrl";
-    break;
-  case SEC_OID_NS_CERT_EXT_CERT_RENEWAL_TIME:
-    bundlekey = "CertDumpNSCertExtCertRenewalTime";
-    break;
-  case SEC_OID_NETSCAPE_AOLSCREENNAME:
-    bundlekey = "CertDumpNetscapeAolScreenname";
     break;
   case SEC_OID_AVA_COUNTRY_NAME:
     bundlekey = "CertDumpAVACountry";
@@ -673,61 +641,6 @@ ProcessRawBytes(nsINSSComponent *nssComponent, SECItem *data,
 }    
 
 static nsresult
-ProcessNSCertTypeExtensions(SECItem  *extData, 
-                            nsAString &text,
-                            nsINSSComponent *nssComponent)
-{
-  nsAutoString local;
-  SECItem decoded;
-  decoded.data = nullptr;
-  decoded.len  = 0;
-  if (SECSuccess != SEC_ASN1DecodeItem(nullptr, &decoded, 
-		SEC_ASN1_GET(SEC_BitStringTemplate), extData)) {
-    nssComponent->GetPIPNSSBundleString("CertDumpExtensionFailure", local);
-    text.Append(local.get());
-    return NS_OK;
-  }
-  unsigned char nsCertType = decoded.data[0];
-  nsMemory::Free(decoded.data);
-  if (nsCertType & NS_CERT_TYPE_SSL_CLIENT) {
-    nssComponent->GetPIPNSSBundleString("VerifySSLClient", local);
-    text.Append(local.get());
-    text.AppendLiteral(SEPARATOR);
-  }
-  if (nsCertType & NS_CERT_TYPE_SSL_SERVER) {
-    nssComponent->GetPIPNSSBundleString("VerifySSLServer", local);
-    text.Append(local.get());
-    text.AppendLiteral(SEPARATOR);
-  }
-  if (nsCertType & NS_CERT_TYPE_EMAIL) {
-    nssComponent->GetPIPNSSBundleString("CertDumpCertTypeEmail", local);
-    text.Append(local.get());
-    text.AppendLiteral(SEPARATOR);
-  }
-  if (nsCertType & NS_CERT_TYPE_OBJECT_SIGNING) {
-    nssComponent->GetPIPNSSBundleString("VerifyObjSign", local);
-    text.Append(local.get());
-    text.AppendLiteral(SEPARATOR);
-  }
-  if (nsCertType & NS_CERT_TYPE_SSL_CA) {
-    nssComponent->GetPIPNSSBundleString("VerifySSLCA", local);
-    text.Append(local.get());
-    text.AppendLiteral(SEPARATOR);
-  }
-  if (nsCertType & NS_CERT_TYPE_EMAIL_CA) {
-    nssComponent->GetPIPNSSBundleString("CertDumpEmailCA", local);
-    text.Append(local.get());
-    text.AppendLiteral(SEPARATOR);
-  }
-  if (nsCertType & NS_CERT_TYPE_OBJECT_SIGNING_CA) {
-    nssComponent->GetPIPNSSBundleString("VerifyObjSign", local);
-    text.Append(local.get());
-    text.AppendLiteral(SEPARATOR);
-  }
-  return NS_OK;
-}
-
-static nsresult
 ProcessKeyUsageExtension(SECItem *extData, nsAString &text,
                          nsINSSComponent *nssComponent)
 {
@@ -741,7 +654,10 @@ ProcessKeyUsageExtension(SECItem *extData, nsAString &text,
     text.Append(local.get());
     return NS_OK;
   }
-  unsigned char keyUsage = decoded.data[0];
+  unsigned char keyUsage = 0;
+  if (decoded.len) {
+    keyUsage = decoded.data[0];
+  }
   nsMemory::Free(decoded.data);  
   if (keyUsage & KU_DIGITAL_SIGNATURE) {
     nssComponent->GetPIPNSSBundleString("CertDumpKUSign", local);
@@ -898,7 +814,7 @@ ProcessRDN(CERTRDN* rdn, nsAString &finalString, nsINSSComponent *nssComponent)
     // We know we can fit buffer of this length. CERT_RFC1485_EscapeAndQuote
     // will fail if we provide smaller buffer then the result can fit to.
     int escapedValueCapacity = decodeItem->len * 3 + 3;
-    ScopedDeleteArray<char> escapedValue(new char[escapedValueCapacity]);
+    UniquePtr<char[]> escapedValue = MakeUnique<char[]>(escapedValueCapacity);
 
     SECStatus status = CERT_RFC1485_EscapeAndQuote(
           escapedValue.get(),
@@ -910,7 +826,7 @@ ProcessRDN(CERTRDN* rdn, nsAString &finalString, nsINSSComponent *nssComponent)
       return NS_ERROR_FAILURE;
     }
 
-    avavalue = NS_ConvertUTF8toUTF16(escapedValue);
+    avavalue = NS_ConvertUTF8toUTF16(escapedValue.get());
     
     SECITEM_FreeItem(decodeItem, true);
     params[0] = type.get();
@@ -933,9 +849,6 @@ ProcessName(CERTName *name, nsINSSComponent *nssComponent, char16_t **value)
 
   nsresult rv;
   CERTRDN **lastRdn;
-  lastRdn = rdns;
-
-
   /* find last RDN */
   lastRdn = rdns;
   while (*lastRdn) lastRdn++;
@@ -1610,9 +1523,6 @@ ProcessExtensionData(SECOidTag oidTag, SECItem *extData,
 {
   nsresult rv;
   switch (oidTag) {
-  case SEC_OID_NS_CERT_EXT_CERT_TYPE:
-    rv = ProcessNSCertTypeExtensions(extData, text, nssComponent);
-    break;
   case SEC_OID_X509_KEY_USAGE:
     rv = ProcessKeyUsageExtension(extData, text, nssComponent);
     break;
@@ -1640,18 +1550,6 @@ ProcessExtensionData(SECOidTag oidTag, SECItem *extData,
     break;
   case SEC_OID_X509_AUTH_INFO_ACCESS:
     rv = ProcessAuthInfoAccess(extData, text, nssComponent);
-    break;
-  case SEC_OID_NS_CERT_EXT_BASE_URL:
-  case SEC_OID_NS_CERT_EXT_REVOCATION_URL:
-  case SEC_OID_NS_CERT_EXT_CA_REVOCATION_URL:
-  case SEC_OID_NS_CERT_EXT_CA_CERT_URL:
-  case SEC_OID_NS_CERT_EXT_CERT_RENEWAL_URL:
-  case SEC_OID_NS_CERT_EXT_CA_POLICY_URL:
-  case SEC_OID_NS_CERT_EXT_HOMEPAGE_URL:
-  case SEC_OID_NS_CERT_EXT_COMMENT:
-  case SEC_OID_NS_CERT_EXT_SSL_SERVER_NAME:
-  case SEC_OID_NS_CERT_EXT_LOST_PASSWORD_URL:
-    rv = ProcessIA5String(extData, text, nssComponent);
     break;
   default:
     if (oidTag == SEC_OID(MS_CERT_EXT_CERTTYPE)) {
@@ -2120,15 +2018,18 @@ nsNSSCertificate::CreateASN1Struct(nsIASN1Object** aRetVal)
 
   nsCOMPtr<nsIMutableArray> asn1Objects;
   sequence->GetASN1Objects(getter_AddRefs(asn1Objects));
-  nsXPIDLCString title;
-  GetWindowTitle(getter_Copies(title));
-  
-  sequence->SetDisplayName(NS_ConvertUTF8toUTF16(title));
+
+  nsAutoString title;
+  nsresult rv = GetWindowTitle(title);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  sequence->SetDisplayName(title);
   sequence.forget(aRetVal);
 
   // This sequence will be contain the tbsCertificate, signatureAlgorithm,
   // and signatureValue.
-  nsresult rv;
   nsCOMPtr<nsINSSComponent> nssComponent(do_GetService(kNSSComponentCID, &rv));
   if (NS_FAILED(rv))
     return rv;

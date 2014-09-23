@@ -17,12 +17,7 @@
 #include "OmxDecoder.h"
 #include "MPAPI.h"
 #include "gfx2DGlue.h"
-
-#ifdef MOZ_AUDIO_OFFLOAD
-#include <stagefright/Utils.h>
-#include <cutils/properties.h>
-#include <stagefright/MetaData.h>
-#endif
+#include "MediaStreamSource.h"
 
 #define MAX_DROPPED_FRAMES 25
 // Try not to spend more than this much time in a single call to DecodeVideoFrame.
@@ -40,13 +35,106 @@ extern PRLogModuleInfo* gMediaDecoderLog;
 #define DECODER_LOG(type, msg)
 #endif
 
+class OmxReaderProcessCachedDataTask : public Task
+{
+public:
+  OmxReaderProcessCachedDataTask(MediaOmxReader* aOmxReader, int64_t aOffset)
+  : mOmxReader(aOmxReader),
+    mOffset(aOffset)
+  { }
+
+  void Run()
+  {
+    MOZ_ASSERT(!NS_IsMainThread());
+    MOZ_ASSERT(mOmxReader.get());
+    mOmxReader->ProcessCachedData(mOffset, false);
+  }
+
+private:
+  nsRefPtr<MediaOmxReader> mOmxReader;
+  int64_t                  mOffset;
+};
+
+// When loading an MP3 stream from a file, we need to parse the file's
+// content to find its duration. Reading files of 100 MiB or more can
+// delay the player app noticably, so the file is read and decoded in
+// smaller chunks.
+//
+// We first read on the decode thread, but parsing must be done on the
+// main thread. After we read the file's initial MiBs in the decode
+// thread, an instance of this class is scheduled to the main thread for
+// parsing the MP3 stream. The decode thread waits until it has finished.
+//
+// If there is more data available from the file, the runnable dispatches
+// a task to the IO thread for retrieving the next chunk of data, and
+// the IO task dispatches a runnable to the main thread for parsing the
+// data. This goes on until all of the MP3 file has been parsed.
+
+class OmxReaderNotifyDataArrivedRunnable : public nsRunnable
+{
+public:
+  OmxReaderNotifyDataArrivedRunnable(MediaOmxReader* aOmxReader,
+                                     const char* aBuffer, uint64_t aLength,
+                                     int64_t aOffset, uint64_t aFullLength)
+  : mOmxReader(aOmxReader),
+    mBuffer(aBuffer),
+    mLength(aLength),
+    mOffset(aOffset),
+    mFullLength(aFullLength)
+  {
+    MOZ_ASSERT(mOmxReader.get());
+    MOZ_ASSERT(mBuffer.get() || !mLength);
+  }
+
+  NS_IMETHOD Run()
+  {
+    NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
+
+    NotifyDataArrived();
+
+    return NS_OK;
+  }
+
+private:
+  void NotifyDataArrived()
+  {
+    const char* buffer = mBuffer.get();
+
+    while (mLength) {
+      uint32_t length = std::min<uint64_t>(mLength, UINT32_MAX);
+      mOmxReader->NotifyDataArrived(buffer, length,
+                                    mOffset);
+      buffer  += length;
+      mLength -= length;
+      mOffset += length;
+    }
+
+    if (mOffset < mFullLength) {
+      // We cannot read data in the main thread because it
+      // might block for too long. Instead we post an IO task
+      // to the IO thread if there is more data available.
+      XRE_GetIOMessageLoop()->PostTask(FROM_HERE,
+          new OmxReaderProcessCachedDataTask(mOmxReader.get(), mOffset));
+    }
+  }
+
+  nsRefPtr<MediaOmxReader> mOmxReader;
+  nsAutoArrayPtr<const char>       mBuffer;
+  uint64_t                         mLength;
+  int64_t                          mOffset;
+  uint64_t                         mFullLength;
+};
+
 MediaOmxReader::MediaOmxReader(AbstractMediaDecoder *aDecoder)
-  : MediaDecoderReader(aDecoder)
+  : MediaOmxCommonReader(aDecoder)
+  , mMP3FrameParser(-1)
   , mHasVideo(false)
   , mHasAudio(false)
   , mVideoSeekTimeUs(-1)
   , mAudioSeekTimeUs(-1)
   , mSkipCount(0)
+  , mUseParserDuration(false)
+  , mLastParserDuration(-1)
 {
 #ifdef PR_LOGGING
   if (!gMediaDecoderLog) {
@@ -59,14 +147,27 @@ MediaOmxReader::MediaOmxReader(AbstractMediaDecoder *aDecoder)
 
 MediaOmxReader::~MediaOmxReader()
 {
-  ReleaseMediaResources();
-  ReleaseDecoder();
-  mOmxDecoder.clear();
 }
 
 nsresult MediaOmxReader::Init(MediaDecoderReader* aCloneDonor)
 {
   return NS_OK;
+}
+
+void MediaOmxReader::ReleaseDecoder()
+{
+  if (mOmxDecoder.get()) {
+    mOmxDecoder->ReleaseDecoder();
+  }
+  mOmxDecoder.clear();
+}
+
+void MediaOmxReader::Shutdown()
+{
+  ReleaseMediaResources();
+  nsCOMPtr<nsIRunnable> event =
+    NS_NewRunnableMethod(this, &MediaOmxReader::ReleaseDecoder);
+  NS_DispatchToMainThread(event);
 }
 
 bool MediaOmxReader::IsWaitingMediaResources()
@@ -99,13 +200,6 @@ void MediaOmxReader::ReleaseMediaResources()
   }
 }
 
-void MediaOmxReader::ReleaseDecoder()
-{
-  if (mOmxDecoder.get()) {
-    mOmxDecoder->ReleaseDecoder();
-  }
-}
-
 nsresult MediaOmxReader::InitOmxDecoder()
 {
   if (!mOmxDecoder.get()) {
@@ -113,7 +207,7 @@ nsresult MediaOmxReader::InitOmxDecoder()
     DataSource::RegisterDefaultSniffers();
     mDecoder->GetResource()->SetReadMode(MediaCacheStream::MODE_METADATA);
 
-    sp<DataSource> dataSource = new MediaStreamSource(mDecoder->GetResource(), mDecoder);
+    sp<DataSource> dataSource = new MediaStreamSource(mDecoder->GetResource());
     dataSource->initCheck();
 
     mExtractor = MediaExtractor::Create(dataSource);
@@ -142,28 +236,42 @@ nsresult MediaOmxReader::ReadMetadata(MediaInfo* aInfo,
     return rv;
   }
 
+  bool isMP3 = mDecoder->GetResource()->GetContentType().EqualsASCII(AUDIO_MP3);
+  if (isMP3) {
+    // When read sdcard's file on b2g platform at constructor,
+    // the mDecoder->GetResource()->GetLength() would return -1.
+    // Delay set the total duration on this function.
+    mMP3FrameParser.SetLength(mDecoder->GetResource()->GetLength());
+    ProcessCachedData(0, true);
+  }
+
   if (!mOmxDecoder->TryLoad()) {
     return NS_ERROR_FAILURE;
   }
-
-#ifdef MOZ_AUDIO_OFFLOAD
-  CheckAudioOffload();
-#endif
 
   if (IsWaitingMediaResources()) {
     return NS_OK;
   }
 
-  // Set the total duration (the max of the audio and video track).
-  int64_t durationUs;
-  mOmxDecoder->GetDuration(&durationUs);
-  if (durationUs) {
-    ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
-    mDecoder->SetMediaDuration(durationUs);
+  if (isMP3 && mMP3FrameParser.IsMP3()) {
+    int64_t duration = mMP3FrameParser.GetDuration();
+    // The MP3FrameParser may reported a duration;
+    // return -1 if no frame has been parsed.
+    if (duration >= 0) {
+      ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+      mUseParserDuration = true;
+      mLastParserDuration = duration;
+      mDecoder->SetMediaDuration(mLastParserDuration);
+    }
+  } else {
+    // Set the total duration (the max of the audio and video track).
+    int64_t durationUs;
+    mOmxDecoder->GetDuration(&durationUs);
+    if (durationUs) {
+      ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+      mDecoder->SetMediaDuration(durationUs);
+    }
   }
-
-  // Check the MediaExtract flag if the source is seekable.
-  mDecoder->SetMediaSeekable(mExtractor->flags() & MediaExtractor::CAN_SEEK);
 
   if (mOmxDecoder->HasVideo()) {
     int32_t displayWidth, displayHeight, width, height;
@@ -202,7 +310,18 @@ nsresult MediaOmxReader::ReadMetadata(MediaInfo* aInfo,
 
  *aInfo = mInfo;
 
+#ifdef MOZ_AUDIO_OFFLOAD
+  CheckAudioOffload();
+#endif
+
   return NS_OK;
+}
+
+bool
+MediaOmxReader::IsMediaSeekable()
+{
+  // Check the MediaExtract flag if the source is seekable.
+  return (mExtractor->flags() & MediaExtractor::CAN_SEEK);
 }
 
 bool MediaOmxReader::DecodeVideoFrame(bool &aKeyframeSkip,
@@ -317,7 +436,7 @@ bool MediaOmxReader::DecodeVideoFrame(bool &aKeyframeSkip,
     }
 
     decoded++;
-    NS_ASSERTION(decoded <= parsed, "Expect to decode fewer frames than parsed in MediaPlugin...");
+    NS_ASSERTION(decoded <= parsed, "Expect to decode fewer frames than parsed in OMX decoder...");
 
     mVideoQueue.Push(v);
 
@@ -329,10 +448,22 @@ bool MediaOmxReader::DecodeVideoFrame(bool &aKeyframeSkip,
 
 void MediaOmxReader::NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset)
 {
-  android::OmxDecoder *omxDecoder = mOmxDecoder.get();
+  MOZ_ASSERT(NS_IsMainThread());
 
-  if (omxDecoder) {
-    omxDecoder->NotifyDataArrived(aBuffer, aLength, aOffset);
+  if (HasVideo()) {
+    return;
+  }
+
+  if (!mMP3FrameParser.NeedsData()) {
+    return;
+  }
+
+  mMP3FrameParser.Parse(aBuffer, aLength, aOffset);
+  int64_t duration = mMP3FrameParser.GetDuration();
+  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+  if (duration != mLastParserDuration && mUseParserDuration) {
+    mLastParserDuration = duration;
+    mDecoder->UpdateEstimatedMediaDuration(mLastParserDuration);
   }
 }
 
@@ -375,7 +506,6 @@ nsresult MediaOmxReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndT
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
   EnsureActive();
 
-  ResetDecode();
   VideoFrameContainer* container = mDecoder->GetVideoFrameContainer();
   if (container && container->GetImageContainer()) {
     container->GetImageContainer()->ClearAllImagesExceptFront();
@@ -400,13 +530,6 @@ nsresult MediaOmxReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndT
   return NS_OK;
 }
 
-static uint64_t BytesToTime(int64_t offset, uint64_t length, uint64_t durationUs) {
-  double perc = double(offset) / double(length);
-  if (perc > 1.0)
-    perc = 1.0;
-  return uint64_t(double(durationUs) * perc);
-}
-
 void MediaOmxReader::SetIdle() {
   if (!mOmxDecoder.get()) {
     return;
@@ -422,41 +545,54 @@ void MediaOmxReader::EnsureActive() {
   NS_ASSERTION(result == NS_OK, "OmxDecoder should be in play state to continue decoding");
 }
 
-#ifdef MOZ_AUDIO_OFFLOAD
-void MediaOmxReader::CheckAudioOffload()
+int64_t MediaOmxReader::ProcessCachedData(int64_t aOffset, bool aWaitForCompletion)
 {
-  NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
+  // We read data in chunks of 32 KiB. We can reduce this
+  // value if media, such as sdcards, is too slow.
+  // Because of SD card's slowness, need to keep sReadSize to small size.
+  // See Bug 914870.
+  static const int64_t sReadSize = 32 * 1024;
 
-  char offloadProp[128];
-  property_get("audio.offload.disable", offloadProp, "0");
-  bool offloadDisable =  atoi(offloadProp) != 0;
-  if (offloadDisable) {
-    return;
+  NS_ASSERTION(!NS_IsMainThread(), "Should not be on main thread.");
+
+  MOZ_ASSERT(mDecoder->GetResource());
+  int64_t resourceLength = mDecoder->GetResource()->GetCachedDataEnd(0);
+  NS_ENSURE_TRUE(resourceLength >= 0, -1);
+
+  if (aOffset >= resourceLength) {
+    return 0; // Cache is empty, nothing to do
   }
 
-  mAudioOffloadTrack = mOmxDecoder->GetAudioOffloadTrack();
-  sp<MetaData> meta = (mAudioOffloadTrack.get()) ?
-      mAudioOffloadTrack->getFormat() : nullptr;
+  int64_t bufferLength = std::min<int64_t>(resourceLength-aOffset, sReadSize);
 
-  // Supporting audio offload only when there is no video, no streaming
-  bool hasNoVideo = !mOmxDecoder->HasVideo();
-  bool isNotStreaming
-      = mDecoder->GetResource()->IsDataCachedToEndOfResource(0);
+  nsAutoArrayPtr<char> buffer(new char[bufferLength]);
 
-  // Not much benefit in trying to offload other channel types. Most of them
-  // aren't supported and also duration would be less than a minute
-  bool isTypeMusic = mAudioChannel == dom::AudioChannel::Content;
+  nsresult rv = mDecoder->GetResource()->ReadFromCache(buffer.get(),
+                                                       aOffset, bufferLength);
+  NS_ENSURE_SUCCESS(rv, -1);
 
-  DECODER_LOG(PR_LOG_DEBUG, ("%s meta %p, no video %d, no streaming %d,"
-      " channel type %d", __FUNCTION__, meta.get(), hasNoVideo,
-      isNotStreaming, mAudioChannel));
-
-  if ((meta.get()) && hasNoVideo && isNotStreaming && isTypeMusic &&
-      canOffloadStream(meta, false, false, AUDIO_STREAM_MUSIC)) {
-    DECODER_LOG(PR_LOG_DEBUG, ("Can offload this audio stream"));
-    mDecoder->SetCanOffloadAudio(true);
+  nsRefPtr<OmxReaderNotifyDataArrivedRunnable> runnable(
+    new OmxReaderNotifyDataArrivedRunnable(this,
+                                           buffer.forget(),
+                                           bufferLength,
+                                           aOffset,
+                                           resourceLength));
+  if (aWaitForCompletion) {
+    rv = NS_DispatchToMainThread(runnable.get(), NS_DISPATCH_SYNC);
+  } else {
+    rv = NS_DispatchToMainThread(runnable.get());
   }
+  NS_ENSURE_SUCCESS(rv, -1);
+
+  return resourceLength - aOffset - bufferLength;
 }
-#endif
+
+android::sp<android::MediaSource> MediaOmxReader::GetAudioOffloadTrack()
+{
+  if (!mOmxDecoder.get()) {
+    return nullptr;
+  }
+  return mOmxDecoder->GetAudioOffloadTrack();
+}
 
 } // namespace mozilla

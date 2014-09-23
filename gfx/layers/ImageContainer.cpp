@@ -6,7 +6,7 @@
 
 #include "ImageContainer.h"
 #include <string.h>                     // for memcpy, memset
-#include "SharedTextureImage.h"         // for SharedTextureImage
+#include "GLImages.h"                   // for SurfaceTextureImage
 #include "gfx2DGlue.h"
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "gfxUtils.h"                   // for gfxUtils
@@ -56,6 +56,10 @@ ImageFactory::CreateImage(ImageFormat aFormat,
     img = new GrallocImage();
     return img.forget();
   }
+  if (aFormat == ImageFormat::OVERLAY_IMAGE) {
+    img = new OverlayImage();
+    return img.forget();
+  }
 #endif
   if (aFormat == ImageFormat::PLANAR_YCBCR) {
     img = new PlanarYCbCrImage(aRecycleBin);
@@ -65,8 +69,14 @@ ImageFactory::CreateImage(ImageFormat aFormat,
     img = new CairoImage();
     return img.forget();
   }
-  if (aFormat == ImageFormat::SHARED_TEXTURE) {
-    img = new SharedTextureImage();
+#ifdef MOZ_WIDGET_ANDROID
+  if (aFormat == ImageFormat::SURFACE_TEXTURE) {
+    img = new SurfaceTextureImage();
+    return img.forget();
+  }
+#endif
+  if (aFormat == ImageFormat::EGLIMAGE) {
+    img = new EGLImageImage();
     return img.forget();
   }
 #ifdef XP_MACOSX
@@ -146,6 +156,17 @@ ImageContainer::CreateImage(ImageFormat aFormat)
 {
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);
 
+#ifdef MOZ_WIDGET_GONK
+  if (aFormat == ImageFormat::OVERLAY_IMAGE) {
+    if (mImageClient && mImageClient->GetTextureInfo().mCompositableType != CompositableType::IMAGE_OVERLAY) {
+      // If this ImageContainer is async but the image type mismatch, fix it here
+      if (ImageBridgeChild::IsCreated()) {
+        ImageBridgeChild::DispatchReleaseImageClient(mImageClient);
+        mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(CompositableType::IMAGE_OVERLAY).drop();
+      }
+    }
+  }
+#endif
   if (mImageClient) {
     nsRefPtr<Image> img = mImageClient->CreateImage(aFormat);
     if (img) {
@@ -249,7 +270,7 @@ ImageContainer::HasCurrentImage()
 
   if (mRemoteData) {
     CrossProcessMutexAutoLock autoLock(*mRemoteDataMutex);
-    
+
     EnsureActiveImage();
 
     return !!mActiveImage.get();
@@ -262,7 +283,7 @@ already_AddRefed<Image>
 ImageContainer::LockCurrentImage()
 {
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-  
+
   if (mRemoteData) {
     NS_ASSERTION(mRemoteDataMutex, "Should have remote data mutex when having remote data!");
     mRemoteDataMutex->Lock();
@@ -405,13 +426,13 @@ ImageContainer::EnsureActiveImage()
     if (mRemoteData->mType == RemoteImageData::RAW_BITMAP &&
         mRemoteData->mBitmap.mData && !mActiveImage) {
       nsRefPtr<RemoteBitmapImage> newImg = new RemoteBitmapImage();
-      
+
       newImg->mFormat = mRemoteData->mFormat;
       newImg->mData = mRemoteData->mBitmap.mData;
       newImg->mSize = mRemoteData->mSize;
       newImg->mStride = mRemoteData->mBitmap.mStride;
       mRemoteData->mWasUpdated = false;
-              
+
       mActiveImage = newImg;
     }
 #ifdef XP_WIN
@@ -464,10 +485,10 @@ PlanarYCbCrImage::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
   return size;
 }
 
-uint8_t* 
+uint8_t*
 PlanarYCbCrImage::AllocateBuffer(uint32_t aSize)
 {
-  return mRecycleBin->GetBuffer(aSize); 
+  return mRecycleBin->GetBuffer(aSize);
 }
 
 static void
@@ -575,6 +596,9 @@ PlanarYCbCrImage::GetAsSourceSurface()
   }
 
   RefPtr<gfx::DataSourceSurface> surface = gfx::Factory::CreateDataSourceSurface(size, format);
+  if (NS_WARN_IF(!surface)) {
+    return nullptr;
+  }
 
   gfx::ConvertYCbCrToRGB(mData, format, size, surface->GetData(), surface->Stride());
 
@@ -590,6 +614,9 @@ RemoteBitmapImage::GetAsSourceSurface()
                          ? gfx::SurfaceFormat::B8G8R8X8
                          : gfx::SurfaceFormat::B8G8R8A8;
   RefPtr<gfx::DataSourceSurface> newSurf = gfx::Factory::CreateDataSourceSurface(mSize, fmt);
+  if (NS_WARN_IF(!newSurf)) {
+    return nullptr;
+  }
 
   for (int y = 0; y < mSize.height; y++) {
     memcpy(newSurf->GetData() + newSurf->Stride() * y,
@@ -629,25 +656,26 @@ CairoImage::GetTextureClient(CompositableClient *aClient)
 
   // gfx::BackendType::NONE means default to content backend
   textureClient = aClient->CreateTextureClientForDrawing(surface->GetFormat(),
-                                                         TextureFlags::DEFAULT,
+                                                         surface->GetSize(),
                                                          gfx::BackendType::NONE,
-                                                         surface->GetSize());
+                                                         TextureFlags::DEFAULT);
   if (!textureClient) {
     return nullptr;
   }
   MOZ_ASSERT(textureClient->CanExposeDrawTarget());
-  if (!textureClient->AllocateForSurface(surface->GetSize()) ||
-      !textureClient->Lock(OpenMode::OPEN_WRITE_ONLY)) {
+  if (!textureClient->Lock(OpenMode::OPEN_WRITE_ONLY)) {
     return nullptr;
   }
 
+  TextureClientAutoUnlock autoUnolck(textureClient);
   {
     // We must not keep a reference to the DrawTarget after it has been unlocked.
-    RefPtr<DrawTarget> dt = textureClient->GetAsDrawTarget();
+    DrawTarget* dt = textureClient->BorrowDrawTarget();
+    if (!dt) {
+      return nullptr;
+    }
     dt->CopySurface(surface, IntRect(IntPoint(), surface->GetSize()), IntPoint());
   }
-
-  textureClient->Unlock();
 
   mTextureClients.Put(forwarder->GetSerial(), textureClient);
   return textureClient;

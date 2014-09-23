@@ -1,4 +1,4 @@
-/* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -118,7 +118,7 @@ let NetMonitorView = {
   /**
    * Destroys the UI for all the displayed panes.
    */
-  _destroyPanes: function() {
+  _destroyPanes: Task.async(function*() {
     dumpn("Destroying the NetMonitorView panes");
 
     Prefs.networkDetailsWidth = this._detailsPane.getAttribute("width");
@@ -126,7 +126,12 @@ let NetMonitorView = {
 
     this._detailsPane = null;
     this._detailsPaneToggleButton = null;
-  },
+
+    for (let p of this._editorPromises.values()) {
+      let editor = yield p;
+      editor.destroy();
+    }
+  }),
 
   /**
    * Gets the visibility state of the network details pane.
@@ -227,6 +232,10 @@ let NetMonitorView = {
       statisticsView.createPrimedCacheChart(requestsView.items);
       statisticsView.createEmptyCacheChart(requestsView.items);
     });
+  },
+
+  reloadPage: function() {
+    NetMonitorController.triggerActivity(ACTIVITY_TYPE.RELOAD.WITH_CACHE_DEFAULT);
   },
 
   /**
@@ -362,6 +371,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     this._onContextCopyImageAsDataUriCommand = this.copyImageAsDataUri.bind(this);
     this._onContextResendCommand = this.cloneSelectedRequest.bind(this);
     this._onContextPerfCommand = () => NetMonitorView.toggleFrontendMode();
+    this._onReloadCommand = () => NetMonitorView.reloadPage();
 
     this.sendCustomRequestEvent = this.sendCustomRequest.bind(this);
     this.closeCustomRequestEvent = this.closeCustomRequest.bind(this);
@@ -379,6 +389,8 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
   },
 
   _onConnect: function() {
+    $("#requests-menu-reload-notice-button").addEventListener("command", this._onReloadCommand, false);
+
     if (NetMonitorController.supportsCustomRequest) {
       $("#request-menu-context-resend").addEventListener("command", this._onContextResendCommand, false);
       $("#custom-request-send-button").addEventListener("click", this.sendCustomRequestEvent, false);
@@ -426,6 +438,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     $("#request-menu-context-resend").removeEventListener("command", this._onContextResendCommand, false);
     $("#request-menu-context-perf").removeEventListener("command", this._onContextPerfCommand, false);
 
+    $("#requests-menu-reload-notice-button").removeEventListener("command", this._onReloadCommand, false);
     $("#requests-menu-perf-notice-button").removeEventListener("command", this._onContextPerfCommand, false);
     $("#requests-menu-network-summary-button").removeEventListener("command", this._onContextPerfCommand, false);
     $("#requests-menu-network-summary-label").removeEventListener("click", this._onContextPerfCommand, false);
@@ -1199,9 +1212,6 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     this.updateMenuView(template, 'method', aMethod);
     this.updateMenuView(template, 'url', aUrl);
 
-    let waterfall = $(".requests-menu-waterfall", template);
-    waterfall.style.backgroundImage = this._cachedWaterfallBackground;
-
     // Flatten the DOM by removing one redundant box (the template container).
     for (let node of template.childNodes) {
       fragment.appendChild(node.cloneNode(true));
@@ -1365,7 +1375,6 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     // Redraw and set the canvas background for each waterfall view.
     this._showWaterfallDivisionLabels(scale);
     this._drawWaterfallBackground(scale);
-    this._flushWaterfallBackgrounds();
 
     // Apply CSS transforms to each waterfall in this container totalTime
     // accurately translate and resize as needed.
@@ -1484,8 +1493,8 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     let pixelArray = imageData.data;
 
     let buf = new ArrayBuffer(pixelArray.length);
-    let buf8 = new Uint8ClampedArray(buf);
-    let data32 = new Uint32Array(buf);
+    let view8bit = new Uint8ClampedArray(buf);
+    let view32bit = new Uint32Array(buf);
 
     // Build new millisecond tick lines...
     let timingStep = REQUESTS_WATERFALL_BACKGROUND_TICKS_MULTIPLE;
@@ -1507,26 +1516,16 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
         let increment = scaledStep * Math.pow(2, i);
         for (let x = 0; x < canvasWidth; x += increment) {
           let position = (window.isRTL ? canvasWidth - x : x) | 0;
-          data32[position] = (alphaComponent << 24) | (b << 16) | (g << 8) | r;
+          view32bit[position] = (alphaComponent << 24) | (b << 16) | (g << 8) | r;
         }
         alphaComponent += REQUESTS_WATERFALL_BACKGROUND_TICKS_OPACITY_ADD;
       }
     }
 
     // Flush the image data and cache the waterfall background.
-    pixelArray.set(buf8);
+    pixelArray.set(view8bit);
     ctx.putImageData(imageData, 0, 0);
-    this._cachedWaterfallBackground = "url(" + canvas.toDataURL() + ")";
-  },
-
-  /**
-   * Reapplies the current waterfall background on all request items.
-   */
-  _flushWaterfallBackgrounds: function() {
-    for (let { target } of this) {
-      let waterfallNode = $(".requests-menu-waterfall", target);
-      waterfallNode.style.backgroundImage = this._cachedWaterfallBackground;
-    }
+    document.mozSetImageElement("waterfall-background", canvas);
   },
 
   /**
@@ -1613,6 +1612,9 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     copyImageAsDataUriElement.hidden = !selectedItem ||
       !selectedItem.attachment.responseContent ||
       !selectedItem.attachment.responseContent.content.mimeType.contains("image/");
+
+    let separator = $("#request-menu-context-separator");
+    separator.hidden = !selectedItem;
 
     let newTabElement = $("#request-menu-context-newtab");
     newTabElement.hidden = !selectedItem;
@@ -1746,7 +1748,6 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
   _canvas: null,
   _ctx: null,
   _cachedWaterfallWidth: 0,
-  _cachedWaterfallBackground: "",
   _firstRequestStartedMillis: -1,
   _lastRequestEndedMillis: -1,
   _updateQueue: [],
@@ -1934,6 +1935,19 @@ function NetworkDetailsView() {
 
 NetworkDetailsView.prototype = {
   /**
+   * An object containing the state of tabs.
+   */
+  _viewState: {
+    // if updating[tab] is true a task is currently updating the given tab.
+    updating: [],
+    // if dirty[tab] is true, the tab needs to be repopulated once current
+    // update task finishes
+    dirty: [],
+    // the most recently received attachment data for the request
+    latestData: null,
+  },
+
+  /**
    * Initialization function, called when the network monitor is started.
    */
   initialize: function() {
@@ -1980,6 +1994,8 @@ NetworkDetailsView.prototype = {
    */
   destroy: function() {
     dumpn("Destroying the NetworkDetailsView");
+
+    $("tabpanels", this.widget).removeEventListener("select", this._onTabSelect);
   },
 
   /**
@@ -2036,7 +2052,19 @@ NetworkDetailsView.prototype = {
       return;
     }
 
+    let viewState = this._viewState;
+    if (viewState.updating[tab]) {
+      // A task is currently updating this tab. If we started another update
+      // task now it would result in a duplicated content as described in bugs
+      // 997065 and 984687. As there's no way to stop the current task mark the
+      // tab dirty and refresh the panel once the current task finishes.
+      viewState.dirty[tab] = true;
+      viewState.latestData = src;
+      return;
+    }
+
     Task.spawn(function*() {
+      viewState.updating[tab] = true;
       switch (tab) {
         case 0: // "Headers"
           yield view._setSummary(src);
@@ -2066,10 +2094,32 @@ NetworkDetailsView.prototype = {
           yield view._setHtmlPreview(src.responseContent);
           break;
       }
-      populated[tab] = true;
-      window.emit(EVENTS.TAB_UPDATED);
-      NetMonitorView.RequestsMenu.ensureSelectedItemIsVisible();
-    });
+      viewState.updating[tab] = false;
+    }).then(() => {
+      if (tab == this.widget.selectedIndex) {
+        if (viewState.dirty[tab]) {
+          // The request information was updated while the task was running.
+          viewState.dirty[tab] = false;
+          view.populate(viewState.latestData);
+        }
+        else {
+          // Tab is selected but not dirty. We're done here.
+          populated[tab] = true;
+          window.emit(EVENTS.TAB_UPDATED);
+
+          if (NetMonitorController.isConnected()) {
+            NetMonitorView.RequestsMenu.ensureSelectedItemIsVisible();
+          }
+        }
+      }
+      else {
+        if (viewState.dirty[tab]) {
+          // Tab is dirty but no longer selected. Don't refresh it now, it'll be
+          // done if the tab is shown again.
+          viewState.dirty[tab] = false;
+        }
+      }
+    }, Cu.reportError);
   },
 
   /**
@@ -2222,7 +2272,7 @@ NetworkDetailsView.prototype = {
       // information available, then nothing else is to be displayed.
       let cookieProps = Object.keys(cookie);
       if (cookieProps.length == 2) {
-        return;
+        continue;
       }
 
       // Display any other information other than the cookie name and value

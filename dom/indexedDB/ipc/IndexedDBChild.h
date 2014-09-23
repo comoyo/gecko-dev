@@ -19,6 +19,13 @@
 #include "mozilla/dom/indexedDB/PIndexedDBRequestChild.h"
 #include "mozilla/dom/indexedDB/PIndexedDBTransactionChild.h"
 
+namespace mozilla {
+namespace dom {
+class ContentChild;
+class TabChild;
+} // dom
+} // mozilla
+
 BEGIN_INDEXEDDB_NAMESPACE
 
 class AsyncConnectionHelper;
@@ -36,6 +43,9 @@ class IDBTransactionListener;
 class IndexedDBChild : public PIndexedDBChild
 {
   IDBFactory* mFactory;
+  ContentChild* mManagerContent;
+  TabChild* mManagerTab;
+
   nsCString mASCIIOrigin;
 
 #ifdef DEBUG
@@ -43,13 +53,26 @@ class IndexedDBChild : public PIndexedDBChild
 #endif
 
 public:
-  IndexedDBChild(const nsCString& aASCIIOrigin);
+  IndexedDBChild(ContentChild* aContentChild, const nsCString& aASCIIOrigin);
+  IndexedDBChild(TabChild* aTabChild, const nsCString& aASCIIOrigin);
   virtual ~IndexedDBChild();
 
   const nsCString&
   ASCIIOrigin() const
   {
     return mASCIIOrigin;
+  }
+
+  ContentChild*
+  GetManagerContent() const
+  {
+    return mManagerContent;
+  }
+
+  TabChild*
+  GetManagerTab() const
+  {
+    return mManagerTab;
   }
 
   void
@@ -201,7 +224,7 @@ class IndexedDBObjectStoreChild : public PIndexedDBObjectStoreChild
   IDBObjectStore* mObjectStore;
 
 public:
-  IndexedDBObjectStoreChild(IDBObjectStore* aObjectStore);
+  explicit IndexedDBObjectStoreChild(IDBObjectStore* aObjectStore);
   virtual ~IndexedDBObjectStoreChild();
 
   void
@@ -246,7 +269,7 @@ class IndexedDBIndexChild : public PIndexedDBIndexChild
   IDBIndex* mIndex;
 
 public:
-  IndexedDBIndexChild(IDBIndex* aIndex);
+  explicit IndexedDBIndexChild(IDBIndex* aIndex);
   virtual ~IndexedDBIndexChild();
 
   void
@@ -329,7 +352,7 @@ public:
   Disconnect();
 
 protected:
-  IndexedDBRequestChildBase(AsyncConnectionHelper* aHelper);
+  explicit IndexedDBRequestChildBase(AsyncConnectionHelper* aHelper);
   virtual ~IndexedDBRequestChildBase();
 
   virtual bool

@@ -28,8 +28,7 @@ class TableRowsCollection : public nsIHTMLCollection,
                             public nsWrapperCache
 {
 public:
-  TableRowsCollection(HTMLTableElement *aParent);
-  virtual ~TableRowsCollection();
+  explicit TableRowsCollection(HTMLTableElement* aParent);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSIDOMHTMLCOLLECTION
@@ -53,6 +52,8 @@ public:
   using nsWrapperCache::GetWrapperPreserveColor;
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 protected:
+  virtual ~TableRowsCollection();
+
   virtual JSObject* GetWrapperPreserveColorInternal() MOZ_OVERRIDE
   {
     return nsWrapperCache::GetWrapperPreserveColor();
@@ -94,7 +95,7 @@ NS_IMPL_CYCLE_COLLECTING_ADDREF(TableRowsCollection)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(TableRowsCollection)
 
 NS_INTERFACE_TABLE_HEAD(TableRowsCollection)
-  NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
+  NS_WRAPPERCACHE_INTERFACE_TABLE_ENTRY
   NS_INTERFACE_TABLE(TableRowsCollection, nsIHTMLCollection,
                      nsIDOMHTMLCollection)
   NS_INTERFACE_TABLE_TO_MAP_SEGUE_CYCLE_COLLECTION(TableRowsCollection)
@@ -287,7 +288,7 @@ TableRowsCollection::ParentDestroyed()
 
 /* --------------------------- HTMLTableElement ---------------------------- */
 
-HTMLTableElement::HTMLTableElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+HTMLTableElement::HTMLTableElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : nsGenericHTMLElement(aNodeInfo),
     mTableInheritedAttributes(TABLE_ATTRS_DIRTY)
 {
@@ -370,7 +371,7 @@ HTMLTableElement::CreateTHead()
   nsRefPtr<nsGenericHTMLElement> head = GetTHead();
   if (!head) {
     // Create a new head rowgroup.
-    nsCOMPtr<nsINodeInfo> nodeInfo;
+    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
     nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::thead,
                                 getter_AddRefs(nodeInfo));
 
@@ -402,7 +403,7 @@ HTMLTableElement::CreateTFoot()
   nsRefPtr<nsGenericHTMLElement> foot = GetTFoot();
   if (!foot) {
     // create a new foot rowgroup
-    nsCOMPtr<nsINodeInfo> nodeInfo;
+    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
     nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::tfoot,
                                 getter_AddRefs(nodeInfo));
 
@@ -433,7 +434,7 @@ HTMLTableElement::CreateCaption()
   nsRefPtr<nsGenericHTMLElement> caption = GetCaption();
   if (!caption) {
     // Create a new caption.
-    nsCOMPtr<nsINodeInfo> nodeInfo;
+    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
     nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::caption,
                                 getter_AddRefs(nodeInfo));
 
@@ -461,7 +462,7 @@ HTMLTableElement::DeleteCaption()
 already_AddRefed<nsGenericHTMLElement>
 HTMLTableElement::CreateTBody()
 {
-  nsCOMPtr<nsINodeInfo> nodeInfo =
+  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo =
     OwnerDoc()->NodeInfoManager()->GetNodeInfo(nsGkAtoms::tbody, nullptr,
                                                kNameSpaceID_XHTML,
                                                nsIDOMNode::ELEMENT_NODE);
@@ -526,7 +527,7 @@ HTMLTableElement::InsertRow(int32_t aIndex, ErrorResult& aError)
     nsINode* parent = refRow->GetParentNode();
 
     // create the row
-    nsCOMPtr<nsINodeInfo> nodeInfo;
+    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
     nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::tr,
                                 getter_AddRefs(nodeInfo));
 
@@ -560,7 +561,7 @@ HTMLTableElement::InsertRow(int32_t aIndex, ErrorResult& aError)
     }
 
     if (!rowGroup) { // need to create a TBODY
-      nsCOMPtr<nsINodeInfo> nodeInfo;
+      nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
       nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::tbody,
                                   getter_AddRefs(nodeInfo));
 
@@ -574,7 +575,7 @@ HTMLTableElement::InsertRow(int32_t aIndex, ErrorResult& aError)
     }
 
     if (rowGroup) {
-      nsCOMPtr<nsINodeInfo> nodeInfo;
+      nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
       nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::tr,
                                   getter_AddRefs(nodeInfo));
 
@@ -621,29 +622,6 @@ HTMLTableElement::DeleteRow(int32_t aIndex, ErrorResult& aError)
   row->RemoveFromParent();
 }
 
-static const nsAttrValue::EnumTable kFrameTable[] = {
-  { "void",   NS_STYLE_TABLE_FRAME_NONE },
-  { "above",  NS_STYLE_TABLE_FRAME_ABOVE },
-  { "below",  NS_STYLE_TABLE_FRAME_BELOW },
-  { "hsides", NS_STYLE_TABLE_FRAME_HSIDES },
-  { "lhs",    NS_STYLE_TABLE_FRAME_LEFT },
-  { "rhs",    NS_STYLE_TABLE_FRAME_RIGHT },
-  { "vsides", NS_STYLE_TABLE_FRAME_VSIDES },
-  { "box",    NS_STYLE_TABLE_FRAME_BOX },
-  { "border", NS_STYLE_TABLE_FRAME_BORDER },
-  { 0 }
-};
-
-static const nsAttrValue::EnumTable kRulesTable[] = {
-  { "none",   NS_STYLE_TABLE_RULES_NONE },
-  { "groups", NS_STYLE_TABLE_RULES_GROUPS },
-  { "rows",   NS_STYLE_TABLE_RULES_ROWS },
-  { "cols",   NS_STYLE_TABLE_RULES_COLS },
-  { "all",    NS_STYLE_TABLE_RULES_ALL },
-  { 0 }
-};
-
-
 bool
 HTMLTableElement::ParseAttribute(int32_t aNamespaceID,
                                  nsIAtom* aAttribute,
@@ -678,12 +656,6 @@ HTMLTableElement::ParseAttribute(int32_t aNamespaceID,
     if (aAttribute == nsGkAtoms::bgcolor ||
         aAttribute == nsGkAtoms::bordercolor) {
       return aResult.ParseColor(aValue);
-    }
-    if (aAttribute == nsGkAtoms::frame) {
-      return aResult.ParseEnumValue(aValue, kFrameTable, false);
-    }
-    if (aAttribute == nsGkAtoms::rules) {
-      return aResult.ParseEnumValue(aValue, kRulesTable, false);
     }
     if (aAttribute == nsGkAtoms::hspace ||
         aAttribute == nsGkAtoms::vspace) {

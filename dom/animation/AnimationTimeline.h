@@ -9,6 +9,7 @@
 #include "nsWrapperCache.h"
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/TimeStamp.h"
 #include "js/TypeDecls.h"
 #include "nsIDocument.h"
 
@@ -20,13 +21,11 @@ namespace dom {
 class AnimationTimeline MOZ_FINAL : public nsWrapperCache
 {
 public:
-  AnimationTimeline(nsIDocument* aDocument)
+  explicit AnimationTimeline(nsIDocument* aDocument)
     : mDocument(aDocument)
   {
     SetIsDOMBinding();
   }
-
-  virtual ~AnimationTimeline() { }
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(AnimationTimeline)
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(AnimationTimeline)
@@ -34,10 +33,25 @@ public:
   nsISupports* GetParentObject() const { return mDocument; }
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 
+  // WebIDL API
   Nullable<double> GetCurrentTime() const;
 
+  Nullable<TimeDuration> GetCurrentTimeDuration() const;
+
+  Nullable<TimeDuration> ToTimelineTime(const TimeStamp& aTimeStamp) const;
+  TimeStamp ToTimeStamp(const TimeDuration& aTimelineTime) const;
+
 protected:
+  TimeStamp GetCurrentTimeStamp() const;
+
+  virtual ~AnimationTimeline() { }
+
   nsCOMPtr<nsIDocument> mDocument;
+
+  // Store the most recently returned value of current time. This is used
+  // in cases where we don't have a refresh driver (e.g. because we are in
+  // a display:none iframe).
+  mutable TimeStamp mLastCurrentTime;
 };
 
 } // namespace dom

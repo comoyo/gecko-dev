@@ -18,9 +18,11 @@ let gIsWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
 const isDebugBuild = Cc["@mozilla.org/xpcom/debug;1"]
                        .getService(Ci.nsIDebug2).isDebugBuild;
 
+const SSS_STATE_FILE_NAME = "SiteSecurityServiceState.txt";
+
 const SEC_ERROR_BASE = Ci.nsINSSErrorsService.NSS_SEC_ERROR_BASE;
 const SSL_ERROR_BASE = Ci.nsINSSErrorsService.NSS_SSL_ERROR_BASE;
-const PSM_ERROR_BASE = Ci.nsINSSErrorsService.PSM_ERROR_BASE;
+const MOZILLA_PKIX_ERROR_BASE = Ci.nsINSSErrorsService.MOZILLA_PKIX_ERROR_BASE;
 
 // Sort in numerical order
 const SEC_ERROR_INVALID_ARGS                            = SEC_ERROR_BASE +   5; // -8187
@@ -35,6 +37,7 @@ const SEC_ERROR_EXPIRED_ISSUER_CERTIFICATE              = SEC_ERROR_BASE +  30; 
 const SEC_ERROR_EXTENSION_VALUE_INVALID                 = SEC_ERROR_BASE +  34; // -8158
 const SEC_ERROR_EXTENSION_NOT_FOUND                     = SEC_ERROR_BASE +  35; // -8157
 const SEC_ERROR_CA_CERT_INVALID                         = SEC_ERROR_BASE +  36;
+const SEC_ERROR_INVALID_KEY                             = SEC_ERROR_BASE +  40; // -8152
 const SEC_ERROR_UNKNOWN_CRITICAL_EXTENSION              = SEC_ERROR_BASE +  41;
 const SEC_ERROR_INADEQUATE_KEY_USAGE                    = SEC_ERROR_BASE +  90; // -8102
 const SEC_ERROR_INADEQUATE_CERT_TYPE                    = SEC_ERROR_BASE +  91; // -8101
@@ -56,8 +59,11 @@ const SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED       = SEC_ERROR_BASE + 176;
 const SEC_ERROR_APPLICATION_CALLBACK_ERROR              = SEC_ERROR_BASE + 178;
 
 const SSL_ERROR_BAD_CERT_DOMAIN                         = SSL_ERROR_BASE +  12;
+const SSL_ERROR_BAD_CERT_ALERT                          = SSL_ERROR_BASE +  17;
 
-const PSM_ERROR_KEY_PINNING_FAILURE                     = PSM_ERROR_BASE +   0;
+const MOZILLA_PKIX_ERROR_KEY_PINNING_FAILURE            = MOZILLA_PKIX_ERROR_BASE +   0;
+const MOZILLA_PKIX_ERROR_CA_CERT_USED_AS_END_ENTITY     = MOZILLA_PKIX_ERROR_BASE +   1;
+const MOZILLA_PKIX_ERROR_INADEQUATE_KEY_SIZE            = MOZILLA_PKIX_ERROR_BASE +   2; // -16382
 
 // Supported Certificate Usages
 const certificateUsageSSLClient              = 0x0001;
@@ -201,7 +207,8 @@ function run_test() {
   add_connection_test("<test-name-1>.example.com",
                       getXPCOMStatusFromNSS(SEC_ERROR_xxx),
                       function() { ... },
-                      function(aTransportSecurityInfo) { ... });
+                      function(aTransportSecurityInfo) { ... },
+                      function(aTransport) { ... });
   [...]
   add_connection_test("<test-name-n>.example.com", Cr.NS_OK);
 
@@ -222,8 +229,11 @@ function add_tls_server_setup(serverBinName) {
 // called before the connection is attempted.
 // aWithSecurityInfo is a callback function that takes an
 // nsITransportSecurityInfo, which is called after the TLS handshake succeeds.
+// aAfterStreamOpen is a callback function that is called with the
+// nsISocketTransport once the output stream is ready.
 function add_connection_test(aHost, aExpectedResult,
-                             aBeforeConnect, aWithSecurityInfo) {
+                             aBeforeConnect, aWithSecurityInfo,
+                             aAfterStreamOpen) {
   const REMOTE_PORT = 8443;
 
   function Connection(aHost) {
@@ -267,6 +277,9 @@ function add_connection_test(aHost, aExpectedResult,
 
     // nsIOutputStreamCallback
     onOutputStreamReady: function(aStream) {
+      if (aAfterStreamOpen) {
+        aAfterStreamOpen(this.transport);
+      }
       let sslSocketControl = this.transport.securityInfo
                                .QueryInterface(Ci.nsISSLSocketControl);
       sslSocketControl.proxyStartSSL();
@@ -297,6 +310,7 @@ function add_connection_test(aHost, aExpectedResult,
       aBeforeConnect();
     }
     connectTo(aHost).then(function(conn) {
+      do_print("handling " + aHost);
       do_check_eq(conn.result, aExpectedResult);
       if (aWithSecurityInfo) {
         aWithSecurityInfo(conn.transport.securityInfo
@@ -432,6 +446,12 @@ function getFailingHttpServer(serverPort, serverIdentities) {
 // Starts an http OCSP responder that serves good OCSP responses and
 // returns an object with a method stop that should be called to stop
 // the http server.
+// NB: Because generating OCSP responses inside the HTTP request
+// handler can cause timeouts, the expected responses are pre-generated
+// all at once before starting the server. This means that their producedAt
+// times will all be the same. If a test depends on this not being the case,
+// perhaps calling startOCSPResponder twice (at different times) will be
+// necessary.
 //
 // serverPort is the port of the http OCSP responder
 // identity is the http hostname that will answer the OCSP requests
@@ -444,13 +464,26 @@ function getFailingHttpServer(serverPort, serverIdentities) {
 //   what is the expected base path of the OCSP request.
 function startOCSPResponder(serverPort, identity, invalidIdentities,
                             nssDBLocation, expectedCertNames,
-                            expectedBasePaths, expectedMethods) {
+                            expectedBasePaths, expectedMethods,
+                            expectedResponseTypes) {
+  let ocspResponseGenerationArgs = expectedCertNames.map(
+    function(expectedNick) {
+      let responseType = "good";
+      if (expectedResponseTypes && expectedResponseTypes.length >= 1) {
+        responseType = expectedResponseTypes.shift();
+      }
+      return [responseType, expectedNick, "unused"];
+    }
+  );
+  let ocspResponses = generateOCSPResponses(ocspResponseGenerationArgs,
+                                            nssDBLocation);
   let httpServer = new HttpServer();
   httpServer.registerPrefixHandler("/",
     function handleServerCallback(aRequest, aResponse) {
       invalidIdentities.forEach(function(identity) {
         do_check_neq(aRequest.host, identity)
       });
+      do_print("got request for: " + aRequest.path);
       let basePath = aRequest.path.slice(1).split("/")[0];
       if (expectedBasePaths.length >= 1) {
         do_check_eq(basePath, expectedBasePaths.shift());
@@ -459,15 +492,9 @@ function startOCSPResponder(serverPort, identity, invalidIdentities,
       if (expectedMethods && expectedMethods.length >= 1) {
         do_check_eq(aRequest.method, expectedMethods.shift());
       }
-      let expectedNick = expectedCertNames.shift();
-      do_print("Generating ocsp response for '" + expectedNick + "(" +
-               basePath + ")'");
       aResponse.setStatusLine(aRequest.httpVersion, 200, "OK");
       aResponse.setHeader("Content-Type", "application/ocsp-response");
-      let args = [ ["good", expectedNick, "unused" ] ];
-      let retArray = generateOCSPResponses(args, nssDBLocation);
-      let responseBody = retArray[0];
-      aResponse.bodyOutputStream.write(responseBody, responseBody.length);
+      aResponse.write(ocspResponses.shift());
     });
   httpServer.identity.setPrimary("http", identity, serverPort);
   invalidIdentities.forEach(function(identity) {
@@ -476,12 +503,16 @@ function startOCSPResponder(serverPort, identity, invalidIdentities,
   httpServer.start(serverPort);
   return {
     stop: function(callback) {
-      do_check_eq(expectedCertNames.length, 0);
+      // make sure we consumed each expected response
+      do_check_eq(ocspResponses.length, 0);
       if (expectedMethods) {
         do_check_eq(expectedMethods.length, 0);
       }
       if (expectedBasePaths) {
         do_check_eq(expectedBasePaths.length, 0);
+      }
+      if (expectedResponseTypes) {
+        do_check_eq(expectedResponseTypes.length, 0);
       }
       httpServer.stop(callback);
     }

@@ -26,13 +26,14 @@ namespace dom {
 class DOMRectReadOnly : public nsISupports
                       , public nsWrapperCache
 {
+protected:
+  virtual ~DOMRectReadOnly() {}
+
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(DOMRectReadOnly)
 
-  virtual ~DOMRectReadOnly() {}
-
-  DOMRectReadOnly(nsISupports* aParent)
+  explicit DOMRectReadOnly(nsISupports* aParent)
     : mParent(aParent)
   {
     SetIsDOMBinding();
@@ -79,8 +80,8 @@ class DOMRect MOZ_FINAL : public DOMRectReadOnly
                         , public nsIDOMClientRect
 {
 public:
-  DOMRect(nsISupports* aParent, double aX = 0, double aY = 0,
-          double aWidth = 0, double aHeight = 0)
+  explicit DOMRect(nsISupports* aParent, double aX = 0, double aY = 0,
+                   double aWidth = 0, double aHeight = 0)
     : DOMRectReadOnly(aParent)
     , mX(aX)
     , mY(aY)
@@ -141,13 +142,18 @@ public:
 
 protected:
   double mX, mY, mWidth, mHeight;
+
+private:
+  ~DOMRect() {};
 };
 
 class DOMRectList MOZ_FINAL : public nsIDOMClientRectList,
                               public nsWrapperCache
 {
+  ~DOMRectList() {}
+
 public:
-  DOMRectList(nsISupports *aParent) : mParent(aParent)
+  explicit DOMRectList(nsISupports *aParent) : mParent(aParent)
   {
     SetIsDOMBinding();
   }
@@ -206,6 +212,7 @@ protected:
 };
 
 }
+
 }
 
 #endif /*MOZILLA_DOMRECT_H_*/

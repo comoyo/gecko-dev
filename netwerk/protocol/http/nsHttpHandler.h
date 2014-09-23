@@ -18,7 +18,6 @@
 #include "nsIHttpProtocolHandler.h"
 #include "nsIObserver.h"
 #include "nsISpeculativeConnect.h"
-#include "nsICache.h"
 
 class nsIHttpChannel;
 class nsIPrefBranch;
@@ -43,10 +42,10 @@ class nsHttpTransaction;
 // nsHttpHandler - protocol handler for HTTP and HTTPS
 //-----------------------------------------------------------------------------
 
-class nsHttpHandler : public nsIHttpProtocolHandler
-                    , public nsIObserver
-                    , public nsSupportsWeakReference
-                    , public nsISpeculativeConnect
+class nsHttpHandler MOZ_FINAL : public nsIHttpProtocolHandler
+                              , public nsIObserver
+                              , public nsSupportsWeakReference
+                              , public nsISpeculativeConnect
 {
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
@@ -57,7 +56,6 @@ public:
     NS_DECL_NSISPECULATIVECONNECT
 
     nsHttpHandler();
-    virtual ~nsHttpHandler();
 
     nsresult Init();
     nsresult AddStandardRequestHeaders(nsHttpHeaderArray *);
@@ -77,7 +75,10 @@ public:
     uint8_t        RedirectionLimit()        { return mRedirectionLimit; }
     PRIntervalTime IdleTimeout()             { return mIdleTimeout; }
     PRIntervalTime SpdyTimeout()             { return mSpdyTimeout; }
-    PRIntervalTime ResponseTimeout()         { return mResponseTimeout; }
+    PRIntervalTime ResponseTimeout() {
+      return mResponseTimeoutEnabled ? mResponseTimeout : 0;
+    }
+    PRIntervalTime ResponseTimeoutEnabled()  { return mResponseTimeoutEnabled; }
     uint16_t       MaxRequestAttempts()      { return mMaxRequestAttempts; }
     const char    *DefaultSocketType()       { return mDefaultSocketType.get(); /* ok to return null */ }
     uint32_t       PhishyUserPassLength()    { return mPhishyUserPassLength; }
@@ -108,7 +109,6 @@ public:
     uint32_t       ConnectTimeout()  { return mConnectTimeout; }
     uint32_t       ParallelSpeculativeConnectLimit() { return mParallelSpeculativeConnectLimit; }
     bool           CriticalRequestPrioritization() { return mCriticalRequestPrioritization; }
-    double         BypassCacheLockThreshold() { return mBypassCacheLockThreshold; }
 
     uint32_t       MaxConnectionsPerOrigin() { return mMaxPersistentConnectionsPerServer; }
     bool           UseRequestTokenBucket() { return mRequestTokenBucketEnabled; }
@@ -298,13 +298,6 @@ public:
     // returns true in between Init and Shutdown states
     bool Active() { return mHandlerActive; }
 
-    static void GetCacheSessionNameForStoragePolicy(
-            nsCacheStoragePolicy storagePolicy,
-            bool isPrivate,
-            uint32_t appId,
-            bool inBrowser,
-            nsACString& sessionName);
-
     // When the disk cache is responding slowly its use is suppressed
     // for 1 minute for most requests. Callable from main thread only.
     TimeStamp GetCacheSkippedUntil() { return mCacheSkippedUntil; }
@@ -312,6 +305,7 @@ public:
     void ClearCacheSkippedUntil() { mCacheSkippedUntil = TimeStamp(); }
 
 private:
+    virtual ~nsHttpHandler();
 
     //
     // Useragent/prefs helper methods
@@ -362,6 +356,7 @@ private:
     PRIntervalTime mIdleTimeout;
     PRIntervalTime mSpdyTimeout;
     PRIntervalTime mResponseTimeout;
+    bool mResponseTimeoutEnabled;
 
     uint16_t mMaxRequestAttempts;
     uint16_t mMaxRequestDelay;
@@ -470,10 +465,6 @@ private:
     // established. In milliseconds.
     uint32_t       mConnectTimeout;
 
-    // The maximum amount of time the nsICacheSession lock can be held
-    // before a new transaction bypasses the cache. In milliseconds.
-    double         mBypassCacheLockThreshold;
-
     // The maximum number of current global half open sockets allowable
     // when starting a new speculative connection.
     uint32_t       mParallelSpeculativeConnectLimit;
@@ -545,6 +536,7 @@ class nsHttpsHandler : public nsIHttpProtocolHandler
                      , public nsSupportsWeakReference
                      , public nsISpeculativeConnect
 {
+    virtual ~nsHttpsHandler() { }
 public:
     // we basically just want to override GetScheme and GetDefaultPort...
     // all other methods should be forwarded to the nsHttpHandler instance.
@@ -556,7 +548,6 @@ public:
     NS_FORWARD_NSISPECULATIVECONNECT     (gHttpHandler->)
 
     nsHttpsHandler() { }
-    virtual ~nsHttpsHandler() { }
 
     nsresult Init();
 };

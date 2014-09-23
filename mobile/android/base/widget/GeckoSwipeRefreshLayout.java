@@ -16,6 +16,8 @@
 
 package org.mozilla.gecko.widget;
 
+import org.mozilla.gecko.AppConstants.Versions;
+
 import android.content.Context;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
@@ -61,25 +63,26 @@ public class GeckoSwipeRefreshLayout extends ViewGroup {
     private static final float MAX_SWIPE_DISTANCE_FACTOR = .6f;
     private static final int REFRESH_TRIGGER_DISTANCE = 120;
 
-    private SwipeProgressBar mProgressBar; //the thing that shows progress is going
-    private View mTarget; //the content that gets pulled down
-    private int mOriginalOffsetTop;
+    SwipeProgressBar mProgressBar; // shows progress is going
+    View mTarget; // content that gets pulled down
+    int mOriginalOffsetTop;
+    int mFrom;
+    int mMediumAnimationDuration;
+    float mFromPercentage;
+    float mCurrPercentage;
+    int mCurrentTargetOffsetTop;
     private OnRefreshListener mListener;
     private MotionEvent mDownEvent;
-    private int mFrom;
-    private boolean mRefreshing = false;
+    private boolean mRefreshing;
     private int mTouchSlop;
     private float mDistanceToTriggerSync = -1;
     private float mPrevY;
-    private int mMediumAnimationDuration;
-    private float mFromPercentage = 0;
-    private float mCurrPercentage = 0;
     private int mProgressBarHeight;
-    private int mCurrentTargetOffsetTop;
+
     // Target is returning to its start offset because it was cancelled or a
     // refresh was triggered.
-    private boolean mReturningToStart;
-    private final DecelerateInterpolator mDecelerateInterpolator;
+    boolean mReturningToStart;
+    final DecelerateInterpolator mDecelerateInterpolator;
     private final AccelerateInterpolator mAccelerateInterpolator;
     private static final int[] LAYOUT_ATTRS = new int[] {
         android.R.attr.enabled
@@ -101,7 +104,7 @@ public class GeckoSwipeRefreshLayout extends ViewGroup {
         }
     };
 
-    private Animation mShrinkTrigger = new Animation() {
+    Animation mShrinkTrigger = new Animation() {
         @Override
         public void applyTransformation(float interpolatedTime, Transformation t) {
             float percent = mFromPercentage + ((0 - mFromPercentage) * interpolatedTime);
@@ -109,7 +112,7 @@ public class GeckoSwipeRefreshLayout extends ViewGroup {
         }
     };
 
-    private final AnimationListener mReturnToStartPositionListener = new BaseAnimationListener() {
+    final AnimationListener mReturnToStartPositionListener = new BaseAnimationListener() {
         @Override
         public void onAnimationEnd(Animation animation) {
             // Once the target content has returned to its start position, reset
@@ -118,7 +121,7 @@ public class GeckoSwipeRefreshLayout extends ViewGroup {
         }
     };
 
-    private final AnimationListener mShrinkAnimationListener = new BaseAnimationListener() {
+    final AnimationListener mShrinkAnimationListener = new BaseAnimationListener() {
         @Override
         public void onAnimationEnd(Animation animation) {
             mCurrPercentage = 0;
@@ -196,6 +199,12 @@ public class GeckoSwipeRefreshLayout extends ViewGroup {
         super.onAttachedToWindow();
         removeCallbacks(mCancel);
         removeCallbacks(mReturnToStartPosition);
+
+        // Sometimes the inner view doesn't get a proper layout
+        // pass when re-attached to the view tree (see bug 1010986).
+        if (getChildCount() > 0) {
+            getChildAt(0).forceLayout();
+        }
     }
 
     @Override
@@ -205,7 +214,7 @@ public class GeckoSwipeRefreshLayout extends ViewGroup {
         removeCallbacks(mCancel);
     }
 
-    private void animateOffsetToStartPosition(int from, AnimationListener listener) {
+    void animateOffsetToStartPosition(int from, AnimationListener listener) {
         mFrom = from;
         mAnimateToStartPosition.reset();
         mAnimateToStartPosition.setDuration(mMediumAnimationDuration);
@@ -344,7 +353,7 @@ public class GeckoSwipeRefreshLayout extends ViewGroup {
      *         scroll up. Override this if the child view is a custom view.
      */
     public boolean canChildScrollUp() {
-        if (android.os.Build.VERSION.SDK_INT < 14) {
+        if (Versions.preICS) {
             if (mTarget instanceof AbsListView) {
                 final AbsListView absListView = (AbsListView) mTarget;
                 return absListView.getChildCount() > 0
@@ -450,7 +459,7 @@ public class GeckoSwipeRefreshLayout extends ViewGroup {
         setTargetOffsetTopAndBottom(targetTop - currentTop);
     }
 
-    private void setTargetOffsetTopAndBottom(int offset) {
+    void setTargetOffsetTopAndBottom(int offset) {
         mTarget.offsetTopAndBottom(offset);
         mCurrentTargetOffsetTop = mTarget.getTop();
     }

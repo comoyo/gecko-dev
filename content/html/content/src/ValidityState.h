@@ -17,6 +17,8 @@ namespace dom {
 class ValidityState MOZ_FINAL : public nsIDOMValidityState,
                                 public nsWrapperCache
 {
+  ~ValidityState() {}
+
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(ValidityState)
@@ -73,7 +75,7 @@ public:
   }
 
 protected:
-  ValidityState(nsIConstraintValidation* aConstraintValidation);
+  explicit ValidityState(nsIConstraintValidation* aConstraintValidation);
 
   /**
    * Helper function to get a validity state from constraint validation instance.

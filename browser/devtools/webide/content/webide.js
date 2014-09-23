@@ -15,14 +15,20 @@ const {require} = devtools;
 const {Services} = Cu.import("resource://gre/modules/Services.jsm");
 const {AppProjects} = require("devtools/app-manager/app-projects");
 const {Connection} = require("devtools/client/connection-manager");
-const {AppManager} = require("devtools/app-manager");
+const {AppManager} = require("devtools/webide/app-manager");
 const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 const ProjectEditor = require("projecteditor/projecteditor");
+const {Devices} = Cu.import("resource://gre/modules/devtools/Devices.jsm");
+const {GetAvailableAddons} = require("devtools/webide/addons");
+const {GetTemplatesJSON, GetAddonsJSON} = require("devtools/webide/remote-resources");
 
-const Strings = Services.strings.createBundle("chrome://webide/content/webide.properties");
+const Strings = Services.strings.createBundle("chrome://browser/locale/devtools/webide.properties");
 
 const HTML = "http://www.w3.org/1999/xhtml";
-const HELP_URL = "https://developer.mozilla.org/Firefox_OS/Using_the_App_Manager#Troubleshooting";
+const HELP_URL = "https://developer.mozilla.org/docs/Tools/WebIDE/Troubleshooting";
+
+// download template index early
+GetTemplatesJSON(true);
 
 // See bug 989619
 console.log = console.log.bind(console);
@@ -56,18 +62,37 @@ let UI = {
     window.addEventListener("focus", this.onfocus, true);
 
     AppProjects.load().then(() => {
-      let lastProjectLocation = Services.prefs.getCharPref("devtools.webide.lastprojectlocation");
-      if (lastProjectLocation) {
-        let lastProject = AppProjects.get(lastProjectLocation);
-        if (lastProject) {
-          AppManager.selectedProject = lastProject;
-        } else {
-          AppManager.selectedProject = null;
-        }
+      this.openLastProject();
+    });
+
+    // Auto install the ADB Addon Helper. Only once.
+    // If the user decides to uninstall the addon, we won't install it again.
+    let autoInstallADBHelper = Services.prefs.getBoolPref("devtools.webide.autoinstallADBHelper");
+    if (autoInstallADBHelper && !Devices.helperAddonInstalled) {
+      GetAvailableAddons().then(addons => {
+        addons.adb.install();
+      }, console.error);
+    }
+    Services.prefs.setBoolPref("devtools.webide.autoinstallADBHelper", false);
+
+    this.lastConnectedRuntime = Services.prefs.getCharPref("devtools.webide.lastConnectedRuntime");
+
+    this.setupDeck();
+  },
+
+  openLastProject: function() {
+    let lastProjectLocation = Services.prefs.getCharPref("devtools.webide.lastprojectlocation");
+    let shouldRestore = Services.prefs.getBoolPref("devtools.webide.restoreLastProject");
+    if (lastProjectLocation && shouldRestore) {
+      let lastProject = AppProjects.get(lastProjectLocation);
+      if (lastProject) {
+        AppManager.selectedProject = lastProject;
       } else {
         AppManager.selectedProject = null;
       }
-    });
+    } else {
+      AppManager.selectedProject = null;
+    }
   },
 
   uninit: function() {
@@ -77,13 +102,22 @@ let UI = {
     window.removeEventListener("message", this.onMessage);
   },
 
+  canWindowClose: function() {
+    if (this.projecteditor) {
+      return this.projecteditor.confirmUnsaved();
+    }
+    return true;
+  },
+
   onfocus: function() {
     // Because we can't track the activity in the folder project,
     // we need to validate the project regularly. Let's assume that
     // if a modification happened, it happened when the window was
     // not focused.
     if (AppManager.selectedProject &&
-        AppManager.selectedProject.type != "runtimeApp") {
+        AppManager.selectedProject.type != "mainProcess" &&
+        AppManager.selectedProject.type != "runtimeApp" &&
+        AppManager.selectedProject.type != "tab") {
       AppManager.validateProject(AppManager.selectedProject);
     }
   },
@@ -93,6 +127,7 @@ let UI = {
     switch (what) {
       case "runtimelist":
         this.updateRuntimeList();
+        this.autoConnectRuntime();
         break;
       case "connection":
         this.updateRuntimeButton();
@@ -100,23 +135,29 @@ let UI = {
         break;
       case "project":
         this.updateTitle();
-        this.closeToolbox();
+        this.destroyToolbox();
         this.updateCommands();
         this.updateProjectButton();
         this.openProject();
+        this.autoStartProject();
         break;
       case "project-is-not-running":
       case "project-is-running":
+      case "list-tabs-response":
         this.updateCommands();
         break;
       case "runtime":
         this.updateRuntimeButton();
+        this.saveLastConnectedRuntime();
         break;
       case "project-validated":
         this.updateTitle();
         this.updateCommands();
         this.updateProjectButton();
+        this.updateProjectEditorHeader();
         break;
+      case "install-progress":
+        this.updateProgress(Math.round(100 * details.bytesSent / details.totalBytes));
     };
   },
 
@@ -148,33 +189,75 @@ let UI = {
     }
   },
 
+  /********** BUSY UI **********/
+
+  _busyTimeout: null,
+  _busyOperationDescription: null,
+  _busyPromise: null,
+
+  updateProgress: function(percent) {
+    let progress = document.querySelector("#action-busy-determined");
+    progress.mode = "determined";
+    progress.value = percent;
+    this.setupBusyTimeout();
+  },
+
   busy: function() {
     this.hidePanels();
-    document.querySelector("window").classList.add("busy")
+    let win = document.querySelector("window");
+    win.classList.add("busy")
+    win.classList.add("busy-undetermined");
     this.updateCommands();
   },
 
   unbusy: function() {
-    document.querySelector("window").classList.remove("busy")
+    let win = document.querySelector("window");
+    win.classList.remove("busy")
+    win.classList.remove("busy-determined");
+    win.classList.remove("busy-undetermined");
     this.updateCommands();
+    this._busyPromise = null;
+  },
+
+  setupBusyTimeout: function() {
+    this.cancelBusyTimeout();
+    this._busyTimeout = setTimeout(() => {
+      this.unbusy();
+      UI.reportError("error_operationTimeout", this._busyOperationDescription);
+    }, 30000);
+  },
+
+  cancelBusyTimeout: function() {
+    clearTimeout(this._busyTimeout);
+  },
+
+  busyWithProgressUntil: function(promise, operationDescription) {
+    this.busyUntil(promise, operationDescription);
+    let win = document.querySelector("window");
+    let progress = document.querySelector("#action-busy-determined");
+    progress.mode = "undetermined";
+    win.classList.add("busy-determined");
+    win.classList.remove("busy-undetermined");
   },
 
   busyUntil: function(promise, operationDescription) {
     // Freeze the UI until the promise is resolved. A 30s timeout
     // will unfreeze the UI, just in case the promise never gets
     // resolved.
-    let timeout = setTimeout(() => {
-      this.unbusy();
-      UI.reportError("error_operationTimeout", operationDescription);
-    }, 30000);
+    this._busyPromise = promise;
+    this._busyOperationDescription = operationDescription;
+    this.setupBusyTimeout();
     this.busy();
     promise.then(() => {
-      clearTimeout(timeout);
+      this.cancelBusyTimeout();
       this.unbusy();
     }, (e) => {
-      clearTimeout(timeout);
-      UI.reportError("error_operationFail", operationDescription);
-      console.error(e);
+      this.cancelBusyTimeout();
+      let operationCanceled = e && e.canceled;
+      if (!operationCanceled) {
+        UI.reportError("error_operationFail", operationDescription);
+        console.error(e);
+      }
       this.unbusy();
     });
     return promise;
@@ -199,48 +282,97 @@ let UI = {
       }
     }];
 
-    let nbox = document.querySelector("#body");
+    let nbox = document.querySelector("#notificationbox");
     nbox.removeAllNotifications(true);
     nbox.appendNotification(text, "webide:errornotification", null,
                             nbox.PRIORITY_WARNING_LOW, buttons);
   },
 
+  dismissErrorNotification: function() {
+    let nbox = document.querySelector("#notificationbox");
+    nbox.removeAllNotifications(true);
+  },
+
   /********** RUNTIME **********/
 
   updateRuntimeList: function() {
+    let wifiHeaderNode = document.querySelector("#runtime-header-wifi-devices");
+    if (AppManager.isWiFiScanningEnabled) {
+      wifiHeaderNode.removeAttribute("hidden");
+    } else {
+      wifiHeaderNode.setAttribute("hidden", "true");
+    }
+
     let USBListNode = document.querySelector("#runtime-panel-usbruntime");
+    let WiFiListNode = document.querySelector("#runtime-panel-wifi-devices");
     let simulatorListNode = document.querySelector("#runtime-panel-simulators");
-    while (USBListNode.hasChildNodes()) {
-      USBListNode.firstChild.remove();
+    let customListNode = document.querySelector("#runtime-panel-custom");
+
+    let noHelperNode = document.querySelector("#runtime-panel-noadbhelper");
+    let noUSBNode = document.querySelector("#runtime-panel-nousbdevice");
+
+    if (Devices.helperAddonInstalled) {
+      noHelperNode.setAttribute("hidden", "true");
+    } else {
+      noHelperNode.removeAttribute("hidden");
     }
 
-    for (let runtime of AppManager.runtimeList.usb) {
-      let panelItemNode = document.createElement("toolbarbutton");
-      panelItemNode.className = "panel-item runtime-panel-item-usbruntime";
-      panelItemNode.setAttribute("label", runtime.getName());
-      USBListNode.appendChild(panelItemNode);
-      let r = runtime;
-      panelItemNode.addEventListener("click", () => {
-        this.hidePanels();
-        this.connectToRuntime(r);
-      }, true);
+    if (AppManager.runtimeList.usb.length == 0 && Devices.helperAddonInstalled) {
+      noUSBNode.removeAttribute("hidden");
+    } else {
+      noUSBNode.setAttribute("hidden", "true");
     }
 
-    while (simulatorListNode.hasChildNodes()) {
-      simulatorListNode.firstChild.remove();
+    for (let [type, parent] of [
+      ["usb", USBListNode],
+      ["wifi", WiFiListNode],
+      ["simulator", simulatorListNode],
+      ["custom", customListNode],
+    ]) {
+      while (parent.hasChildNodes()) {
+        parent.firstChild.remove();
+      }
+      for (let runtime of AppManager.runtimeList[type]) {
+        let panelItemNode = document.createElement("toolbarbutton");
+        panelItemNode.className = "panel-item runtime-panel-item-" + type;
+        panelItemNode.setAttribute("label", runtime.getName());
+        parent.appendChild(panelItemNode);
+        let r = runtime;
+        panelItemNode.addEventListener("click", () => {
+          this.hidePanels();
+          this.dismissErrorNotification();
+          this.connectToRuntime(r);
+        }, true);
+      }
     }
-    for (let runtime of AppManager.runtimeList.simulator) {
-      let panelItemNode = document.createElement("toolbarbutton");
-      panelItemNode.className = "panel-item runtime-panel-item-simulator";
-      panelItemNode.setAttribute("label", runtime.getName());
-      simulatorListNode.appendChild(panelItemNode);
-      let r = runtime;
-      panelItemNode.addEventListener("click", () => {
-        this.hidePanels();
-        this.connectToRuntime(r);
-      }, true);
+  },
+
+  autoConnectRuntime: function () {
+    // Automatically reconnect to the previously selected runtime,
+    // if available and has an ID
+    if (AppManager.selectedRuntime || !this.lastConnectedRuntime) {
+      return;
+    }
+    let [_, type, id] = this.lastConnectedRuntime.match(/^(\w+):(.+)$/);
+
+    type = type.toLowerCase();
+
+    // Local connection is mapped to AppManager.runtimeList.custom array
+    if (type == "local") {
+      type = "custom";
     }
 
+    // We support most runtimes except simulator, that needs to be manually
+    // launched
+    if (type == "usb" || type == "wifi" || type == "custom") {
+      for (let runtime of AppManager.runtimeList[type]) {
+        // Some runtimes do not expose getID function and don't support
+        // autoconnect (like remote connection)
+        if (typeof(runtime.getID) == "function" && runtime.getID() == id) {
+          this.connectToRuntime(runtime);
+        }
+      }
+    }
   },
 
   connectToRuntime: function(runtime) {
@@ -257,6 +389,17 @@ let UI = {
       let name = AppManager.selectedRuntime.getName();
       labelNode.setAttribute("value", name);
     }
+  },
+
+  saveLastConnectedRuntime: function () {
+    if (AppManager.selectedRuntime &&
+        typeof(AppManager.selectedRuntime.getID) === "function") {
+      this.lastConnectedRuntime = AppManager.selectedRuntime.type + ":" + AppManager.selectedRuntime.getID();
+    } else {
+      this.lastConnectedRuntime = "";
+    }
+    Services.prefs.setCharPref("devtools.webide.lastConnectedRuntime",
+                               this.lastConnectedRuntime);
   },
 
   /********** PROJECTS **********/
@@ -283,17 +426,57 @@ let UI = {
 
   // ProjectEditor & details screen
 
+  destroyProjectEditor: function() {
+    if (this.projecteditor) {
+      this.projecteditor.destroy();
+      this.projecteditor = null;
+    }
+  },
+
+  updateProjectEditorMenusVisibility: function() {
+    if (this.projecteditor) {
+      let panel = document.querySelector("#deck").selectedPanel;
+      if (panel && panel.id == "deck-panel-projecteditor") {
+        this.projecteditor.menuEnabled = true;
+      } else {
+        this.projecteditor.menuEnabled = false;
+      }
+    }
+  },
+
   getProjectEditor: function() {
     if (this.projecteditor) {
       return this.projecteditor.loaded;
     }
 
-    let projecteditorIframe = document.querySelector("#projecteditor");
-    this.projecteditor = ProjectEditor.ProjectEditor(projecteditorIframe);
+    let projecteditorIframe = document.querySelector("#deck-panel-projecteditor");
+    this.projecteditor = ProjectEditor.ProjectEditor(projecteditorIframe, {
+      menubar: document.querySelector("#main-menubar"),
+      menuindex: 1
+    });
     this.projecteditor.on("onEditorSave", (editor, resource) => {
       AppManager.validateProject(AppManager.selectedProject);
     });
     return this.projecteditor.loaded;
+  },
+
+  updateProjectEditorHeader: function() {
+    let project = AppManager.selectedProject;
+    if (!project || !this.projecteditor) {
+      return;
+    }
+    let status = project.validationStatus || "unknown";
+    if (status == "error warning") {
+      status = "error";
+    }
+    this.getProjectEditor().then((projecteditor) => {
+      projecteditor.setProjectToAppPath(project.location, {
+        name: project.name,
+        iconUrl: project.icon,
+        projectOverviewURL: "chrome://webide/content/details.xhtml",
+        validationStatus: status
+      }).then(null, console.error);
+    }, console.error);
   },
 
   isProjectEditorEnabled: function() {
@@ -301,18 +484,19 @@ let UI = {
   },
 
   openProject: function() {
-    let detailsIframe = document.querySelector("#details");
-    let projecteditorIframe = document.querySelector("#projecteditor");
-
     let project = AppManager.selectedProject;
 
     // Nothing to show
 
     if (!project) {
-      detailsIframe.setAttribute("hidden", "true");
-      projecteditorIframe.setAttribute("hidden", "true");
-      document.commandDispatcher.focusedElement = document.documentElement;
+      this.resetDeck();
       return;
+    }
+
+    // Save last project location
+
+    if (project.location) {
+      Services.prefs.setCharPref("devtools.webide.lastprojectlocation", project.location);
     }
 
     // Make sure the directory exist before we show Project Editor
@@ -328,28 +512,71 @@ let UI = {
     if (project.type != "packaged" ||
         !this.isProjectEditorEnabled() ||
         forceDetailsOnly) {
-      detailsIframe.removeAttribute("hidden");
-      projecteditorIframe.setAttribute("hidden", "true");
-      document.commandDispatcher.focusedElement = document.documentElement;
+      this.selectDeckPanel("details");
       return;
     }
 
     // Show ProjectEditor
 
-    detailsIframe.setAttribute("hidden", "true");
-    projecteditorIframe.removeAttribute("hidden");
+    this.selectDeckPanel("projecteditor");
 
-    this.getProjectEditor().then((projecteditor) => {
-      projecteditor.setProjectToAppPath(project.location, {
-        name: project.name,
-        iconUrl: project.icon,
-        projectOverviewURL: "chrome://webide/content/details.xhtml"
-      });
+    this.getProjectEditor().then(() => {
+      this.updateProjectEditorHeader();
     }, console.error);
+  },
 
-    if (project.location) {
-      Services.prefs.setCharPref("devtools.webide.lastprojectlocation", project.location);
+  autoStartProject: function() {
+    let project = AppManager.selectedProject;
+
+    if (!project) {
+      return;
     }
+    if (!(project.type == "runtimeApp" ||
+          project.type == "mainProcess" ||
+          project.type == "tab")) {
+      return; // For something that is not an editable app, we're done.
+    }
+
+    Task.spawn(function() {
+      if (project.type == "runtimeApp") {
+        yield UI.busyUntil(AppManager.launchRuntimeApp(), "running app");
+      }
+      yield UI.createToolbox();
+    });
+  },
+
+  /********** DECK **********/
+
+  setupDeck: function() {
+    let iframes = document.querySelectorAll("#deck > iframe");
+    for (let iframe of iframes) {
+      iframe.tooltip = "aHTMLTooltip";
+    }
+  },
+
+  resetFocus: function() {
+    document.commandDispatcher.focusedElement = document.documentElement;
+  },
+
+  selectDeckPanel: function(id) {
+    this.hidePanels();
+    this.resetFocus();
+    let deck = document.querySelector("#deck");
+    let panel = deck.querySelector("#deck-panel-" + id);
+    let lazysrc = panel.getAttribute("lazysrc");
+    if (lazysrc) {
+      panel.removeAttribute("lazysrc");
+      panel.setAttribute("src", lazysrc);
+    }
+    deck.selectedPanel = panel;
+    this.updateProjectEditorMenusVisibility();
+  },
+
+  resetDeck: function() {
+    this.resetFocus();
+    let deck = document.querySelector("#deck");
+    deck.selectedPanel = null;
+    this.updateProjectEditorMenusVisibility();
   },
 
   /********** COMMANDS **********/
@@ -400,11 +627,13 @@ let UI = {
 
       // If connected and a project is selected
       if (AppManager.selectedProject.type == "runtimeApp") {
-        if (isProjectRunning) {
-          playCmd.setAttribute("disabled", "true");
-        } else {
-          playCmd.removeAttribute("disabled");
-        }
+        playCmd.removeAttribute("disabled");
+      } else if (AppManager.selectedProject.type == "tab") {
+        playCmd.removeAttribute("disabled");
+        stopCmd.setAttribute("disabled", "true");
+      } else if (AppManager.selectedProject.type == "mainProcess") {
+        playCmd.setAttribute("disabled", "true");
+        stopCmd.setAttribute("disabled", "true");
       } else {
         if (AppManager.selectedProject.errorsCount == 0) {
           playCmd.removeAttribute("disabled");
@@ -432,18 +661,18 @@ let UI = {
 
     let runtimePanelButton = document.querySelector("#runtime-panel-button");
     if (AppManager.connection.status == Connection.Status.CONNECTED) {
-      screenshotCmd.removeAttribute("disabled");
-      permissionsCmd.removeAttribute("disabled");
+      if (AppManager.deviceFront) {
+        detailsCmd.removeAttribute("disabled");
+        permissionsCmd.removeAttribute("disabled");
+        screenshotCmd.removeAttribute("disabled");
+      }
       disconnectCmd.removeAttribute("disabled");
-      detailsCmd.removeAttribute("disabled");
-      box.removeAttribute("hidden");
       runtimePanelButton.setAttribute("active", "true");
     } else {
-      screenshotCmd.setAttribute("disabled", "true");
-      permissionsCmd.setAttribute("disabled", "true");
-      disconnectCmd.setAttribute("disabled", "true");
       detailsCmd.setAttribute("disabled", "true");
-      box.setAttribute("hidden", "true");
+      permissionsCmd.setAttribute("disabled", "true");
+      screenshotCmd.setAttribute("disabled", "true");
+      disconnectCmd.setAttribute("disabled", "true");
       runtimePanelButton.removeAttribute("active");
     }
 
@@ -464,13 +693,20 @@ let UI = {
     } catch(e) { console.error(e); }
   },
 
-  closeToolbox: function() {
+  destroyToolbox: function() {
     if (this.toolboxPromise) {
       this.toolboxPromise.then(toolbox => {
         toolbox.destroy();
         this.toolboxPromise = null;
       }, console.error);
     }
+  },
+
+  createToolbox: function() {
+    this.toolboxPromise = AppManager.getTarget().then((target) => {
+      return this.showToolbox(target);
+    }, console.error);
+    return this.busyUntil(this.toolboxPromise, "opening toolbox");
   },
 
   showToolbox: function(target) {
@@ -482,7 +718,7 @@ let UI = {
     splitter.removeAttribute("hidden");
 
     let iframe = document.createElement("iframe");
-    document.querySelector("window").insertBefore(iframe, splitter.nextSibling);
+    document.querySelector("notificationbox").insertBefore(iframe, splitter.nextSibling);
     let host = devtools.Toolbox.HostType.CUSTOM;
     let options = { customIframe: iframe };
     this.toolboxIframe = iframe;
@@ -496,9 +732,7 @@ let UI = {
   },
 
   closeToolboxUI: function() {
-    let body = document.querySelector("#body");
-    body.removeAttribute("hidden");
-
+    this.resetFocus();
     Services.prefs.setIntPref("devtools.toolbox.footer.height", this.toolboxIframe.height);
 
     // We have to destroy the iframe, otherwise, the keybindings of webide don't work
@@ -515,7 +749,9 @@ let UI = {
 
 let Cmds = {
   quit: function() {
-    window.close();
+    if (UI.canWindowClose()) {
+      window.close();
+    }
   },
 
   /**
@@ -592,6 +828,14 @@ let Cmds = {
         return;
       }
 
+      // Clean location string and add "http://" if missing
+      location = location.trim();
+      try { // Will fail if no scheme
+        Services.io.extractScheme(location);
+      } catch(e) {
+        location = "http://" + location;
+      }
+
       // Add project
       let project = yield AppProjects.addHosted(location)
 
@@ -625,11 +869,10 @@ let Cmds = {
         projectsNode.appendChild(panelItemNode);
         panelItemNode.setAttribute("label", project.name || AppManager.DEFAULT_PROJECT_NAME);
         panelItemNode.setAttribute("image", project.icon || AppManager.DEFAULT_PROJECT_ICON);
-        if (!project.validationStatus) {
-          // The result of the validation process (storing names, icons, …) has never been
-          // stored in the IndexedDB database. This happens when the project has been created
-          // from the old app manager. We need to run the validation again and update the name
-          // and icon of the app
+        if (!project.name || !project.icon) {
+          // The result of the validation process (storing names, icons, …) is not stored in
+          // the IndexedDB database when App Manager v1 is used.
+          // We need to run the validation again and update the name and icon of the app.
           AppManager.validateProject(project).then(() => {
             panelItemNode.setAttribute("label", project.name);
             panelItemNode.setAttribute("image", project.icon);
@@ -657,7 +900,13 @@ let Cmds = {
 
 
     let runtimeappsHeaderNode = document.querySelector("#panel-header-runtimeapps");
-    if (AppManager.connection.status == Connection.Status.CONNECTED) {
+    let sortedApps = AppManager.webAppsStore.object.all;
+    sortedApps = sortedApps.sort((a, b) => {
+      return a.name > b.name;
+    });
+    let mainProcess = AppManager.isMainProcessDebuggable();
+    if (AppManager.connection.status == Connection.Status.CONNECTED &&
+        (sortedApps.length > 0 || mainProcess)) {
       runtimeappsHeaderNode.removeAttribute("hidden");
     } else {
       runtimeappsHeaderNode.setAttribute("hidden", "true");
@@ -668,8 +917,24 @@ let Cmds = {
       runtimeAppsNode.firstChild.remove();
     }
 
-    for (let i = 0; i < AppManager.webAppsStore.object.all.length; i++) {
-      let app = AppManager.webAppsStore.object.all[i];
+    if (mainProcess) {
+      let panelItemNode = document.createElement("toolbarbutton");
+      panelItemNode.className = "panel-item";
+      panelItemNode.setAttribute("label", Strings.GetStringFromName("mainProcess_label"));
+      panelItemNode.setAttribute("image", AppManager.DEFAULT_PROJECT_ICON);
+      runtimeAppsNode.appendChild(panelItemNode);
+      panelItemNode.addEventListener("click", () => {
+        UI.hidePanels();
+        AppManager.selectedProject = {
+          type: "mainProcess",
+          name: Strings.GetStringFromName("mainProcess_label"),
+          icon: AppManager.DEFAULT_PROJECT_ICON
+        };
+      }, true);
+    }
+
+    for (let i = 0; i < sortedApps.length; i++) {
+      let app = sortedApps[i];
       let panelItemNode = document.createElement("toolbarbutton");
       panelItemNode.className = "panel-item";
       panelItemNode.setAttribute("label", app.name);
@@ -686,10 +951,66 @@ let Cmds = {
       }, true);
     }
 
+    // Build the tab list right now, so it's fast...
+    this._buildProjectPanelTabs();
+
+    // But re-list them and rebuild, in case any tabs navigated since the last
+    // time they were listed.
+    AppManager.listTabs().then(() => {
+      this._buildProjectPanelTabs();
+    });
+
     return deferred.promise;
   },
 
+  _buildProjectPanelTabs: function() {
+    let tabs = AppManager.tabStore.tabs;
+    let tabsHeaderNode = document.querySelector("#panel-header-tabs");
+    if (AppManager.connection.status == Connection.Status.CONNECTED &&
+        tabs.length > 0) {
+      tabsHeaderNode.removeAttribute("hidden");
+    } else {
+      tabsHeaderNode.setAttribute("hidden", "true");
+    }
+
+    let tabsNode = document.querySelector("#project-panel-tabs");
+    while (tabsNode.hasChildNodes()) {
+      tabsNode.firstChild.remove();
+    }
+
+    for (let i = 0; i < tabs.length; i++) {
+      let tab = tabs[i];
+      let url = new URL(tab.url);
+      // Wanted to use nsIFaviconService here, but it only works for visited
+      // tabs, so that's no help for any remote tabs.  Maybe some favicon wizard
+      // knows how to get high-res favicons easily, or we could offer actor
+      // support for this (bug 1061654).
+      tab.favicon = url.origin + "/favicon.ico";
+      tab.name = tab.title || Strings.GetStringFromName("project_tab_loading");
+      if (url.protocol.startsWith("http")) {
+        tab.name = url.hostname + ": " + tab.name;
+      }
+      let panelItemNode = document.createElement("toolbarbutton");
+      panelItemNode.className = "panel-item";
+      panelItemNode.setAttribute("label", tab.name);
+      panelItemNode.setAttribute("image", tab.favicon);
+      tabsNode.appendChild(panelItemNode);
+      panelItemNode.addEventListener("click", () => {
+        UI.hidePanels();
+        AppManager.selectedProject = {
+          type: "tab",
+          app: tab,
+          icon: tab.favicon,
+          location: tab.url,
+          name: tab.name
+        };
+      }, true);
+    }
+  },
+
   showRuntimePanel: function() {
+    AppManager.scanForWiFiRuntimes();
+
     let panel = document.querySelector("#runtime-panel");
     let anchor = document.querySelector("#runtime-panel-button > .panel-button-anchor");
 
@@ -718,92 +1039,27 @@ let Cmds = {
   },
 
   showPermissionsTable: function() {
-    return UI.busyUntil(AppManager.deviceFront.getRawPermissionsTable().then(json => {
-      let styleContent = "";
-      styleContent += "body {background:white; font-family: monospace}";
-      styleContent += "table {border-collapse: collapse}";
-      styleContent += "th, td {padding: 5px; border: 1px solid #EEE}";
-      styleContent += "th {min-width: 130px}";
-      styleContent += "td {text-align: center}";
-      styleContent += "th:first-of-type, td:first-of-type {text-align:left}";
-      styleContent += ".permallow  {color:rgb(152, 207, 57)}";
-      styleContent += ".permprompt {color:rgb(0,158,237)}";
-      styleContent += ".permdeny   {color:rgb(204,73,8)}";
-      let style = document.createElementNS(HTML, "style");
-      style.textContent = styleContent;
-      let table = document.createElementNS(HTML, "table");
-      table.innerHTML = "<tr><th>Name</th><th>type:web</th><th>type:privileged</th><th>type:certified</th></tr>";
-      let permissionsTable = json.rawPermissionsTable;
-      for (let name in permissionsTable) {
-        let tr = document.createElementNS(HTML, "tr");
-        let td = document.createElementNS(HTML, "td");
-        td.textContent = name;
-        tr.appendChild(td);
-        for (let type of ["app","privileged","certified"]) {
-          let td = document.createElementNS(HTML, "td");
-          if (permissionsTable[name][type] == json.ALLOW_ACTION) {
-            td.textContent = "✓";
-            td.className = "permallow";
-          }
-          if (permissionsTable[name][type] == json.PROMPT_ACTION) {
-            td.textContent = "!";
-            td.className = "permprompt";
-          }
-          if (permissionsTable[name][type] == json.DENY_ACTION) {
-            td.textContent = "✕";
-            td.className = "permdeny"
-          }
-          tr.appendChild(td);
-        }
-        table.appendChild(tr);
-      }
-      let body = document.createElementNS(HTML, "body");
-      body.appendChild(style);
-      body.appendChild(table);
-      let url = "data:text/html;charset=utf-8,";
-      url += encodeURIComponent(body.outerHTML);
-      UI.openInBrowser(url);
-    }), "showing permission table");
+    UI.selectDeckPanel("permissionstable");
   },
 
   showRuntimeDetails: function() {
-    return UI.busyUntil(AppManager.deviceFront.getDescription().then(json => {
-      let styleContent = "";
-      styleContent += "body {background:white; font-family: monospace}";
-      styleContent += "table {border-collapse: collapse}";
-      styleContent += "th, td {padding: 5px; border: 1px solid #EEE}";
-      let style = document.createElementNS(HTML, "style");
-      style.textContent = styleContent;
-      let table = document.createElementNS(HTML, "table");
-      for (let name in json) {
-        let tr = document.createElementNS(HTML, "tr");
-        let td = document.createElementNS(HTML, "td");
-        td.textContent = name;
-        tr.appendChild(td);
-        td = document.createElementNS(HTML, "td");
-        td.textContent = json[name];
-        tr.appendChild(td);
-        table.appendChild(tr);
-      }
-      let body = document.createElementNS(HTML, "body");
-      body.appendChild(style);
-      body.appendChild(table);
-      let url = "data:text/html;charset=utf-8,";
-      url += encodeURIComponent(body.outerHTML);
-      UI.openInBrowser(url);
-    }), "showing runtime details");
+    UI.selectDeckPanel("runtimedetails");
+  },
 
+  showMonitor: function() {
+    UI.selectDeckPanel("monitor");
   },
 
   play: function() {
     switch(AppManager.selectedProject.type) {
       case "packaged":
+        return UI.busyWithProgressUntil(AppManager.installAndRunProject(), "installing and running app");
       case "hosted":
         return UI.busyUntil(AppManager.installAndRunProject(), "installing and running app");
-        break;
       case "runtimeApp":
-        return UI.busyUntil(AppManager.runRuntimeApp(), "running app");
-        break;
+        return UI.busyUntil(AppManager.launchOrReloadRuntimeApp(), "launching / reloading app");
+      case "tab":
+        return UI.busyUntil(AppManager.reloadTab(), "reloading tab");
     }
     return promise.reject();
   },
@@ -814,14 +1070,10 @@ let Cmds = {
 
   toggleToolbox: function() {
     if (UI.toolboxIframe) {
-      UI.closeToolbox();
+      UI.destroyToolbox();
       return promise.resolve();
     } else {
-      UI.toolboxPromise = AppManager.getTarget().then((target) => {
-        return UI.showToolbox(target);
-      }, console.error);
-      UI.busyUntil(UI.toolboxPromise, "opening toolbox");
-      return UI.toolboxPromise;
+      return UI.createToolbox();
     }
   },
 
@@ -830,11 +1082,23 @@ let Cmds = {
   },
 
   toggleEditors: function() {
-    Services.prefs.setBoolPref("devtools.webide.showProjectEditor", !UI.isProjectEditorEnabled());
+    let isNowEnabled = !UI.isProjectEditorEnabled();
+    Services.prefs.setBoolPref("devtools.webide.showProjectEditor", isNowEnabled);
+    if (!isNowEnabled) {
+      UI.destroyProjectEditor();
+    }
     UI.openProject();
   },
 
   showTroubleShooting: function() {
     UI.openInBrowser(HELP_URL);
+  },
+
+  showAddons: function() {
+    UI.selectDeckPanel("addons");
+  },
+
+  showPrefs: function() {
+    UI.selectDeckPanel("prefs");
   },
 }

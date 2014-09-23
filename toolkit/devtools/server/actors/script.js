@@ -1,4 +1,4 @@
-/* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2; js-indent-level: 2; -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,20 +6,24 @@
 
 "use strict";
 
-const Debugger = require("Debugger");
 const Services = require("Services");
-const { Cc, Ci, Cu, components } = require("chrome");
-const { ActorPool } = require("devtools/server/actors/common");
+const { Cc, Ci, Cu, components, ChromeWorker } = require("chrome");
+const { ActorPool, getOffsetColumn } = require("devtools/server/actors/common");
 const { DebuggerServer } = require("devtools/server/main");
 const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
 const { dbg_assert, dumpn, update } = DevToolsUtils;
 const { SourceMapConsumer, SourceMapGenerator } = require("source-map");
+const promise = require("promise");
+const Debugger = require("Debugger");
+const xpcInspector = require("xpcInspector");
+const mapURIToAddonID = require("./utils/map-uri-to-addon-id");
+
 const { defer, resolve, reject, all } = require("devtools/toolkit/deprecated-sync-thenables");
-const {CssLogic} = require("devtools/styleinspector/css-logic");
+const { CssLogic } = require("devtools/styleinspector/css-logic");
 
-Cu.import("resource://gre/modules/NetUtil.jsm");
-
-let B2G_ID = "{3c2e2abc-06d4-11e1-ac3b-374f68613e61}";
+DevToolsUtils.defineLazyGetter(this, "NetUtil", () => {
+  return Cu.import("resource://gre/modules/NetUtil.jsm", {}).NetUtil;
+});
 
 let TYPED_ARRAY_CLASSES = ["Uint8Array", "Uint8ClampedArray", "Uint16Array",
       "Uint32Array", "Int8Array", "Int16Array", "Int32Array", "Float32Array",
@@ -28,33 +32,6 @@ let TYPED_ARRAY_CLASSES = ["Uint8Array", "Uint8ClampedArray", "Uint16Array",
 // Number of items to preview in objects, arrays, maps, sets, lists,
 // collections, etc.
 let OBJECT_PREVIEW_MAX_ITEMS = 10;
-
-let addonManager = null;
-
-/**
- * This is a wrapper around amIAddonManager.mapURIToAddonID which always returns
- * false on B2G to avoid loading the add-on manager there and reports any
- * exceptions rather than throwing so that the caller doesn't have to worry
- * about them.
- */
-function mapURIToAddonID(uri, id) {
-  if ((Services.appinfo.ID || undefined) == B2G_ID) {
-    return false;
-  }
-
-  if (!addonManager) {
-    addonManager = Cc["@mozilla.org/addons/integration;1"].
-                   getService(Ci.amIAddonManager);
-  }
-
-  try {
-    return addonManager.mapURIToAddonID(uri, id);
-  }
-  catch (e) {
-    DevToolsUtils.reportException("mapURIToAddonID", e);
-    return false;
-  }
-}
 
 /**
  * BreakpointStore objects keep track of all breakpoints that get set so that we
@@ -92,7 +69,7 @@ BreakpointStore.prototype = {
   get size() { return this._size; },
 
   /**
-   * Add a breakpoint to the breakpoint store.
+   * Add a breakpoint to the breakpoint store if it doesn't already exist.
    *
    * @param Object aBreakpoint
    *        The breakpoint to be added (not copied). It is an object with the
@@ -103,10 +80,11 @@ BreakpointStore.prototype = {
    *            the whole line)
    *          - condition (optional)
    *          - actor (optional)
+   * @returns Object aBreakpoint
+   *          The new or existing breakpoint.
    */
   addBreakpoint: function (aBreakpoint) {
     let { url, line, column } = aBreakpoint;
-    let updating = false;
 
     if (column != null) {
       if (!this._breakpoints[url]) {
@@ -115,16 +93,22 @@ BreakpointStore.prototype = {
       if (!this._breakpoints[url][line]) {
         this._breakpoints[url][line] = [];
       }
-      this._breakpoints[url][line][column] = aBreakpoint;
+      if (!this._breakpoints[url][line][column]) {
+        this._breakpoints[url][line][column] = aBreakpoint;
+        this._size++;
+      }
+      return this._breakpoints[url][line][column];
     } else {
       // Add a breakpoint that breaks on the whole line.
       if (!this._wholeLineBreakpoints[url]) {
         this._wholeLineBreakpoints[url] = [];
       }
-      this._wholeLineBreakpoints[url][line] = aBreakpoint;
+      if (!this._wholeLineBreakpoints[url][line]) {
+        this._wholeLineBreakpoints[url][line] = aBreakpoint;
+        this._size++;
+      }
+      return this._wholeLineBreakpoints[url][line];
     }
-
-    this._size++;
   },
 
   /**
@@ -324,9 +308,6 @@ exports.BreakpointStore = BreakpointStore;
  * Manages pushing event loops and automatically pops and exits them in the
  * correct order as they are resolved.
  *
- * @param nsIJSInspector inspector
- *        The underlying JS inspector we use to enter and exit nested event
- *        loops.
  * @param ThreadActor thread
  *        The thread actor instance that owns this EventLoopStack.
  * @param DebuggerServerConnection connection
@@ -338,8 +319,7 @@ exports.BreakpointStore = BreakpointStore;
  *          - preNest: function called before entering a nested event loop
  *          - postNest: function called after exiting a nested event loop
  */
-function EventLoopStack({ inspector, thread, connection, hooks }) {
-  this._inspector = inspector;
+function EventLoopStack({ thread, connection, hooks }) {
   this._hooks = hooks;
   this._thread = thread;
   this._connection = connection;
@@ -350,7 +330,7 @@ EventLoopStack.prototype = {
    * The number of nested event loops on the stack.
    */
   get size() {
-    return this._inspector.eventLoopNestLevel;
+    return xpcInspector.eventLoopNestLevel;
   },
 
   /**
@@ -360,7 +340,7 @@ EventLoopStack.prototype = {
     let url = null;
     if (this.size > 0) {
       try {
-        url = this._inspector.lastNestRequestor.url
+        url = xpcInspector.lastNestRequestor.url
       } catch (e) {
         // The tab's URL getter may throw if the tab is destroyed by the time
         // this code runs, but we don't really care at this point.
@@ -375,7 +355,7 @@ EventLoopStack.prototype = {
    * top of the stack
    */
   get lastConnection() {
-    return this._inspector.lastNestRequestor._connection;
+    return xpcInspector.lastNestRequestor._connection;
   },
 
   /**
@@ -385,7 +365,6 @@ EventLoopStack.prototype = {
    */
   push: function () {
     return new EventLoop({
-      inspector: this._inspector,
       thread: this._thread,
       connection: this._connection,
       hooks: this._hooks
@@ -397,8 +376,6 @@ EventLoopStack.prototype = {
  * An object that represents a nested event loop. It is used as the nest
  * requestor with nsIJSInspector instances.
  *
- * @param nsIJSInspector inspector
- *        The JS Inspector that runs nested event loops.
  * @param ThreadActor thread
  *        The thread actor that is creating this nested event loop.
  * @param DebuggerServerConnection connection
@@ -407,8 +384,7 @@ EventLoopStack.prototype = {
  *        The same hooks object passed into EventLoopStack during its
  *        initialization.
  */
-function EventLoop({ inspector, thread, connection, hooks }) {
-  this._inspector = inspector;
+function EventLoop({ thread, connection, hooks }) {
   this._thread = thread;
   this._hooks = hooks;
   this._connection = connection;
@@ -431,13 +407,13 @@ EventLoop.prototype = {
       : null;
 
     this.entered = true;
-    this._inspector.enterNestedEventLoop(this);
+    xpcInspector.enterNestedEventLoop(this);
 
     // Keep exiting nested event loops while the last requestor is resolved.
-    if (this._inspector.eventLoopNestLevel > 0) {
-      const { resolved } = this._inspector.lastNestRequestor;
+    if (xpcInspector.eventLoopNestLevel > 0) {
+      const { resolved } = xpcInspector.lastNestRequestor;
       if (resolved) {
-        this._inspector.exitNestedEventLoop();
+        xpcInspector.exitNestedEventLoop();
       }
     }
 
@@ -465,8 +441,8 @@ EventLoop.prototype = {
       throw new Error("Already resolved this nested event loop!");
     }
     this.resolved = true;
-    if (this === this._inspector.lastNestRequestor) {
-      this._inspector.exitNestedEventLoop();
+    if (this === xpcInspector.lastNestRequestor) {
+      xpcInspector.exitNestedEventLoop();
       return true;
     }
     return false;
@@ -476,40 +452,53 @@ EventLoop.prototype = {
 /**
  * JSD2 actors.
  */
+
 /**
  * Creates a ThreadActor.
  *
  * ThreadActors manage a JSInspector object and manage execution/inspection
  * of debuggees.
  *
- * @param aHooks object
- *        An object with preNest and postNest methods for calling when entering
- *        and exiting a nested event loop.
+ * @param aParent object
+ *        This |ThreadActor|'s parent actor. It must implement the following
+ *        properties:
+ *          - url: The URL string of the debuggee.
+ *          - window: The global window object.
+ *          - preNest: Function called before entering a nested event loop.
+ *          - postNest: Function called after exiting a nested event loop.
+ *          - makeDebugger: A function that takes no arguments and instantiates
+ *            a Debugger that manages its globals on its own.
  * @param aGlobal object [optional]
  *        An optional (for content debugging only) reference to the content
  *        window.
  */
-function ThreadActor(aHooks, aGlobal)
+function ThreadActor(aParent, aGlobal)
 {
   this._state = "detached";
   this._frameActors = [];
-  this._hooks = aHooks;
-  this.global = aGlobal;
-  // A map of actorID -> actor for breakpoints created and managed by the server.
-  this._hiddenBreakpoints = new Map();
-
-  this.findGlobals = this.globalManager.findGlobals.bind(this);
-  this.onNewGlobal = this.globalManager.onNewGlobal.bind(this);
-  this.onNewSource = this.onNewSource.bind(this);
-  this._allEventsListener = this._allEventsListener.bind(this);
-
-  this._options = {
-    useSourceMaps: false
-  };
-
+  this._parent = aParent;
+  this._dbg = null;
   this._gripDepth = 0;
   this._threadLifetimePool = null;
   this._tabClosed = false;
+
+  this._options = {
+    useSourceMaps: false,
+    autoBlackBox: false
+  };
+
+  // A map of actorID -> actor for breakpoints created and managed by the
+  // server.
+  this._hiddenBreakpoints = new Map();
+
+  this.global = aGlobal;
+
+  this._allEventsListener = this._allEventsListener.bind(this);
+  this.onNewGlobal = this.onNewGlobal.bind(this);
+  this.onNewSource = this.onNewSource.bind(this);
+  this.uncaughtExceptionHook = this.uncaughtExceptionHook.bind(this);
+  this.onDebuggerStatement = this.onDebuggerStatement.bind(this);
+  this.onNewScript = this.onNewScript.bind(this);
 }
 
 /**
@@ -523,6 +512,23 @@ ThreadActor.prototype = {
   _gripDepth: null,
 
   actorPrefix: "context",
+
+  get dbg() {
+    if (!this._dbg) {
+      this._dbg = this._parent.makeDebugger();
+      this._dbg.uncaughtExceptionHook = this.uncaughtExceptionHook;
+      this._dbg.onDebuggerStatement = this.onDebuggerStatement;
+      this._dbg.onNewScript = this.onNewScript;
+      this._dbg.on("newGlobal", this.onNewGlobal);
+      // Keep the debugger disabled until a client attaches.
+      this._dbg.enabled = this._state != "detached";
+    }
+    return this._dbg;
+  },
+
+  get globalDebugObject() {
+    return this.dbg.makeGlobalObjectReference(this._parent.window);
+  },
 
   get state() { return this._state; },
   get attached() this.state == "attached" ||
@@ -542,7 +548,7 @@ ThreadActor.prototype = {
 
   get sources() {
     if (!this._sources) {
-      this._sources = new ThreadSources(this, this._options.useSourceMaps,
+      this._sources = new ThreadSources(this, this._options,
                                         this._allowSource, this.onNewSource);
     }
     return this._sources;
@@ -612,126 +618,23 @@ ThreadActor.prototype = {
    * Remove all debuggees and clear out the thread's sources.
    */
   clearDebuggees: function () {
-    if (this.dbg) {
+    if (this._dbg) {
       this.dbg.removeAllDebuggees();
     }
     this._sources = null;
   },
 
   /**
-   * Add a debuggee global to the Debugger object.
-   *
-   * @returns the Debugger.Object that corresponds to the global.
+   * Listener for our |Debugger|'s "newGlobal" event.
    */
-  addDebuggee: function (aGlobal) {
-    let globalDebugObject;
-    try {
-      globalDebugObject = this.dbg.addDebuggee(aGlobal);
-    } catch (e) {
-      // Ignore attempts to add the debugger's compartment as a debuggee.
-      dumpn("Ignoring request to add the debugger's compartment as a debuggee");
-    }
-    return globalDebugObject;
-  },
-
-  /**
-   * Initialize the Debugger.
-   */
-  _initDebugger: function () {
-    this.dbg = new Debugger();
-    this.dbg.uncaughtExceptionHook = this.uncaughtExceptionHook.bind(this);
-    this.dbg.onDebuggerStatement = this.onDebuggerStatement.bind(this);
-    this.dbg.onNewScript = this.onNewScript.bind(this);
-    this.dbg.onNewGlobalObject = this.globalManager.onNewGlobal.bind(this);
-    // Keep the debugger disabled until a client attaches.
-    this.dbg.enabled = this._state != "detached";
-  },
-
-  /**
-   * Remove a debuggee global from the JSInspector.
-   */
-  removeDebugee: function (aGlobal) {
-    try {
-      this.dbg.removeDebuggee(aGlobal);
-    } catch(ex) {
-      // XXX: This debuggee has code currently executing on the stack,
-      // we need to save this for later.
-    }
-  },
-
-  /**
-   * Add the provided window and all windows in its frame tree as debuggees.
-   *
-   * @returns the Debugger.Object that corresponds to the window.
-   */
-  _addDebuggees: function (aWindow) {
-    let globalDebugObject = this.addDebuggee(aWindow);
-    let frames = aWindow.frames;
-    if (frames) {
-      for (let i = 0; i < frames.length; i++) {
-        this._addDebuggees(frames[i]);
-      }
-    }
-    return globalDebugObject;
-  },
-
-  /**
-   * An object that will be used by ThreadActors to tailor their behavior
-   * depending on the debugging context being required (chrome or content).
-   */
-  globalManager: {
-    findGlobals: function () {
-      const { getContentGlobals } = require("devtools/server/content-globals");
-
-      this.globalDebugObject = this._addDebuggees(this.global);
-
-      // global may not be a window
-      try {
-        getContentGlobals({
-          'inner-window-id': getInnerId(this.global)
-        }).forEach(this.addDebuggee.bind(this));
-      }
-      catch(e) {}
-    },
-
-    /**
-     * A function that the engine calls when a new global object
-     * (for example a sandbox) has been created.
-     *
-     * @param aGlobal Debugger.Object
-     *        The new global object that was created.
-     */
-    onNewGlobal: function (aGlobal) {
-      let useGlobal = (aGlobal.hostAnnotations &&
-                       aGlobal.hostAnnotations.type == "document" &&
-                       aGlobal.hostAnnotations.element === this.global);
-
-      // check if the global is a sdk page-mod sandbox
-      if (!useGlobal) {
-        let metadata = {};
-        let id = "";
-        try {
-          id = getInnerId(this.global);
-          metadata = Cu.getSandboxMetadata(aGlobal.unsafeDereference());
-        }
-        catch (e) {}
-
-        useGlobal = (metadata['inner-window-id'] && metadata['inner-window-id'] == id);
-      }
-
-      // Content debugging only cares about new globals in the contant window,
-      // like iframe children.
-      if (useGlobal) {
-        this.addDebuggee(aGlobal);
-        // Notify the client.
-        this.conn.send({
-          from: this.actorID,
-          type: "newGlobal",
-          // TODO: after bug 801084 lands see if we need to JSONify this.
-          hostAnnotations: aGlobal.hostAnnotations
-        });
-      }
-    }
+  onNewGlobal: function (aGlobal) {
+    // Notify the client.
+    this.conn.send({
+      from: this.actorID,
+      type: "newGlobal",
+      // TODO: after bug 801084 lands see if we need to JSONify this.
+      hostAnnotations: aGlobal.hostAnnotations
+    });
   },
 
   disconnect: function () {
@@ -753,11 +656,11 @@ ThreadActor.prototype = {
       this._prettyPrintWorker = null;
     }
 
-    if (!this.dbg) {
+    if (!this._dbg) {
       return;
     }
-    this.dbg.enabled = false;
-    this.dbg = null;
+    this._dbg.enabled = false;
+    this._dbg = null;
   },
 
   /**
@@ -786,16 +689,12 @@ ThreadActor.prototype = {
     // Initialize an event loop stack. This can't be done in the constructor,
     // because this.conn is not yet initialized by the actor pool at that time.
     this._nestedEventLoops = new EventLoopStack({
-      inspector: DebuggerServer.xpcInspector,
-      hooks: this._hooks,
+      hooks: this._parent,
       connection: this.conn,
       thread: this
     });
 
-    if (!this.dbg) {
-      this._initDebugger();
-    }
-    this.findGlobals();
+    this.dbg.addDebuggees();
     this.dbg.enabled = true;
     try {
       // Put ourselves in the paused state.
@@ -1083,10 +982,12 @@ ThreadActor.prototype = {
    *        The frame we want to clear the stepping hooks from.
    */
   _clearSteppingHooks: function (aFrame) {
-    while (aFrame) {
-      aFrame.onStep = undefined;
-      aFrame.onPop = undefined;
-      aFrame = aFrame.older;
+    if (aFrame && aFrame.live) {
+      while (aFrame) {
+        aFrame.onStep = undefined;
+        aFrame.onPop = undefined;
+        aFrame = aFrame.older;
+      }
     }
   },
 
@@ -1125,8 +1026,8 @@ ThreadActor.prototype = {
     // different tabs or multiple debugger clients connected to the same tab)
     // only allow resumption in a LIFO order.
     if (this._nestedEventLoops.size && this._nestedEventLoops.lastPausedUrl
-        && (this._nestedEventLoops.lastPausedUrl !== this._hooks.url
-        || this._nestedEventLoops.lastConnection !== this.conn)) {
+        && (this._nestedEventLoops.lastPausedUrl !== this._parent.url
+            || this._nestedEventLoops.lastConnection !== this.conn)) {
       return {
         error: "wrongOrder",
         message: "trying to resume in the wrong order.",
@@ -1257,7 +1158,29 @@ ThreadActor.prototype = {
         let l = Object.create(null);
         l.type = handler.type;
         let listener = handler.listenerObject;
-        l.script = this.globalDebugObject.makeDebuggeeValue(listener).script;
+        let listenerDO = this.globalDebugObject.makeDebuggeeValue(listener);
+        // If the listener is an object with a 'handleEvent' method, use that.
+        if (listenerDO.class == "Object" || listenerDO.class == "XULElement") {
+          // For some events we don't have permission to access the
+          // 'handleEvent' property when running in content scope.
+          if (!listenerDO.unwrap()) {
+            continue;
+          }
+          let heDesc;
+          while (!heDesc && listenerDO) {
+            heDesc = listenerDO.getOwnPropertyDescriptor("handleEvent");
+            listenerDO = listenerDO.proto;
+          }
+          if (heDesc && heDesc.value) {
+            listenerDO = heDesc.value;
+          }
+        }
+        // When the listener is a bound function, we are actually interested in
+        // the target function.
+        while (listenerDO.isBoundFunction) {
+          listenerDO = listenerDO.boundTargetFunction;
+        }
+        l.script = listenerDO.script;
         // Chrome listeners won't be converted to debuggee values, since their
         // compartment is not added as a debuggee.
         if (!l.script)
@@ -1417,9 +1340,7 @@ ThreadActor.prototype = {
 
     let locationPromise = this.sources.getGeneratedLocation(aRequest.location);
     return locationPromise.then(({url, line, column}) => {
-      if (line == null ||
-          line < 0 ||
-          this.dbg.findScripts({ url: url }).length == 0) {
+      if (line == null || line < 0) {
         return {
           error: "noScript",
           message: "Requested setting a breakpoint on "
@@ -1515,12 +1436,11 @@ ThreadActor.prototype = {
     // Find all scripts matching the given location
     let scripts = this.dbg.findScripts(aLocation);
     if (scripts.length == 0) {
+      // Since we did not find any scripts to set the breakpoint on now, return
+      // early. When a new script that matches this breakpoint location is
+      // introduced, the breakpoint actor will already be in the breakpoint store
+      // and will be set at that time.
       return {
-        error: "noScript",
-        message: "Requested setting a breakpoint on "
-          + aLocation.url + ":" + aLocation.line
-          + (aLocation.column != null ? ":" + aLocation.column : "")
-          + " but there is no Debugger.Script at that location",
         actor: actor.actorID
       };
     }
@@ -1560,7 +1480,7 @@ ThreadActor.prototype = {
     */
 
     // Find all innermost scripts matching the given location
-    let scripts = this.dbg.findScripts({
+    scripts = this.dbg.findScripts({
       url: aLocation.url,
       line: aLocation.line,
       innermost: true
@@ -1584,8 +1504,7 @@ ThreadActor.prototype = {
           if (!actualLocation) {
             actualLocation = {
               url: aLocation.url,
-              line: line,
-              column: 0
+              line: line
             };
           }
           found = true;
@@ -1828,9 +1747,37 @@ ThreadActor.prototype = {
         listenerForm.capturing = handler.capturing;
         listenerForm.allowsUntrusted = handler.allowsUntrusted;
         listenerForm.inSystemEventGroup = handler.inSystemEventGroup;
-        listenerForm.isEventHandler = !!node["on" + listenerForm.type];
+        let handlerName = "on" + listenerForm.type;
+        listenerForm.isEventHandler = false;
+        if (typeof node.hasAttribute !== "undefined") {
+          listenerForm.isEventHandler = !!node.hasAttribute(handlerName);
+        }
+        if (!!node[handlerName]) {
+          listenerForm.isEventHandler = !!node[handlerName];
+        }
         // Get the Debugger.Object for the listener object.
         let listenerDO = this.globalDebugObject.makeDebuggeeValue(listener);
+        // If the listener is an object with a 'handleEvent' method, use that.
+        if (listenerDO.class == "Object" || listenerDO.class == "XULElement") {
+          // For some events we don't have permission to access the
+          // 'handleEvent' property when running in content scope.
+          if (!listenerDO.unwrap()) {
+            continue;
+          }
+          let heDesc;
+          while (!heDesc && listenerDO) {
+            heDesc = listenerDO.getOwnPropertyDescriptor("handleEvent");
+            listenerDO = listenerDO.proto;
+          }
+          if (heDesc && heDesc.value) {
+            listenerDO = heDesc.value;
+          }
+        }
+        // When the listener is a bound function, we are actually interested in
+        // the target function.
+        while (listenerDO.isBoundFunction) {
+          listenerDO = listenerDO.boundTargetFunction;
+        }
         listenerForm.function = this.createValueGrip(listenerDO);
         listeners.push(listenerForm);
       }
@@ -1872,6 +1819,7 @@ ThreadActor.prototype = {
       aFrame.onStep = undefined;
       aFrame.onPop = undefined;
     }
+
     // Clear DOM event breakpoints.
     // XPCShell tests don't use actual DOM windows for globals and cause
     // removeListenerForAllEvents to throw.
@@ -2017,11 +1965,13 @@ ThreadActor.prototype = {
     switch (typeof aValue) {
       case "boolean":
         return aValue;
+
       case "string":
         if (this._stringIsLong(aValue)) {
           return this.longStringGrip(aValue, aPool);
         }
         return aValue;
+
       case "number":
         if (aValue === Infinity) {
           return { type: "Infinity" };
@@ -2033,13 +1983,26 @@ ThreadActor.prototype = {
           return { type: "-0" };
         }
         return aValue;
+
       case "undefined":
         return { type: "undefined" };
+
       case "object":
         if (aValue === null) {
           return { type: "null" };
         }
         return this.objectGrip(aValue, aPool);
+
+      case "symbol":
+        let form = {
+          type: "symbol"
+        };
+        let name = getSymbolName(aValue);
+        if (name !== undefined) {
+          form.name = this.createValueGrip(name);
+        }
+        return form;
+
       default:
         dbg_assert(false, "Failed to provide a grip for: " + aValue);
         return null;
@@ -2052,14 +2015,14 @@ ThreadActor.prototype = {
    */
   createProtocolCompletionValue: function (aCompletion) {
     let protoValue = {};
-    if ("return" in aCompletion) {
+    if (aCompletion == null) {
+      protoValue.terminated = true;
+    } else if ("return" in aCompletion) {
       protoValue.return = this.createValueGrip(aCompletion.return);
-    } else if ("yield" in aCompletion) {
-      protoValue.return = this.createValueGrip(aCompletion.yield);
     } else if ("throw" in aCompletion) {
       protoValue.throw = this.createValueGrip(aCompletion.throw);
     } else {
-      protoValue.terminated = true;
+      protoValue.return = this.createValueGrip(aCompletion.yield);
     }
     return protoValue;
   },
@@ -2503,14 +2466,15 @@ PauseScopedActor.prototype = {
  *         resolved nsIURI
  */
 function resolveURIToLocalPath(aURI) {
+  let resolved;
   switch (aURI.scheme) {
     case "jar":
     case "file":
       return aURI;
 
     case "chrome":
-      let resolved = Cc["@mozilla.org/chrome/chrome-registry;1"].
-                     getService(Ci.nsIChromeRegistry).convertChromeURL(aURI);
+      resolved = Cc["@mozilla.org/chrome/chrome-registry;1"].
+                 getService(Ci.nsIChromeRegistry).convertChromeURL(aURI);
       return resolveURIToLocalPath(resolved);
 
     case "resource":
@@ -3072,7 +3036,14 @@ ObjectActor.prototype = {
     };
 
     if (this.obj.class != "DeadObject") {
-      let raw = Cu.unwaiveXrays(this.obj.unsafeDereference());
+      let raw = this.obj.unsafeDereference();
+
+      // If Cu is not defined, we are running on a worker thread, where xrays
+      // don't exist.
+      if (Cu) {
+        raw = Cu.unwaiveXrays(raw);
+      }
+
       if (!DevToolsUtils.isSafeJSObject(raw)) {
         raw = null;
       }
@@ -3505,14 +3476,27 @@ exports.ObjectActor = ObjectActor;
 DebuggerServer.ObjectActorPreviewers = {
   String: [function({obj, threadActor}, aGrip) {
     let result = genericObjectPreviewer("String", String, obj, threadActor);
-    if (result) {
-      let length = DevToolsUtils.getProperty(obj, "length");
-      if (typeof length != "number") {
-        return false;
-      }
+    let length = DevToolsUtils.getProperty(obj, "length");
 
-      aGrip.displayString = result.value;
+    if (!result || typeof length != "number") {
+      return false;
+    }
+
+    aGrip.preview = {
+      kind: "ArrayLike",
+      length: length
+    };
+
+    if (threadActor._gripDepth > 1) {
       return true;
+    }
+
+    let items = aGrip.preview.items = [];
+
+    const max = Math.min(result.value.length, OBJECT_PREVIEW_MAX_ITEMS);
+    for (let i = 0; i < max; i++) {
+      let value = threadActor.createValueGrip(result.value[i]);
+      items.push(value);
     }
 
     return true;
@@ -3612,8 +3596,16 @@ DebuggerServer.ObjectActorPreviewers = {
     let raw = obj.unsafeDereference();
     let items = aGrip.preview.items = [];
 
-    for (let [i, value] of Array.prototype.entries.call(raw)) {
-      if (Object.hasOwnProperty.call(raw, i)) {
+    for (let i = 0; i < length; ++i) {
+      // Array Xrays filter out various possibly-unsafe properties (like
+      // functions, and claim that the value is undefined instead. This
+      // is generally the right thing for privileged code accessing untrusted
+      // objects, but quite confusing for Object previews. So we manually
+      // override this protection by waiving Xrays on the array, and re-applying
+      // Xrays on any indexed value props that we pull off of it.
+      let desc = Object.getOwnPropertyDescriptor(Cu.waiveXrays(raw), i);
+      if (desc && !desc.get && !desc.set) {
+        let value = Cu.unwaiveXrays(desc.value);
         value = makeDebuggeeValueIfNeeded(obj, value);
         items.push(threadActor.createValueGrip(value));
       } else {
@@ -3685,7 +3677,21 @@ DebuggerServer.ObjectActorPreviewers = {
 
     let raw = obj.unsafeDereference();
     let entries = aGrip.preview.entries = [];
-    for (let [key, value] of Map.prototype.entries.call(raw)) {
+    // Iterating over a Map via .entries goes through various intermediate
+    // objects - an Iterator object, then a 2-element Array object, then the
+    // actual values we care about. We don't have Xrays to Iterator objects,
+    // so we get Opaque wrappers for them. And even though we have Xrays to
+    // Arrays, the semantics often deny access to the entires based on the
+    // nature of the values. So we need waive Xrays for the iterator object
+    // and the tupes, and then re-apply them on the underlying values until
+    // we fix bug 1023984.
+    //
+    // Even then though, we might want to continue waiving Xrays here for the
+    // same reason we do so for Arrays above - this filtering behavior is likely
+    // to be more confusing than beneficial in the case of Object previews.
+    for (let keyValuePair of Cu.waiveXrays(Map.prototype.entries.call(raw))) {
+      let key = Cu.unwaiveXrays(keyValuePair[0]);
+      let value = Cu.unwaiveXrays(keyValuePair[1]);
       key = makeDebuggeeValueIfNeeded(obj, key);
       value = makeDebuggeeValueIfNeeded(obj, value);
       entries.push([threadActor.createValueGrip(key),
@@ -3789,7 +3795,9 @@ DebuggerServer.ObjectActorPreviewers.Object = [
     let raw = obj.unsafeDereference();
     let global = Cu.getGlobalForObject(DebuggerServer);
     let classProto = global[obj.class].prototype;
-    let safeView = classProto.subarray.call(raw, 0, OBJECT_PREVIEW_MAX_ITEMS);
+    // The Xray machinery for TypedArrays denies indexed access on the grounds
+    // that it's slow, and advises callers to do a structured clone instead.
+    let safeView = Cu.cloneInto(classProto.subarray.call(raw, 0, OBJECT_PREVIEW_MAX_ITEMS), global);
     let items = aGrip.preview.items = [];
     for (let i = 0; i < safeView.length; i++) {
       items.push(safeView[i]);
@@ -3829,7 +3837,7 @@ DebuggerServer.ObjectActorPreviewers.Object = [
   },
 
   function CSSMediaRule({obj, threadActor}, aGrip, aRawObj) {
-    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSMediaRule)) {
+    if (isWorker || !aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSMediaRule)) {
       return false;
     }
     aGrip.preview = {
@@ -3840,7 +3848,7 @@ DebuggerServer.ObjectActorPreviewers.Object = [
   },
 
   function CSSStyleRule({obj, threadActor}, aGrip, aRawObj) {
-    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleRule)) {
+    if (isWorker || !aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleRule)) {
       return false;
     }
     aGrip.preview = {
@@ -3851,11 +3859,10 @@ DebuggerServer.ObjectActorPreviewers.Object = [
   },
 
   function ObjectWithURL({obj, threadActor}, aGrip, aRawObj) {
-    if (!aRawObj ||
-        !(aRawObj instanceof Ci.nsIDOMCSSImportRule ||
-          aRawObj instanceof Ci.nsIDOMCSSStyleSheet ||
-          aRawObj instanceof Ci.nsIDOMLocation ||
-          aRawObj instanceof Ci.nsIDOMWindow)) {
+    if (isWorker || !aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSImportRule ||
+                                  aRawObj instanceof Ci.nsIDOMCSSStyleSheet ||
+                                  aRawObj instanceof Ci.nsIDOMLocation ||
+                                  aRawObj instanceof Ci.nsIDOMWindow)) {
       return false;
     }
 
@@ -3877,7 +3884,7 @@ DebuggerServer.ObjectActorPreviewers.Object = [
   },
 
   function ArrayLike({obj, threadActor}, aGrip, aRawObj) {
-    if (!aRawObj ||
+    if (isWorker || !aRawObj ||
         obj.class != "DOMStringList" &&
         obj.class != "DOMTokenList" &&
         !(aRawObj instanceof Ci.nsIDOMMozNamedAttrMap ||
@@ -3916,7 +3923,7 @@ DebuggerServer.ObjectActorPreviewers.Object = [
   }, // ArrayLike
 
   function CSSStyleDeclaration({obj, threadActor}, aGrip, aRawObj) {
-    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleDeclaration)) {
+    if (isWorker || !aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleDeclaration)) {
       return false;
     }
 
@@ -3938,7 +3945,8 @@ DebuggerServer.ObjectActorPreviewers.Object = [
   },
 
   function DOMNode({obj, threadActor}, aGrip, aRawObj) {
-    if (obj.class == "Object" || !aRawObj || !(aRawObj instanceof Ci.nsIDOMNode)) {
+    if (isWorker || obj.class == "Object" || !aRawObj ||
+        !(aRawObj instanceof Ci.nsIDOMNode)) {
       return false;
     }
 
@@ -3989,7 +3997,7 @@ DebuggerServer.ObjectActorPreviewers.Object = [
   }, // DOMNode
 
   function DOMEvent({obj, threadActor}, aGrip, aRawObj) {
-    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMEvent)) {
+    if (isWorker || !aRawObj || !(aRawObj instanceof Ci.nsIDOMEvent)) {
       return false;
     }
 
@@ -4025,8 +4033,9 @@ DebuggerServer.ObjectActorPreviewers.Object = [
       preview.modifiers = modifiers;
 
       props.push("key", "charCode", "keyCode");
-    } else if (aRawObj instanceof Ci.nsIDOMTransitionEvent ||
-               aRawObj instanceof Ci.nsIDOMAnimationEvent) {
+    } else if (aRawObj instanceof Ci.nsIDOMTransitionEvent) {
+      props.push("propertyName", "pseudoElement");
+    } else if (aRawObj instanceof Ci.nsIDOMAnimationEvent) {
       props.push("animationName", "pseudoElement");
     } else if (aRawObj instanceof Ci.nsIDOMClipboardEvent) {
       props.push("clipboardData");
@@ -4071,7 +4080,7 @@ DebuggerServer.ObjectActorPreviewers.Object = [
   }, // DOMEvent
 
   function DOMException({obj, threadActor}, aGrip, aRawObj) {
-    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMDOMException)) {
+    if (isWorker || !aRawObj || !(aRawObj instanceof Ci.nsIDOMDOMException)) {
       return false;
     }
 
@@ -4612,9 +4621,10 @@ EnvironmentActor.prototype = {
       }
 
       let value = this.obj.getVariable(name);
-      // The slot is optimized out or arguments on a dead scope.
+      // The slot is optimized out, arguments on a dead scope, or an
+      // uninitialized binding.
       // FIXME: Need actual UI, bug 941287.
-      if (value && (value.optimizedOut || value.missingArguments)) {
+      if (value && (value.optimizedOut || value.missingArguments || value.uninitialized)) {
         continue;
       }
 
@@ -4739,13 +4749,13 @@ Object.defineProperty(Debugger.Frame.prototype, "line", {
  *        is associated. (Currently unused, but required to make this
  *        constructor usable with addGlobalActor.)
  *
- * @param aHooks object
- *        An object with preNest and postNest methods for calling when entering
- *        and exiting a nested event loop.
+ * @param aParent object
+ *        This actor's parent actor. See ThreadActor for a list of expected
+ *        properties.
  */
-function ChromeDebuggerActor(aConnection, aHooks)
+function ChromeDebuggerActor(aConnection, aParent)
 {
-  ThreadActor.call(this, aHooks);
+  ThreadActor.call(this, aParent);
 }
 
 ChromeDebuggerActor.prototype = Object.create(ThreadActor.prototype);
@@ -4760,38 +4770,7 @@ update(ChromeDebuggerActor.prototype, {
    * Override the eligibility check for scripts and sources to make sure every
    * script and source with a URL is stored when debugging chrome.
    */
-  _allowSource: function(aSourceURL) !!aSourceURL,
-
-   /**
-   * An object that will be used by ThreadActors to tailor their behavior
-   * depending on the debugging context being required (chrome or content).
-   * The methods that this object provides must be bound to the ThreadActor
-   * before use.
-   */
-  globalManager: {
-    findGlobals: function () {
-      // Add every global known to the debugger as debuggee.
-      this.dbg.addAllGlobalsAsDebuggees();
-    },
-
-    /**
-     * A function that the engine calls when a new global object has been
-     * created.
-     *
-     * @param aGlobal Debugger.Object
-     *        The new global object that was created.
-     */
-    onNewGlobal: function (aGlobal) {
-      this.addDebuggee(aGlobal);
-      // Notify the client.
-      this.conn.send({
-        from: this.actorID,
-        type: "newGlobal",
-        // TODO: after bug 801084 lands see if we need to JSONify this.
-        hostAnnotations: aGlobal.hostAnnotations
-      });
-    }
-  }
+  _allowSource: aSourceURL => !!aSourceURL
 });
 
 exports.ChromeDebuggerActor = ChromeDebuggerActor;
@@ -4805,18 +4784,12 @@ exports.ChromeDebuggerActor = ChromeDebuggerActor;
  *        is associated. (Currently unused, but required to make this
  *        constructor usable with addGlobalActor.)
  *
- * @param aHooks object
- *        An object with preNest and postNest methods for calling
- *        when entering and exiting a nested event loops.
- *
- * @param aAddonID string
- *        ID of the add-on this actor will debug. It will be used to
- *        filter out globals marked for debugging.
+ * @param aParent object
+ *        This actor's parent actor. See ThreadActor for a list of expected
+ *        properties.
  */
-
-function AddonThreadActor(aConnect, aHooks, aAddonID) {
-  this.addonID = aAddonID;
-  ThreadActor.call(this, aHooks);
+function AddonThreadActor(aConnect, aParent) {
+  ThreadActor.call(this, aParent);
 }
 
 AddonThreadActor.prototype = Object.create(ThreadActor.prototype);
@@ -4838,7 +4811,7 @@ update(AddonThreadActor.prototype, {
       return false;
     }
 
-    // XPIProvider.jsm evals some code in every add-on's bootstrap.js. Hide it
+    // XPIProvider.jsm evals some code in every add-on's bootstrap.js. Hide it.
     if (aSourceURL == "resource://gre/modules/addons/XPIProvider.jsm") {
       return false;
     }
@@ -4846,97 +4819,6 @@ update(AddonThreadActor.prototype, {
     return true;
   },
 
-  /**
-   * An object that will be used by ThreadActors to tailor their
-   * behaviour depending on the debugging context being required (chrome,
-   * addon or content). The methods that this object provides must
-   * be bound to the ThreadActor before use.
-   */
-  globalManager: {
-    findGlobals: function ADA_findGlobals() {
-      for (let global of this.dbg.findAllGlobals()) {
-        if (this._checkGlobal(global)) {
-          this.dbg.addDebuggee(global);
-        }
-      }
-    },
-
-    /**
-     * A function that the engine calls when a new global object
-     * has been created.
-     *
-     * @param aGlobal Debugger.Object
-     *        The new global object that was created.
-     */
-    onNewGlobal: function ADA_onNewGlobal(aGlobal) {
-      if (this._checkGlobal(aGlobal)) {
-        this.addDebuggee(aGlobal);
-        // Notify the client.
-        this.conn.send({
-          from: this.actorID,
-          type: "newGlobal",
-          // TODO: after bug 801084 lands see if we need to JSONify this.
-          hostAnnotations: aGlobal.hostAnnotations
-        });
-      }
-    }
-  },
-
-  /**
-   * Checks if the provided global belongs to the debugged add-on.
-   *
-   * @param aGlobal Debugger.Object
-   */
-  _checkGlobal: function ADA_checkGlobal(aGlobal) {
-    let obj = null;
-    try {
-      obj = aGlobal.unsafeDereference();
-    }
-    catch (e) {
-      // Because of bug 991399 we sometimes get bad objects here. If we can't
-      // dereference them then they won't be useful to us
-      return false;
-    }
-
-    try {
-      // This will fail for non-Sandbox objects, hence the try-catch block.
-      let metadata = Cu.getSandboxMetadata(obj);
-      if (metadata) {
-        return metadata.addonID === this.addonID;
-      }
-    } catch (e) {
-    }
-
-    if (obj instanceof Ci.nsIDOMWindow) {
-      let id = {};
-      if (mapURIToAddonID(obj.document.documentURIObject, id)) {
-        return id.value === this.addonID;
-      }
-      return false;
-    }
-
-    // Check the global for a __URI__ property and then try to map that to an
-    // add-on
-    let uridescriptor = aGlobal.getOwnPropertyDescriptor("__URI__");
-    if (uridescriptor && "value" in uridescriptor && uridescriptor.value) {
-      let uri;
-      try {
-        uri = Services.io.newURI(uridescriptor.value, null, null);
-      }
-      catch (e) {
-        DevToolsUtils.reportException("AddonThreadActor.prototype._checkGlobal",
-                                      new Error("Invalid URI: " + uridescriptor.value));
-        return false;
-      }
-
-      let id = {};
-      if (mapURIToAddonID(uri, id)) {
-        return id.value === this.addonID;
-      }
-    }
-
-    return false;
-  }
 });
 
 exports.AddonThreadActor = AddonThreadActor;
@@ -4945,10 +4827,11 @@ exports.AddonThreadActor = AddonThreadActor;
  * Manages the sources for a thread. Handles source maps, locations in the
  * sources, etc for ThreadActors.
  */
-function ThreadSources(aThreadActor, aUseSourceMaps, aAllowPredicate,
+function ThreadSources(aThreadActor, aOptions, aAllowPredicate,
                        aOnNewSource) {
   this._thread = aThreadActor;
-  this._useSourceMaps = aUseSourceMaps;
+  this._useSourceMaps = aOptions.useSourceMaps;
+  this._autoBlackBox = aOptions.autoBlackBox;
   this._allow = aAllowPredicate;
   this._onNewSource = aOnNewSource;
 
@@ -4968,6 +4851,14 @@ function ThreadSources(aThreadActor, aUseSourceMaps, aAllowPredicate,
  */
 ThreadSources._blackBoxedSources = new Set(["self-hosted"]);
 ThreadSources._prettyPrintedSources = new Map();
+
+
+/**
+ * Matches strings of the form "foo.min.js" or "foo-min.js", etc. If the regular
+ * expression matches, we can be fairly sure that the source is minified, and
+ * treat it as such.
+ */
+const MINIFIED_SOURCE_REGEXP = /\bmin\.js$/;
 
 ThreadSources.prototype = {
   /**
@@ -5000,6 +4891,10 @@ ThreadSources.prototype = {
       return this._sourceActors[url];
     }
 
+    if (this._autoBlackBox && this._isMinifiedURL(url)) {
+      this.blackBox(url);
+    }
+
     let actor = new SourceActor({
       url: url,
       thread: this._thread,
@@ -5016,6 +4911,26 @@ ThreadSources.prototype = {
       reportError(e);
     }
     return actor;
+  },
+
+  /**
+   * Returns true if the URL likely points to a minified resource, false
+   * otherwise.
+   *
+   * @param String aURL
+   *        The URL to test.
+   * @returns Boolean
+   */
+  _isMinifiedURL: function (aURL) {
+    try {
+      let url = Services.io.newURI(aURL, null, null)
+                           .QueryInterface(Ci.nsIURL);
+      return MINIFIED_SOURCE_REGEXP.test(url.fileName);
+    } catch (e) {
+      // Not a valid URL so don't try to parse out the filename, just test the
+      // whole thing with the minified source regexp.
+      return MINIFIED_SOURCE_REGEXP.test(aURL);
+    }
   },
 
   /**
@@ -5037,7 +4952,13 @@ ThreadSources.prototype = {
           .QueryInterface(Ci.nsIURL);
         if (url.fileExtension === "js") {
           spec.contentType = "text/javascript";
-          spec.text = aScript.source.text;
+          // If the Debugger API wasn't able to load the source,
+          // because sources were discarded
+          // (javascript.options.discardSystemSource == true),
+          // give source() a chance to fetch them.
+          if (aScript.source.text != "[no source]") {
+            spec.text = aScript.source.text;
+          }
         }
       } catch(ex) {
         // Not a valid URI.
@@ -5153,16 +5074,21 @@ ThreadSources.prototype = {
    */
   getOriginalLocation: function ({ url, line, column }) {
     if (url in this._sourceMapsByGeneratedSource) {
+      column = column || 0;
+
       return this._sourceMapsByGeneratedSource[url]
         .then((aSourceMap) => {
-          let { source: aSourceURL, line: aLine, column: aColumn } = aSourceMap.originalPositionFor({
-            line: line,
-            column: column
-          });
+          let {
+            source: aSourceURL,
+            line: aLine,
+            column: aColumn,
+            name: aName
+          } = aSourceMap.originalPositionFor({ line, column });
           return {
             url: aSourceURL,
             line: aLine,
-            column: aColumn
+            column: aColumn,
+            name: aName
           };
         })
         .then(null, error => {
@@ -5307,31 +5233,6 @@ exports.ThreadSources = ThreadSources;
 
 // Utility functions.
 
-// TODO bug 863089: use Debugger.Script.prototype.getOffsetColumn when it is
-// implemented.
-function getOffsetColumn(aOffset, aScript) {
-  let bestOffsetMapping = null;
-  for (let offsetMapping of aScript.getAllColumnOffsets()) {
-    if (!bestOffsetMapping ||
-        (offsetMapping.offset <= aOffset &&
-         offsetMapping.offset > bestOffsetMapping.offset)) {
-      bestOffsetMapping = offsetMapping;
-    }
-  }
-
-  if (!bestOffsetMapping) {
-    // XXX: Try not to completely break the experience of using the debugger for
-    // the user by assuming column 0. Simultaneously, report the error so that
-    // there is a paper trail if the assumption is bad and the debugging
-    // experience becomes wonky.
-    reportError(new Error("Could not find a column for offset " + aOffset
-                          + " in the script " + aScript));
-    return 0;
-  }
-
-  return bestOffsetMapping.columnNumber;
-}
-
 /**
  * Return the non-source-mapped location of the given Debugger.Frame. If the
  * frame does not have a script, the location's properties are all null.
@@ -5453,7 +5354,14 @@ function fetch(aURL, aOptions={ loadFromCache: true }) {
       channel.loadFlags = aOptions.loadFromCache
         ? channel.LOAD_FROM_CACHE
         : channel.LOAD_BYPASS_CACHE;
-      channel.asyncOpen(streamListener, null);
+      try {
+        channel.asyncOpen(streamListener, null);
+      } catch(e) {
+        deferred.reject(new Error("Request failed for '"
+                                  + url
+                                  + "': "
+                                  + e.message));
+      }
       break;
   }
 
@@ -5493,10 +5401,11 @@ function convertToUnicode(aString, aCharset=null) {
  * @param String aPrefix
  *        An optional prefix for the reported error message.
  */
-function reportError(aError, aPrefix="") {
+let oldReportError = reportError;
+reportError = function(aError, aPrefix="") {
   dbg_assert(aError instanceof Error, "Must pass Error objects to reportError");
   let msg = aPrefix + aError.message + ":\n" + aError.stack;
-  Cu.reportError(msg);
+  oldReportError(msg);
   dumpn(msg);
 }
 
@@ -5525,14 +5434,21 @@ function getInnerId(window) {
                 getInterface(Ci.nsIDOMWindowUtils).currentInnerWindowID;
 };
 
-exports.register = function(handle) {
-  ThreadActor.breakpointStore = new BreakpointStore();
-  ThreadSources._blackBoxedSources = new Set(["self-hosted"]);
-  ThreadSources._prettyPrintedSources = new Map();
+function getInnerId(window) {
+  return window.QueryInterface(Ci.nsIInterfaceRequestor).
+                getInterface(Ci.nsIDOMWindowUtils).currentInnerWindowID;
 };
 
-exports.unregister = function(handle) {
-  ThreadActor.breakpointStore = null;
+const symbolProtoToString = typeof Symbol === "function" ? Symbol.prototype.toString : null;
+
+function getSymbolName(symbol) {
+  const name = symbolProtoToString.call(symbol).slice("Symbol(".length, -1);
+  return name || undefined;
+}
+
+exports.cleanup = function() {
+  // Reset shared globals when reloading the debugger server
+  ThreadActor.breakpointStore = new BreakpointStore();
   ThreadSources._blackBoxedSources.clear();
   ThreadSources._prettyPrintedSources.clear();
-};
+}

@@ -48,6 +48,7 @@
 #include "nsIWritablePropertyBag2.h"
 #include "nsICategoryManager.h"
 #include "nsPluginStreamListenerPeer.h"
+#include "mozilla/LoadInfo.h"
 #include "mozilla/Preferences.h"
 
 #include "nsEnumeratorUtils.h"
@@ -719,10 +720,10 @@ void nsPluginHost::OnPluginInstanceDestroyed(nsPluginTag* aPluginTag)
   // Another reason not to unload immediately is that loading is expensive,
   // and it is better to leave popular plugins loaded.
   //
-  // Our default behavior is to try to unload a plugin three minutes after
-  // its last instance is destroyed. This seems like a reasonable compromise
-  // that allows us to reclaim memory while allowing short state retention
-  // and avoid perf hits for loading popular plugins.
+  // Our default behavior is to try to unload a plugin after a pref-controlled
+  // delay once its last instance is destroyed. This seems like a reasonable
+  // compromise that allows us to reclaim memory while allowing short state
+  // retention and avoid perf hits for loading popular plugins.
   if (!hasInstance) {
     if (UnloadPluginsASAP()) {
       aPluginTag->TryUnloadPlugin(false);
@@ -2816,11 +2817,12 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
     owner->GetDOMElement(getter_AddRefs(element));
     owner->GetDocument(getter_AddRefs(doc));
   }
+  nsCOMPtr<nsIPrincipal> principal = doc ? doc->NodePrincipal() : nullptr;
 
   int16_t shouldLoad = nsIContentPolicy::ACCEPT;
   rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_OBJECT_SUBREQUEST,
                                  url,
-                                 (doc ? doc->NodePrincipal() : nullptr),
+                                 principal,
                                  element,
                                  EmptyCString(), //mime guess
                                  nullptr,         //extra
@@ -2840,19 +2842,29 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
   if (NS_FAILED(rv))
     return rv;
 
+  if (!principal) {
+    principal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  // @arg loadgroup:
+  // do not add this internal plugin's channel on the
+  // load group otherwise this channel could be canceled
+  // form |nsDocShell::OnLinkClickSync| bug 166613
   nsCOMPtr<nsIChannel> channel;
-  rv = NS_NewChannel(getter_AddRefs(channel), url, nullptr,
-    nullptr, /* do not add this internal plugin's channel
-            on the load group otherwise this channel could be canceled
-            form |nsDocShell::OnLinkClickSync| bug 166613 */
-    listenerPeer);
+  rv = NS_NewChannelInternal(getter_AddRefs(channel),
+                             url,
+                             doc,
+                             principal,
+                             nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL,
+                             nsIContentPolicy::TYPE_OBJECT_SUBREQUEST,
+                             nullptr,  // aChannelPolicy
+                             nullptr,  // aLoadGroup 
+                             listenerPeer);
+
   if (NS_FAILED(rv))
     return rv;
 
   if (doc) {
-    // Set the owner of channel to the document principal...
-    channel->SetOwner(doc->NodePrincipal());
-
     // And if it's a script allow it to execute against the
     // document's script context.
     nsCOMPtr<nsIScriptChannel> scriptChannel(do_QueryInterface(channel));
@@ -3630,7 +3642,7 @@ class nsPluginDestroyRunnable : public nsRunnable,
                                 public PRCList
 {
 public:
-  nsPluginDestroyRunnable(nsNPAPIPluginInstance *aInstance)
+  explicit nsPluginDestroyRunnable(nsNPAPIPluginInstance *aInstance)
     : mInstance(aInstance)
   {
     PR_INIT_CLIST(this);

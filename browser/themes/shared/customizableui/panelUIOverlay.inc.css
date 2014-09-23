@@ -139,7 +139,9 @@ panelmultiview[nosubviews=true] > .panel-viewcontainer > .panel-viewstack > .pan
 
 .panel-subview-header,
 .subviewbutton.panel-subview-footer {
-  padding: 12px;
+  box-sizing: border-box;
+  min-height: 41px;
+  padding: 11px 12px;
 }
 
 .panel-subview-header {
@@ -248,7 +250,7 @@ panelview:not([mainview]) .toolbarbutton-text,
 
 #PanelUI-contents {
   display: block;
-  flex: 1 0 auto;
+  flex: 1 0 main-size;
   margin-left: auto;
   margin-right: auto;
   padding: .5em 0;
@@ -401,6 +403,7 @@ toolbaritem[cui-areatype="menu-panel"][sdkstylewidget="true"]:not(.panel-wide-it
 .panelUI-grid .toolbarbutton-1 > .toolbarbutton-badge-container,
 .customization-palette .toolbarbutton-1 > .toolbarbutton-menubutton-button > .toolbarbutton-icon,
 .customization-palette .toolbarbutton-1 > .toolbarbutton-icon,
+.customization-palette .toolbarbutton-1 > .toolbarbutton-badge-container,
 .panelUI-grid #bookmarks-toolbar-placeholder > .toolbarbutton-icon,
 .customization-palette #bookmarks-toolbar-placeholder > .toolbarbutton-icon,
 .panel-customization-placeholder-child > .toolbarbutton-icon {
@@ -490,8 +493,9 @@ toolbarpaletteitem[place="palette"] > toolbaritem > toolbarbutton {
 #PanelUI-customize,
 #PanelUI-quit {
   margin: 0;
-  padding: 10px 0;
-  min-height: 2em;
+  padding: 11px 0;
+  box-sizing: border-box;
+  min-height: 40px;
   -moz-appearance: none;
   box-shadow: none;
   border: none;  
@@ -887,20 +891,26 @@ toolbarbutton[panel-multiview-anchor="true"] > .toolbarbutton-menubutton-button 
                     linear-gradient(rgba(255,255,255,0.3), rgba(255,255,255,0));
   background-repeat: no-repeat;
   background-color: Highlight;
-  background-position: left 10px center, 0; /* this doesn't need to be changed for RTL */
+  background-position: left 10px center, 0;
+}
+
+#PanelUI-help[panel-multiview-anchor="true"]:-moz-locale-dir(rtl)::after {
+  background-image: url(chrome://browser/skin/customizableui/subView-arrow-back-inverted-rtl.png),
+                    linear-gradient(rgba(255,255,255,0.3), rgba(255,255,255,0));
+  background-position: right 10px center, 0;
 }
 
 toolbarbutton[panel-multiview-anchor="true"] {
   background-image: url(chrome://browser/skin/customizableui/subView-arrow-back-inverted.png),
                     linear-gradient(rgba(255,255,255,0.3), rgba(255,255,255,0));
-  background-position: right 5px center;
+  background-position: right calc(@menuPanelButtonWidth@ / 2 - @exitSubviewGutterWidth@ + 2px) center;
   background-repeat: no-repeat, repeat;
 }
 
 toolbarbutton[panel-multiview-anchor="true"]:-moz-locale-dir(rtl) {
   background-image: url(chrome://browser/skin/customizableui/subView-arrow-back-inverted-rtl.png),
                     linear-gradient(rgba(255,255,255,0.3), rgba(255,255,255,0));
-  background-position: left 5px center;
+  background-position: left calc(@menuPanelButtonWidth@ / 2 - @exitSubviewGutterWidth@ + 2px) center;
 }
 
 toolbarpaletteitem[place="palette"] > .toolbarbutton-1 > .toolbarbutton-menubutton-dropmarker,

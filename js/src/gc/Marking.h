@@ -20,9 +20,11 @@ class ArrayBufferViewObject;
 class SharedArrayBufferObject;
 class BaseShape;
 class DebugScopeObject;
-struct GCMarker;
+class GCMarker;
 class GlobalObject;
 class LazyScript;
+class NestedScopeObject;
+class SavedFrame;
 class ScopeObject;
 class Shape;
 class UnownedBaseShape;
@@ -31,8 +33,8 @@ template<class> class HeapPtr;
 
 namespace jit {
 class JitCode;
-class IonScript;
-class VMFunction;
+struct IonScript;
+struct VMFunction;
 }
 
 namespace types {
@@ -105,13 +107,17 @@ DeclMarker(BaseShape, UnownedBaseShape)
 DeclMarker(JitCode, jit::JitCode)
 DeclMarker(Object, ArgumentsObject)
 DeclMarker(Object, ArrayBufferObject)
+DeclMarker(Object, ArrayBufferObjectMaybeShared)
 DeclMarker(Object, ArrayBufferViewObject)
-DeclMarker(Object, SharedArrayBufferObject)
 DeclMarker(Object, DebugScopeObject)
 DeclMarker(Object, GlobalObject)
 DeclMarker(Object, JSObject)
 DeclMarker(Object, JSFunction)
+DeclMarker(Object, NestedScopeObject)
+DeclMarker(Object, SavedFrame)
 DeclMarker(Object, ScopeObject)
+DeclMarker(Object, SharedArrayBufferObject)
+DeclMarker(Object, SharedTypedArrayObject)
 DeclMarker(Script, JSScript)
 DeclMarker(LazyScript, LazyScript)
 DeclMarker(Shape, Shape)
@@ -120,12 +126,16 @@ DeclMarker(String, JSString)
 DeclMarker(String, JSFlatString)
 DeclMarker(String, JSLinearString)
 DeclMarker(String, PropertyName)
+DeclMarker(Symbol, JS::Symbol)
 DeclMarker(TypeObject, types::TypeObject)
 
 #undef DeclMarker
 
 void
 MarkPermanentAtom(JSTracer *trc, JSAtom *atom, const char *name);
+
+void
+MarkWellKnownSymbol(JSTracer *trc, JS::Symbol *sym);
 
 /* Return true if the pointer is nullptr, or if it is a tagged pointer to
  * nullptr.
@@ -348,9 +358,6 @@ IsAboutToBeFinalized(BarrieredBase<JSScript*> *scriptp)
     return IsScriptAboutToBeFinalized(scriptp);
 }
 
-#ifdef JS_ION
-/* Nonsense to get WeakCache to work with new Marking semantics. */
-
 inline bool
 IsAboutToBeFinalized(const js::jit::VMFunction **vmfunc)
 {
@@ -366,7 +373,6 @@ IsAboutToBeFinalized(ReadBarrieredJitCode code)
 {
     return IsJitCodeAboutToBeFinalized(code.unsafeGet());
 }
-#endif
 
 inline Cell *
 ToMarkable(const Value &v)
@@ -388,7 +394,10 @@ TraceKind(const Value &v)
     JS_ASSERT(v.isMarkable());
     if (v.isObject())
         return JSTRACE_OBJECT;
-    return JSTRACE_STRING;
+    if (v.isString())
+        return JSTRACE_STRING;
+    JS_ASSERT(v.isSymbol());
+    return JSTRACE_SYMBOL;
 }
 
 inline JSGCTraceKind

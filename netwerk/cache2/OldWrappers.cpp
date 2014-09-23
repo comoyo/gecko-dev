@@ -39,7 +39,7 @@ namespace { // anon
 class DoomCallbackSynchronizer : public nsRunnable
 {
 public:
-  DoomCallbackSynchronizer(nsICacheEntryDoomCallback* cb) : mCB(cb)
+  explicit DoomCallbackSynchronizer(nsICacheEntryDoomCallback* cb) : mCB(cb)
   {
     MOZ_COUNT_CTOR(DoomCallbackSynchronizer);
   }
@@ -92,7 +92,7 @@ class DoomCallbackWrapper : public nsICacheListener
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSICACHELISTENER
 
-  DoomCallbackWrapper(nsICacheEntryDoomCallback* cb) : mCB(cb)
+  explicit DoomCallbackWrapper(nsICacheEntryDoomCallback* cb) : mCB(cb)
   {
     MOZ_COUNT_CTOR(DoomCallbackWrapper);
   }
@@ -366,6 +366,18 @@ _OldCacheEntryWrapper::~_OldCacheEntryWrapper()
   LOG(("Destroying _OldCacheEntryWrapper %p for descriptor %p", this, mOldInfo.get()));
 }
 
+NS_IMETHODIMP _OldCacheEntryWrapper::GetIsForcedValid(bool *aIsForcedValid)
+{
+  // Unused stub
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP _OldCacheEntryWrapper::ForceValidFor(uint32_t aSecondsToTheFuture)
+{
+  // Unused stub
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
 NS_IMPL_ISUPPORTS(_OldCacheEntryWrapper, nsICacheEntry)
 
 NS_IMETHODIMP _OldCacheEntryWrapper::AsyncDoom(nsICacheEntryDoomCallback* listener)
@@ -482,10 +494,11 @@ namespace { // anon
 
 class MetaDataVisitorWrapper : public nsICacheMetaDataVisitor
 {
+  virtual ~MetaDataVisitorWrapper() {}
+
   NS_DECL_ISUPPORTS
   NS_DECL_NSICACHEMETADATAVISITOR
-  MetaDataVisitorWrapper(nsICacheEntryMetaDataVisitor* cb) : mCB(cb) {}
-  virtual ~MetaDataVisitorWrapper() {}
+  explicit MetaDataVisitorWrapper(nsICacheEntryMetaDataVisitor* cb) : mCB(cb) {}
   nsCOMPtr<nsICacheEntryMetaDataVisitor> mCB;
 };
 
@@ -618,10 +631,10 @@ GetCacheSession(nsCSubstring const &aScheme,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsICacheSession> session;
-  rv = serv->CreateSession(clientId.get(),
-                           storagePolicy,
-                           nsICache::STREAM_BASED,
-                           getter_AddRefs(session));
+  rv = nsCacheService::GlobalInstance()->CreateSessionInternal(clientId.get(),
+                                                               storagePolicy,
+                                                               nsICache::STREAM_BASED,
+                                                               getter_AddRefs(session));
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = session->SetIsPrivate(aLoadInfo->IsPrivate());
@@ -943,6 +956,18 @@ NS_IMETHODIMP _OldStorage::AsyncOpenURI(nsIURI *aURI,
   return NS_OK;
 }
 
+NS_IMETHODIMP _OldStorage::OpenTruncate(nsIURI *aURI, const nsACString & aIdExtension,
+                                        nsICacheEntry **aCacheEntry)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP _OldStorage::Exists(nsIURI *aURI, const nsACString & aIdExtension,
+                                   bool *aResult)
+{
+  return NS_ERROR_NOT_AVAILABLE;
+}
+
 NS_IMETHODIMP _OldStorage::AsyncDoomURI(nsIURI *aURI, const nsACString & aIdExtension,
                                         nsICacheEntryDoomCallback* aCallback)
 {
@@ -984,7 +1009,7 @@ NS_IMETHODIMP _OldStorage::AsyncEvictStorage(nsICacheEntryDoomCallback* aCallbac
           do_GetService(NS_CACHESERVICE_CONTRACTID, &rv);
       NS_ENSURE_SUCCESS(rv, rv);
 
-      rv = serv->EvictEntries(nsICache::STORE_OFFLINE);
+      rv = nsCacheService::GlobalInstance()->EvictEntriesInternal(nsICache::STORE_OFFLINE);
       NS_ENSURE_SUCCESS(rv, rv);
     }
     else {
@@ -1073,7 +1098,7 @@ NS_IMETHODIMP _OldStorage::AsyncVisitStorage(nsICacheStorageVisitor* aVisitor,
 
   nsRefPtr<_OldVisitCallbackWrapper> cb = new _OldVisitCallbackWrapper(
     deviceID, aVisitor, aVisitEntries, mLoadInfo);
-  rv = serv->VisitEntries(cb);
+  rv = nsCacheService::GlobalInstance()->VisitEntriesInternal(cb);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;

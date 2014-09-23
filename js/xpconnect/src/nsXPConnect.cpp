@@ -21,10 +21,6 @@
 #include "WrapperFactory.h"
 #include "AccessCheck.h"
 
-#ifdef MOZ_JSDEBUGGER
-#include "jsdIDebuggerService.h"
-#endif
-
 #include "XPCQuickStubs.h"
 
 #include "mozilla/dom/BindingUtils.h"
@@ -57,12 +53,10 @@ nsXPConnect* nsXPConnect::gSelf = nullptr;
 bool         nsXPConnect::gOnceAliveNowDead = false;
 uint32_t     nsXPConnect::gReportAllJSExceptions = 0;
 
-bool         xpc::gDebugMode = false;
-bool         xpc::gDesiredDebugMode = false;
-
 // Global cache of the default script security manager (QI'd to
-// nsIScriptSecurityManager)
+// nsIScriptSecurityManager) and the system principal.
 nsIScriptSecurityManager *nsXPConnect::gScriptSecurityManager = nullptr;
+nsIPrincipal *nsXPConnect::gSystemPrincipal = nullptr;
 
 const char XPC_CONTEXT_STACK_CONTRACTID[] = "@mozilla.org/js/xpc/ContextStack;1";
 const char XPC_RUNTIME_CONTRACTID[]       = "@mozilla.org/js/xpc/RuntimeService;1";
@@ -109,6 +103,7 @@ nsXPConnect::~nsXPConnect()
     // maps that our finalize callback depends on.
     JS_GC(mRuntime->Runtime());
 
+    NS_RELEASE(gSystemPrincipal);
     gScriptSecurityManager = nullptr;
 
     // shutdown the logging system
@@ -142,9 +137,14 @@ nsXPConnect::InitStatics()
     // Fire up the SSM.
     nsScriptSecurityManager::InitStatics();
     gScriptSecurityManager = nsScriptSecurityManager::GetScriptSecurityManager();
+    gScriptSecurityManager->GetSystemPrincipal(&gSystemPrincipal);
+    MOZ_RELEASE_ASSERT(gSystemPrincipal);
 
     // Initialize the SafeJSContext.
     gSelf->mRuntime->GetJSContextStack()->InitSafeJSContext();
+
+    // Initialize our singleton scopes.
+    gSelf->mRuntime->InitSingletonScopes();
 }
 
 nsXPConnect*
@@ -187,56 +187,120 @@ nsXPConnect::IsISupportsDescendant(nsIInterfaceInfo* info)
 }
 
 void
-xpc::SystemErrorReporter(JSContext *cx, const char *message, JSErrorReport *rep)
+xpc::ErrorReport::Init(JSErrorReport *aReport,
+                       const char *aFallbackMessage,
+                       nsIGlobalObject *aGlobal)
 {
-    // It would be nice to assert !DescribeScriptedCaller here, to be sure
-    // that there isn't any script running that could catch the exception. But
-    // the JS engine invokes the error reporter directly if someone reports an
-    // ErrorReport that it doesn't know how to turn into an exception. Arguably
-    // it should just learn how to throw everything. But either way, if the
-    // exception is ending here, it's not going to get propagated to a caller,
-    // so it's up to us to make it known.
+    MOZ_ASSERT(NS_IsMainThread());
+    MOZ_ASSERT(aGlobal);
 
-    nsresult rv;
+    mGlobal = aGlobal;
+    mWindow = do_QueryInterface(mGlobal);
+    MOZ_ASSERT_IF(mWindow, mWindow->IsInnerWindow());
 
-    /* Use the console service to register the error. */
-    nsCOMPtr<nsIConsoleService> consoleService =
-        do_GetService(NS_CONSOLESERVICE_CONTRACTID);
+    nsIPrincipal *prin = mGlobal->PrincipalOrNull();
+    mIsChrome = nsContentUtils::IsSystemPrincipal(prin);
 
-    /*
-     * Make an nsIScriptError, populate it with information from this
-     * error, then log it with the console service.
-     */
-    nsCOMPtr<nsIScriptError> errorObject =
-        do_CreateInstance(NS_SCRIPTERROR_CONTRACTID);
-
-    if (consoleService && errorObject) {
-        uint32_t column = rep->uctokenptr - rep->uclinebuf;
-
-        const char16_t* ucmessage =
-            static_cast<const char16_t*>(rep->ucmessage);
-        const char16_t* uclinebuf =
-            static_cast<const char16_t*>(rep->uclinebuf);
-
-        rv = errorObject->Init(
-              ucmessage ? nsDependentString(ucmessage) : EmptyString(),
-              NS_ConvertASCIItoUTF16(rep->filename),
-              uclinebuf ? nsDependentString(uclinebuf) : EmptyString(),
-              rep->lineno, column, rep->flags,
-              "system javascript");
-        if (NS_SUCCEEDED(rv))
-            consoleService->LogMessage(errorObject);
-    }
-
-    if (nsContentUtils::DOMWindowDumpEnabled()) {
-        fprintf(stderr, "System JS : %s %s:%d - %s\n",
-                JSREPORT_IS_WARNING(rep->flags) ? "WARNING" : "ERROR",
-                rep->filename, rep->lineno,
-                message ? message : "<no message>");
-    }
-
+    InitInternal(aReport, aFallbackMessage);
 }
 
+void
+xpc::ErrorReport::InitOnWorkerThread(JSErrorReport *aReport,
+                                     const char *aFallbackMessage,
+                                     bool aIsChrome)
+{
+    MOZ_ASSERT(!NS_IsMainThread());
+    mIsChrome = aIsChrome;
+
+    InitInternal(aReport, aFallbackMessage);
+}
+
+void
+xpc::ErrorReport::InitInternal(JSErrorReport *aReport,
+                               const char *aFallbackMessage)
+{
+    const char16_t* m = static_cast<const char16_t*>(aReport->ucmessage);
+    if (m) {
+        JSFlatString* name = js::GetErrorTypeName(CycleCollectedJSRuntime::Get()->Runtime(), aReport->exnType);
+        if (name) {
+            AssignJSFlatString(mErrorMsg, name);
+            mErrorMsg.AppendLiteral(": ");
+        }
+        mErrorMsg.Append(m);
+    }
+
+    if (mErrorMsg.IsEmpty() && aFallbackMessage) {
+        mErrorMsg.AssignWithConversion(aFallbackMessage);
+    }
+
+    if (!aReport->filename) {
+        mFileName.SetIsVoid(true);
+    } else {
+        mFileName.AssignWithConversion(aReport->filename);
+    }
+
+    mSourceLine = static_cast<const char16_t*>(aReport->uclinebuf);
+
+    mLineNumber = aReport->lineno;
+    mColumn = aReport->column;
+    mFlags = aReport->flags;
+}
+
+#ifdef PR_LOGGING
+static PRLogModuleInfo* gJSDiagnostics;
+#endif
+
+void
+xpc::ErrorReport::LogToConsole()
+{
+    // Log to stdout.
+    if (nsContentUtils::DOMWindowDumpEnabled()) {
+        nsAutoCString error;
+        error.AssignLiteral("JavaScript ");
+        if (JSREPORT_IS_STRICT(mFlags))
+            error.AppendLiteral("strict ");
+        if (JSREPORT_IS_WARNING(mFlags))
+            error.AppendLiteral("warning: ");
+        else
+            error.AppendLiteral("error: ");
+        error.Append(NS_LossyConvertUTF16toASCII(mFileName));
+        error.AppendLiteral(", line ");
+        error.AppendInt(mLineNumber, 10);
+        error.AppendLiteral(": ");
+        error.Append(NS_LossyConvertUTF16toASCII(mErrorMsg));
+
+        fprintf(stderr, "%s\n", error.get());
+        fflush(stderr);
+    }
+
+#ifdef PR_LOGGING
+    // Log to the PR Log Module.
+    if (!gJSDiagnostics)
+        gJSDiagnostics = PR_NewLogModule("JSDiagnostics");
+    if (gJSDiagnostics) {
+        PR_LOG(gJSDiagnostics,
+                JSREPORT_IS_WARNING(mFlags) ? PR_LOG_WARNING : PR_LOG_ERROR,
+                ("file %s, line %u\n%s", NS_LossyConvertUTF16toASCII(mFileName).get(),
+                 mLineNumber, NS_LossyConvertUTF16toASCII(mErrorMsg).get()));
+    }
+#endif
+
+    // Log to the console. We do this last so that we can simply return if
+    // there's no console service without affecting the other reporting
+    // mechanisms.
+    nsCOMPtr<nsIConsoleService> consoleService =
+      do_GetService(NS_CONSOLESERVICE_CONTRACTID);
+    nsCOMPtr<nsIScriptError> errorObject =
+      do_CreateInstance("@mozilla.org/scripterror;1");
+    NS_ENSURE_TRUE_VOID(consoleService && errorObject);
+
+    nsresult rv = errorObject->InitWithWindowID(mErrorMsg, mFileName, mSourceLine,
+                                                mLineNumber, mColumn, mFlags, Category(),
+                                                mWindow ? mWindow->WindowID() : 0);
+    NS_ENSURE_SUCCESS_VOID(rv);
+    consoleService->LogMessage(errorObject);
+
+}
 
 /***************************************************************************/
 
@@ -304,35 +368,18 @@ static inline T UnexpectedFailure(T rv)
     return rv;
 }
 
-/* void initClasses (in JSContextPtr aJSContext, in JSObjectPtr aGlobalJSObj); */
-NS_IMETHODIMP
-nsXPConnect::InitClasses(JSContext * aJSContext, JSObject * aGlobalJSObj)
-{
-    MOZ_ASSERT(aJSContext, "bad param");
-    MOZ_ASSERT(aGlobalJSObj, "bad param");
-    RootedObject globalJSObj(aJSContext, aGlobalJSObj);
-
-    JSAutoCompartment ac(aJSContext, globalJSObj);
-
-    XPCWrappedNativeScope* scope =
-        XPCWrappedNativeScope::GetNewOrUsed(aJSContext, globalJSObj);
-
-    if (!scope)
-        return UnexpectedFailure(NS_ERROR_FAILURE);
-
-    scope->RemoveWrappedNativeProtos();
-
-    if (!XPCNativeWrapper::AttachNewConstructorObject(aJSContext, globalJSObj))
-        return UnexpectedFailure(NS_ERROR_FAILURE);
-
-    return NS_OK;
-}
-
 void
-TraceXPCGlobal(JSTracer *trc, JSObject *obj)
+xpc::TraceXPCGlobal(JSTracer *trc, JSObject *obj)
 {
     if (js::GetObjectClass(obj)->flags & JSCLASS_DOM_GLOBAL)
         mozilla::dom::TraceProtoAndIfaceCache(trc, obj);
+
+    // We might be called from a GC during the creation of a global, before we've
+    // been able to set up the compartment private or the XPCWrappedNativeScope,
+    // so we need to null-check those.
+    xpc::CompartmentPrivate* compartmentPrivate = xpc::CompartmentPrivate::Get(obj);
+    if (compartmentPrivate && compartmentPrivate->scope)
+        compartmentPrivate->scope->TraceInside(trc);
 }
 
 namespace xpc {
@@ -390,7 +437,7 @@ InitGlobalObject(JSContext* aJSContext, JS::Handle<JSObject*> aGlobal, uint32_t 
     JSAutoCompartment ac(aJSContext, aGlobal);
     if (!(aFlags & nsIXPConnect::OMIT_COMPONENTS_OBJECT)) {
         // XPCCallContext gives us an active request needed to save/restore.
-        if (!GetCompartmentPrivate(aGlobal)->scope->AttachComponentsObject(aJSContext) ||
+        if (!CompartmentPrivate::Get(aGlobal)->scope->AttachComponentsObject(aJSContext) ||
             !XPCNativeWrapper::AttachNewConstructorObject(aJSContext, aGlobal)) {
             return UnexpectedFailure(false);
         }
@@ -405,6 +452,13 @@ InitGlobalObject(JSContext* aJSContext, JS::Handle<JSObject*> aGlobal, uint32_t 
                        status == nsIPrincipal::APP_STATUS_CERTIFIED;
         }
         JS::CompartmentOptionsRef(aGlobal).setDiscardSource(isSystem);
+    }
+
+    if (ExtraWarningsForSystemJS()) {
+        nsIPrincipal *prin = GetObjectPrincipal(aGlobal);
+        bool isSystem = nsContentUtils::IsSystemPrincipal(prin);
+        if (isSystem)
+            JS::CompartmentOptionsRef(aGlobal).extraWarningsOverride().set(true);
     }
 
     // Stuff coming through this path always ends up as a DOM global.
@@ -658,7 +712,7 @@ nsXPConnect::GetWrappedNativeOfNativeObject(JSContext * aJSContext,
 
     RootedObject aScope(aJSContext, aScopeArg);
 
-    XPCWrappedNativeScope* scope = GetObjectScope(aScope);
+    XPCWrappedNativeScope* scope = ObjectScope(aScope);
     if (!scope)
         return UnexpectedFailure(NS_ERROR_FAILURE);
 
@@ -689,8 +743,8 @@ nsXPConnect::ReparentWrappedNativeIfFound(JSContext * aJSContext,
     RootedObject aScope(aJSContext, aScopeArg);
     RootedObject aNewParent(aJSContext, aNewParentArg);
 
-    XPCWrappedNativeScope* scope = GetObjectScope(aScope);
-    XPCWrappedNativeScope* scope2 = GetObjectScope(aNewParent);
+    XPCWrappedNativeScope* scope = ObjectScope(aScope);
+    XPCWrappedNativeScope* scope2 = ObjectScope(aNewParent);
     if (!scope || !scope2)
         return UnexpectedFailure(NS_ERROR_FAILURE);
 
@@ -720,7 +774,7 @@ nsXPConnect::RescueOrphansInScope(JSContext *aJSContext, JSObject *aScopeArg)
 {
     RootedObject aScope(aJSContext, aScopeArg);
 
-    XPCWrappedNativeScope *scope = GetObjectScope(aScope);
+    XPCWrappedNativeScope *scope = ObjectScope(aScope);
     if (!scope)
         return UnexpectedFailure(NS_ERROR_FAILURE);
 
@@ -820,7 +874,7 @@ nsXPConnect::CreateSandbox(JSContext *cx, nsIPrincipal *principal,
 NS_IMETHODIMP
 nsXPConnect::EvalInSandboxObject(const nsAString& source, const char *filename,
                                  JSContext *cx, JSObject *sandboxArg,
-                                 bool returnStringOnly, MutableHandleValue rval)
+                                 MutableHandleValue rval)
 {
     if (!sandboxArg)
         return NS_ERROR_INVALID_ARG;
@@ -833,7 +887,7 @@ nsXPConnect::EvalInSandboxObject(const nsAString& source, const char *filename,
         filenameStr = NS_LITERAL_CSTRING("x-bogus://XPConnect/Sandbox");
     }
     return EvalInSandbox(cx, sandbox, source, filenameStr, 1,
-                         JSVERSION_DEFAULT, returnStringOnly, rval);
+                         JSVERSION_DEFAULT, rval);
 }
 
 /* nsIXPConnectJSObjectHolder getWrappedNativePrototype (in JSContextPtr aJSContext, in JSObjectPtr aScope, in nsIClassInfo aClassInfo); */
@@ -846,7 +900,7 @@ nsXPConnect::GetWrappedNativePrototype(JSContext * aJSContext,
     RootedObject aScope(aJSContext, aScopeArg);
     JSAutoCompartment ac(aJSContext, aScope);
 
-    XPCWrappedNativeScope* scope = GetObjectScope(aScope);
+    XPCWrappedNativeScope* scope = ObjectScope(aScope);
     if (!scope)
         return UnexpectedFailure(NS_ERROR_FAILURE);
 
@@ -962,19 +1016,6 @@ nsXPConnect::DebugPrintJSStack(bool showArgs,
     return nullptr;
 }
 
-/* void debugDumpEvalInJSStackFrame (in uint32_t aFrameNumber, in string aSourceText); */
-NS_IMETHODIMP
-nsXPConnect::DebugDumpEvalInJSStackFrame(uint32_t aFrameNumber, const char *aSourceText)
-{
-    JSContext* cx = GetCurrentJSContext();
-    if (!cx)
-        printf("there is no JSContext on the nsIThreadJSContextStack!\n");
-    else
-        xpc_DumpEvalInJSStackFrame(cx, aFrameNumber, aSourceText);
-
-    return NS_OK;
-}
-
 /* jsval variantToJS (in JSContextPtr ctx, in JSObjectPtr scope, in nsIVariant value); */
 NS_IMETHODIMP
 nsXPConnect::VariantToJS(JSContext* ctx, JSObject* scopeArg, nsIVariant* value,
@@ -1047,12 +1088,6 @@ nsXPConnect::AfterProcessNextEvent(nsIThreadInternal *aThread,
 
     PopJSContextNoScriptContext();
 
-    // If the cx stack is empty, that means we're at the an un-nested event
-    // loop. This is a good time to make changes to debug mode.
-    if (XPCJSRuntime::Get()->GetJSContextStack()->Count() == 0) {
-        MOZ_ASSERT(mEventDepth == 0);
-        CheckForDebugMode(XPCJSRuntime::Get()->Runtime());
-    }
     return NS_OK;
 }
 
@@ -1112,69 +1147,6 @@ NS_IMETHODIMP_(void)
 nsXPConnect::UnregisterContextCallback(xpcContextCallback func)
 {
     mRuntime->RemoveContextCallback(func);
-}
-
-#ifdef MOZ_JSDEBUGGER
-void
-nsXPConnect::CheckForDebugMode(JSRuntime *rt)
-{
-    if (gDebugMode == gDesiredDebugMode) {
-        return;
-    }
-
-    // This can happen if a Worker is running, but we don't have the ability to
-    // debug workers right now, so just return.
-    if (!NS_IsMainThread())
-        MOZ_CRASH();
-
-    AutoSafeJSContext cx;
-    JS_SetRuntimeDebugMode(rt, gDesiredDebugMode);
-
-    nsresult rv;
-    const char jsdServiceCtrID[] = "@mozilla.org/js/jsd/debugger-service;1";
-    nsCOMPtr<jsdIDebuggerService> jsds = do_GetService(jsdServiceCtrID, &rv);
-    if (NS_FAILED(rv)) {
-        goto fail;
-    }
-
-    if (!JS_SetDebugModeForAllCompartments(cx, gDesiredDebugMode))
-        goto fail;
-
-    if (gDesiredDebugMode) {
-        rv = jsds->ActivateDebugger(rt);
-    }
-
-    gDebugMode = gDesiredDebugMode;
-    return;
-
-fail:
-    if (jsds)
-        jsds->DeactivateDebugger();
-
-    /*
-     * If an attempt to turn debug mode on fails, cancel the request. It's
-     * always safe to turn debug mode off, since DeactivateDebugger prevents
-     * debugger callbacks from having any effect.
-     */
-    if (gDesiredDebugMode)
-        JS_SetRuntimeDebugMode(rt, false);
-    gDesiredDebugMode = gDebugMode = false;
-}
-#else //MOZ_JSDEBUGGER not defined
-void
-nsXPConnect::CheckForDebugMode(JSRuntime *rt)
-{
-    gDesiredDebugMode = gDebugMode = false;
-}
-#endif //#ifdef MOZ_JSDEBUGGER
-
-
-void
-xpc_ActivateDebugMode()
-{
-    XPCJSRuntime* rt = nsXPConnect::GetRuntimeInstance();
-    nsXPConnect::XPConnect()->SetDebugModeWhenPossible(true, true);
-    nsXPConnect::CheckForDebugMode(rt->Runtime());
 }
 
 /* virtual */
@@ -1307,26 +1279,17 @@ void
 SetLocationForGlobal(JSObject *global, const nsACString& location)
 {
     MOZ_ASSERT(global);
-    EnsureCompartmentPrivate(global)->SetLocation(location);
+    CompartmentPrivate::Get(global)->SetLocation(location);
 }
 
 void
 SetLocationForGlobal(JSObject *global, nsIURI *locationURI)
 {
     MOZ_ASSERT(global);
-    EnsureCompartmentPrivate(global)->SetLocationURI(locationURI);
+    CompartmentPrivate::Get(global)->SetLocationURI(locationURI);
 }
 
 } // namespace xpc
-
-NS_IMETHODIMP
-nsXPConnect::SetDebugModeWhenPossible(bool mode, bool allowSyncDisable)
-{
-    gDesiredDebugMode = mode;
-    if (!mode && allowSyncDisable)
-        CheckForDebugMode(mRuntime->Runtime());
-    return NS_OK;
-}
 
 NS_IMETHODIMP
 nsXPConnect::NotifyDidPaint()
@@ -1474,14 +1437,6 @@ nsXPConnect::ReadFunction(nsIObjectInputStream *stream, JSContext *cx, JSObject 
     return ReadScriptOrFunction(stream, cx, nullptr, functionObjp);
 }
 
-NS_IMETHODIMP
-nsXPConnect::MarkErrorUnreported(JSContext *cx)
-{
-    XPCContext *xpcc = XPCContext::GetXPCContext(cx);
-    xpcc->MarkErrorUnreported();
-    return NS_OK;
-}
-
 /* These are here to be callable from a debugger */
 extern "C" {
 JS_EXPORT_API(void) DumpJSStack()
@@ -1501,16 +1456,6 @@ JS_EXPORT_API(char*) PrintJSStack()
     return (NS_SUCCEEDED(rv) && xpc) ?
         xpc->DebugPrintJSStack(true, true, false) :
         nullptr;
-}
-
-JS_EXPORT_API(void) DumpJSEval(uint32_t frameno, const char* text)
-{
-    nsresult rv;
-    nsCOMPtr<nsIXPConnect> xpc(do_GetService(nsIXPConnect::GetCID(), &rv));
-    if (NS_SUCCEEDED(rv) && xpc)
-        xpc->DebugDumpEvalInJSStackFrame(frameno, text);
-    else
-        printf("failed to get XPConnect service!\n");
 }
 
 JS_EXPORT_API(void) DumpCompleteHeap()
@@ -1562,6 +1507,32 @@ IsXrayWrapper(JSObject *obj)
     return WrapperFactory::IsXrayWrapper(obj);
 }
 
+JSAddonId *
+NewAddonId(JSContext *cx, const nsACString &id)
+{
+    JS::RootedString str(cx, JS_NewStringCopyN(cx, id.BeginReading(), id.Length()));
+    if (!str)
+        return nullptr;
+    return JS::NewAddonId(cx, str);
+}
+
+bool
+SetAddonInterposition(const nsACString &addonIdStr, nsIAddonInterposition *interposition)
+{
+    JSAddonId *addonId;
+    {
+        // We enter the junk scope just to allocate a string, which actually will go
+        // in the system zone.
+        AutoJSAPI jsapi;
+        jsapi.Init(xpc::PrivilegedJunkScope());
+        addonId = NewAddonId(jsapi.cx(), addonIdStr);
+        if (!addonId)
+            return false;
+    }
+
+    return XPCWrappedNativeScope::SetAddonInterposition(addonId, interposition);
+}
+
 } // namespace xpc
 
 namespace mozilla {
@@ -1577,9 +1548,9 @@ IsChromeOrXBL(JSContext* cx, JSObject* /* unused */)
     // compat and not security for remote XUL, we just always claim to be XBL.
     //
     // Note that, for performance, we don't check AllowXULXBLForPrincipal here,
-    // and instead rely on the fact that AllowXBLScope() only returns false in
+    // and instead rely on the fact that AllowContentXBLScope() only returns false in
     // remote XUL situations.
-    return AccessCheck::isChrome(c) || IsXBLScope(c) || !AllowXBLScope(c);
+    return AccessCheck::isChrome(c) || IsContentXBLScope(c) || !AllowContentXBLScope(c);
 }
 
 } // namespace dom

@@ -23,6 +23,9 @@ loader.loadSubScript("chrome://marionette/content/EventUtils.js", utils);
 loader.loadSubScript("chrome://marionette/content/ChromeUtils.js", utils);
 loader.loadSubScript("chrome://marionette/content/atoms.js", utils);
 
+// SpecialPowers requires insecure automation-only features that we put behind a pref.
+Services.prefs.setBoolPref('security.turn_off_all_security_so_that_viruses_can_take_over_this_computer',
+                           true);
 let specialpowers = {};
 loader.loadSubScript("chrome://specialpowers/content/SpecialPowersObserver.js",
                      specialpowers);
@@ -571,9 +574,7 @@ MarionetteServerConnection.prototype = {
       "platformVersion": Services.appinfo.platformVersion,
 
       // Supported features
-      "cssSelectorsEnabled": true,
       "handlesAlerts": false,
-      "javascriptEnabled": true,
       "nativeEvents": false,
       "rotatable": isB2G,
       "secureSsl": false,
@@ -718,6 +719,7 @@ MarionetteServerConnection.prototype = {
                     createInstance(Ci.nsIFileInputStream);
       stream.init(this.importedScripts, -1, 0, 0);
       let data = NetUtil.readInputStreamToString(stream, stream.available());
+      stream.close();
       script = data + script;
     }
 
@@ -964,7 +966,6 @@ MarionetteServerConnection.prototype = {
 
     let curWindow = this.getCurrentWindow();
     let original_onerror = curWindow.onerror;
-    let that = this;
     that.timeout = timeout;
     let marionette = new Marionette(this, curWindow, "chrome",
                                     this.marionetteLog,
@@ -1125,12 +1126,21 @@ MarionetteServerConnection.prototype = {
    * of the current resource.
    */
   getCurrentUrl: function MDA_getCurrentUrl() {
+    let isB2G = appName == "B2G";
     this.command_id = this.getCommandId();
-    if (this.context == "chrome") {
+    if (this.context === "chrome") {
       this.sendResponse(this.getCurrentWindow().location.href, this.command_id);
     }
     else {
-      this.sendAsync("getCurrentUrl", {}, this.command_id);
+      if (isB2G) {
+        this.sendAsync("getCurrentUrl", {}, this.command_id);
+      }
+      else {
+        this.sendResponse(this.curBrowser
+                              .tab
+                              .linkedBrowser
+                              .contentWindow.location.href, this.command_id);
+      }
     }
   },
 
@@ -1246,6 +1256,45 @@ MarionetteServerConnection.prototype = {
   },
 
   /**
+   * Get the current window position.
+   */
+  getWindowPosition: function MDA_getWindowPosition() {
+    this.command_id = this.getCommandId();
+    let curWindow = this.getCurrentWindow();
+    this.sendResponse({ x: curWindow.screenX, y: curWindow.screenY}, this.command_id);
+  },
+
+  /**
+  * Set the window position of the browser on the OS Window Manager
+  *
+  * @param object aRequest
+  *        'x': the x co-ordinate of the top/left of the window that
+  *             it will be moved to
+  *        'y': the y co-ordinate of the top/left of the window that
+  *             it will be moved to
+  */
+  setWindowPosition: function MDA_setWindowPosition(aRequest) {
+    let command_id = this.command_id = this.getCommandId();
+    if (appName !== "Firefox") {
+      this.sendError("Unable to set the window position on mobile", 61, null,
+                      command_id);
+
+    }
+    else {
+      let x = parseInt(aRequest.parameters.x);;
+      let y  = parseInt(aRequest.parameters.y);
+
+      if (isNaN(x) || isNaN(y)) {
+        this.sendError("x and y arguments should be integers", 13, null, command_id);
+        return;
+      }
+      let curWindow = this.getCurrentWindow();
+      curWindow.moveTo(x, y);
+      this.sendOk(command_id);
+    }
+  },
+
+  /**
    * Switch to a window based on name or server-assigned id.
    * Searches based on name, then id.
    *
@@ -1336,6 +1385,17 @@ MarionetteServerConnection.prototype = {
       if (aRequest.parameters.element != undefined) {
         if (this.curBrowser.elementManager.seenItems[aRequest.parameters.element]) {
           let wantedFrame = this.curBrowser.elementManager.getKnownElement(aRequest.parameters.element, curWindow); //HTMLIFrameElement
+          // Deal with an embedded xul:browser case
+          if (wantedFrame.tagName == "xul:browser") {
+            curWindow = wantedFrame.contentWindow;
+            this.curFrame = curWindow;
+            if (aRequest.parameters.focus) {
+              this.curFrame.focus();
+            }
+            checkTimer.initWithCallback(checkLoad.bind(this), 100, Ci.nsITimer.TYPE_ONE_SHOT);
+            return;
+          }
+          // else, assume iframe
           let frames = curWindow.document.getElementsByTagName("iframe");
           let numFrames = frames.length;
           for (let i = 0; i < numFrames; i++) {
@@ -1880,6 +1940,29 @@ MarionetteServerConnection.prototype = {
     }
   },
 
+  getElementRect: function MDA_getElementRect(aRequest) {
+    let command_id = this.command_id = this.getCommandId();
+    if (this.context == "chrome") {
+      try {
+        let el = this.curBrowser.elementManager.getKnownElement(
+            aRequest.parameters.id, this.getCurrentWindow());
+        let clientRect = el.getBoundingClientRect();
+        this.sendResponse({x: clientRect.x + this.getCurrentWindow().pageXOffset,
+                           y: clientRect.y + this.getCurrentWindow().pageYOffset,
+                           width: clientRect.width, height: clientRect.height},
+                           command_id);
+      }
+      catch (e) {
+        this.sendError(e.message, e.code, e.stack, command_id);
+      }
+    }
+    else {
+      this.sendAsync("getElementRect",
+                     { id:aRequest.parameters.id },
+                     command_id);
+    }
+  },
+
   /**
    * Send key presses to element after focusing on it
    *
@@ -2309,6 +2392,78 @@ MarionetteServerConnection.prototype = {
   },
 
   /**
+   * Get the size of the browser window currently in focus.
+   *
+   * Will return the current browser window size in pixels. Refers to
+   * window outerWidth and outerHeight values, which include scroll bars,
+   * title bars, etc.
+   *
+   */
+  getWindowSize: function MDA_getWindowSize(aRequest) {
+    this.command_id = this.getCommandId();
+    let curWindow = this.getCurrentWindow();
+    let curWidth = curWindow.outerWidth;
+    let curHeight = curWindow.outerHeight;
+    this.sendResponse({width: curWidth, height: curHeight}, this.command_id);
+  },
+
+  /**
+   * Set the size of the browser window currently in focus.
+   *
+   * Not supported on B2G. The supplied width and height values refer to
+   * the window outerWidth and outerHeight values, which include scroll
+   * bars, title bars, etc.
+   *
+   * An error will be returned if the requested window size would result
+   * in the window being in the maximized state.
+   */
+  setWindowSize: function MDA_setWindowSize(aRequest) {
+    this.command_id = this.getCommandId();
+
+    if (appName !== "Firefox") {
+      this.sendError("Not supported on mobile", 405, null, this.command_id);
+      return;
+    }
+
+    try {
+      var width = parseInt(aRequest.parameters.width);
+      var height = parseInt(aRequest.parameters.height);
+    }
+    catch(e) {
+      this.sendError(e.message, e.code, e.stack, this.command_id);
+      return;
+    }
+
+    let curWindow = this.getCurrentWindow();
+    if (width >= curWindow.screen.availWidth && height >= curWindow.screen.availHeight) {
+      this.sendError("Invalid requested size, cannot maximize", 405, null, this.command_id);
+      return;
+    }
+
+    curWindow.resizeTo(width, height);
+    this.sendOk(this.command_id);
+  },
+
+  /**
+   * Maximizes the Browser Window as if the user pressed the maximise button
+   *
+   * Not Supported on B2G or Fennec
+   */
+  maximizeWindow: function MDA_maximizeWindow (aRequest) {
+    this.command_id = this.getCommandId();
+
+    if (appName !== "Firefox") {
+      this.sendError("Not supported for mobile", 405, null, this.command_id);
+      return;
+    }
+
+    let curWindow = this.getCurrentWindow();
+    curWindow.moveTo(0,0);
+    curWindow.resizeTo(curWindow.screen.availWidth, curWindow.screen.availHeight);
+    this.sendOk(this.command_id);
+  },
+
+  /**
    * Helper function to convert an outerWindowID into a UID that Marionette
    * tracks.
    */
@@ -2468,11 +2623,12 @@ MarionetteServerConnection.prototype.requestTypes = {
   "isElementDisplayed": MarionetteServerConnection.prototype.isElementDisplayed,
   "getElementValueOfCssProperty": MarionetteServerConnection.prototype.getElementValueOfCssProperty,
   "submitElement": MarionetteServerConnection.prototype.submitElement,
-  "getElementSize": MarionetteServerConnection.prototype.getElementSize,
+  "getElementSize": MarionetteServerConnection.prototype.getElementSize,  //deprecated
+  "getElementRect": MarionetteServerConnection.prototype.getElementRect,
   "isElementEnabled": MarionetteServerConnection.prototype.isElementEnabled,
   "isElementSelected": MarionetteServerConnection.prototype.isElementSelected,
   "sendKeysToElement": MarionetteServerConnection.prototype.sendKeysToElement,
-  "getElementLocation": MarionetteServerConnection.prototype.getElementLocation,
+  "getElementLocation": MarionetteServerConnection.prototype.getElementLocation,  // deprecated
   "getElementPosition": MarionetteServerConnection.prototype.getElementLocation,  // deprecated
   "clearElement": MarionetteServerConnection.prototype.clearElement,
   "getTitle": MarionetteServerConnection.prototype.getTitle,
@@ -2491,6 +2647,8 @@ MarionetteServerConnection.prototype.requestTypes = {
   "getWindowHandles": MarionetteServerConnection.prototype.getWindowHandles,
   "getCurrentWindowHandles": MarionetteServerConnection.prototype.getWindowHandles,  // Selenium 2 compat
   "getWindows":  MarionetteServerConnection.prototype.getWindowHandles,  // deprecated
+  "getWindowPosition": MarionetteServerConnection.prototype.getWindowPosition,
+  "setWindowPosition": MarionetteServerConnection.prototype.setWindowPosition,
   "getActiveFrame": MarionetteServerConnection.prototype.getActiveFrame,
   "switchToFrame": MarionetteServerConnection.prototype.switchToFrame,
   "switchToWindow": MarionetteServerConnection.prototype.switchToWindow,
@@ -2512,7 +2670,10 @@ MarionetteServerConnection.prototype.requestTypes = {
   "deleteCookie": MarionetteServerConnection.prototype.deleteCookie,
   "getActiveElement": MarionetteServerConnection.prototype.getActiveElement,
   "getScreenOrientation": MarionetteServerConnection.prototype.getScreenOrientation,
-  "setScreenOrientation": MarionetteServerConnection.prototype.setScreenOrientation
+  "setScreenOrientation": MarionetteServerConnection.prototype.setScreenOrientation,
+  "getWindowSize": MarionetteServerConnection.prototype.getWindowSize,
+  "setWindowSize": MarionetteServerConnection.prototype.setWindowSize,
+  "maximizeWindow": MarionetteServerConnection.prototype.maximizeWindow
 };
 
 /**
@@ -2552,7 +2713,13 @@ BrowserObj.prototype = {
   setBrowser: function BO_setBrowser(win) {
     switch (appName) {
       case "Firefox":
-        this.browser = win.gBrowser;
+        if (this.window.location.href.indexOf("chrome://b2g") == -1) {
+          this.browser = win.gBrowser;
+        }
+        else {
+          // this is Mulet
+          appName = "B2G";
+        }
         break;
       case "Fennec":
         this.browser = win.BrowserApp;
@@ -2598,7 +2765,9 @@ BrowserObj.prototype = {
    * Closes current tab
    */
   closeTab: function BO_closeTab() {
-    if (this.tab != null && (appName != "B2G")) {
+    if (this.browser &&
+        this.browser.removeTab &&
+        this.tab != null && (appName != "B2G")) {
       this.browser.removeTab(this.tab);
       this.tab = null;
     }

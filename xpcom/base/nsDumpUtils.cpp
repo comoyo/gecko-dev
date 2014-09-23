@@ -13,7 +13,7 @@
 #include "nsIObserverService.h"
 #include "mozilla/ClearOnShutdown.h"
 
-#if defined(XP_LINUX) || defined(__FreeBSD__) || defined(XP_MACOSX) // {
+#ifdef XP_UNIX // {
 #include "mozilla/Preferences.h"
 #include <fcntl.h>
 #include <unistd.h>
@@ -427,7 +427,7 @@ FifoWatcher::OnFileCanReadWithoutBlocking(int aFd)
   LOG("Got unexpected value from fifo; ignoring it.");
 }
 
-#endif // XP_LINUX }
+#endif // XP_UNIX }
 
 // In Android case, this function will open a file named aFilename under
 // /data/local/tmp/"aFoldername".
@@ -475,8 +475,7 @@ nsDumpUtils::OpenTempFile(const nsACString& aFilename, nsIFile** aFile,
       return rv;
     }
 
-    while (chmod(dirPath.get(), 0777) == -1 && errno == EINTR)
-    {
+    while (chmod(dirPath.get(), 0777) == -1 && errno == EINTR) {
     }
   }
 #endif
@@ -503,8 +502,7 @@ nsDumpUtils::OpenTempFile(const nsACString& aFilename, nsIFile** aFile,
     return rv;
   }
 
-  while (chmod(path.get(), 0666) == -1 && errno == EINTR)
-  {
+  while (chmod(path.get(), 0666) == -1 && errno == EINTR) {
   }
 #endif
 

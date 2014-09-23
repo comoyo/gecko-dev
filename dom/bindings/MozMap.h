@@ -27,7 +27,7 @@ template<typename DataType>
 class MozMapEntry : public nsStringHashKey
 {
 public:
-  MozMapEntry(const nsAString* aKeyTypePointer)
+  explicit MozMapEntry(const nsAString* aKeyTypePointer)
     : nsStringHashKey(aKeyTypePointer)
   {
   }
@@ -65,6 +65,13 @@ public:
   const DataType& Get(const nsAString& aKey) const
   {
     const EntryType* ent = this->GetEntry(aKey);
+    MOZ_ASSERT(ent, "Why are you using a key we didn't claim to have?");
+    return ent->mData;
+  }
+
+  DataType& Get(const nsAString& aKey)
+  {
+    EntryType* ent = this->GetEntry(aKey);
     MOZ_ASSERT(ent, "Why are you using a key we didn't claim to have?");
     return ent->mData;
   }

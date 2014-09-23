@@ -70,6 +70,9 @@ const BrowserWindowTrait = Trait.compose(
       else if ('url' in options) {
         this._tabOptions = [ Options(options.url) ];
       }
+      for (let tab of this._tabOptions) {
+        tab.inNewWindow = true;
+      }
 
       this._isPrivate = isPrivateBrowsingSupported && !!options.isPrivate;
 
@@ -121,7 +124,7 @@ const BrowserWindowTrait = Trait.compose(
  * registered, `null` otherwise.
  */
 function getRegisteredWindow(chromeWindow) {
-  for each (let window in windows) {
+  for (let window of windows) {
     if (chromeWindow === window._window)
       return window;
   }

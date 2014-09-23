@@ -18,14 +18,14 @@ class nsXBLPrototypeHandler;
 class nsXBLEventHandler : public nsIDOMEventListener
 {
 public:
-  nsXBLEventHandler(nsXBLPrototypeHandler* aHandler);
-  virtual ~nsXBLEventHandler();
+  explicit nsXBLEventHandler(nsXBLPrototypeHandler* aHandler);
 
   NS_DECL_ISUPPORTS
 
   NS_DECL_NSIDOMEVENTLISTENER
 
 protected:
+  virtual ~nsXBLEventHandler();
   nsXBLPrototypeHandler* mProtoHandler;
 
 private:
@@ -39,7 +39,7 @@ private:
 class nsXBLMouseEventHandler : public nsXBLEventHandler
 {
 public:
-  nsXBLMouseEventHandler(nsXBLPrototypeHandler* aHandler);
+  explicit nsXBLMouseEventHandler(nsXBLPrototypeHandler* aHandler);
   virtual ~nsXBLMouseEventHandler();
 
 private:
@@ -50,7 +50,6 @@ class nsXBLKeyEventHandler : public nsIDOMEventListener
 {
 public:
   nsXBLKeyEventHandler(nsIAtom* aEventType, uint8_t aPhase, uint8_t aType);
-  virtual ~nsXBLKeyEventHandler();
 
   NS_DECL_ISUPPORTS
 
@@ -86,13 +85,15 @@ public:
     mIsBoundToChrome = aIsBoundToChrome;
   }
 
-  void SetUsingXBLScope(bool aUsingXBLScope)
+  void SetUsingContentXBLScope(bool aUsingContentXBLScope)
   {
-    mUsingXBLScope = aUsingXBLScope;
+    mUsingContentXBLScope = aUsingContentXBLScope;
   }
 
 private:
   nsXBLKeyEventHandler();
+  virtual ~nsXBLKeyEventHandler();
+
   bool ExecuteMatchedHandlers(nsIDOMKeyEvent* aEvent, uint32_t aCharCode,
                                 bool aIgnoreShiftKey);
 
@@ -101,7 +102,7 @@ private:
   uint8_t mPhase;
   uint8_t mType;
   bool mIsBoundToChrome;
-  bool mUsingXBLScope;
+  bool mUsingContentXBLScope;
 };
 
 nsresult

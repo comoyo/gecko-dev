@@ -7,6 +7,7 @@
 #include <algorithm>
 #include "mozilla/Assertions.h"
 #include "MediaTrackConstraints.h"
+#include "mtransport/runnable_utils.h"
 
 // scoped_ptr.h uses FF
 #ifdef FF
@@ -48,12 +49,13 @@ extern PRLogModuleInfo* GetMediaManagerLog();
 NS_IMPL_ISUPPORTS0(MediaEngineWebRTCAudioSource)
 
 // XXX temp until MSG supports registration
-StaticAutoPtr<AudioOutputObserver> gFarendObserver;
+StaticRefPtr<AudioOutputObserver> gFarendObserver;
 
 AudioOutputObserver::AudioOutputObserver()
   : mPlayoutFreq(0)
   , mPlayoutChannels(0)
   , mChunkSize(0)
+  , mSaved(nullptr)
   , mSamplesSaved(0)
 {
   // Buffers of 10ms chunks
@@ -63,15 +65,17 @@ AudioOutputObserver::AudioOutputObserver()
 AudioOutputObserver::~AudioOutputObserver()
 {
   Clear();
+  moz_free(mSaved);
+  mSaved = nullptr;
 }
 
 void
 AudioOutputObserver::Clear()
 {
   while (mPlayoutFifo->size() > 0) {
-    (void) mPlayoutFifo->Pop();
+    moz_free(mPlayoutFifo->Pop());
   }
-  mSaved = nullptr;
+  // we'd like to touch mSaved here, but we can't if we might still be getting callbacks
 }
 
 FarEndAudioChunk *
@@ -86,9 +90,22 @@ AudioOutputObserver::Size()
   return mPlayoutFifo->size();
 }
 
+void
+AudioOutputObserver::MixerCallback(AudioDataValue* aMixedBuffer,
+                                   AudioSampleFormat aFormat,
+                                   uint32_t aChannels,
+                                   uint32_t aFrames,
+                                   uint32_t aSampleRate)
+{
+  if (gFarendObserver) {
+    gFarendObserver->InsertFarEnd(aMixedBuffer, aFrames, false,
+                                  aSampleRate, aChannels, aFormat);
+  }
+}
+
 // static
 void
-AudioOutputObserver::InsertFarEnd(const AudioDataValue *aBuffer, uint32_t aSamples, bool aOverran,
+AudioOutputObserver::InsertFarEnd(const AudioDataValue *aBuffer, uint32_t aFrames, bool aOverran,
                                   int aFreq, int aChannels, AudioSampleFormat aFormat)
 {
   if (mPlayoutChannels != 0) {
@@ -122,7 +139,7 @@ AudioOutputObserver::InsertFarEnd(const AudioDataValue *aBuffer, uint32_t aSampl
   // Rechunk to 10ms.
   // The AnalyzeReverseStream() and WebRtcAec_BufferFarend() functions insist on 10ms
   // samples per call.  Annoying...
-  while (aSamples) {
+  while (aFrames) {
     if (!mSaved) {
       mSaved = (FarEndAudioChunk *) moz_xmalloc(sizeof(FarEndAudioChunk) +
                                                 (mChunkSize * aChannels - 1)*sizeof(int16_t));
@@ -131,8 +148,8 @@ AudioOutputObserver::InsertFarEnd(const AudioDataValue *aBuffer, uint32_t aSampl
       aOverran = false;
     }
     uint32_t to_copy = mChunkSize - mSamplesSaved;
-    if (to_copy > aSamples) {
-      to_copy = aSamples;
+    if (to_copy > aFrames) {
+      to_copy = aFrames;
     }
 
     int16_t *dest = &(mSaved->mData[mSamplesSaved * aChannels]);
@@ -143,7 +160,7 @@ AudioOutputObserver::InsertFarEnd(const AudioDataValue *aBuffer, uint32_t aSampl
       fwrite(&(mSaved->mData[mSamplesSaved * aChannels]), to_copy * aChannels, sizeof(int16_t), fp);
     }
 #endif
-    aSamples -= to_copy;
+    aFrames -= to_copy;
     mSamplesSaved += to_copy;
     aBuffer += to_copy * aChannels;
 
@@ -154,7 +171,8 @@ AudioOutputObserver::InsertFarEnd(const AudioDataValue *aBuffer, uint32_t aSampl
         // thread safety issues.
         break;
       } else {
-        mPlayoutFifo->Push((int8_t *) mSaved.forget()); // takes ownership
+        mPlayoutFifo->Push((int8_t *) mSaved); // takes ownership
+        mSaved = nullptr;
         mSamplesSaved = 0;
       }
     }
@@ -381,7 +399,7 @@ MediaEngineWebRTCAudioSource::NotifyPull(MediaStreamGraph* aGraph,
 {
   // Ignore - we push audio data
 #ifdef DEBUG
-  TrackTicks target = TimeToTicksRoundUp(SAMPLE_FREQUENCY, aDesiredTime);
+  TrackTicks target = aSource->TimeToTicksRoundUp(SAMPLE_FREQUENCY, aDesiredTime);
   TrackTicks delta = target - aLastEndTime;
   LOG(("Audio: NotifyPull: aDesiredTime %ld, target %ld, delta %ld",(int64_t) aDesiredTime, (int64_t) target, (int64_t) delta));
   aLastEndTime = target;
@@ -517,8 +535,7 @@ MediaEngineWebRTCAudioSource::Process(int channel,
   if (!mStarted) {
     mStarted  = true;
     while (gFarendObserver->Size() > 1) {
-      FarEndAudioChunk *buffer = gFarendObserver->Pop(); // only call if size() > 0
-      free(buffer);
+      moz_free(gFarendObserver->Pop()); // only call if size() > 0
     }
   }
 
@@ -526,15 +543,16 @@ MediaEngineWebRTCAudioSource::Process(int channel,
     FarEndAudioChunk *buffer = gFarendObserver->Pop(); // only call if size() > 0
     if (buffer) {
       int length = buffer->mSamples;
-      if (mVoERender->ExternalPlayoutData(buffer->mData,
-                                          gFarendObserver->PlayoutFrequency(),
-                                          gFarendObserver->PlayoutChannels(),
-                                          mPlayoutDelay,
-                                          length) == -1) {
+      int res = mVoERender->ExternalPlayoutData(buffer->mData,
+                                                gFarendObserver->PlayoutFrequency(),
+                                                gFarendObserver->PlayoutChannels(),
+                                                mPlayoutDelay,
+                                                length);
+      moz_free(buffer);
+      if (res == -1) {
         return;
       }
     }
-    free(buffer);
   }
 
 #ifdef PR_LOGGING
@@ -566,23 +584,26 @@ MediaEngineWebRTCAudioSource::Process(int channel,
     sample* dest = static_cast<sample*>(buffer->Data());
     memcpy(dest, audio10ms, length * sizeof(sample));
 
-    AudioSegment segment;
+    nsAutoPtr<AudioSegment> segment(new AudioSegment());
     nsAutoTArray<const sample*,1> channels;
     channels.AppendElement(dest);
-    segment.AppendFrames(buffer.forget(), channels, length);
+    segment->AppendFrames(buffer.forget(), channels, length);
     TimeStamp insertTime;
-    segment.GetStartTime(insertTime);
+    segment->GetStartTime(insertTime);
 
-    SourceMediaStream *source = mSources[i];
-    if (source) {
-      // This is safe from any thread, and is safe if the track is Finished
-      // or Destroyed.
+    if (mSources[i]) {
       // Make sure we include the stream and the track.
       // The 0:1 is a flag to note when we've done the final insert for a given input block.
-      LogTime(AsyncLatencyLogger::AudioTrackInsertion, LATENCY_STREAM_ID(source, mTrackID),
+      LogTime(AsyncLatencyLogger::AudioTrackInsertion, LATENCY_STREAM_ID(mSources[i], mTrackID),
               (i+1 < len) ? 0 : 1, insertTime);
 
-      source->AppendToTrack(mTrackID, &segment);
+      // This is safe from any thread, and is safe if the track is Finished
+      // or Destroyed.
+      // Note: due to evil magic, the nsAutoPtr<AudioSegment>'s ownership transfers to
+      // the Runnable (AutoPtr<> = AutoPtr<>)
+      RUN_ON_THREAD(mThread, WrapRunnable(mSources[i], &SourceMediaStream::AppendToTrack,
+                                          mTrackID, segment, (AudioSegment *) nullptr),
+                    NS_DISPATCH_NORMAL);
     }
   }
 

@@ -21,41 +21,55 @@ SOURCES += [
 ]
 
 if CONFIG['MOZ_WMF']:
-  EXPORTS += [
-      'wmf/MFTDecoder.h',
-      'wmf/WMFAudioOutputSource.h',
-      'wmf/WMFDecoderModule.h',
-      'wmf/WMFMediaDataDecoder.h',
-      'wmf/WMFVideoOutputSource.h',
-  ]
-  UNIFIED_SOURCES += [
-      'wmf/MFTDecoder.cpp',
-      'wmf/WMFAudioOutputSource.cpp',
-      'wmf/WMFDecoderModule.cpp',
-      'wmf/WMFMediaDataDecoder.cpp',
-      'wmf/WMFVideoOutputSource.cpp',
-  ]
+    DIRS += [ 'wmf' ];
 
+if CONFIG['MOZ_EME']:
+    DIRS += ['eme']
+    
 if CONFIG['MOZ_FFMPEG']:
+    EXPORTS += [
+        'ffmpeg/FFmpegRuntimeLinker.h',
+    ]
+    UNIFIED_SOURCES += [
+        'ffmpeg/FFmpegLog.cpp',
+        'ffmpeg/FFmpegRuntimeLinker.cpp',
+    ]
+    DIRS += [
+        'ffmpeg/libav53',
+        'ffmpeg/libav54',
+        'ffmpeg/libav55',
+    ]
+    LOCAL_INCLUDES += [
+        'ffmpeg',
+    ]
+
+if CONFIG['MOZ_APPLEMEDIA']:
   EXPORTS += [
-      'ffmpeg/FFmpegAACDecoder.h',
-      'ffmpeg/FFmpegDataDecoder.h',
-      'ffmpeg/FFmpegDecoderModule.h',
-      'ffmpeg/FFmpegFunctionList.h',
-      'ffmpeg/FFmpegH264Decoder.h',
-      'ffmpeg/FFmpegRuntimeLinker.h',
+      'apple/AppleDecoderModule.h',
   ]
   UNIFIED_SOURCES += [
-      'ffmpeg/FFmpegAACDecoder.cpp',
-      'ffmpeg/FFmpegDataDecoder.cpp',
-      'ffmpeg/FFmpegDecoderModule.cpp',
-      'ffmpeg/FFmpegH264Decoder.cpp',
-      'ffmpeg/FFmpegRuntimeLinker.cpp',
+      'apple/AppleATDecoder.cpp',
+      'apple/AppleCMLinker.cpp',
+      'apple/AppleDecoderModule.cpp',
+      'apple/AppleUtils.cpp',
+      'apple/AppleVDADecoder.cpp',
+      'apple/AppleVDALinker.cpp',
+      'apple/AppleVTDecoder.cpp',
+      'apple/AppleVTLinker.cpp',
   ]
-  LOCAL_INCLUDES += [
-      'ffmpeg/include',
+  OS_LIBS += [
+      '-framework AudioToolbox',
   ]
 
-FINAL_LIBRARY = 'gklayout'
+if CONFIG['ANDROID_VERSION'] >= '18'and CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
+    DEFINES['MOZ_GONK_MEDIACODEC'] = True
+    DIRS += ['gonk']
+
+include('/ipc/chromium/chromium-config.mozbuild')
+
+FINAL_LIBRARY = 'xul'
 
 FAIL_ON_WARNINGS = True
+
+if CONFIG['OS_ARCH'] == 'WINNT':
+    DEFINES['NOMINMAX'] = True

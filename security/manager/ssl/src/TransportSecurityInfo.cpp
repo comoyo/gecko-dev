@@ -20,6 +20,7 @@
 #include "nsIProgrammingLanguage.h"
 #include "nsIArray.h"
 #include "nsComponentManagerUtils.h"
+#include "nsReadableUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "PSMRunnable.h"
 
@@ -288,8 +289,8 @@ TransportSecurityInfo::GetInterface(const nsIID & uuid, void * *result)
 // of the previous value. This is so when older versions attempt to
 // read a newer serialized TransportSecurityInfo, they will actually
 // fail and return NS_ERROR_FAILURE instead of silently failing.
-#define TRANSPORTSECURITYINFOMAGIC { 0xa9863a23, 0x28ea, 0x45d2, \
-  { 0xa2, 0x5a, 0x35, 0x7c, 0xae, 0xfa, 0x7f, 0x82 } }
+#define TRANSPORTSECURITYINFOMAGIC { 0xa9863a23, 0xf40a, 0x4060, \
+    { 0xb2, 0xe1, 0x62, 0xab, 0x2b, 0x85, 0x26, 0xa9 } }
 static NS_DEFINE_CID(kTransportSecurityInfoMagic, TRANSPORTSECURITYINFOMAGIC);
 
 NS_IMETHODIMP
@@ -330,6 +331,15 @@ TransportSecurityInfo::Write(nsIObjectOutputStream* stream)
   if (NS_FAILED(rv)) {
     return rv;
   }
+
+  rv = NS_WriteOptionalCompoundObject(stream,
+                                      mFailedCertChain,
+                                      NS_GET_IID(nsIX509CertList),
+                                      true);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
   return NS_OK;
 }
 
@@ -385,6 +395,14 @@ TransportSecurityInfo::Read(nsIObjectInputStream* stream)
   if (!mSSLStatus) {
     return NS_ERROR_FAILURE;
   }
+
+  nsCOMPtr<nsISupports> failedCertChainSupports;
+  rv = NS_ReadOptionalObject(stream, true, getter_AddRefs(failedCertChainSupports));
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  mFailedCertChain = do_QueryInterface(failedCertChainSupports);
+
   return NS_OK;
 }
 
@@ -534,13 +552,9 @@ AppendErrorTextUntrusted(PRErrorCode errTrust,
                          nsString &returnedMessage)
 {
   const char *errorID = nullptr;
-  nsCOMPtr<nsIX509Cert3> cert3 = do_QueryInterface(ix509);
-  if (cert3) {
-    bool isSelfSigned;
-    if (NS_SUCCEEDED(cert3->GetIsSelfSigned(&isSelfSigned))
-        && isSelfSigned) {
-      errorID = "certErrorTrust_SelfSigned";
-    }
+  bool isSelfSigned;
+  if (NS_SUCCEEDED(ix509->GetIsSelfSigned(&isSelfSigned)) && isSelfSigned) {
+    errorID = "certErrorTrust_SelfSigned";
   }
 
   if (!errorID) {
@@ -600,22 +614,24 @@ GetSubjectAltNames(CERTCertificate *nssCert,
   allNames.Truncate();
   nameCount = 0;
 
-  PLArenaPool *san_arena = nullptr;
   SECItem altNameExtension = {siBuffer, nullptr, 0 };
   CERTGeneralName *sanNameList = nullptr;
 
   SECStatus rv = CERT_FindCertExtension(nssCert, SEC_OID_X509_SUBJECT_ALT_NAME,
                                         &altNameExtension);
-  if (rv != SECSuccess)
+  if (rv != SECSuccess) {
     return false;
+  }
 
-  san_arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
-  if (!san_arena)
+  ScopedPLArenaPool arena(PORT_NewArena(DER_DEFAULT_CHUNKSIZE));
+  if (!arena) {
     return false;
+  }
 
-  sanNameList = CERT_DecodeAltNameExtension(san_arena, &altNameExtension);
-  if (!sanNameList)
+  sanNameList = CERT_DecodeAltNameExtension(arena.get(), &altNameExtension);
+  if (!sanNameList) {
     return false;
+  }
 
   SECITEM_FreeItem(&altNameExtension, false);
 
@@ -624,12 +640,21 @@ GetSubjectAltNames(CERTCertificate *nssCert,
     nsAutoString name;
     switch (current->type) {
       case certDNSName:
-        name.AssignASCII((char*)current->name.other.data, current->name.other.len);
-        if (!allNames.IsEmpty()) {
-          allNames.AppendLiteral(", ");
+        {
+          nsDependentCSubstring nameFromCert(reinterpret_cast<char*>
+                                              (current->name.other.data),
+                                              current->name.other.len);
+          // dNSName fields are defined as type IA5String and thus should
+          // be limited to ASCII characters.
+          if (IsASCII(nameFromCert)) {
+            name.Assign(NS_ConvertASCIItoUTF16(nameFromCert));
+            if (!allNames.IsEmpty()) {
+              allNames.AppendLiteral(", ");
+            }
+            ++nameCount;
+            allNames.Append(name);
+          }
         }
-        ++nameCount;
-        allNames.Append(name);
         break;
 
       case certIPAddress:
@@ -665,7 +690,6 @@ GetSubjectAltNames(CERTCertificate *nssCert,
     current = CERT_GetNextGeneralName(current);
   } while (current != sanNameList); // double linked
 
-  PORT_FreeArena(san_arena, false);
   return true;
 }
 
@@ -679,11 +703,7 @@ AppendErrorTextMismatch(const nsString &host,
   const char16_t *params[1];
   nsresult rv;
 
-  mozilla::pkix::ScopedCERTCertificate nssCert;
-
-  nsCOMPtr<nsIX509Cert2> cert2 = do_QueryInterface(ix509, &rv);
-  if (cert2)
-    nssCert = cert2->GetCert();
+  ScopedCERTCertificate nssCert(ix509->GetCert());
 
   if (!nssCert) {
     // We are unable to extract the valid names, say "not valid for name".
@@ -707,16 +727,17 @@ AppendErrorTextMismatch(const nsString &host,
     useSAN = GetSubjectAltNames(nssCert.get(), component, allNames, nameCount);
 
   if (!useSAN) {
-    char *certName = nullptr;
-    // currently CERT_FindNSStringExtension is not being exported by NSS.
-    // If it gets exported, enable the following line.
-    //   certName = CERT_FindNSStringExtension(nssCert, SEC_OID_NS_CERT_EXT_SSL_SERVER_NAME);
-    // However, it has been discussed to treat the extension as obsolete and ignore it.
-    if (!certName)
-      certName = CERT_GetCommonName(&nssCert->subject);
+    char *certName = CERT_GetCommonName(&nssCert->subject);
     if (certName) {
-      ++nameCount;
-      allNames.Assign(NS_ConvertUTF8toUTF16(certName));
+      nsDependentCSubstring commonName(certName, strlen(certName));
+      if (IsUTF8(commonName)) {
+        // Bug 1024781
+        // We should actually check that the common name is a valid dns name or
+        // ip address and not any string value before adding it to the display
+        // list.
+        ++nameCount;
+        allNames.Assign(NS_ConvertUTF8toUTF16(commonName));
+      }
       PORT_Free(certName);
     }
   }
@@ -952,7 +973,7 @@ formatOverridableCertErrorMessage(nsISSLStatus & sslStatus,
 RememberCertErrorsTable::sInstance = nullptr;
 
 RememberCertErrorsTable::RememberCertErrorsTable()
-  : mErrorHosts(16)
+  : mErrorHosts()
   , mMutex("RememberCertErrorsTable::mMutex")
 {
 }
@@ -1066,6 +1087,32 @@ TransportSecurityInfo::SetStatusErrorBits(nsIX509Cert & cert,
   RememberCertErrorsTable::GetInstance().RememberCertHasError(this,
                                                               mSSLStatus,
                                                               SECFailure);
+}
+
+NS_IMETHODIMP
+TransportSecurityInfo::GetFailedCertChain(nsIX509CertList** _result)
+{
+  NS_ASSERTION(_result, "non-NULL destination required");
+
+  *_result = mFailedCertChain;
+  NS_IF_ADDREF(*_result);
+
+  return NS_OK;
+}
+
+nsresult
+TransportSecurityInfo::SetFailedCertChain(ScopedCERTCertList& certList)
+{
+  nsNSSShutDownPreventionLock lock;
+  if (isAlreadyShutDown()) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  nsCOMPtr<nsIX509CertList> comCertList;
+  // nsNSSCertList takes ownership of certList
+  mFailedCertChain = new nsNSSCertList(certList, lock);
+
+  return NS_OK;
 }
 
 } } // namespace mozilla::psm

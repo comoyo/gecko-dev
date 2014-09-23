@@ -35,7 +35,7 @@
 
 #include <float.h>
 
-#include "jit/AsmJS.h"
+#include "asmjs/AsmJSValidate.h"
 #include "jit/mips/Assembler-mips.h"
 #include "vm/Runtime.h"
 
@@ -519,31 +519,23 @@ class SimulatorRuntime
         lockOwner_(nullptr) {}
     ~SimulatorRuntime();
     bool init() {
-#ifdef JS_THREADSAFE
         lock_ = PR_NewLock();
         if (!lock_)
             return false;
-#endif
         if (!icache_.init())
             return false;
         return true;
     }
     ICacheMap &icache() {
-#ifdef JS_THREADSAFE
         MOZ_ASSERT(lockOwner_ == PR_GetCurrentThread());
-#endif
         return icache_;
     }
     Redirection *redirection() const {
-#ifdef JS_THREADSAFE
         MOZ_ASSERT(lockOwner_ == PR_GetCurrentThread());
-#endif
         return redirection_;
     }
     void setRedirection(js::jit::Redirection *redirection) {
-#ifdef JS_THREADSAFE
         MOZ_ASSERT(lockOwner_ == PR_GetCurrentThread());
-#endif
         redirection_ = redirection;
     }
 };
@@ -556,21 +548,17 @@ class AutoLockSimulatorRuntime
   public:
     AutoLockSimulatorRuntime(SimulatorRuntime *srt)
         : srt_(srt) {
-#ifdef JS_THREADSAFE
         PR_Lock(srt_->lock_);
         MOZ_ASSERT(!srt_->lockOwner_);
 #ifdef DEBUG
         srt_->lockOwner_ = PR_GetCurrentThread();
 #endif
-#endif
     }
 
     ~AutoLockSimulatorRuntime() {
-#ifdef JS_THREADSAFE
         MOZ_ASSERT(srt_->lockOwner_ == PR_GetCurrentThread());
         srt_->lockOwner_ = nullptr;
         PR_Unlock(srt_->lock_);
-#endif
     }
 };
 
@@ -786,21 +774,25 @@ MipsDebugger::printAllRegs()
 void
 MipsDebugger::printAllRegsIncludingFPU()
 {
-#define FPU_REG_INFO(n) FloatRegisters::GetName(n), FloatRegisters::GetName(n+1), \
-        getFPURegisterValueInt(n+1), \
-        getFPURegisterValueInt(n), \
-                        getFPURegisterValueDouble(n)
-
     printAllRegs();
 
     printf("\n\n");
     // f0, f1, f2, ... f31.
-    for (uint32_t i = 0; i < FloatRegisters::Total; i += 2) {
-        printf("%3s,%3s: 0x%08x%08x %16.4e\n", FPU_REG_INFO(i));
+    for (uint32_t i = 0; i < FloatRegisters::TotalSingle; i++) {
+        if (i & 0x1) {
+            printf("%3s: 0x%08x\tflt: %-8.4g\n",
+                   FloatRegisters::GetName(i),
+                   getFPURegisterValueInt(i),
+                   getFPURegisterValueFloat(i));
+        } else {
+            printf("%3s: 0x%08x\tflt: %-8.4g\tdbl: %-16.4g\n",
+                   FloatRegisters::GetName(i),
+                   getFPURegisterValueInt(i),
+                   getFPURegisterValueFloat(i),
+                   getFPURegisterValueDouble(i));
+        }
     }
 
-#undef REG_INFO
-#undef FPU_REG_INFO
 }
 
 static char *
@@ -862,7 +854,8 @@ DisassembleInstruction(uint32_t pc)
     sprintf(llvmcmd, "bash -c \"echo -n '%p'; echo '%s' | "
             "llvm-mc -disassemble -arch=mipsel -mcpu=mips32r2 | "
             "grep -v pure_instructions | grep -v .text\"", static_cast<void*>(bytes), hexbytes);
-    system(llvmcmd);
+    if (system(llvmcmd))
+        printf("Cannot disassemble instruction.\n");
 }
 
 void
@@ -939,12 +932,23 @@ MipsDebugger::debug()
                         printAllRegsIncludingFPU();
                     } else {
                         Register reg = Register::FromName(arg1);
-                        FloatRegister fReg = FloatRegister::FromName(arg1);
+                        FloatRegisters::Code fCode = FloatRegister::FromName(arg1);
                         if (reg != InvalidReg) {
                             value = getRegisterValue(reg.code());
                             printf("%s: 0x%08x %d \n", arg1, value, value);
-                        } else if (fReg.code() != FloatRegisters::Invalid) {
-                            MOZ_ASSUME_UNREACHABLE("NYI");
+                        } else if (fCode != FloatRegisters::Invalid) {
+                            if (fCode & 0x1) {
+                                printf("%3s: 0x%08x\tflt: %-8.4g\n",
+                                       FloatRegisters::GetName(fCode),
+                                       getFPURegisterValueInt(fCode),
+                                       getFPURegisterValueFloat(fCode));
+                            } else {
+                                printf("%3s: 0x%08x\tflt: %-8.4g\tdbl: %-16.4g\n",
+                                       FloatRegisters::GetName(fCode),
+                                       getFPURegisterValueInt(fCode),
+                                       getFPURegisterValueFloat(fCode),
+                                       getFPURegisterValueDouble(fCode));
+                            }
                         } else {
                             printf("%s unrecognized\n", arg1);
                         }
@@ -1278,7 +1282,7 @@ SimulatorRuntime::ICacheHasher::match(const Key &k, const Lookup &l)
 void
 Simulator::FlushICache(void *start_addr, size_t size)
 {
-    SimulatorRuntime *srt = Simulator::Current()->srt_;
+    SimulatorRuntime *srt = TlsPerThreadData.get()->simulatorRuntime();
     AutoLockSimulatorRuntime alsr(srt);
     js::jit::FlushICache(srt->icache(), start_addr, size);
 }
@@ -1345,14 +1349,12 @@ class Redirection
 {
     friend class SimulatorRuntime;
 
-    Redirection(void* nativeFunction, ABIFunctionType type)
+    Redirection(void* nativeFunction, ABIFunctionType type, SimulatorRuntime *srt)
       : nativeFunction_(nativeFunction),
         swiInstruction_(kCallRedirInstr),
         type_(type),
         next_(nullptr)
     {
-        Simulator *sim = Simulator::Current();
-        SimulatorRuntime *srt = sim->srt_;
         next_ = srt->redirection();
 	if (Simulator::ICacheCheckingEnabled)
 	    FlushICache(srt->icache(), addressOfSwiInstruction(), SimInstruction::kInstrSize);
@@ -1365,10 +1367,13 @@ class Redirection
     ABIFunctionType type() const { return type_; }
 
     static Redirection *Get(void *nativeFunction, ABIFunctionType type) {
-        Simulator *sim = Simulator::Current();
-        AutoLockSimulatorRuntime alsr(sim->srt_);
+        PerThreadData *pt = TlsPerThreadData.get();
+        SimulatorRuntime *srt = pt->simulatorRuntime();
+        AutoLockSimulatorRuntime alsr(srt);
 
-        Redirection *current = sim->srt_->redirection();
+        JS_ASSERT_IF(pt->simulator(), pt->simulator()->srt_ == srt);
+
+        Redirection *current = srt->redirection();
         for (; current != nullptr; current = current->next_) {
             if (current->nativeFunction_ == nativeFunction) {
                 MOZ_ASSERT(current->type() == type);
@@ -1382,7 +1387,7 @@ class Redirection
                                        __FILE__, __LINE__);
             MOZ_CRASH();
         }
-        new(redir) Redirection(nativeFunction, type);
+        new(redir) Redirection(nativeFunction, type, srt);
         return redir;
     }
 
@@ -1414,10 +1419,8 @@ SimulatorRuntime::~SimulatorRuntime()
         js_delete(r);
         r = next;
     }
-#ifdef JS_THREADSAFE
     if (lock_)
         PR_DestroyLock(lock_);
-#endif
 }
 
 // Get the active Simulator for the current thread.
@@ -1864,7 +1867,7 @@ Simulator::softwareInterrupt(SimInstruction *instr)
     // We first check if we met a call_rt_redirected.
     if (instr->instructionBits() == kCallRedirInstr) {
 #if !defined(USES_O32_ABI)
-        MOZ_ASSUME_UNREACHABLE("Only O32 ABI supported.");
+        MOZ_CRASH("Only O32 ABI supported.");
 #else
         Redirection *redirection = Redirection::FromSwiInstruction(instr);
         int32_t arg0 = getRegister(a0);
@@ -1883,7 +1886,7 @@ Simulator::softwareInterrupt(SimInstruction *instr)
 
         intptr_t external = reinterpret_cast<intptr_t>(redirection->nativeFunction());
 
-        bool stack_aligned = (getRegister(sp) & (StackAlignment - 1)) == 0;
+        bool stack_aligned = (getRegister(sp) & (ABIStackAlignment - 1)) == 0;
         if (!stack_aligned) {
             fprintf(stderr, "Runtime call with unaligned stack!\n");
             MOZ_CRASH();
@@ -2020,7 +2023,7 @@ Simulator::softwareInterrupt(SimInstruction *instr)
             break;
           }
           default:
-            MOZ_ASSUME_UNREACHABLE("call");
+            MOZ_CRASH("call");
         }
 
         setRegister(ra, saved_ra);
@@ -2145,7 +2148,7 @@ Simulator::signalExceptions()
 {
     for (int i = 1; i < kNumExceptions; i++) {
         if (exceptions[i] != 0)
-            MOZ_ASSUME_UNREACHABLE("Error: Exception raised.");
+            MOZ_CRASH("Error: Exception raised.");
     }
 }
 
@@ -2353,7 +2356,7 @@ Simulator::configureTypeRegister(SimInstruction *instr,
             alu_out = rs_u * rt_u;  // Only the lower 32 bits are kept.
             break;
           case ff_clz:
-            alu_out = __builtin_clz(rs_u);
+            alu_out = rs_u ? __builtin_clz(rs_u) : 32;
             break;
           default:
             MOZ_CRASH();
@@ -3297,7 +3300,7 @@ Simulator::branchDelayInstructionDecode(SimInstruction *instr)
     }
 
     if (instr->isForbiddenInBranchDelay()) {
-        MOZ_ASSUME_UNREACHABLE("Eror:Unexpected opcode in a branch delay slot.");
+        MOZ_CRASH("Eror:Unexpected opcode in a branch delay slot.");
     }
     instructionDecode(instr);
 }
@@ -3309,7 +3312,7 @@ Simulator::execute()
     // Get the PC to simulate. Cannot use the accessor here as we need the
     // raw PC value and not the one used as input to arithmetic instructions.
     int program_counter = get_pc();
-    AsmJSActivation *activation = TlsPerThreadData.get()->asmJSActivationStackFromOwnerThread();
+    AsmJSActivation *activation = TlsPerThreadData.get()->asmJSActivationStack();
 
     while (program_counter != end_sim_pc) {
         if (enableStopSimAt && (icount_ == Simulator::StopSimAt)) {
@@ -3323,7 +3326,7 @@ Simulator::execute()
             int32_t rpc = resume_pc_;
             if (MOZ_UNLIKELY(rpc != 0)) {
                 // AsmJS signal handler ran and we have to adjust the pc.
-                activation->setInterrupted((void *)get_pc());
+                activation->setResumePC((void *)get_pc());
                 set_pc(rpc);
                 resume_pc_ = 0;
             }
@@ -3417,7 +3420,7 @@ Simulator::call(uint8_t *entry, int argument_count, ...)
     else
         entry_stack = entry_stack - kCArgsSlotsSize;
 
-    entry_stack &= ~StackAlignment;
+    entry_stack &= ~ABIStackAlignment;
 
     intptr_t *stack_argument = reinterpret_cast<intptr_t*>(entry_stack);
 

@@ -14,7 +14,6 @@
 #include "X11/Xlib.h"
 #endif
 
-class gfxImageSurface;
 class gfxFontconfigUtils;
 class QWindow;
 
@@ -28,9 +27,6 @@ public:
     }
 
     virtual already_AddRefed<gfxASurface>
-    OptimizeImage(gfxImageSurface *aSurface,
-                  gfxImageFormat format) MOZ_OVERRIDE;
-    virtual already_AddRefed<gfxASurface>
       CreateOffscreenSurface(const IntSize& size,
                              gfxContentType contentType) MOZ_OVERRIDE;
 
@@ -43,13 +39,9 @@ public:
 
     virtual nsresult UpdateFontList() MOZ_OVERRIDE;
 
-    virtual nsresult ResolveFontName(const nsAString& aFontName,
-                                     FontResolverCallback aCallback,
-                                     void *aClosure, bool& aAborted) MOZ_OVERRIDE;
-
     virtual nsresult GetStandardFamilyName(const nsAString& aFontName, nsAString& aFamilyName) MOZ_OVERRIDE;
 
-    virtual gfxFontGroup *CreateFontGroup(const nsAString &aFamilies,
+    virtual gfxFontGroup *CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
                                           const gfxFontStyle *aStyle,
                                           gfxUserFontSet* aUserFontSet) MOZ_OVERRIDE;
 
@@ -57,15 +49,20 @@ public:
      * Look up a local platform font using the full font face name (needed to
      * support @font-face src local() )
      */
-    virtual gfxFontEntry* LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                          const nsAString& aFontName) MOZ_OVERRIDE;
+    virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
+                                          uint16_t aWeight,
+                                          int16_t aStretch,
+                                          bool aItalic) MOZ_OVERRIDE;
 
     /**
      * Activate a platform font (needed to support @font-face src url() )
      *
      */
-    virtual gfxFontEntry* MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                           const uint8_t *aFontData,
+    virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
+                                           uint16_t aWeight,
+                                           int16_t aStretch,
+                                           bool aItalic,
+                                           const uint8_t* aFontData,
                                            uint32_t aLength) MOZ_OVERRIDE;
 
     /**
@@ -86,8 +83,6 @@ public:
 #endif
 
     virtual int GetScreenDepth() const MOZ_OVERRIDE;
-
-    virtual bool SupportsOffMainThreadCompositing() MOZ_OVERRIDE;
 
 protected:
     static gfxFontconfigUtils *sFontconfigUtils;

@@ -21,6 +21,10 @@
 #include "mozilla/Attributes.h"
 #include "nsIInterfaceRequestor.h"
 
+#ifdef XP_WIN
+#include "win_wifiScanner.h"
+#endif
+
 #if defined(PR_LOGGING)
 extern PRLogModuleInfo *gWifiMonitorLog;
 #endif
@@ -28,11 +32,13 @@ extern PRLogModuleInfo *gWifiMonitorLog;
 
 class nsWifiAccessPoint;
 
+#define kDefaultWifiScanInterval 5 /* seconds */
+
 class nsWifiListener
 {
  public:
 
-  nsWifiListener(nsMainThreadPtrHolder<nsIWifiListener>* aListener)
+  explicit nsWifiListener(nsMainThreadPtrHolder<nsIWifiListener>* aListener)
   {
     mListener = aListener;
     mHasSentData = false;
@@ -69,6 +75,9 @@ class nsWifiMonitor MOZ_FINAL : nsIRunnable, nsIWifiMonitor, nsIObserver
 
   mozilla::ReentrantMonitor mReentrantMonitor;
 
+#ifdef XP_WIN
+  nsAutoPtr<WinWifiScanner> mWinWifiScanner;
+#endif
 };
 #else
 #include "nsIWifi.h"
@@ -91,6 +100,7 @@ class nsWifiMonitor MOZ_FINAL : nsIWifiMonitor, nsIWifiScanResultsReady, nsIObse
       mTimer = nullptr;
     }
   }
+  void StartScan();
   nsCOMArray<nsWifiAccessPoint> mLastAccessPoints;
   nsTArray<nsWifiListener> mListeners;
   nsCOMPtr<nsITimer> mTimer;

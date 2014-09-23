@@ -107,7 +107,7 @@ FlattenedPath::QuadraticBezierTo(const Point &aCP1,
                                  const Point &aCP2)
 {
   MOZ_ASSERT(!mCalculatedLength);
-  // We need to elevate the degree of this quadratic Bézier to cubic, so we're
+  // We need to elevate the degree of this quadratic Bï¿½zier to cubic, so we're
   // going to add an intermediate control point, and recompute control point 1.
   // The first and last control points remain the same.
   // This formula can be found on http://fontforge.sourceforge.net/bezier.html
@@ -276,7 +276,7 @@ FindInflectionApproximationRange(BezierControlPoints aControlPoints,
     Point cp21 = aControlPoints.mCP2 - aControlPoints.mCP1;
     Point cp41 = aControlPoints.mCP4 - aControlPoints.mCP1;
 
-    if (cp21.x == 0 && cp21.y == 0) {
+    if (cp21.x == 0.f && cp21.y == 0.f) {
       // In this case s3 becomes lim[n->0] (cp41.x * n) / n - (cp41.y * n) / n = cp41.x - cp41.y.
 
       // Use the absolute value so that Min and Max will correspond with the
@@ -375,8 +375,15 @@ FindInflectionPoints(const BezierControlPoints &aControlPoints,
       // Instead of a linear acceleration change we have a constant
       // acceleration change. This means the equation has no solution
       // and there are no inflection points, unless the constant is 0.
-      // In that case the curve is a straight line, but we'll let
-      // FlattenBezierCurveSegment deal with this.
+      // In that case the curve is a straight line, essentially that means
+      // the easiest way to deal with is is by saying there's an inflection
+      // point at t == 0. The inflection point approximation range found will
+      // automatically extend into infinity.
+      if (c == 0) {
+        *aCount = 1;
+        *aT1 = 0;
+        return;
+      }
       *aCount = 0;
       return;
     }

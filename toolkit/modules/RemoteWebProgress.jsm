@@ -1,4 +1,4 @@
-// -*- Mode: javascript; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
+// -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -166,13 +166,17 @@ RemoteWebProgressManager.prototype = {
       let location = newURI(json.location);
       let flags = json.flags;
 
+      // These properties can change even for a sub-frame navigation.
+      this._browser.webNavigation.canGoBack = json.canGoBack;
+      this._browser.webNavigation.canGoForward = json.canGoForward;
+
       if (json.isTopLevel) {
         this._browser.webNavigation._currentURI = location;
-        this._browser.webNavigation.canGoBack = json.canGoBack;
-        this._browser.webNavigation.canGoForward = json.canGoForward;
         this._browser._characterSet = json.charset;
         this._browser._documentURI = newURI(json.documentURI);
         this._browser._imageDocument = null;
+        this._browser._mayEnableCharacterEncodingMenu = json.mayEnableCharacterEncodingMenu;
+        this._browser._contentPrincipal = json.principal;
       }
 
       this._callProgressListeners("onLocationChange", webProgress, request, location, flags);

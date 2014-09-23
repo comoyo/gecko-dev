@@ -57,12 +57,11 @@
 #define JS_TYPEREPR_REFERENCE_KIND      2
 #define JS_TYPEREPR_STRUCT_KIND         3
 #define JS_TYPEREPR_SIZED_ARRAY_KIND    4
-#define JS_TYPEREPR_X4_KIND             5
+#define JS_TYPEREPR_SIMD_KIND           5
 
 // These constants are for use exclusively in JS code. In C++ code,
-// prefer ScalarTypeRepresentation::TYPE_INT8 etc, which allows
-// you to write a switch which will receive a warning if you omit a
-// case.
+// prefer Scalar::Int8 etc, which allows you to write a switch which will
+// receive a warning if you omit a case.
 #define JS_SCALARTYPEREPR_INT8          0
 #define JS_SCALARTYPEREPR_UINT8         1
 #define JS_SCALARTYPEREPR_INT16         2
@@ -82,31 +81,43 @@
 #define JS_REFERENCETYPEREPR_STRING     2
 
 // These constants are for use exclusively in JS code.  In C++ code,
-// prefer X4TypeRepresentation::TYPE_INT32 etc, since that allows
+// prefer SimdTypeRepresentation::TYPE_INT32 etc, since that allows
 // you to write a switch which will receive a warning if you omit a
 // case.
-#define JS_X4TYPEREPR_INT32         0
-#define JS_X4TYPEREPR_FLOAT32       1
+#define JS_SIMDTYPEREPR_INT32         0
+#define JS_SIMDTYPEREPR_FLOAT32       1
 
 ///////////////////////////////////////////////////////////////////////////
 // Slots for typed objects
 
-#define JS_TYPEDOBJ_SLOT_BYTEOFFSET       0
-#define JS_TYPEDOBJ_SLOT_BYTELENGTH       1
-#define JS_TYPEDOBJ_SLOT_OWNER            2
-#define JS_TYPEDOBJ_SLOT_NEXT_VIEW        3
 
-#define JS_DATAVIEW_SLOTS              4 // Number of slots for data views
+// Common to data view, typed arrays, and typed objects:
+#define JS_BUFVIEW_SLOT_BYTEOFFSET       0
+#define JS_BUFVIEW_SLOT_LENGTH           1 // see (*) below
+#define JS_BUFVIEW_SLOT_OWNER            2
 
-#define JS_TYPEDOBJ_SLOT_LENGTH           4 // Length of array (see (*) below)
-#define JS_TYPEDOBJ_SLOT_TYPE_DESCR       5 // For typed objects, type descr
+// Specific to data view:
+#define JS_DATAVIEW_SLOT_DATA            3 // see (**) below
+#define JS_DATAVIEW_SLOTS                3 // Number of slots for data views
 
-#define JS_TYPEDOBJ_SLOT_DATA             7 // private slot, based on alloc kind
-#define JS_TYPEDOBJ_SLOTS                 6 // Number of slots for typed objs
+// Specific to typed arrays:
+#define JS_TYPEDARR_SLOT_DATA            3 // see (**) below
+#define JS_TYPEDARR_SLOTS                3 // Number of slots for typed arrays
 
-// (*) The JS_TYPEDOBJ_SLOT_LENGTH slot stores the length for typed objects of
-// sized and unsized array type. The slot contains 0 for non-arrays.
-// The slot also contains 0 for *unattached* typed objects, no matter what
-// type they have.
+// Specific to typed objects:
+#define JS_TYPEDOBJ_SLOT_DATA            3
+#define JS_TYPEDOBJ_SLOTS                3 // Number of slots for typed objs
+
+// (*) The interpretation of the JS_BUFVIEW_SLOT_LENGTH slot depends on
+// the kind of view:
+// - DataView: stores the length in bytes
+// - TypedArray: stores the array length
+// - TypedObject: for arrays, stores the array length, else 0
+
+// (**) This is the index of the slot that will be used for private data.
+// It is hardcoded here based on the GC Kind that will be assigned. It is
+// a function of the total number of slots, but it is non-trivial to encode
+// that function at compile-time, so we instead use a hardcoded constant
+// coupled with some handy assertions.
 
 #endif

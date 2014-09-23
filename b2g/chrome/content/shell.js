@@ -1,15 +1,14 @@
-/* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- /
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- /
 /* vim: set shiftwidth=2 tabstop=2 autoindent cindent expandtab: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 Cu.import('resource://gre/modules/ContactService.jsm');
-Cu.import('resource://gre/modules/SettingsChangeNotifier.jsm');
+Cu.import('resource://gre/modules/SettingsRequestManager.jsm');
 Cu.import('resource://gre/modules/DataStoreChangeNotifier.jsm');
 Cu.import('resource://gre/modules/AlarmService.jsm');
 Cu.import('resource://gre/modules/ActivitiesService.jsm');
-Cu.import('resource://gre/modules/PermissionPromptHelper.jsm');
 Cu.import('resource://gre/modules/NotificationDB.jsm');
 Cu.import('resource://gre/modules/Payment.jsm');
 Cu.import("resource://gre/modules/AppsUtils.jsm");
@@ -19,17 +18,16 @@ Cu.import('resource://gre/modules/ErrorPage.jsm');
 Cu.import('resource://gre/modules/AlertsHelper.jsm');
 #ifdef MOZ_WIDGET_GONK
 Cu.import('resource://gre/modules/NetworkStatsService.jsm');
+Cu.import('resource://gre/modules/ResourceStatsService.jsm');
 #endif
 
 // Identity
 Cu.import('resource://gre/modules/SignInToWebsite.jsm');
 SignInToWebsiteController.init();
 
-#ifdef MOZ_SERVICES_FXACCOUNTS
 Cu.import('resource://gre/modules/FxAccountsMgmtService.jsm');
-#endif
-
 Cu.import('resource://gre/modules/DownloadsAPI.jsm');
+Cu.import('resource://gre/modules/MobileIdentityManager.jsm');
 
 XPCOMUtils.defineLazyModuleGetter(this, "SystemAppProxy",
                                   "resource://gre/modules/SystemAppProxy.jsm");
@@ -52,11 +50,6 @@ XPCOMUtils.defineLazyServiceGetter(this, 'gSystemMessenger',
 XPCOMUtils.defineLazyServiceGetter(Services, 'fm',
                                    '@mozilla.org/focus-manager;1',
                                    'nsIFocusManager');
-
-XPCOMUtils.defineLazyGetter(this, 'DebuggerServer', function() {
-  Cu.import('resource://gre/modules/devtools/dbg-server.jsm');
-  return DebuggerServer;
-});
 
 XPCOMUtils.defineLazyGetter(this, "ppmm", function() {
   return Cc["@mozilla.org/parentprocessmessagemanager;1"]
@@ -209,11 +202,6 @@ var shell = {
     }, "network-connection-state-changed", false);
   },
 
-  get contentBrowser() {
-    delete this.contentBrowser;
-    return this.contentBrowser = document.getElementById('systemapp');
-  },
-
   get homeURL() {
     try {
       let homeSrc = Services.env.get('B2G_HOMESCREEN');
@@ -313,7 +301,7 @@ var shell = {
       container.removeChild(hotfix);
     }
 #endif
-    container.appendChild(systemAppFrame);
+    this.contentBrowser = container.appendChild(systemAppFrame);
 
     systemAppFrame.contentWindow
                   .QueryInterface(Ci.nsIInterfaceRequestor)
@@ -343,6 +331,7 @@ var shell = {
     window.addEventListener('sizemodechange', this);
     window.addEventListener('unload', this);
     this.contentBrowser.addEventListener('mozbrowserloadstart', this, true);
+    this.contentBrowser.addEventListener('mozbrowserselectionchange', this, true);
 
     CustomEventManager.init();
     WebappsHelper.init();
@@ -369,11 +358,8 @@ var shell = {
     window.removeEventListener('mozfullscreenchange', this);
     window.removeEventListener('sizemodechange', this);
     this.contentBrowser.removeEventListener('mozbrowserloadstart', this, true);
+    this.contentBrowser.removeEventListener('mozbrowserselectionchange', this, true);
     ppmm.removeMessageListener("content-handler", this);
-    if (this.timer) {
-      this.timer.cancel();
-      this.timer = null;
-    }
 
     UserAgentOverrides.uninit();
     IndexedDBPromptHelper.uninit();
@@ -475,9 +461,6 @@ var shell = {
   },
 
   lastHardwareButtonEventType: null, // property for the hack above
-  needBufferOpenAppReq: true,
-  bufferedOpenAppReqs: [],
-  timer: null,
   visibleNormalAudioActive: false,
 
   handleEvent: function shell_handleEvent(evt) {
@@ -517,6 +500,30 @@ var shell = {
 
         this.notifyContentStart();
        break;
+
+      case 'mozbrowserselectionchange':
+        // The mozbrowserselectionchange event, may have crossed the chrome-content boundary.
+        // This event always dispatch to shell.js. But the offset we got from this event is
+        // based on tab's coordinate. So get the actual offsets between shell and evt.target.
+        let elt = evt.target;
+        let win = elt.ownerDocument.defaultView;
+        let offsetX = win.mozInnerScreenX - window.mozInnerScreenX;
+        let offsetY = win.mozInnerScreenY - window.mozInnerScreenY;
+
+        let rect = elt.getBoundingClientRect();
+        offsetX += rect.left;
+        offsetY += rect.top;
+
+        let data = evt.detail;
+        data.offsetX = offsetX;
+        data.offsetY = offsetY;
+
+        DoCommandHelper.setEvent(evt);
+        shell.sendChromeEvent({
+          type: 'selectionchange',
+          detail: data,
+        });
+        break;
 
       case 'MozApplicationManifest':
         try {
@@ -591,22 +598,7 @@ var shell = {
       return;
     }
 
-    this.sendEvent(getContentWindow(), "mozChromeEvent",
-                   Cu.cloneInto(details, getContentWindow()));
-  },
-
-  openAppForSystemMessage: function shell_openAppForSystemMessage(msg) {
-    let payload = {
-      url: msg.pageURL,
-      manifestURL: msg.manifestURL,
-      isActivity: (msg.type == 'activity'),
-      onlyShowApp: msg.onlyShowApp,
-      showApp: msg.showApp,
-      target: msg.target,
-      expectingSystemMessage: true,
-      extra: msg.extra
-    }
-    this.sendCustomEvent('open-app', payload);
+    this.sendCustomEvent("mozChromeEvent", details);
   },
 
   receiveMessage: function shell_receiveMessage(message) {
@@ -677,18 +669,6 @@ var shell = {
   }
 };
 
-// Listen for the request of opening app and relay them to Gaia.
-Services.obs.addObserver(function onSystemMessageOpenApp(subject, topic, data) {
-  let msg = JSON.parse(data);
-  // Buffer non-activity request until content starts to load for 10 seconds.
-  // We'll revisit this later if new kind of requests don't need to be cached.
-  if (shell.needBufferOpenAppReq && msg.type !== 'activity') {
-    shell.bufferedOpenAppReqs.push(msg);
-    return;
-  }
-  shell.openAppForSystemMessage(msg);
-}, 'system-messages-open-app', false);
-
 Services.obs.addObserver(function onFullscreenOriginChange(subject, topic, data) {
   shell.sendChromeEvent({ type: "fullscreenoriginchange",
                           fullscreenorigin: data });
@@ -717,21 +697,6 @@ var CustomEventManager = {
     window.addEventListener("ContentStart", (function(evt) {
       let content = shell.contentBrowser.contentWindow;
       content.addEventListener("mozContentEvent", this, false, true);
-
-      // After content starts to load for 10 seconds, send and
-      // clean up the buffered open-app requests if there is any.
-      //
-      // TODO: Bug 793420 - Remove the waiting timer for the 'open-app'
-      //                    mozChromeEvents requested by System Message
-      shell.timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-      shell.timer.initWithCallback(function timerCallback() {
-        shell.bufferedOpenAppReqs.forEach(function bufferOpenAppReq(msg) {
-          shell.openAppForSystemMessage(msg);
-        });
-        shell.bufferedOpenAppReqs.length = 0;
-        shell.needBufferOpenAppReq = false;
-        shell.timer = null;
-      }, 10000, Ci.nsITimer.TYPE_ONE_SHOT);
     }).bind(this), false);
   },
 
@@ -742,6 +707,8 @@ var CustomEventManager = {
     switch(detail.type) {
       case 'webapps-install-granted':
       case 'webapps-install-denied':
+      case 'webapps-uninstall-granted':
+      case 'webapps-uninstall-denied':
         WebappsHelper.handleEvent(detail);
         break;
       case 'select-choicechange':
@@ -750,15 +717,29 @@ var CustomEventManager = {
       case 'system-message-listener-ready':
         Services.obs.notifyObservers(null, 'system-message-listener-ready', null);
         break;
-      case 'remote-debugger-prompt':
-        RemoteDebugger.handleEvent(detail);
-        break;
       case 'captive-portal-login-cancel':
         CaptivePortalLoginHelper.handleEvent(detail);
         break;
       case 'inputmethod-update-layouts':
         KeyboardHelper.handleEvent(detail);
         break;
+      case 'do-command':
+        DoCommandHelper.handleEvent(detail.cmd);
+        break;
+    }
+  }
+}
+
+let DoCommandHelper = {
+  _event: null,
+  setEvent: function docommand_setEvent(evt) {
+    this._event = evt;
+  },
+
+  handleEvent: function docommand_handleEvent(cmd) {
+    if (this._event) {
+      shell.sendEvent(this._event.target, 'mozdocommand', { cmd: cmd });
+      this._event = null;
     }
   }
 }
@@ -770,6 +751,7 @@ var WebappsHelper = {
   init: function webapps_init() {
     Services.obs.addObserver(this, "webapps-launch", false);
     Services.obs.addObserver(this, "webapps-ask-install", false);
+    Services.obs.addObserver(this, "webapps-ask-uninstall", false);
     Services.obs.addObserver(this, "webapps-close", false);
   },
 
@@ -792,6 +774,12 @@ var WebappsHelper = {
       case "webapps-install-denied":
         DOMApplicationRegistry.denyInstall(installer);
         break;
+      case "webapps-uninstall-granted":
+        DOMApplicationRegistry.confirmUninstall(installer);
+        break;
+      case "webapps-uninstall-denied":
+        DOMApplicationRegistry.denyUninstall(installer);
+        break;
     }
   },
 
@@ -799,40 +787,44 @@ var WebappsHelper = {
     let json = JSON.parse(data);
     json.mm = subject;
 
+    let id;
+
     switch(topic) {
       case "webapps-launch":
         DOMApplicationRegistry.getManifestFor(json.manifestURL).then((aManifest) => {
           if (!aManifest)
             return;
 
-          let manifest = new ManifestHelper(aManifest, json.origin);
+          let manifest = new ManifestHelper(aManifest, json.origin,
+                                            json.manifestURL);
           let payload = {
-            __exposedProps__: {
-              timestamp: "r",
-              url: "r",
-              manifestURL: "r"
-            },
             timestamp: json.timestamp,
             url: manifest.fullLaunchPath(json.startPoint),
             manifestURL: json.manifestURL
-          }
-          shell.sendEvent(getContentWindow(), "webapps-launch", payload);
+          };
+          shell.sendCustomEvent("webapps-launch", payload);
         });
         break;
       case "webapps-ask-install":
-        let id = this.registerInstaller(json);
+        id = this.registerInstaller(json);
         shell.sendChromeEvent({
           type: "webapps-ask-install",
           id: id,
           app: json.app
         });
         break;
+      case "webapps-ask-uninstall":
+        id = this.registerInstaller(json);
+        shell.sendChromeEvent({
+          type: "webapps-ask-uninstall",
+          id: id,
+          app: json.app
+        });
+        break;
       case "webapps-close":
-        shell.sendEvent(getContentWindow(), "webapps-close",
-          {
-            __exposedProps__: { "manifestURL": "r" },
-            "manifestURL": json.manifestURL
-          });
+        shell.sendCustomEvent("webapps-close", {
+          "manifestURL": json.manifestURL
+        });
         break;
     }
   }
@@ -869,133 +861,6 @@ let IndexedDBPromptHelper = {
   }
 }
 
-let RemoteDebugger = {
-  _promptDone: false,
-  _promptAnswer: false,
-  _running: false,
-
-  prompt: function debugger_prompt() {
-    this._promptDone = false;
-
-    shell.sendChromeEvent({
-      "type": "remote-debugger-prompt"
-    });
-
-    while(!this._promptDone) {
-      Services.tm.currentThread.processNextEvent(true);
-    }
-
-    return this._promptAnswer;
-  },
-
-  handleEvent: function debugger_handleEvent(detail) {
-    this._promptAnswer = detail.value;
-    this._promptDone = true;
-  },
-
-  get isDebugging() {
-    if (!this._running) {
-      return false;
-    }
-
-    return DebuggerServer._connections &&
-           Object.keys(DebuggerServer._connections).length > 0;
-  },
-
-  // Start the debugger server.
-  start: function debugger_start() {
-    if (this._running) {
-      return;
-    }
-
-    if (!DebuggerServer.initialized) {
-      // Ask for remote connections.
-      DebuggerServer.init(this.prompt.bind(this));
-
-      // /!\ Be careful when adding a new actor, especially global actors.
-      // Any new global actor will be exposed and returned by the root actor.
-
-      // Add Firefox-specific actors, but prevent tab actors to be loaded in
-      // the parent process, unless we enable certified apps debugging.
-      let restrictPrivileges = Services.prefs.getBoolPref("devtools.debugger.forbid-certified-apps");
-      DebuggerServer.addBrowserActors("navigator:browser", restrictPrivileges);
-
-      /**
-       * Construct a root actor appropriate for use in a server running in B2G.
-       * The returned root actor respects the factories registered with
-       * DebuggerServer.addGlobalActor only if certified apps debugging is on,
-       * otherwise we used an explicit limited list of global actors
-       *
-       * * @param connection DebuggerServerConnection
-       *        The conection to the client.
-       */
-      DebuggerServer.createRootActor = function createRootActor(connection)
-      {
-        let { Promise: promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
-        let parameters = {
-          // We do not expose browser tab actors yet,
-          // but we still have to define tabList.getList(),
-          // otherwise, client won't be able to fetch global actors
-          // from listTabs request!
-          tabList: {
-            getList: function() {
-              return promise.resolve([]);
-            }
-          },
-          // Use an explicit global actor list to prevent exposing
-          // unexpected actors
-          globalActorFactories: restrictPrivileges ? {
-            webappsActor: DebuggerServer.globalActorFactories.webappsActor,
-            deviceActor: DebuggerServer.globalActorFactories.deviceActor,
-          } : DebuggerServer.globalActorFactories
-        };
-        let devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
-        let { RootActor } = devtools.require("devtools/server/actors/root");
-        let root = new RootActor(connection, parameters);
-        root.applicationType = "operating-system";
-        return root;
-      };
-
-#ifdef MOZ_WIDGET_GONK
-      DebuggerServer.on("connectionchange", function() {
-        AdbController.updateState();
-      });
-#endif
-    }
-
-    let path = Services.prefs.getCharPref("devtools.debugger.unix-domain-socket") ||
-               "/data/local/debugger-socket";
-    try {
-      DebuggerServer.openListener(path);
-      // Temporary event, until bug 942756 lands and offers a way to know
-      // when the server is up and running.
-      Services.obs.notifyObservers(null, 'debugger-server-started', null);
-      this._running = true;
-    } catch (e) {
-      dump('Unable to start debugger server: ' + e + '\n');
-    }
-  },
-
-  stop: function debugger_stop() {
-    if (!this._running) {
-      return;
-    }
-
-    if (!DebuggerServer.initialized) {
-      // Can this really happen if we are running?
-      this._running = false;
-      return;
-    }
-
-    try {
-      DebuggerServer.closeListener();
-    } catch (e) {
-      dump('Unable to stop debugger server: ' + e + '\n');
-    }
-    this._running = false;
-  }
-}
-
 let KeyboardHelper = {
   handleEvent: function keyboard_handleEvent(detail) {
     Keyboard.setLayouts(detail.layouts);
@@ -1016,11 +881,15 @@ window.addEventListener('ContentStart', function ss_onContentStart() {
     try {
       var canvas = document.createElementNS('http://www.w3.org/1999/xhtml',
                                             'canvas');
-      var width = window.innerWidth;
-      var height = window.innerHeight;
+      var docRect = document.body.getBoundingClientRect();
+      var width = docRect.width;
+      var height = docRect.height;
+
+      // Convert width and height from CSS pixels (potentially fractional)
+      // to device pixels (integer).
       var scale = window.devicePixelRatio;
-      canvas.setAttribute('width', width * scale);
-      canvas.setAttribute('height', height * scale);
+      canvas.setAttribute('width', Math.round(width * scale));
+      canvas.setAttribute('height', Math.round(height * scale));
 
       var context = canvas.getContext('2d');
       var flags =
@@ -1031,11 +900,7 @@ window.addEventListener('ContentStart', function ss_onContentStart() {
       context.drawWindow(window, 0, 0, width, height,
                          'rgb(255,255,255)', flags);
 
-      // I can't use sendChromeEvent() here because it doesn't wrap
-      // the blob in the detail object correctly. So I use __exposedProps__
-      // instead to safely send the chrome detail object to content.
-      shell.sendEvent(getContentWindow(), 'mozChromeEvent', {
-        __exposedProps__: { type: 'r', file: 'r' },
+      shell.sendChromeEvent({
         type: 'take-screenshot-success',
         file: canvas.mozGetAsFile('screenshot', 'image/png')
       });
@@ -1063,6 +928,7 @@ var CaptivePortalLoginHelper = {
   init: function init() {
     Services.obs.addObserver(this, 'captive-portal-login', false);
     Services.obs.addObserver(this, 'captive-portal-login-abort', false);
+    Services.obs.addObserver(this, 'captive-portal-login-success', false);
   },
   handleEvent: function handleEvent(detail) {
     Services.captivePortalDetector.cancelLogin(detail.id);
@@ -1290,54 +1156,7 @@ window.addEventListener('ContentStart', function update_onContentStart() {
   // We must set the size in KB, and keep a bit of free space.
   let size = Math.floor(stats.totalBytes / 1024) - 1024;
   Services.prefs.setIntPref("browser.cache.disk.capacity", size);
-}) ()
-#endif
-
-#ifdef MOZ_WIDGET_GONK
-let SensorsListener = {
-  sensorsListenerDevices: ['crespo'],
-  device: libcutils.property_get("ro.product.device"),
-
-  deviceNeedsWorkaround: function SensorsListener_deviceNeedsWorkaround() {
-    return (this.sensorsListenerDevices.indexOf(this.device) != -1);
-  },
-
-  handleEvent: function SensorsListener_handleEvent(evt) {
-    switch(evt.type) {
-      case 'devicemotion':
-        // Listener that does nothing, we need this to have the sensor being
-        // able to report correct values, as explained in bug 753245, comment 6
-        // and in bug 871916
-        break;
-
-      default:
-        break;
-    }
-  },
-
-  observe: function SensorsListener_observe(subject, topic, data) {
-    // We remove the listener when the screen is off, otherwise sensor will
-    // continue to bother us with data and we won't be able to get the
-    // system into suspend state, thus draining battery.
-    if (data === 'on') {
-      window.addEventListener('devicemotion', this);
-    } else {
-      window.removeEventListener('devicemotion', this);
-    }
-  },
-
-  init: function SensorsListener_init() {
-    if (this.deviceNeedsWorkaround()) {
-      // On boot, enable the listener, screen will be on.
-      window.addEventListener('devicemotion', this);
-
-      // Then listen for further screen state changes
-      Services.obs.addObserver(this, 'screen-state-changed', false);
-    }
-  }
-}
-
-SensorsListener.init();
+})();
 #endif
 
 // Calling this observer will cause a shutdown an a profile reset.
@@ -1405,8 +1224,7 @@ const kTransferContractId = "@mozilla.org/transfer;1";
 
 // Override Toolkit's nsITransfer implementation with the one from the
 // JavaScript API for downloads.  This will eventually be removed when
-// nsIDownloadManager will not be available anymore (bug 851471).  The
-// old code in this module will be removed in bug 899110.
+// nsIDownloadManager will not be available anymore (bug 851471).
 Components.manager.QueryInterface(Ci.nsIComponentRegistrar)
                   .registerFactory(kTransferCid, "",
                                    kTransferContractId, null);

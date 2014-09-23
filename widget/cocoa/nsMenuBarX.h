@@ -28,9 +28,11 @@ public:
   NS_DECL_ISUPPORTS
 
   nsNativeMenuServiceX() {}
-  virtual ~nsNativeMenuServiceX() {}
 
   NS_IMETHOD CreateNativeMenuBar(nsIWidget* aParent, nsIContent* aMenuBarNode);
+
+protected:
+  virtual ~nsNativeMenuServiceX() {}
 };
 
 @interface NSMenu (Undocumented)
@@ -101,7 +103,6 @@ public:
   // The following content nodes have been removed from the menu system.
   // We save them here for use in command handling.
   nsCOMPtr<nsIContent> mAboutItemContent;
-  nsCOMPtr<nsIContent> mUpdateItemContent;
   nsCOMPtr<nsIContent> mPrefItemContent;
   nsCOMPtr<nsIContent> mQuitItemContent;
 

@@ -16,6 +16,9 @@
  * The purpose of abstracting this as a separate class is to allow it to be
  * wrapped in a JS::Heap<T> to correctly handle post-barriering of the JSObject
  * pointer, when present.
+ *
+ * No implementation of rootKind() is provided, which prevents
+ * Root<nsXBLMaybeCompiled<UncompiledT>> from being used.
  */
 template <class UncompiledT>
 class nsXBLMaybeCompiled
@@ -23,10 +26,10 @@ class nsXBLMaybeCompiled
 public:
   nsXBLMaybeCompiled() : mUncompiled(BIT_UNCOMPILED) {}
 
-  nsXBLMaybeCompiled(UncompiledT* uncompiled)
+  explicit nsXBLMaybeCompiled(UncompiledT* uncompiled)
     : mUncompiled(reinterpret_cast<uintptr_t>(uncompiled) | BIT_UNCOMPILED) {}
 
-  nsXBLMaybeCompiled(JSObject* compiled) : mCompiled(compiled) {}
+  explicit nsXBLMaybeCompiled(JSObject* compiled) : mCompiled(compiled) {}
 
   bool IsCompiled() const
   {
@@ -75,7 +78,7 @@ private:
     JSObject* mCompiled;
   };
 
-  friend class js::GCMethods<nsXBLMaybeCompiled<UncompiledT> >;
+  friend struct js::GCMethods<nsXBLMaybeCompiled<UncompiledT>>;
 };
 
 /* Add support for JS::Heap<nsXBLMaybeCompiled>. */
@@ -87,11 +90,6 @@ struct GCMethods<nsXBLMaybeCompiled<UncompiledT> >
   typedef struct GCMethods<JSObject *> Base;
 
   static nsXBLMaybeCompiled<UncompiledT> initial() { return nsXBLMaybeCompiled<UncompiledT>(); }
-
-  /*
-   * No implementation of kind() is provided to prevent
-   * Root<nsXBLMaybeCompiled<UncompiledT>> from being used.
-   */
 
   static bool poisoned(nsXBLMaybeCompiled<UncompiledT> function)
   {

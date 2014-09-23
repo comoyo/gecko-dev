@@ -23,12 +23,13 @@ class ArchiveRequestEvent : public nsRunnable
 public:
   NS_DECL_NSIRUNNABLE
 
-  ArchiveRequestEvent(ArchiveRequest* request)
-  : mRequest(request)
+  explicit ArchiveRequestEvent(ArchiveRequest* aRequest)
+  : mRequest(aRequest)
   {
     MOZ_COUNT_CTOR(ArchiveRequestEvent);
   }
 
+protected:
   ~ArchiveRequestEvent()
   {
     MOZ_COUNT_DTOR(ArchiveRequestEvent);
@@ -131,18 +132,11 @@ ArchiveRequest::ReaderReady(nsTArray<nsCOMPtr<nsIDOMFile> >& aFileList,
 
   nsresult rv;
 
-  nsCOMPtr<nsIGlobalObject> globalObject = do_QueryInterface(GetOwner());
-  if (NS_WARN_IF(!globalObject)) {
+  AutoJSAPI jsapi;
+  if (NS_WARN_IF(!jsapi.Init(GetOwner()))) {
     return NS_ERROR_UNEXPECTED;
   }
-
-  AutoJSAPI jsapi;
   JSContext* cx = jsapi.cx();
-
-  JS::Rooted<JSObject*> global(cx, globalObject->GetGlobalJSObject());
-  NS_ASSERTION(global, "Failed to get global object!");
-
-  JSAutoCompartment ac(cx, global);
 
   JS::Rooted<JS::Value> result(cx);
   switch (mOperation) {
@@ -154,9 +148,13 @@ ArchiveRequest::ReaderReady(nsTArray<nsCOMPtr<nsIDOMFile> >& aFileList,
       rv = GetFileResult(cx, &result, aFileList);
       break;
 
-      case GetFiles:
-        rv = GetFilesResult(cx, &result, aFileList);
-        break;
+    case GetFiles:
+      rv = GetFilesResult(cx, &result, aFileList);
+      break;
+
+    default:
+      rv = NS_ERROR_UNEXPECTED;
+      break;
   }
 
   if (NS_FAILED(rv)) {

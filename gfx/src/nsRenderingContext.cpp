@@ -20,8 +20,6 @@
 #include "nsRect.h"                     // for nsRect, nsIntRect
 #include "nsRegion.h"                   // for nsIntRegionRectIterator, etc
 
-class gfxASurface;
-
 // XXXTodo: rename FORM_TWIPS to FROM_APPUNITS
 #define FROM_TWIPS(_x)  ((gfxFloat)((_x)/(mP2A)))
 #define FROM_TWIPS_INT(_x)  (NSToIntRound((gfxFloat)((_x)/(mP2A))))
@@ -67,13 +65,6 @@ static int32_t FindSafeLength(const char *aString, uint32_t aLength,
 
 void
 nsRenderingContext::Init(nsDeviceContext* aContext,
-                         gfxASurface *aThebesSurface)
-{
-    Init(aContext, new gfxContext(aThebesSurface));
-}
-
-void
-nsRenderingContext::Init(nsDeviceContext* aContext,
                          gfxContext *aThebesContext)
 {
     mDeviceContext = aContext;
@@ -93,18 +84,6 @@ nsRenderingContext::Init(nsDeviceContext* aContext,
 //
 // graphics state
 //
-
-void
-nsRenderingContext::PushState()
-{
-    mThebes->Save();
-}
-
-void
-nsRenderingContext::PopState()
-{
-    mThebes->Restore();
-}
 
 void
 nsRenderingContext::IntersectClip(const nsRect& aRect)
@@ -133,7 +112,7 @@ nsRenderingContext::SetClip(const nsIntRegion& aRegion)
     // an existing clip.
 
     gfxMatrix mat = mThebes->CurrentMatrix();
-    mThebes->IdentityMatrix();
+    mThebes->SetMatrix(gfxMatrix());
 
     mThebes->ResetClip();
 
@@ -179,18 +158,6 @@ nsRenderingContext::SetColor(nscolor aColor)
     mThebes->SetColor(gfxRGBA(aColor));
 }
 
-void
-nsRenderingContext::Translate(const nsPoint& aPt)
-{
-    mThebes->Translate(gfxPoint(FROM_TWIPS(aPt.x), FROM_TWIPS(aPt.y)));
-}
-
-void
-nsRenderingContext::Scale(float aSx, float aSy)
-{
-    mThebes->Scale(aSx, aSy);
-}
-
 //
 // shapes
 //
@@ -218,7 +185,7 @@ nsRenderingContext::DrawLine(nscoord aX0, nscoord aY0,
         p0.Round();
         p1.Round();
 
-        mThebes->IdentityMatrix();
+        mThebes->SetMatrix(gfxMatrix());
 
         mThebes->NewPath();
 
@@ -341,7 +308,7 @@ nsRenderingContext::FillRect(const nsRect& aRect)
         if (!ConditionRect(r))
             return;
 
-        mThebes->IdentityMatrix();
+        mThebes->SetMatrix(gfxMatrix());
         mThebes->NewPath();
 
         mThebes->Rectangle(r, true);
@@ -359,16 +326,6 @@ nsRenderingContext::FillRect(nscoord aX, nscoord aY,
                              nscoord aWidth, nscoord aHeight)
 {
     FillRect(nsRect(aX, aY, aWidth, aHeight));
-}
-
-void
-nsRenderingContext::InvertRect(const nsRect& aRect)
-{
-    gfxContext::GraphicsOperator lastOp = mThebes->CurrentOperator();
-
-    mThebes->SetOperator(gfxContext::OPERATOR_XOR);
-    FillRect(aRect);
-    mThebes->SetOperator(lastOp);
 }
 
 void

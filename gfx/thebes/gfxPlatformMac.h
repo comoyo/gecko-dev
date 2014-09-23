@@ -29,33 +29,28 @@ public:
       CreateOffscreenSurface(const IntSize& size,
                              gfxContentType contentType) MOZ_OVERRIDE;
 
-    virtual already_AddRefed<gfxASurface>
-      CreateOffscreenImageSurface(const gfxIntSize& aSize,
-                                  gfxContentType aContentType);
-
-    already_AddRefed<gfxASurface> OptimizeImage(gfxImageSurface *aSurface,
-                                                gfxImageFormat format);
-
     mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont);
 
-    nsresult ResolveFontName(const nsAString& aFontName,
-                             FontResolverCallback aCallback,
-                             void *aClosure, bool& aAborted);
-
     nsresult GetStandardFamilyName(const nsAString& aFontName, nsAString& aFamilyName);
 
-    gfxFontGroup *CreateFontGroup(const nsAString &aFamilies,
-                                  const gfxFontStyle *aStyle,
-                                  gfxUserFontSet *aUserFontSet);
+    gfxFontGroup*
+    CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
+                    const gfxFontStyle *aStyle,
+                    gfxUserFontSet *aUserFontSet);
 
-    virtual gfxFontEntry* LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                          const nsAString& aFontName);
+    virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
+                                          uint16_t aWeight,
+                                          int16_t aStretch,
+                                          bool aItalic);
 
     virtual gfxPlatformFontList* CreatePlatformFontList();
 
-    virtual gfxFontEntry* MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                           const uint8_t *aFontData,
+    virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
+                                           uint16_t aWeight,
+                                           int16_t aStretch,
+                                           bool aItalic,
+                                           const uint8_t* aFontData,
                                            uint32_t aLength);
 
     bool IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags);
@@ -69,17 +64,19 @@ public:
                                         int32_t aRunScript,
                                         nsTArray<const char*>& aFontList);
 
+    virtual bool CanRenderContentToDataSurface() const MOZ_OVERRIDE {
+      return true;
+    }
+
     bool UseAcceleratedCanvas();
+
+    virtual bool UseTiling() MOZ_OVERRIDE;
 
     // lower threshold on font anti-aliasing
     uint32_t GetAntiAliasingThreshold() { return mFontAntiAliasingThreshold; }
 
-    virtual already_AddRefed<gfxASurface>
-    GetThebesSurfaceForDrawTarget(mozilla::gfx::DrawTarget *aTarget);
 private:
     virtual void GetPlatformCMSOutputProfile(void* &mem, size_t &size);
-
-    virtual bool SupportsOffMainThreadCompositing();
 
     // read in the pref value for the lower threshold on font anti-aliasing
     static uint32_t ReadAntiAliasingThreshold();

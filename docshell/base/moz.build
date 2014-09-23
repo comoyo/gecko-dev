@@ -20,7 +20,7 @@ XPIDL_SOURCES += [
     'nsIDownloadHistory.idl',
     'nsIGlobalHistory2.idl',
     'nsILoadContext.idl',
-    'nsIMarkupDocumentViewer.idl',
+    'nsILoadInfo.idl',
     'nsIPrivacyTransitionObserver.idl',
     'nsIReflowObserver.idl',
     'nsIRefreshURI.idl',
@@ -45,10 +45,12 @@ EXPORTS += [
 EXPORTS.mozilla += [
     'IHistory.h',
     'LoadContext.h',
+    'LoadInfo.h',
 ]
 
 UNIFIED_SOURCES += [
     'LoadContext.cpp',
+    'LoadInfo.cpp',
     'nsAboutRedirector.cpp',
     'nsDefaultURIFixup.cpp',
     'nsDocShellEditorData.cpp',
@@ -81,6 +83,7 @@ LOCAL_INCLUDES += [
     '/layout/generic',
     '/layout/xul',
     '/netwerk/protocol/viewsource',
+    '/tools/profiler',
 ]
 
 if CONFIG['MOZ_TOOLKIT_SEARCH']:

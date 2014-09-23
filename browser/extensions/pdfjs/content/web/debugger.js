@@ -53,7 +53,7 @@ var FontInspector = (function FontInspectorClosure() {
     var selects = document.getElementsByTagName('input');
     for (var i = 0; i < selects.length; ++i) {
       var select = selects[i];
-      if (select.dataset.fontName != fontName) {
+      if (select.dataset.fontName !== fontName) {
         continue;
       }
       select.checked = !select.checked;
@@ -216,7 +216,7 @@ var StepperManager = (function StepperManagerClosure() {
       }
       for (i = 0; i < steppers.length; ++i) {
         var stepper = steppers[i];
-        if (stepper.pageIndex == pageIndex) {
+        if (stepper.pageIndex === pageIndex) {
           stepper.panel.removeAttribute('hidden');
         } else {
           stepper.panel.setAttribute('hidden', true);
@@ -225,7 +225,7 @@ var StepperManager = (function StepperManagerClosure() {
       var options = stepperChooser.options;
       for (i = 0; i < options.length; ++i) {
         var option = options[i];
-        option.selected = option.value == pageIndex;
+        option.selected = (option.value | 0) === pageIndex;
       }
     },
     saveBreakPoints: function saveBreakPoints(pageIndex, bps) {
@@ -246,26 +246,7 @@ var Stepper = (function StepperClosure() {
     return d;
   }
 
-  function glyphsToString(glyphs) {
-    var out = '';
-    for (var i = 0; i < glyphs.length; i++) {
-      if (glyphs[i] === null) {
-        out += ' ';
-      } else {
-        out += glyphs[i].fontChar;
-      }
-    }
-    return out;
-  }
-
   var opMap = null;
-
-  var glyphCommands = {
-    'showText': 0,
-    'showSpacedText': 0,
-    'nextLineShowText': 0,
-    'nextLineSetSpacingShowText': 2
-  };
 
   function simplifyArgs(args) {
     if (typeof args === 'string') {
@@ -351,7 +332,7 @@ var Stepper = (function StepperClosure() {
         line.className = 'line';
         line.dataset.idx = i;
         chunk.appendChild(line);
-        var checked = this.breakPoints.indexOf(i) != -1;
+        var checked = this.breakPoints.indexOf(i) !== -1;
         var args = operatorList.argsArray[i] || [];
 
         var breakCell = c('td');
@@ -367,24 +348,26 @@ var Stepper = (function StepperClosure() {
         line.appendChild(c('td', i.toString()));
         var fn = opMap[operatorList.fnArray[i]];
         var decArgs = args;
-        if (fn in glyphCommands) {
-          var glyphIndex = glyphCommands[fn];
-          var glyphs = args[glyphIndex];
-          decArgs = args.slice();
-          var newArg;
-          if (fn === 'showSpacedText') {
-            newArg = [];
-            for (var j = 0; j < glyphs.length; j++) {
-              if (typeof glyphs[j] === 'number') {
-                newArg.push(glyphs[j]);
-              } else {
-                newArg.push(glyphsToString(glyphs[j]));
+        if (fn === 'showText') {
+          var glyphs = args[0];
+          var newArgs = [];
+          var str = [];
+          for (var j = 0; j < glyphs.length; j++) {
+            var glyph = glyphs[j];
+            if (typeof glyph === 'object' && glyph !== null) {
+              str.push(glyph.fontChar);
+            } else {
+              if (str.length > 0) {
+                newArgs.push(str.join(''));
+                str = [];
               }
+              newArgs.push(glyph); // null or number
             }
-          } else {
-            newArg = glyphsToString(glyphs);
           }
-          decArgs[glyphIndex] = newArg;
+          if (str.length > 0) {
+            newArgs.push(str.join(''));
+          }
+          decArgs = [newArgs];
         }
         line.appendChild(c('td', fn));
         line.appendChild(c('td', JSON.stringify(simplifyArgs(decArgs))));
@@ -436,7 +419,7 @@ var Stepper = (function StepperClosure() {
       var allRows = this.panel.getElementsByClassName('line');
       for (var x = 0, xx = allRows.length; x < xx; ++x) {
         var row = allRows[x];
-        if (row.dataset.idx == idx) {
+        if (parseInt(row.dataset.idx, 10) === idx) {
           row.style.backgroundColor = 'rgb(251,250,207)';
           row.scrollIntoView();
         } else {
@@ -614,7 +597,7 @@ var PDFBug = (function PDFBugClosure() {
       activePanel = index;
       var tools = this.tools;
       for (var j = 0; j < tools.length; ++j) {
-        if (j == index) {
+        if (j === index) {
           buttons[j].setAttribute('class', 'active');
           tools[j].active = true;
           tools[j].panel.removeAttribute('hidden');

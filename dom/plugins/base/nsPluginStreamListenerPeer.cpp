@@ -38,8 +38,7 @@ class nsPluginByteRangeStreamListener
   , public nsIInterfaceRequestor
 {
 public:
-  nsPluginByteRangeStreamListener(nsIWeakReference* aWeakPtr);
-  virtual ~nsPluginByteRangeStreamListener();
+  explicit nsPluginByteRangeStreamListener(nsIWeakReference* aWeakPtr);
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSIREQUESTOBSERVER
@@ -47,6 +46,8 @@ public:
   NS_DECL_NSIINTERFACEREQUESTOR
 
 private:
+  virtual ~nsPluginByteRangeStreamListener();
+
   nsCOMPtr<nsIStreamListener> mStreamConverter;
   nsWeakPtr mWeakPtrPluginStreamListenerPeer;
   bool mRemoveMagicNumber;
@@ -420,7 +421,8 @@ nsPluginStreamListenerPeer::OnStartRequest(nsIRequest *request,
                                            nsISupports* aContext)
 {
   nsresult rv = NS_OK;
-  PROFILER_LABEL("nsPluginStreamListenerPeer", "OnStartRequest");
+  PROFILER_LABEL("nsPluginStreamListenerPeer", "OnStartRequest",
+    js::ProfileEntry::Category::OTHER);
 
   if (mRequests.IndexOfObject(GetBaseRequest(request)) == -1) {
     NS_ASSERTION(mRequests.Count() == 0,
@@ -637,10 +639,33 @@ nsPluginStreamListenerPeer::RequestRead(NPByteRange* rangeList)
 
   nsresult rv = NS_OK;
 
+  nsRefPtr<nsPluginInstanceOwner> owner = mPluginInstance->GetOwner();
+  nsCOMPtr<nsIDocument> doc;
+  if (owner) {
+    rv = owner->GetDocument(getter_AddRefs(doc));
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
   nsCOMPtr<nsIInterfaceRequestor> callbacks = do_QueryReferent(mWeakPtrChannelCallbacks);
   nsCOMPtr<nsILoadGroup> loadGroup = do_QueryReferent(mWeakPtrChannelLoadGroup);
+
+  nsCOMPtr<nsIPrincipal> principal = doc ? doc->NodePrincipal() : nullptr;
+  if (!principal) {
+    principal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
   nsCOMPtr<nsIChannel> channel;
-  rv = NS_NewChannel(getter_AddRefs(channel), mURL, nullptr, loadGroup, callbacks);
+  rv = NS_NewChannelInternal(getter_AddRefs(channel),
+                             mURL,
+                             doc,
+                             principal,
+                             nsILoadInfo::SEC_NORMAL,
+                             nsIContentPolicy::TYPE_OTHER,
+                             nullptr,   // aChannelPolicy
+                             loadGroup,
+                             callbacks);
+
   if (NS_FAILED(rv))
     return rv;
 
@@ -1200,7 +1225,6 @@ public:
   }
 
   ChannelRedirectProxyCallback() {}
-  virtual ~ChannelRedirectProxyCallback() {}
 
   NS_DECL_ISUPPORTS
 
@@ -1215,6 +1239,8 @@ public:
   }
 
 private:
+  virtual ~ChannelRedirectProxyCallback() {}
+
   nsWeakPtr mWeakListener;
   nsCOMPtr<nsIAsyncVerifyRedirectCallback> mParent;
   nsCOMPtr<nsIChannel> mOldChannel;

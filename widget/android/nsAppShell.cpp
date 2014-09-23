@@ -23,9 +23,10 @@
 #include "nsIDOMClientRect.h"
 #include "nsIDOMWakeLockListener.h"
 #include "nsIPowerManagerService.h"
-#include "nsFrameManager.h"
 #include "nsINetworkLinkService.h"
+#include "nsCategoryManagerUtils.h"
 
+#include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/Services.h"
 #include "mozilla/unused.h"
 #include "mozilla/Preferences.h"
@@ -110,7 +111,10 @@ private:
 };
 
 class WakeLockListener MOZ_FINAL : public nsIDOMMozWakeLockListener {
- public:
+private:
+  ~WakeLockListener() {}
+
+public:
   NS_DECL_ISUPPORTS;
 
   nsresult Callback(const nsAString& topic, const nsAString& state) {
@@ -127,9 +131,7 @@ nsAppShell::nsAppShell()
     : mQueueLock("nsAppShell.mQueueLock"),
       mCondLock("nsAppShell.mCondLock"),
       mQueueCond(mCondLock, "nsAppShell.mQueueCond"),
-      mQueuedDrawEvent(nullptr),
-      mQueuedViewportEvent(nullptr),
-      mAllowCoalescingNextDraw(false)
+      mQueuedViewportEvent(nullptr)
 {
     gAppShell = this;
 
@@ -185,6 +187,7 @@ nsAppShell::Init()
         mozilla::services::GetObserverService();
     if (obsServ) {
         obsServ->AddObserver(this, "xpcom-shutdown", false);
+        obsServ->AddObserver(this, "browser-delayed-startup-finished", false);
     }
 
     if (sPowerManagerService)
@@ -210,6 +213,9 @@ nsAppShell::Observe(nsISupports* aSubject,
                nsDependentString(aData).Equals(NS_LITERAL_STRING(PREFNAME_COALESCE_TOUCHES))) {
         mAllowCoalescingTouches = Preferences::GetBool(PREFNAME_COALESCE_TOUCHES, true);
         return NS_OK;
+    } else if (!strcmp(aTopic, "browser-delayed-startup-finished")) {
+        NS_CreateServicesFromCategory("browser-delayed-startup-finished", nullptr,
+                                      "browser-delayed-startup-finished");
     }
     return NS_OK;
 }
@@ -228,14 +234,18 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
 {
     EVLOG("nsAppShell::ProcessNextNativeEvent %d", mayWait);
 
-    PROFILER_LABEL("nsAppShell", "ProcessNextNativeEvent");
+    PROFILER_LABEL("nsAppShell", "ProcessNextNativeEvent",
+        js::ProfileEntry::Category::EVENTS);
+
     nsAutoPtr<AndroidGeckoEvent> curEvent;
     {
         MutexAutoLock lock(mCondLock);
 
         curEvent = PopNextEvent();
         if (!curEvent && mayWait) {
-            PROFILER_LABEL("nsAppShell::ProcessNextNativeEvent", "Wait");
+            PROFILER_LABEL("nsAppShell", "ProcessNextNativeEvent::Wait",
+                js::ProfileEntry::Category::EVENTS);
+
             // hmm, should we really hardcode this 10s?
 #if defined(DEBUG_ANDROID_EVENTS)
             PRTime t0, t1;
@@ -254,6 +264,8 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
 
     if (!curEvent)
         return false;
+
+    mozilla::BackgroundHangMonitor().NotifyActivity();
 
     EVLOG("nsAppShell: event %p %d", (void*)curEvent.get(), curEvent->Type());
 
@@ -420,7 +432,7 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
     }
 
     case AndroidGeckoEvent::TELEMETRY_UI_EVENT: {
-        if (curEvent->Characters().Length() == 0)
+        if (curEvent->Data().Length() == 0)
             break;
 
         nsCOMPtr<nsIUITelemetryObserver> obs;
@@ -669,9 +681,7 @@ nsAppShell::PopNextEvent()
     if (mEventQueue.Length()) {
         ae = mEventQueue[0];
         mEventQueue.RemoveElementAt(0);
-        if (mQueuedDrawEvent == ae) {
-            mQueuedDrawEvent = nullptr;
-        } else if (mQueuedViewportEvent == ae) {
+        if (mQueuedViewportEvent == ae) {
             mQueuedViewportEvent = nullptr;
         }
     }
@@ -720,50 +730,6 @@ nsAppShell::PostEvent(AndroidGeckoEvent *ae)
             }
             break;
 
-        case AndroidGeckoEvent::DRAW:
-            if (mQueuedDrawEvent) {
-#if defined(DEBUG) || defined(FORCE_ALOG)
-                // coalesce this new draw event with the one already in the queue
-                const nsIntRect& oldRect = mQueuedDrawEvent->Rect();
-                const nsIntRect& newRect = ae->Rect();
-                nsIntRect combinedRect = oldRect.Union(newRect);
-
-                // XXX We may want to consider using regions instead of rectangles.
-                //     Print an error if we're upload a lot more than we would
-                //     if we handled this as two separate events.
-                int combinedArea = (oldRect.width * oldRect.height) +
-                                   (newRect.width * newRect.height);
-                int boundsArea = combinedRect.width * combinedRect.height;
-                if (boundsArea > combinedArea * 8)
-                    ALOG("nsAppShell: Area of bounds greatly exceeds combined area: %d > %d",
-                         boundsArea, combinedArea);
-#endif
-
-                // coalesce into the new draw event rather than the queued one because
-                // it is not always safe to move draws earlier in the queue; there may
-                // be events between the two draws that affect scroll position or something.
-                ae->UnionRect(mQueuedDrawEvent->Rect());
-
-                EVLOG("nsAppShell: Coalescing previous DRAW event at %p into new DRAW event %p", mQueuedDrawEvent, ae);
-                mEventQueue.RemoveElement(mQueuedDrawEvent);
-                delete mQueuedDrawEvent;
-            }
-
-            if (!mAllowCoalescingNextDraw) {
-                // if we're not allowing coalescing of this draw event, then
-                // don't set mQueuedDrawEvent to point to this; that way the
-                // next draw event that comes in won't kill this one.
-                mAllowCoalescingNextDraw = true;
-                mQueuedDrawEvent = nullptr;
-            } else {
-                mQueuedDrawEvent = ae;
-            }
-
-            allowCoalescingNextViewport = true;
-
-            mEventQueue.AppendElement(ae);
-            break;
-
         case AndroidGeckoEvent::VIEWPORT:
             if (mQueuedViewportEvent) {
                 // drop the previous viewport event now that we have a new one
@@ -772,25 +738,21 @@ nsAppShell::PostEvent(AndroidGeckoEvent *ae)
                 delete mQueuedViewportEvent;
             }
             mQueuedViewportEvent = ae;
-            // temporarily turn off draw-coalescing, so that we process a draw
-            // event as soon as possible after a viewport change
-            mAllowCoalescingNextDraw = false;
             allowCoalescingNextViewport = true;
 
             mEventQueue.AppendElement(ae);
             break;
 
         case AndroidGeckoEvent::MOTION_EVENT:
-            if (ae->Action() == AndroidMotionEvent::ACTION_MOVE && mAllowCoalescingTouches) {
+        case AndroidGeckoEvent::APZ_INPUT_EVENT:
+            if (mAllowCoalescingTouches && mEventQueue.Length() > 0) {
                 int len = mEventQueue.Length();
-                if (len > 0) {
-                    AndroidGeckoEvent* event = mEventQueue[len - 1];
-                    if (event->Type() == AndroidGeckoEvent::MOTION_EVENT && event->Action() == AndroidMotionEvent::ACTION_MOVE) {
-                        // consecutive motion-move events; drop the last one before adding the new one
-                        EVLOG("nsAppShell: Dropping old move event at %p in favour of new move event %p", event, ae);
-                        mEventQueue.RemoveElementAt(len - 1);
-                        delete event;
-                    }
+                AndroidGeckoEvent* event = mEventQueue[len - 1];
+                if (ae->CanCoalesceWith(event)) {
+                    // consecutive motion-move events; drop the last one before adding the new one
+                    EVLOG("nsAppShell: Dropping old move event at %p in favour of new move event %p", event, ae);
+                    mEventQueue.RemoveElementAt(len - 1);
+                    delete event;
                 }
             }
             mEventQueue.AppendElement(ae);

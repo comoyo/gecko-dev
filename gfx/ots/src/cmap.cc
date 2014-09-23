@@ -360,8 +360,8 @@ bool Parse31013(ots::OpenTypeFile *file,
   if (!subtable.Skip(8)) {
     return OTS_FAILURE_MSG("Bad cmap subtable length");
   }
-  uint16_t language = 0;
-  if (!subtable.ReadU16(&language)) {
+  uint32_t language = 0;
+  if (!subtable.ReadU32(&language)) {
     return OTS_FAILURE_MSG("Can't read cmap subtable language");
   }
   if (language) {
@@ -748,6 +748,7 @@ bool ots_cmap_parse(OpenTypeFile *file, const uint8_t *data, size_t length) {
   // the UCS-4 table for non-BMP glyphs. We'll pass the following subtables:
   //   Platform ID   Encoding ID  Format
   //   0             0            4       (Unicode Default)
+  //   0             1            4       (Unicode 1.1)
   //   0             3            4       (Unicode BMP)
   //   0             3            12      (Unicode UCS-4)
   //   0             5            14      (Unicode Variation Sequences)
@@ -758,8 +759,8 @@ bool ots_cmap_parse(OpenTypeFile *file, const uint8_t *data, size_t length) {
   //   3             10           13      (MS UCS-4 Fallback mapping)
   //
   // Note:
-  //  * 0-0-4 table is (usually) written as a 3-1-4 table. If 3-1-4 table
-  //    also exists, the 0-0-4 table is ignored.
+  //  * 0-0-4 and 0-1-4 tables are (usually) written as a 3-1-4 table. If 3-1-4 table
+  //    also exists, the 0-0-4 or 0-1-4 tables are ignored.
   //  * Unlike 0-0-4 table, 0-3-4 table is written as a 0-3-4 table.
   //    Some fonts which include 0-5-14 table seems to be required 0-3-4
   //    table. The 0-3-4 table will be wriiten even if 3-1-4 table also exists.
@@ -771,9 +772,9 @@ bool ots_cmap_parse(OpenTypeFile *file, const uint8_t *data, size_t length) {
     if (subtable_headers[i].platform == 0) {
       // Unicode platform
 
-      if ((subtable_headers[i].encoding == 0) &&
+      if ((subtable_headers[i].encoding == 0 || subtable_headers[i].encoding == 1) &&
           (subtable_headers[i].format == 4)) {
-        // parse and output the 0-0-4 table as 3-1-4 table. Sometimes the 0-0-4
+        // parse and output the 0-0-4 and 0-1-4 tables as 3-1-4 table. Sometimes the 0-0-4
         // table actually points to MS symbol data and thus should be parsed as
         // 3-0-4 table (e.g., marqueem.ttf and quixotic.ttf). This error will be
         // recovered in ots_cmap_serialise().
@@ -876,8 +877,8 @@ bool ots_cmap_serialise(OTSStream *out, OpenTypeFile *file) {
 
   // Some fonts don't have 3-0-4 MS Symbol nor 3-1-4 Unicode BMP tables
   // (e.g., old fonts for Mac). We don't support them.
-  if (!have_304 && !have_314 && !have_034) {
-    return OTS_FAILURE();
+  if (!have_304 && !have_314 && !have_034 && !have_31012 && !have_31013) {
+    return OTS_FAILURE_MSG("no supported subtables were found");
   }
 
   if (!out->WriteU16(0) ||
@@ -1005,7 +1006,7 @@ bool ots_cmap_serialise(OTSStream *out, OpenTypeFile *file) {
         = file->cmap->subtable_3_10_13;
     const unsigned num_groups = groups.size();
     if (!out->WriteU16(13) ||
-        !out->WriteU16(0) ||
+        !out->WriteU32(0) ||
         !out->WriteU32(num_groups * 12 + 14) ||
         !out->WriteU32(0) ||
         !out->WriteU32(num_groups)) {
@@ -1101,3 +1102,5 @@ void ots_cmap_free(OpenTypeFile *file) {
 }
 
 }  // namespace ots
+
+#undef TABLE_NAME

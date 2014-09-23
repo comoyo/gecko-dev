@@ -54,10 +54,11 @@ public:
   void OnFacesDetected(camera_frame_metadata_t* aMetaData);
   void OnTakePictureComplete(uint8_t* aData, uint32_t aLength);
   void OnTakePictureError();
+  void OnRateLimitPreview(bool aLimit);
   void OnNewPreviewFrame(layers::TextureClient* aBuffer);
   void OnRecorderEvent(int msg, int ext1, int ext2);
   void OnSystemError(CameraControlListener::SystemContext aWhere, nsresult aError);
- 
+
   // See ICameraControl.h for getter/setter return values.
   virtual nsresult Set(uint32_t aKey, const nsAString& aValue) MOZ_OVERRIDE;
   virtual nsresult Get(uint32_t aKey, nsAString& aValue) MOZ_OVERRIDE;
@@ -67,6 +68,8 @@ public:
   virtual nsresult Get(uint32_t aKey, int32_t& aValue) MOZ_OVERRIDE;
   virtual nsresult Set(uint32_t aKey, int64_t aValue) MOZ_OVERRIDE;
   virtual nsresult Get(uint32_t aKey, int64_t& aValue) MOZ_OVERRIDE;
+  virtual nsresult Set(uint32_t aKey, bool aValue) MOZ_OVERRIDE;
+  virtual nsresult Get(uint32_t aKey, bool& aValue) MOZ_OVERRIDE;
   virtual nsresult Set(uint32_t aKey, const Size& aValue) MOZ_OVERRIDE;
   virtual nsresult Get(uint32_t aKey, Size& aValue) MOZ_OVERRIDE;
   virtual nsresult Set(uint32_t aKey, const nsTArray<Region>& aRegions) MOZ_OVERRIDE;
@@ -84,6 +87,7 @@ public:
 protected:
   ~nsGonkCameraControl();
 
+  using CameraControlImpl::OnRateLimitPreview;
   using CameraControlImpl::OnNewPreviewFrame;
   using CameraControlImpl::OnAutoFocusComplete;
   using CameraControlImpl::OnFacesDetected;
@@ -124,7 +128,6 @@ protected:
   nsresult SetupRecording(int aFd, int aRotation, uint64_t aMaxFileSizeBytes,
                           uint64_t aMaxVideoLengthMs);
   nsresult SetupRecordingFlash(bool aAutoEnableLowLightTorch);
-  nsresult SetupVideoMode(const nsAString& aProfile);
   nsresult SetPreviewSize(const Size& aSize);
   nsresult SetVideoSize(const Size& aSize);
   nsresult PausePreview();
@@ -174,6 +177,7 @@ protected:
   bool                      mFlashSupported;
   bool                      mLuminanceSupported;
   bool                      mAutoFlashModeOverridden;
+  bool                      mSeparateVideoAndPreviewSizesSupported;
   Atomic<uint32_t>          mDeferConfigUpdate;
   GonkCameraParameters      mParams;
 
@@ -181,6 +185,10 @@ protected:
 
   android::MediaProfiles*   mMediaProfiles;
   nsRefPtr<android::GonkRecorder> mRecorder;
+  // Touching mRecorder happens inside this monitor because the destructor
+  // can run on any thread, and we need to be able to clean up properly if
+  // GonkCameraControl goes away.
+  ReentrantMonitor          mRecorderMonitor;
 
   // Camcorder profile settings for the desired quality level
   nsRefPtr<GonkRecorderProfileManager> mProfileManager;
@@ -198,6 +206,7 @@ private:
 };
 
 // camera driver callbacks
+void OnRateLimitPreview(nsGonkCameraControl* gc, bool aLimit);
 void OnTakePictureComplete(nsGonkCameraControl* gc, uint8_t* aData, uint32_t aLength);
 void OnTakePictureError(nsGonkCameraControl* gc);
 void OnAutoFocusComplete(nsGonkCameraControl* gc, bool aSuccess);

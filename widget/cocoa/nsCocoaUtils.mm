@@ -3,9 +3,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "gfxImageSurface.h"
+#include <cmath>
+
+#include "gfx2DGlue.h"
 #include "gfxPlatform.h"
 #include "gfxUtils.h"
+#include "ImageRegion.h"
 #include "nsCocoaUtils.h"
 #include "nsChildView.h"
 #include "nsMenuBarX.h"
@@ -19,6 +22,7 @@
 #include "nsMenuUtilsX.h"
 #include "nsToolkit.h"
 #include "nsCRT.h"
+#include "SVGImageContext.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/Preferences.h"
@@ -36,6 +40,8 @@ using mozilla::gfx::IntRect;
 using mozilla::gfx::IntSize;
 using mozilla::gfx::SurfaceFormat;
 using mozilla::gfx::SourceSurface;
+using mozilla::image::ImageRegion;
+using std::ceil;
 
 static float
 MenuBarScreenHeight()
@@ -137,18 +143,95 @@ NSPoint nsCocoaUtils::EventLocationForWindow(NSEvent* anEvent, NSWindow* aWindow
   NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(NSMakePoint(0.0, 0.0));
 }
 
+@interface NSEvent (ScrollPhase)
+// 10.5 and 10.6
+- (long long)_scrollPhase;
+// 10.7 and above
+- (NSEventPhase)phase;
+- (NSEventPhase)momentumPhase;
+@end
+
+NSEventPhase nsCocoaUtils::EventPhase(NSEvent* aEvent)
+{
+  if ([aEvent respondsToSelector:@selector(phase)]) {
+    return [aEvent phase];
+  }
+  return NSEventPhaseNone;
+}
+
+NSEventPhase nsCocoaUtils::EventMomentumPhase(NSEvent* aEvent)
+{
+  if ([aEvent respondsToSelector:@selector(momentumPhase)]) {
+    return [aEvent momentumPhase];
+  }
+  if ([aEvent respondsToSelector:@selector(_scrollPhase)]) {
+    switch ([aEvent _scrollPhase]) {
+      case 1: return NSEventPhaseBegan;
+      case 2: return NSEventPhaseChanged;
+      case 3: return NSEventPhaseEnded;
+      default: return NSEventPhaseNone;
+    }
+  }
+  return NSEventPhaseNone;
+}
+
 BOOL nsCocoaUtils::IsMomentumScrollEvent(NSEvent* aEvent)
 {
-  if ([aEvent type] != NSScrollWheel)
-    return NO;
-    
-  if ([aEvent respondsToSelector:@selector(momentumPhase)])
-    return ([aEvent momentumPhase] & NSEventPhaseChanged) != 0;
-    
-  if ([aEvent respondsToSelector:@selector(_scrollPhase)])
-    return [aEvent _scrollPhase] != 0;
-    
-  return NO;
+  return [aEvent type] == NSScrollWheel &&
+    EventMomentumPhase(aEvent) != NSEventPhaseNone;
+}
+
+@interface NSEvent (HasPreciseScrollingDeltas)
+// 10.7 and above
+- (BOOL)hasPreciseScrollingDeltas;
+// For 10.6 and below, see the comment in nsChildView.h about _eventRef
+- (EventRef)_eventRef;
+@end
+
+BOOL nsCocoaUtils::HasPreciseScrollingDeltas(NSEvent* aEvent)
+{
+  if ([aEvent respondsToSelector:@selector(hasPreciseScrollingDeltas)]) {
+    return [aEvent hasPreciseScrollingDeltas];
+  }
+
+  // For events that don't contain pixel scrolling information, the event
+  // kind of their underlaying carbon event is kEventMouseWheelMoved instead
+  // of kEventMouseScroll.
+  EventRef carbonEvent = [aEvent _eventRef];
+  return carbonEvent && ::GetEventKind(carbonEvent) == kEventMouseScroll;
+}
+
+@interface NSEvent (ScrollingDeltas)
+// 10.6 and below
+- (CGFloat)deviceDeltaX;
+- (CGFloat)deviceDeltaY;
+// 10.7 and above
+- (CGFloat)scrollingDeltaX;
+- (CGFloat)scrollingDeltaY;
+@end
+
+void nsCocoaUtils::GetScrollingDeltas(NSEvent* aEvent, CGFloat* aOutDeltaX, CGFloat* aOutDeltaY)
+{
+  if ([aEvent respondsToSelector:@selector(scrollingDeltaX)]) {
+    *aOutDeltaX = [aEvent scrollingDeltaX];
+    *aOutDeltaY = [aEvent scrollingDeltaY];
+    return;
+  }
+  if ([aEvent respondsToSelector:@selector(deviceDeltaX)] &&
+      HasPreciseScrollingDeltas(aEvent)) {
+    // Calling deviceDeltaX/Y on those events that do not contain pixel
+    // scrolling information triggers a Cocoa assertion and an
+    // Objective-C NSInternalInconsistencyException.
+    *aOutDeltaX = [aEvent deviceDeltaX];
+    *aOutDeltaY = [aEvent deviceDeltaY];
+    return;
+  }
+
+  // This is only hit pre-10.7 when we are called on a scroll event that does
+  // not contain pixel scrolling information.
+  CGFloat lineDeltaPixels = 12;
+  *aOutDeltaX = [aEvent deltaX] * lineDeltaPixels;
+  *aOutDeltaY = [aEvent deltaY] * lineDeltaPixels;
 }
 
 void nsCocoaUtils::HideOSChromeOnScreen(bool aShouldHide, NSScreen* aScreen)
@@ -397,24 +480,28 @@ nsresult nsCocoaUtils::CreateNSImageFromImageContainer(imgIContainer *aImage, ui
 
   // Render a vector image at the correct resolution on a retina display
   if (aImage->GetType() == imgIContainer::TYPE_VECTOR && scaleFactor != 1.0f) {
-    int scaledWidth = (int)ceilf(width * scaleFactor);
-    int scaledHeight = (int)ceilf(height * scaleFactor);
+    gfxIntSize scaledSize(ceil(width * scaleFactor),
+                          ceil(height * scaleFactor));
 
-    nsRefPtr<gfxImageSurface> frame =
-      new gfxImageSurface(gfxIntSize(scaledWidth, scaledHeight), gfxImageFormat::ARGB32);
-    NS_ENSURE_TRUE(frame, NS_ERROR_FAILURE);
+    RefPtr<DrawTarget> drawTarget = gfxPlatform::GetPlatform()->
+      CreateOffscreenContentDrawTarget(ToIntSize(scaledSize),
+                                       SurfaceFormat::B8G8R8A8);
+    if (!drawTarget) {
+      NS_ERROR("Failed to create DrawTarget");
+      return NS_ERROR_FAILURE;
+    }
 
-    nsRefPtr<gfxContext> context = new gfxContext(frame);
-    NS_ENSURE_TRUE(context, NS_ERROR_FAILURE);
+    nsRefPtr<gfxContext> context = new gfxContext(drawTarget);
+    if (!context) {
+      NS_ERROR("Failed to create gfxContext");
+      return NS_ERROR_FAILURE;
+    }
 
-    aImage->Draw(context, GraphicsFilter::FILTER_NEAREST, gfxMatrix(),
-      gfxRect(0.0f, 0.0f, scaledWidth, scaledHeight),
-      nsIntRect(0, 0, width, height),
-      nsIntSize(scaledWidth, scaledHeight),
-      nullptr, aWhichFrame, imgIContainer::FLAG_SYNC_DECODE);
+    aImage->Draw(context, scaledSize, ImageRegion::Create(scaledSize),
+                 aWhichFrame, GraphicsFilter::FILTER_NEAREST, Nothing(),
+                 imgIContainer::FLAG_SYNC_DECODE);
 
-    surface =
-      gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(nullptr, frame);
+    surface = drawTarget->Snapshot();
   } else {
     surface = aImage->GetFrame(aWhichFrame, imgIContainer::FLAG_SYNC_DECODE);
   }
@@ -525,7 +612,7 @@ nsCocoaUtils::InitPluginEvent(WidgetPluginEvent &aPluginEvent,
                               NPCocoaEvent &aCocoaEvent)
 {
   aPluginEvent.time = PR_IntervalNow();
-  aPluginEvent.pluginEvent = (void*)&aCocoaEvent;
+  aPluginEvent.mPluginEvent.Copy(aCocoaEvent);
   aPluginEvent.retargetToFocusedDocument = false;
 }
 

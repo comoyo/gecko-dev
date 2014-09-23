@@ -103,6 +103,11 @@ PluginModuleParent::LoadModule(const char* aFilePath)
     parent->Open(parent->mSubprocess->GetChannel(),
                  parent->mSubprocess->GetChildProcessHandle());
 
+    // Request Windows message deferral behavior on our channel. This
+    // applies to the top level and all sub plugin protocols since they
+    // all share the same channel.
+    parent->GetIPCChannel()->SetChannelFlags(MessageChannel::REQUIRE_DEFERRED_MESSAGE_PROTECTION);
+
     TimeoutChanged(CHILD_TIMEOUT_PREF, parent);
 
 #ifdef MOZ_CRASHREPORTER
@@ -891,7 +896,9 @@ PluginModuleParent::NPP_NewStream(NPP instance, NPMIMEType type,
                                   NPStream* stream, NPBool seekable,
                                   uint16_t* stype)
 {
-    PROFILER_LABEL("PluginModuleParent", "NPP_NewStream");
+    PROFILER_LABEL("PluginModuleParent", "NPP_NewStream",
+      js::ProfileEntry::Category::OTHER);
+
     PluginInstanceParent* i = InstCast(instance);
     if (!i)
         return NPERR_GENERIC_ERROR;
@@ -1757,6 +1764,7 @@ public:
     {}
 
 private:
+    ~PluginProfilerObserver() {}
     PluginModuleParent* mPmp;
 };
 

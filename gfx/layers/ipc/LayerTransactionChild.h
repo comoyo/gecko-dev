@@ -11,6 +11,7 @@
 #include <stdint.h>                     // for uint32_t
 #include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
 #include "mozilla/ipc/ProtocolUtils.h"
+#include "mozilla/layers/AsyncTransactionTracker.h" // for AsyncTransactionTracker
 #include "mozilla/layers/PLayerTransactionChild.h"
 #include "mozilla/RefPtr.h"
 
@@ -24,6 +25,7 @@ class ShadowLayerForwarder;
 namespace layers {
 
 class LayerTransactionChild : public PLayerTransactionChild
+                            , public AsyncTransactionTrackersHolder
 {
   typedef InfallibleTArray<AsyncParentMessageData> AsyncParentMessageArray;
 public:
@@ -44,11 +46,15 @@ public:
     mForwarder = aForwarder;
   }
 
+  virtual void SendFenceHandle(AsyncTransactionTracker* aTracker,
+                               PTextureChild* aTexture,
+                               const FenceHandle& aFence);
+
 protected:
   LayerTransactionChild()
-    : mIPCOpen(false)
+    : mForwarder(nullptr)
+    , mIPCOpen(false)
     , mDestroyed(false)
-    , mForwarder(nullptr)
   {}
   ~LayerTransactionChild() { }
 
@@ -63,7 +69,7 @@ protected:
   virtual bool DeallocPTextureChild(PTextureChild* actor) MOZ_OVERRIDE;
 
   virtual bool
-  RecvParentAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessages) MOZ_OVERRIDE;
+  RecvParentAsyncMessages(const InfallibleTArray<AsyncParentMessageData>& aMessages) MOZ_OVERRIDE;
 
   virtual void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
 
@@ -80,9 +86,9 @@ protected:
   friend class CompositorChild;
   friend class layout::RenderFrameChild;
 
+  ShadowLayerForwarder* mForwarder;
   bool mIPCOpen;
   bool mDestroyed;
-  ShadowLayerForwarder* mForwarder;
 };
 
 } // namespace layers

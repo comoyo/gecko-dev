@@ -44,6 +44,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <string>
 #include <vector>
 
+#include "mozilla/UniquePtr.h"
+
 #include "logging.h"
 #include "nspr.h"
 #include "nss.h"
@@ -316,6 +318,17 @@ int NrIceCtx::stream_failed(void *obj, nr_ice_media_stream *stream) {
   return 0;
 }
 
+int NrIceCtx::ice_checking(void *obj, nr_ice_peer_ctx *pctx) {
+  MOZ_MTLOG(ML_DEBUG, "ice_checking called");
+
+  // Get the ICE ctx
+  NrIceCtx *ctx = static_cast<NrIceCtx *>(obj);
+
+  ctx->SetConnectionState(ICE_CTX_CHECKING);
+
+  return 0;
+}
+
 int NrIceCtx::ice_completed(void *obj, nr_ice_peer_ctx *pctx) {
   MOZ_MTLOG(ML_DEBUG, "ice_completed called");
 
@@ -418,7 +431,8 @@ RefPtr<NrIceCtx> NrIceCtx::Create(const std::string& name,
       NR_reg_set_uchar((char *)"ice.pref.interface.wlan0", 232);
     }
 
-    NR_reg_set_uint4((char *)"stun.client.maximum_transmits",4);
+    NR_reg_set_uint4((char *)"stun.client.maximum_transmits",7);
+    NR_reg_set_uint4((char *)NR_ICE_REG_TRICKLE_GRACE_PERIOD, 5000);
   }
 
   // Create the ICE context
@@ -464,6 +478,7 @@ RefPtr<NrIceCtx> NrIceCtx::Create(const std::string& name,
   ctx->ice_handler_vtbl_->stream_failed = &NrIceCtx::stream_failed;
   ctx->ice_handler_vtbl_->ice_completed = &NrIceCtx::ice_completed;
   ctx->ice_handler_vtbl_->msg_recvd = &NrIceCtx::msg_recvd;
+  ctx->ice_handler_vtbl_->ice_checking = &NrIceCtx::ice_checking;
 
   ctx->ice_handler_ = new nr_ice_handler();
   ctx->ice_handler_->vtbl = ctx->ice_handler_vtbl_;
@@ -529,8 +544,7 @@ nsresult NrIceCtx::SetStunServers(const std::vector<NrIceStunServer>&
   if (stun_servers.empty())
     return NS_OK;
 
-  ScopedDeleteArray<nr_ice_stun_server> servers(
-      new nr_ice_stun_server[stun_servers.size()]);
+  auto servers = MakeUnique<nr_ice_stun_server[]>(stun_servers.size());
 
   for (size_t i=0; i < stun_servers.size(); ++i) {
     nsresult rv = stun_servers[i].ToNicerStunStruct(&servers[i]);
@@ -540,7 +554,7 @@ nsresult NrIceCtx::SetStunServers(const std::vector<NrIceStunServer>&
     }
   }
 
-  int r = nr_ice_ctx_set_stun_servers(ctx_, servers, stun_servers.size());
+  int r = nr_ice_ctx_set_stun_servers(ctx_, servers.get(), stun_servers.size());
   if (r) {
     MOZ_MTLOG(ML_ERROR, "Couldn't set STUN server for '" << name_ << "'");
     return NS_ERROR_FAILURE;
@@ -556,8 +570,7 @@ nsresult NrIceCtx::SetTurnServers(const std::vector<NrIceTurnServer>&
   if (turn_servers.empty())
     return NS_OK;
 
-  ScopedDeleteArray<nr_ice_turn_server> servers(
-      new nr_ice_turn_server[turn_servers.size()]);
+  auto servers = MakeUnique<nr_ice_turn_server[]>(turn_servers.size());
 
   for (size_t i=0; i < turn_servers.size(); ++i) {
     nsresult rv = turn_servers[i].ToNicerTurnStruct(&servers[i]);
@@ -567,7 +580,7 @@ nsresult NrIceCtx::SetTurnServers(const std::vector<NrIceTurnServer>&
     }
   }
 
-  int r = nr_ice_ctx_set_turn_servers(ctx_, servers, turn_servers.size());
+  int r = nr_ice_ctx_set_turn_servers(ctx_, servers.get(), turn_servers.size());
   if (r) {
     MOZ_MTLOG(ML_ERROR, "Couldn't set TURN server for '" << name_ << "'");
     return NS_ERROR_FAILURE;
@@ -688,8 +701,6 @@ nsresult NrIceCtx::StartChecks() {
       SetConnectionState(ICE_CTX_FAILED);
       return NS_ERROR_FAILURE;
     }
-  } else {
-    SetConnectionState(ICE_CTX_CHECKING);
   }
 
   return NS_OK;
@@ -721,6 +732,15 @@ void NrIceCtx::SetConnectionState(ConnectionState state) {
   MOZ_MTLOG(ML_INFO, "NrIceCtx(" << name_ << "): state " <<
             connection_state_ << "->" << state);
   connection_state_ = state;
+
+  if (connection_state_ == ICE_CTX_FAILED) {
+    MOZ_MTLOG(ML_INFO, "NrIceCtx(" << name_ << "): dumping r_log ringbuffer... ");
+    std::deque<std::string> logs;
+    RLogRingBuffer::GetInstance()->GetAny(0, &logs);
+    for (auto l = logs.begin(); l != logs.end(); ++l) {
+      MOZ_MTLOG(ML_INFO, *l);
+    }
+  }
 
   SignalConnectionStateChange(this, state);
 }

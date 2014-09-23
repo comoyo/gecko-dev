@@ -17,8 +17,6 @@
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsTArrayForwardDeclare.h"     // for InfallibleTArray
 
-class gfx3DMatrix;
-
 namespace mozilla {
 
 namespace ipc {
@@ -50,8 +48,11 @@ public:
                          ShadowLayersManager* aLayersManager,
                          uint64_t aId,
                          ProcessId aOtherProcess);
+
+protected:
   ~LayerTransactionParent();
 
+public:
   void Destroy();
 
   LayerManagerComposite* layer_manager() const { return mLayerManager; }
@@ -81,6 +82,9 @@ public:
 
   virtual bool IsSameProcess() const MOZ_OVERRIDE;
 
+  const uint64_t& GetPendingTransactionId() { return mPendingTransaction; }
+  void SetPendingTransactionId(uint64_t aId) { mPendingTransaction = aId; }
+
   // CompositableParentManager
   virtual void SendFenceHandle(AsyncTransactionTracker* aTracker,
                                PTextureParent* aTexture,
@@ -95,17 +99,23 @@ public:
 
 protected:
   virtual bool RecvUpdate(const EditArray& cset,
+                          const uint64_t& aTransactionId,
                           const TargetConfig& targetConfig,
                           const bool& isFirstPaint,
                           const bool& scheduleComposite,
                           const uint32_t& paintSequenceNumber,
+                          const bool& isRepeatTransaction,
+                          const mozilla::TimeStamp& aTransactionStart,
                           EditReplyArray* reply) MOZ_OVERRIDE;
 
   virtual bool RecvUpdateNoSwap(const EditArray& cset,
+                                const uint64_t& aTransactionId,
                                 const TargetConfig& targetConfig,
                                 const bool& isFirstPaint,
                                 const bool& scheduleComposite,
-                                const uint32_t& paintSequenceNumber) MOZ_OVERRIDE;
+                                const uint32_t& paintSequenceNumber,
+                                const bool& isRepeatTransaction,
+                                const mozilla::TimeStamp& aTransactionStart) MOZ_OVERRIDE;
 
   virtual bool RecvClearCachedResources() MOZ_OVERRIDE;
   virtual bool RecvForceComposite() MOZ_OVERRIDE;
@@ -116,9 +126,10 @@ protected:
   virtual bool RecvGetAnimationTransform(PLayerParent* aParent,
                                          MaybeTransform* aTransform)
                                          MOZ_OVERRIDE;
-  virtual bool RecvSetAsyncScrollOffset(PLayerParent* aLayer,
+  virtual bool RecvSetAsyncScrollOffset(const FrameMetrics::ViewID& aId,
                                         const int32_t& aX, const int32_t& aY) MOZ_OVERRIDE;
-  virtual bool RecvGetAPZTestData(APZTestData* aOutData);
+  virtual bool RecvGetAPZTestData(APZTestData* aOutData) MOZ_OVERRIDE;
+  virtual bool RecvRequestProperty(const nsString& aProperty, float* aValue) MOZ_OVERRIDE;
 
   virtual PLayerParent* AllocPLayerParent() MOZ_OVERRIDE;
   virtual bool DeallocPLayerParent(PLayerParent* actor) MOZ_OVERRIDE;
@@ -164,6 +175,8 @@ private:
   //   mId != 0 => mRoot == null
   // because the "real tree" is owned by the compositor.
   uint64_t mId;
+
+  uint64_t mPendingTransaction;
   // When the widget/frame/browser stuff in this process begins its
   // destruction process, we need to Disconnect() all the currently
   // live shadow layers, because some of them might be orphaned from

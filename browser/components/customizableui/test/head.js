@@ -227,6 +227,15 @@ function startCustomizing(aWindow=window) {
   return deferred.promise;
 }
 
+function promiseObserverNotified(aTopic) {
+  let deferred = Promise.defer();
+  Services.obs.addObserver(function onNotification(aSubject, aTopic, aData) {
+    Services.obs.removeObserver(onNotification, aTopic);
+      deferred.resolve({subject: aSubject, data: aData});
+    }, aTopic, false);
+  return deferred.promise;
+}
+
 function openAndLoadWindow(aOptions, aWaitForDelayedStartup=false) {
   let deferred = Promise.defer();
   let win = OpenBrowserWindow(aOptions);
@@ -249,8 +258,13 @@ function openAndLoadWindow(aOptions, aWaitForDelayedStartup=false) {
 }
 
 function promiseWindowClosed(win) {
+  let deferred = Promise.defer();
+  win.addEventListener("unload", function onunload() {
+    win.removeEventListener("unload", onunload);
+    deferred.resolve();
+  });
   win.close();
-  return waitForCondition(() => win.closed);
+  return deferred.promise;
 }
 
 function promisePanelShown(win) {
@@ -469,7 +483,10 @@ function promisePopupEvent(aPopup, aEventSuffix) {
 // This is a simpler version of the context menu check that
 // exists in contextmenu_common.js.
 function checkContextMenu(aContextMenu, aExpectedEntries, aWindow=window) {
-  let childNodes = aContextMenu.childNodes;
+  let childNodes = [...aContextMenu.childNodes];
+  // Ignore hidden nodes:
+  childNodes = childNodes.filter((n) => !n.hidden);
+
   for (let i = 0; i < childNodes.length; i++) {
     let menuitem = childNodes[i];
     try {
@@ -479,7 +496,7 @@ function checkContextMenu(aContextMenu, aExpectedEntries, aWindow=window) {
       }
 
       let selector = aExpectedEntries[i][0];
-      ok(menuitem.mozMatchesSelector(selector), "menuitem should match " + selector + " selector");
+      ok(menuitem.matches(selector), "menuitem should match " + selector + " selector");
       let commandValue = menuitem.getAttribute("command");
       let relatedCommand = commandValue ? aWindow.document.getElementById(commandValue) : null;
       let menuItemDisabled = relatedCommand ?

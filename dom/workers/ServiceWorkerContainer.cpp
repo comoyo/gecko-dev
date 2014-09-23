@@ -6,17 +6,22 @@
 
 #include "ServiceWorkerContainer.h"
 
+#include "nsIDocument.h"
+#include "nsIServiceWorkerManager.h"
 #include "nsPIDOMWindow.h"
+#include "mozilla/Services.h"
 
 #include "nsCycleCollectionParticipant.h"
+#include "nsServiceManagerUtils.h"
 
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ServiceWorkerContainerBinding.h"
 #include "mozilla/dom/workers/bindings/ServiceWorker.h"
 
+#include "ServiceWorker.h"
+
 namespace mozilla {
 namespace dom {
-namespace workers {
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServiceWorkerContainer)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
@@ -24,7 +29,38 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 NS_IMPL_ADDREF_INHERITED(ServiceWorkerContainer, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(ServiceWorkerContainer, DOMEventTargetHelper)
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED(ServiceWorkerContainer, DOMEventTargetHelper, mWindow)
+NS_IMPL_CYCLE_COLLECTION_INHERITED(ServiceWorkerContainer, DOMEventTargetHelper,
+                                   mControllerWorker, mReadyPromise)
+
+ServiceWorkerContainer::ServiceWorkerContainer(nsPIDOMWindow* aWindow)
+  : DOMEventTargetHelper(aWindow)
+{
+}
+
+ServiceWorkerContainer::~ServiceWorkerContainer()
+{
+  RemoveReadyPromise();
+}
+
+void
+ServiceWorkerContainer::DisconnectFromOwner()
+{
+  RemoveReadyPromise();
+  DOMEventTargetHelper::DisconnectFromOwner();
+}
+
+void
+ServiceWorkerContainer::RemoveReadyPromise()
+{
+  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  if (window) {
+    nsCOMPtr<nsIServiceWorkerManager> swm =
+      mozilla::services::GetServiceWorkerManager();
+    MOZ_ASSERT(swm);
+
+    swm->RemoveReadyPromise(window);
+  }
+}
 
 JSObject*
 ServiceWorkerContainer::WrapObject(JSContext* aCx)
@@ -37,55 +73,109 @@ ServiceWorkerContainer::Register(const nsAString& aScriptURL,
                                  const RegistrationOptionList& aOptions,
                                  ErrorResult& aRv)
 {
-  // FIXME(nsm): Bug 984048
-  aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-  return nullptr;
-}
+  nsCOMPtr<nsISupports> promise;
 
-already_AddRefed<Promise>
-ServiceWorkerContainer::Unregister(const nsAString& aScope,
-                                   ErrorResult& aRv)
-{
-  // FIXME(nsm): Bug 984048
-  aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-  return nullptr;
-}
+  nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
+  if (!swm) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
 
-already_AddRefed<workers::ServiceWorker>
-ServiceWorkerContainer::GetInstalling()
-{
-  // FIXME(nsm): Bug 1002570
-  return nullptr;
+  aRv = swm->Register(aOptions.mScope, aScriptURL, getter_AddRefs(promise));
+  if (aRv.Failed()) {
+    return nullptr;
+  }
+
+  nsRefPtr<Promise> ret = static_cast<Promise*>(promise.get());
+  MOZ_ASSERT(ret);
+  return ret.forget();
 }
 
 already_AddRefed<workers::ServiceWorker>
-ServiceWorkerContainer::GetWaiting()
+ServiceWorkerContainer::GetController()
 {
-  // FIXME(nsm): Bug 1002570
-  return nullptr;
-}
+  if (!mControllerWorker) {
+    nsresult rv;
+    nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
+    if (!swm) {
+      return nullptr;
+    }
 
-already_AddRefed<workers::ServiceWorker>
-ServiceWorkerContainer::GetCurrent()
-{
-  // FIXME(nsm): Bug 1002570
-  return nullptr;
+    nsCOMPtr<nsISupports> serviceWorker;
+    rv = swm->GetDocumentController(GetOwner(), getter_AddRefs(serviceWorker));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return nullptr;
+    }
+
+    mControllerWorker =
+      static_cast<workers::ServiceWorker*>(serviceWorker.get());
+  }
+
+  nsRefPtr<workers::ServiceWorker> ref = mControllerWorker;
+  return ref.forget();
 }
 
 already_AddRefed<Promise>
-ServiceWorkerContainer::GetAll(ErrorResult& aRv)
+ServiceWorkerContainer::GetRegistrations(ErrorResult& aRv)
 {
-  // FIXME(nsm): Bug 1002571
-  aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-  return nullptr;
+  nsresult rv;
+  nsCOMPtr<nsIServiceWorkerManager> swm = do_GetService(SERVICEWORKERMANAGER_CONTRACTID, &rv);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(rv);
+    return nullptr;
+  }
+
+  nsCOMPtr<nsISupports> promise;
+  aRv = swm->GetRegistrations(GetOwner(), getter_AddRefs(promise));
+  if (aRv.Failed()) {
+    return nullptr;
+  }
+
+  nsRefPtr<Promise> ret = static_cast<Promise*>(promise.get());
+  MOZ_ASSERT(ret);
+  return ret.forget();
 }
 
 already_AddRefed<Promise>
-ServiceWorkerContainer::WhenReady(ErrorResult& aRv)
+ServiceWorkerContainer::GetRegistration(const nsAString& aDocumentURL,
+                                        ErrorResult& aRv)
 {
-  // FIXME(nsm): Bug 984048
-  aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-  return nullptr;
+  nsresult rv;
+  nsCOMPtr<nsIServiceWorkerManager> swm = do_GetService(SERVICEWORKERMANAGER_CONTRACTID, &rv);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(rv);
+    return nullptr;
+  }
+
+  nsCOMPtr<nsISupports> promise;
+  aRv = swm->GetRegistration(GetOwner(), aDocumentURL, getter_AddRefs(promise));
+  if (aRv.Failed()) {
+    return nullptr;
+  }
+
+  nsRefPtr<Promise> ret = static_cast<Promise*>(promise.get());
+  MOZ_ASSERT(ret);
+  return ret.forget();
+}
+
+Promise*
+ServiceWorkerContainer::GetReady(ErrorResult& aRv)
+{
+  if (mReadyPromise) {
+    return mReadyPromise;
+  }
+
+  nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
+  if (!swm) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  nsCOMPtr<nsISupports> promise;
+  aRv = swm->GetReadyPromise(GetOwner(), getter_AddRefs(promise));
+
+  mReadyPromise = static_cast<Promise*>(promise.get());
+  return mReadyPromise;
 }
 
 // Testing only.
@@ -98,6 +188,21 @@ ServiceWorkerContainer::ClearAllServiceWorkerData(ErrorResult& aRv)
 
 // Testing only.
 void
+ServiceWorkerContainer::GetScopeForUrl(const nsAString& aUrl,
+                                       nsString& aScope,
+                                       ErrorResult& aRv)
+{
+  nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
+  if (!swm) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return;
+  }
+
+  aRv = swm->GetScopeForUrl(aUrl, aScope);
+}
+
+// Testing only.
+void
 ServiceWorkerContainer::GetControllingWorkerScriptURLForPath(
                                                         const nsAString& aPath,
                                                         nsString& aScriptURL,
@@ -105,6 +210,5 @@ ServiceWorkerContainer::GetControllingWorkerScriptURLForPath(
 {
   aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
 }
-} // namespace workers
 } // namespace dom
 } // namespace mozilla

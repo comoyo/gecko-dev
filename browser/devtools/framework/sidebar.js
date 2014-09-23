@@ -1,4 +1,4 @@
-/* -*- Mode: Javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -70,15 +70,19 @@ ToolSidebar.prototype = {
 
     let tab = this._tabbox.tabs.appendItem();
     tab.setAttribute("label", ""); // Avoid showing "undefined" while the tab is loading
+    tab.setAttribute("id", "sidebar-tab-" + id);
 
-    let onIFrameLoaded = function() {
-      tab.setAttribute("label", iframe.contentDocument.title);
+    let onIFrameLoaded = (event) => {
+      let doc = event.target;
+      let win = doc.defaultView;
+      tab.setAttribute("label", doc.title);
+
       iframe.removeEventListener("load", onIFrameLoaded, true);
-      if ("setPanel" in iframe.contentWindow) {
-        iframe.contentWindow.setPanel(this._toolPanel, iframe);
+      if ("setPanel" in win) {
+        win.setPanel(this._toolPanel, iframe);
       }
       this.emit(id + "-ready");
-    }.bind(this);
+    };
 
     iframe.addEventListener("load", onIFrameLoaded, true);
 
@@ -101,12 +105,33 @@ ToolSidebar.prototype = {
       // For some reason I don't understand, if we call this.select in this
       // event loop (after inserting the tab), the tab will never get the
       // the "selected" attribute set to true.
-      this._panelDoc.defaultView.setTimeout(function() {
+      this._panelDoc.defaultView.setTimeout(() => {
         this.select(id);
-      }.bind(this), 10);
+      }, 10);
     }
 
     this.emit("new-tab-registered", id);
+  },
+
+  /**
+   * Remove an existing tab.
+   */
+  removeTab: function(id) {
+    let tab = this._tabbox.tabs.querySelector("tab#sidebar-tab-" + id);
+    if (!tab) {
+      return;
+    }
+
+    tab.remove();
+
+    let panel = this.getTab(id);
+    if (panel) {
+      panel.remove();
+    }
+
+    this._tabs.delete(id);
+
+    this.emit("tab-unregistered", id);
   },
 
   /**

@@ -18,6 +18,7 @@ import org.mozilla.gecko.GeckoThread;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
+import org.mozilla.gecko.util.NativeJSObject;
 import org.mozilla.gecko.webapp.InstallHelper.InstallCallback;
 
 import android.content.Intent;
@@ -39,10 +40,11 @@ public class WebappImpl extends GeckoApp implements InstallCallback {
     private static final String LOGTAG = "GeckoWebappImpl";
 
     private URI mOrigin;
-    private TextView mTitlebarText = null;
-    private View mTitlebar = null;
+    private TextView mTitlebarText;
+    private View mTitlebar;
 
-    private View mSplashscreen;
+    // Must only be accessed from the UI thread.
+    View mSplashscreen;
 
     private boolean mIsApk = true;
     private ApkResources mApkResources;
@@ -325,13 +327,13 @@ public class WebappImpl extends GeckoApp implements InstallCallback {
     }
 
     @Override
-    public void installCompleted(InstallHelper installHelper, String event, JSONObject message) {
+    public void installCompleted(InstallHelper installHelper, String event, NativeJSObject message) {
         if (event == null) {
             return;
         }
 
         if (event.equals("Webapps:Postinstall")) {
-            String origin = message.optString("origin");
+            String origin = message.optString("origin", null);
             launchWebapp(origin);
         }
     }

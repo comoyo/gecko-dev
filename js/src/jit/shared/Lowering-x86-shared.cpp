@@ -36,7 +36,7 @@ LIRGeneratorX86Shared::visitGuardShape(MGuardShape *ins)
 {
     JS_ASSERT(ins->obj()->type() == MIRType_Object);
 
-    LGuardShape *guard = new(alloc()) LGuardShape(useRegister(ins->obj()));
+    LGuardShape *guard = new(alloc()) LGuardShape(useRegisterAtStart(ins->obj()));
     if (!assignSnapshot(guard, ins->bailoutKind()))
         return false;
     if (!add(guard, ins))
@@ -49,8 +49,8 @@ LIRGeneratorX86Shared::visitGuardObjectType(MGuardObjectType *ins)
 {
     JS_ASSERT(ins->obj()->type() == MIRType_Object);
 
-    LGuardObjectType *guard = new(alloc()) LGuardObjectType(useRegister(ins->obj()));
-    if (!assignSnapshot(guard))
+    LGuardObjectType *guard = new(alloc()) LGuardObjectType(useRegisterAtStart(ins->obj()));
+    if (!assignSnapshot(guard, Bailout_ObjectIdentityOrTypeGuard))
         return false;
     if (!add(guard, ins))
         return false;
@@ -75,9 +75,9 @@ LIRGeneratorX86Shared::lowerForShift(LInstructionHelper<1, 2, 0> *ins, MDefiniti
     // shift operator should be constant or in register ecx
     // x86 can't shift a non-ecx register
     if (rhs->isConstant())
-        ins->setOperand(1, useOrConstant(rhs));
+        ins->setOperand(1, useOrConstantAtStart(rhs));
     else
-        ins->setOperand(1, useFixed(rhs, ecx));
+        ins->setOperand(1, lhs != rhs ? useFixed(rhs, ecx) : useFixedAtStart(rhs, ecx));
 
     return defineReuseInput(ins, mir, 0);
 }
@@ -95,7 +95,7 @@ LIRGeneratorX86Shared::lowerForALU(LInstructionHelper<1, 2, 0> *ins, MDefinition
                                    MDefinition *lhs, MDefinition *rhs)
 {
     ins->setOperand(0, useRegisterAtStart(lhs));
-    ins->setOperand(1, useOrConstant(rhs));
+    ins->setOperand(1, lhs != rhs ? useOrConstant(rhs) : useOrConstantAtStart(rhs));
     return defineReuseInput(ins, mir, 0);
 }
 
@@ -103,7 +103,7 @@ bool
 LIRGeneratorX86Shared::lowerForFPU(LInstructionHelper<1, 2, 0> *ins, MDefinition *mir, MDefinition *lhs, MDefinition *rhs)
 {
     ins->setOperand(0, useRegisterAtStart(lhs));
-    ins->setOperand(1, use(rhs));
+    ins->setOperand(1, lhs != rhs ? use(rhs) : useAtStart(rhs));
     return defineReuseInput(ins, mir, 0);
 }
 
@@ -122,7 +122,7 @@ LIRGeneratorX86Shared::lowerMulI(MMul *mul, MDefinition *lhs, MDefinition *rhs)
     // Note: lhs is used twice, so that we can restore the original value for the
     // negative zero check.
     LMulI *lir = new(alloc()) LMulI(useRegisterAtStart(lhs), useOrConstant(rhs), use(lhs));
-    if (mul->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+    if (mul->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
         return false;
     return defineReuseInput(lir, mul, 0);
 }
@@ -152,13 +152,15 @@ LIRGeneratorX86Shared::lowerDivI(MDiv *div)
                 // lhs copy register is needed.
                 lir = new(alloc()) LDivPowTwoI(lhs, useRegister(div->lhs()), shift, rhs < 0);
             }
-            if (div->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+            if (div->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
                 return false;
             return defineReuseInput(lir, div, 0);
-        } else if (rhs != 0) {
+        } else if (rhs != 0 &&
+                   gen->optimizationInfo().registerAllocator() != RegisterAllocator_LSRA)
+        {
             LDivOrModConstantI *lir;
             lir = new(alloc()) LDivOrModConstantI(useRegister(div->lhs()), rhs, tempFixed(eax));
-            if (div->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+            if (div->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
                 return false;
             return defineFixed(lir, div, LAllocation(AnyRegister(edx)));
         }
@@ -166,7 +168,7 @@ LIRGeneratorX86Shared::lowerDivI(MDiv *div)
 
     LDivI *lir = new(alloc()) LDivI(useRegister(div->lhs()), useRegister(div->rhs()),
                                     tempFixed(edx));
-    if (div->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+    if (div->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
         return false;
     return defineFixed(lir, div, LAllocation(AnyRegister(eax)));
 }
@@ -182,13 +184,15 @@ LIRGeneratorX86Shared::lowerModI(MMod *mod)
         int32_t shift = FloorLog2(Abs(rhs));
         if (rhs != 0 && uint32_t(1) << shift == Abs(rhs)) {
             LModPowTwoI *lir = new(alloc()) LModPowTwoI(useRegisterAtStart(mod->lhs()), shift);
-            if (mod->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+            if (mod->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
                 return false;
             return defineReuseInput(lir, mod, 0);
-        } else if (rhs != 0) {
+        } else if (rhs != 0 &&
+                   gen->optimizationInfo().registerAllocator() != RegisterAllocator_LSRA)
+        {
             LDivOrModConstantI *lir;
             lir = new(alloc()) LDivOrModConstantI(useRegister(mod->lhs()), rhs, tempFixed(edx));
-            if (mod->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+            if (mod->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
                 return false;
             return defineFixed(lir, mod, LAllocation(AnyRegister(eax)));
         }
@@ -197,7 +201,7 @@ LIRGeneratorX86Shared::lowerModI(MMod *mod)
     LModI *lir = new(alloc()) LModI(useRegister(mod->lhs()),
                                     useRegister(mod->rhs()),
                                     tempFixed(eax));
-    if (mod->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+    if (mod->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
         return false;
     return defineFixed(lir, mod, LAllocation(AnyRegister(edx)));
 }
@@ -221,7 +225,7 @@ LIRGeneratorX86Shared::lowerUDiv(MDiv *div)
     LUDivOrMod *lir = new(alloc()) LUDivOrMod(useRegister(div->lhs()),
                                               useRegister(div->rhs()),
                                               tempFixed(edx));
-    if (div->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+    if (div->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
         return false;
     return defineFixed(lir, div, LAllocation(AnyRegister(eax)));
 }
@@ -232,7 +236,7 @@ LIRGeneratorX86Shared::lowerUMod(MMod *mod)
     LUDivOrMod *lir = new(alloc()) LUDivOrMod(useRegister(mod->lhs()),
                                               useRegister(mod->rhs()),
                                               tempFixed(eax));
-    if (mod->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+    if (mod->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
         return false;
     return defineFixed(lir, mod, LAllocation(AnyRegister(edx)));
 }
@@ -317,4 +321,70 @@ LIRGeneratorX86Shared::visitForkJoinGetSlice(MForkJoinGetSlice *ins)
                           tempFixed(ForkJoinGetSliceReg_temp0),
                           tempFixed(ForkJoinGetSliceReg_temp1));
     return defineFixed(lir, ins, LAllocation(AnyRegister(ForkJoinGetSliceReg_output)));
+}
+
+bool
+LIRGeneratorX86Shared::visitSimdTernaryBitwise(MSimdTernaryBitwise *ins)
+{
+    MOZ_ASSERT(IsSimdType(ins->type()));
+
+    if (ins->type() == MIRType_Int32x4 || ins->type() == MIRType_Float32x4) {
+        LSimdSelect *lins = new(alloc()) LSimdSelect;
+
+        // This must be useRegisterAtStart() because it is destroyed.
+        lins->setOperand(0, useRegisterAtStart(ins->getOperand(0)));
+        // This must be useRegisterAtStart() because it is destroyed.
+        lins->setOperand(1, useRegisterAtStart(ins->getOperand(1)));
+        // This could be useRegister(), but combining it with
+        // useRegisterAtStart() is broken see bug 772830.
+        lins->setOperand(2, useRegisterAtStart(ins->getOperand(2)));
+        // The output is constrained to be in the same register as the second
+        // argument to avoid redundantly copying the result into place. The
+        // register allocator will move the result if necessary.
+        return defineReuseInput(lins, ins, 1);
+    }
+
+    MOZ_CRASH("Unknown SIMD kind when doing bitwise operations");
+    return false;
+}
+
+bool
+LIRGeneratorX86Shared::visitSimdSplatX4(MSimdSplatX4 *ins)
+{
+    LAllocation x = useRegisterAtStart(ins->getOperand(0));
+    LSimdSplatX4 *lir = new(alloc()) LSimdSplatX4(x);
+
+    switch (ins->type()) {
+      case MIRType_Int32x4:
+        return define(lir, ins);
+      case MIRType_Float32x4:
+        return defineReuseInput(lir, ins, 0);
+      default:
+        MOZ_CRASH("Unknown SIMD kind");
+    }
+}
+
+
+bool
+LIRGeneratorX86Shared::visitSimdValueX4(MSimdValueX4 *ins)
+{
+    if (ins->type() == MIRType_Float32x4) {
+        // As x is used at start and reused for the output, other inputs can't
+        // be used at start.
+        LAllocation x = useRegisterAtStart(ins->getOperand(0));
+        LAllocation y = useRegister(ins->getOperand(1));
+        LAllocation z = useRegister(ins->getOperand(2));
+        LAllocation w = useRegister(ins->getOperand(3));
+        LDefinition copyY = tempCopy(ins->getOperand(1), 1);
+        return defineReuseInput(new (alloc()) LSimdValueFloat32x4(x, y, z, w, copyY), ins, 0);
+    }
+
+    // No defineReuseInput => useAtStart for everyone.
+    LAllocation x = useRegisterAtStart(ins->getOperand(0));
+    LAllocation y = useRegisterAtStart(ins->getOperand(1));
+    LAllocation z = useRegisterAtStart(ins->getOperand(2));
+    LAllocation w = useRegisterAtStart(ins->getOperand(3));
+
+    MOZ_ASSERT(ins->type() == MIRType_Int32x4);
+    return define(new(alloc()) LSimdValueInt32x4(x, y, z, w), ins);
 }

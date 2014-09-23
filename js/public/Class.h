@@ -10,7 +10,7 @@
 #define js_Class_h
 
 #include "mozilla/NullPtr.h"
- 
+
 #include "jstypes.h"
 
 #include "js/CallArgs.h"
@@ -24,12 +24,12 @@
  * object behavior and, e.g., allows custom slow layout.
  */
 
-class JSFreeOp;
+struct JSFreeOp;
 struct JSFunctionSpec;
 
 namespace js {
 
-class Class;
+struct Class;
 class FreeOp;
 class PropertyName;
 class Shape;
@@ -152,7 +152,7 @@ typedef void
 
 // Finalizes external strings created by JS_NewExternalString.
 struct JSStringFinalizer {
-    void (*finalize)(const JSStringFinalizer *fin, jschar *chars);
+    void (*finalize)(const JSStringFinalizer *fin, char16_t *chars);
 };
 
 // Check whether v is an instance of obj.  Return false on error or exception,
@@ -184,6 +184,9 @@ typedef JSObject *
 
 typedef JSObject *
 (* JSWeakmapKeyDelegateOp)(JSObject *obj);
+
+typedef void
+(* JSObjectMovedOp)(JSObject *obj, const JSObject *old);
 
 /* js::Class operation signatures. */
 
@@ -232,10 +235,7 @@ typedef bool
 (* PropertyAttributesOp)(JSContext *cx, JS::HandleObject obj, JS::Handle<PropertyName*> name,
                          unsigned *attrsp);
 typedef bool
-(* DeletePropertyOp)(JSContext *cx, JS::HandleObject obj, JS::Handle<PropertyName*> name,
-                     bool *succeeded);
-typedef bool
-(* DeleteElementOp)(JSContext *cx, JS::HandleObject obj, uint32_t index, bool *succeeded);
+(* DeleteGenericOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *succeeded);
 
 typedef bool
 (* WatchOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleObject callable);
@@ -321,10 +321,19 @@ struct ClassExtension
      * wrapped object is collected.
      */
     JSWeakmapKeyDelegateOp weakmapKeyDelegateOp;
+
+    /*
+     * Optional hook called when an object is moved by a compacting GC.
+     *
+     * There may exist weak pointers to an object that are not traced through
+     * when the normal trace APIs are used, for example objects in the wrapper
+     * cache.  This hook allows these pointers to be updated.
+     */
+    JSObjectMovedOp objectMovedOp;
 };
 
 #define JS_NULL_CLASS_SPEC  {nullptr,nullptr,nullptr,nullptr,nullptr,nullptr}
-#define JS_NULL_CLASS_EXT   {nullptr,nullptr,nullptr,false,nullptr}
+#define JS_NULL_CLASS_EXT   {nullptr,nullptr,nullptr,false,nullptr,nullptr}
 
 struct ObjectOps
 {
@@ -342,20 +351,18 @@ struct ObjectOps
     StrictElementIdOp   setElement;
     GenericAttributesOp getGenericAttributes;
     GenericAttributesOp setGenericAttributes;
-    DeletePropertyOp    deleteProperty;
-    DeleteElementOp     deleteElement;
+    DeleteGenericOp     deleteGeneric;
     WatchOp             watch;
     UnwatchOp           unwatch;
     SliceOp             slice; // Optimized slice, can be null.
-
     JSNewEnumerateOp    enumerate;
     ObjectOp            thisObject;
 };
 
 #define JS_NULL_OBJECT_OPS                                                    \
-    {nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr, \
-     nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr, \
-     nullptr,nullptr}
+    {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,  \
+     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,  \
+     nullptr, nullptr, nullptr}
 
 } // namespace js
 
@@ -475,7 +482,8 @@ struct Class
         return flags & JSCLASS_EMULATES_UNDEFINED;
     }
 
-    bool isCallable() const {
+    bool nonProxyCallable() const {
+        MOZ_ASSERT(!isProxy());
         return this == js::FunctionClassPtr || call;
     }
 
@@ -523,8 +531,9 @@ Valueify(const JSClass *c)
  * value of objects.
  */
 enum ESClassValue {
-    ESClass_Array, ESClass_Number, ESClass_String, ESClass_Boolean,
-    ESClass_RegExp, ESClass_ArrayBuffer, ESClass_Date
+    ESClass_Object, ESClass_Array, ESClass_Number, ESClass_String,
+    ESClass_Boolean, ESClass_RegExp, ESClass_ArrayBuffer, ESClass_SharedArrayBuffer,
+    ESClass_Date, ESClass_Set, ESClass_Map
 };
 
 /*
@@ -539,6 +548,15 @@ ObjectClassIs(JSObject &obj, ESClassValue classValue, JSContext *cx);
 /* Just a helper that checks v.isObject before calling ObjectClassIs. */
 inline bool
 IsObjectWithClass(const JS::Value &v, ESClassValue classValue, JSContext *cx);
+
+/* Fills |vp| with the unboxed value for boxed types, or undefined otherwise. */
+inline bool
+Unbox(JSContext *cx, JS::HandleObject obj, JS::MutableHandleValue vp);
+
+#ifdef DEBUG
+JS_FRIEND_API(bool)
+HasObjectMovedOp(JSObject *obj);
+#endif
 
 }  /* namespace js */
 

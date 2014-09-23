@@ -42,8 +42,7 @@ public:
      * applied when creating and rendering into such a temporary surface.
      */
     gfxQuartzNativeDrawing(gfxContext *ctx,
-                           const gfxRect& aNativeRect,
-                           gfxFloat aBackingScale = 1.0f);
+                           const gfxRect& aNativeRect);
 
     /* Returns a CGContextRef which may be used for native drawing.  This
      * CGContextRef is valid until EndNativeDrawing is called; if it is used
@@ -58,19 +57,13 @@ private:
     gfxQuartzNativeDrawing(const gfxQuartzNativeDrawing&) MOZ_DELETE;
     const gfxQuartzNativeDrawing& operator=(const gfxQuartzNativeDrawing&) MOZ_DELETE;
 
-
     // Final destination context
     nsRefPtr<gfxContext> mContext;
     mozilla::RefPtr<mozilla::gfx::DrawTarget> mDrawTarget;
     mozilla::gfx::BorrowedCGContext mBorrowedContext;
-    // context that draws to mQuartzSurface; can be different from mContext
-    // if mContext is not drawing to Quartz
-    nsRefPtr<gfxContext> mSurfaceContext;
-    gfxRect mNativeRect;
-    gfxFloat mBackingScale;
+    mozilla::gfx::Rect mNativeRect;
 
     // saved state
-    nsRefPtr<gfxQuartzSurface> mQuartzSurface;
     CGContextRef mCGContext;
 };
 

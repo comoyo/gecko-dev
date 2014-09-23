@@ -7,6 +7,9 @@
 
 function SpecialPowers(window) {
   this.window = Components.utils.getWeakReference(window);
+  this._windowID = window.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
+                         .getInterface(Components.interfaces.nsIDOMWindowUtils)
+                         .currentInnerWindowID;
   this._encounteredCrashDumpFiles = [];
   this._unexpectedCrashDumpFiles = { };
   this._crashDumpDir = null;
@@ -21,6 +24,20 @@ function SpecialPowers(window) {
   this._pongHandlers = [];
   this._messageListener = this._messageReceived.bind(this);
   addMessageListener("SPPingService", this._messageListener);
+  let (self = this) {
+    Services.obs.addObserver(function onInnerWindowDestroyed(subject, topic, data) {
+      var id = subject.QueryInterface(Components.interfaces.nsISupportsPRUint64).data;
+      if (self._windowID === id) {
+        Services.obs.removeObserver(onInnerWindowDestroyed, "inner-window-destroyed");
+        try {
+          removeMessageListener("SPPingService", self._messageListener);
+        } catch (e if e.result == Components.results.NS_ERROR_ILLEGAL_VALUE) {
+          // Ignore the exception which the message manager has been destroyed.
+          ;
+        }
+      }
+    }, "inner-window-destroyed", false);
+  }
 }
 
 SpecialPowers.prototype = new SpecialPowersAPI();
@@ -89,15 +106,6 @@ SpecialPowers.prototype.executeAfterFlushingMessageQueue = function(aCallback) {
   sendAsyncMessage("SPPingService", { op: "ping" });
 };
 
-// Expose everything but internal APIs (starting with underscores) to
-// web content.  We cannot use Object.keys to view SpecialPowers.prototype since
-// we are using the functions from SpecialPowersAPI.prototype
-SpecialPowers.prototype.__exposedProps__ = {};
-for (var i in SpecialPowers.prototype) {
-  if (i.charAt(0) != "_")
-    SpecialPowers.prototype.__exposedProps__[i] = "r";
-}
-
 // Attach our API to the window.
 function attachSpecialPowersToWindow(aWindow) {
   try {
@@ -132,3 +140,11 @@ var specialpowersmanager = new SpecialPowersManager();
 
 this.SpecialPowers = SpecialPowers;
 this.attachSpecialPowersToWindow = attachSpecialPowersToWindow;
+
+// In the case of Chrome mochitests that inject specialpowers.js as
+// a regular content script
+if (typeof window != 'undefined') {
+  window.addMessageListener = function() {}
+  window.removeMessageListener = function() {}
+  window.wrappedJSObject.SpecialPowers = new SpecialPowers(window);
+}

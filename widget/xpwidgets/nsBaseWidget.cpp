@@ -172,7 +172,7 @@ static void DeferredDestroyCompositor(CompositorParent* aCompositorParent,
 
 void nsBaseWidget::DestroyCompositor()
 {
-  LayerScope::DestroyServerSocket();
+  LayerScope::DeInit();
 
   if (mCompositorChild) {
     mCompositorChild->SendWillStop();
@@ -784,12 +784,7 @@ nsBaseWidget::ComputeShouldAccelerate(bool aDefault)
   // those versions of the OS.
   // This will still let full-screen video be accelerated on OpenGL, because
   // that XUL widget opts in to acceleration, but that's probably OK.
-  SInt32 major = nsCocoaFeatures::OSXVersionMajor();
-  SInt32 minor = nsCocoaFeatures::OSXVersionMinor();
-  SInt32 bugfix = nsCocoaFeatures::OSXVersionBugFix();
-  if (major == 10 && minor == 6 && bugfix <= 2) {
-    accelerateByDefault = false;
-  }
+  accelerateByDefault = nsCocoaFeatures::AccelerateByDefault();
 #endif
 
   // we should use AddBoolPrefVarCache
@@ -817,7 +812,7 @@ nsBaseWidget::ComputeShouldAccelerate(bool aDefault)
 
     int32_t status;
     if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_OPENGL_LAYERS, &status))) {
-      if (status == nsIGfxInfo::FEATURE_NO_INFO) {
+      if (status == nsIGfxInfo::FEATURE_STATUS_OK) {
         whitelisted = true;
       }
     }
@@ -835,7 +830,7 @@ nsBaseWidget::ComputeShouldAccelerate(bool aDefault)
       NS_WARNING("OpenGL-accelerated layers are not supported on this system");
       tell_me_once = 1;
     }
-#ifdef MOZ_ANDROID_OMTC
+#ifdef MOZ_WIDGET_ANDROID
     NS_RUNTIMEABORT("OpenGL-accelerated layers are a hard requirement on this platform. "
                     "Cannot continue without support for them");
 #endif
@@ -872,22 +867,11 @@ nsBaseWidget::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
   aHints.AppendElement(LayersBackend::LAYERS_BASIC);
 }
 
-static void
-CheckForBasicBackends(nsTArray<LayersBackend>& aHints)
-{
-#ifndef XP_WIN
-  for (size_t i = 0; i < aHints.Length(); ++i) {
-    if (aHints[i] == LayersBackend::LAYERS_BASIC &&
-        !Preferences::GetBool("layers.offmainthreadcomposition.force-basic", false)) {
-      // basic compositor is not stable enough for regular use
-      aHints[i] = LayersBackend::LAYERS_NONE;
-    }
-  }
-#endif
-}
-
 void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 {
+  MOZ_ASSERT(gfxPlatform::UsesOffMainThreadCompositing(),
+             "This function assumes OMTC");
+
   // Recreating this is tricky, as we may still have an old and we need
   // to make sure it's properly destroyed by calling DestroyCompositor!
 
@@ -897,12 +881,12 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
     return;
   }
 
-  // The server socket has to be created on the main thread.
-  LayerScope::CreateServerSocket();
+  // Initialize LayerScope on the main thread.
+  LayerScope::Init();
 
   mCompositorParent = NewCompositorParent(aWidth, aHeight);
   MessageChannel *parentChannel = mCompositorParent->GetIPCChannel();
-  ClientLayerManager* lm = new ClientLayerManager(this);
+  nsRefPtr<ClientLayerManager> lm = new ClientLayerManager(this);
   MessageLoop *childMessageLoop = CompositorParent::CompositorLoop();
   mCompositorChild = new CompositorChild(lm);
   mCompositorChild->Open(parentChannel, childMessageLoop, ipc::ChildSide);
@@ -912,9 +896,16 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   nsTArray<LayersBackend> backendHints;
   GetPreferredCompositorBackends(backendHints);
 
-  if (!mRequireOffMainThreadCompositing) {
-    CheckForBasicBackends(backendHints);
+#if !defined(MOZ_X11) && !defined(XP_WIN)
+  if (!mRequireOffMainThreadCompositing &&
+      !Preferences::GetBool("layers.offmainthreadcomposition.force-basic", false)) {
+    for (size_t i = 0; i < backendHints.Length(); ++i) {
+      if (backendHints[i] == LayersBackend::LAYERS_BASIC) {
+        backendHints[i] = LayersBackend::LAYERS_NONE;
+      }
+    }
   }
+#endif
 
   bool success = false;
   if (!backendHints.IsEmpty()) {
@@ -925,7 +916,7 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   if (success) {
     ShadowLayerForwarder* lf = lm->AsShadowForwarder();
     if (!lf) {
-      delete lm;
+      lm = nullptr;
       mCompositorChild = nullptr;
       return;
     }
@@ -934,7 +925,7 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
     ImageBridgeChild::IdentifyCompositorTextureHost(textureFactoryIdentifier);
     WindowUsesOMTC();
 
-    mLayerManager = lm;
+    mLayerManager = lm.forget();
     return;
   }
 
@@ -946,7 +937,7 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
 bool nsBaseWidget::ShouldUseOffMainThreadCompositing()
 {
-  return CompositorParent::CompositorLoop();
+  return gfxPlatform::UsesOffMainThreadCompositing();
 }
 
 LayerManager* nsBaseWidget::GetLayerManager(PLayerTransactionChild* aShadowManager,
@@ -1009,19 +1000,6 @@ nsDeviceContext* nsBaseWidget::GetDeviceContext()
   }
   return mContext;
 }
-
-//-------------------------------------------------------------------------
-//
-// Get the thebes surface
-//
-//-------------------------------------------------------------------------
-gfxASurface *nsBaseWidget::GetThebesSurface()
-{
-  // in theory we should get our parent's surface,
-  // clone it, and set a device offset before returning
-  return nullptr;
-}
-
 
 //-------------------------------------------------------------------------
 //
@@ -1724,6 +1702,8 @@ static void debug_SetCachedBoolPref(const char * aPrefName,bool aValue)
 
 //////////////////////////////////////////////////////////////
 class Debug_PrefObserver MOZ_FINAL : public nsIObserver {
+    ~Debug_PrefObserver() {}
+
   public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIOBSERVER

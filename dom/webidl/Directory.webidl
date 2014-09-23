@@ -37,9 +37,8 @@ interface Directory {
    * @return If succeeds, the promise is resolved with the new created
    * File object. Otherwise, rejected with a DOM error.
    */
-  [NewObject]
-  // Promise<File>
-  Promise createFile(DOMString path, optional CreateFileOptions options);
+  [NewObject, Throws]
+  Promise<File> createFile(DOMString path, optional CreateFileOptions options);
 
   /*
    * Creates a descendent directory. This method will create any intermediate
@@ -50,9 +49,8 @@ interface Directory {
    * @return If succeeds, the promise is resolved with the new created
    * Directory object. Otherwise, rejected with a DOM error.
    */
-  [NewObject]
-  // Promise<Directory>
-  Promise createDirectory(DOMString path);
+  [NewObject, Throws]
+  Promise<Directory> createDirectory(DOMString path);
 
   /*
    * Gets a descendent file or directory with the given path.
@@ -62,9 +60,8 @@ interface Directory {
    * with a File or Directory object, depending on the entry's type. Otherwise,
    * rejected with a DOM error.
    */
-  [NewObject]
-  // Promise<(File or Directory)>
-  Promise get(DOMString path);
+  [NewObject, Throws]
+  Promise<(File or Directory)> get(DOMString path);
 
   /*
    * Deletes a file or an empty directory. The target must be a descendent of
@@ -77,9 +74,8 @@ interface Directory {
    * exist, the promise is resolved with boolean false. If the target did exist
    * and was successfully deleted, the promise is resolved with boolean true.
    */
-  [NewObject]
-  // Promise<boolean>
-  Promise remove((DOMString or File or Directory) path);
+  [NewObject, Throws]
+  Promise<boolean> remove((DOMString or File or Directory) path);
 
   /*
    * Deletes a file or a directory recursively. The target should be a
@@ -92,9 +88,8 @@ interface Directory {
    * resolved with boolean false. If the target did exist and was successfully
    * deleted, the promise is resolved with boolean true.
    */
-  [NewObject]
-  // Promise<boolean>
-  Promise removeDeep((DOMString or File or Directory) path);
+  [NewObject, Throws]
+  Promise<boolean> removeDeep((DOMString or File or Directory) path);
 };
 
 enum CreateIfExistsMode { "replace", "fail" };

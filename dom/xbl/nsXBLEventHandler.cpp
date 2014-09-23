@@ -13,6 +13,7 @@
 #include "mozilla/dom/Event.h" // for nsIDOMEvent::InternalDOMEvent()
 #include "mozilla/dom/EventTarget.h"
 
+using namespace mozilla;
 using namespace mozilla::dom;
 
 nsXBLEventHandler::nsXBLEventHandler(nsXBLPrototypeHandler* aHandler)
@@ -71,7 +72,7 @@ nsXBLKeyEventHandler::nsXBLKeyEventHandler(nsIAtom* aEventType, uint8_t aPhase,
     mPhase(aPhase),
     mType(aType),
     mIsBoundToChrome(false),
-    mUsingXBLScope(false)
+    mUsingContentXBLScope(false)
 {
 }
 
@@ -97,7 +98,7 @@ nsXBLKeyEventHandler::ExecuteMatchedHandlers(nsIDOMKeyEvent* aKeyEvent,
     bool hasAllowUntrustedAttr = handler->HasAllowUntrustedAttr();
     if ((trustedEvent ||
         (hasAllowUntrustedAttr && handler->AllowUntrustedEvents()) ||
-        (!hasAllowUntrustedAttr && !mIsBoundToChrome && !mUsingXBLScope)) &&
+        (!hasAllowUntrustedAttr && !mIsBoundToChrome && !mUsingContentXBLScope)) &&
         handler->KeyEventMatched(aKeyEvent, aCharCode, aIgnoreShiftKey)) {
       handler->ExecuteHandler(target, aKeyEvent);
       executed = true;
@@ -147,12 +148,12 @@ NS_NewXBLEventHandler(nsXBLPrototypeHandler* aHandler,
                       nsIAtom* aEventType,
                       nsXBLEventHandler** aResult)
 {
-  switch (nsContentUtils::GetEventCategory(nsDependentAtomString(aEventType))) {
-    case NS_DRAG_EVENT:
-    case NS_MOUSE_EVENT:
-    case NS_MOUSE_SCROLL_EVENT:
-    case NS_WHEEL_EVENT:
-    case NS_SIMPLE_GESTURE_EVENT:
+  switch (nsContentUtils::GetEventClassID(nsDependentAtomString(aEventType))) {
+    case eDragEventClass:
+    case eMouseEventClass:
+    case eMouseScrollEventClass:
+    case eWheelEventClass:
+    case eSimpleGestureEventClass:
       *aResult = new nsXBLMouseEventHandler(aHandler);
       break;
     default:

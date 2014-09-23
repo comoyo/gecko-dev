@@ -12,7 +12,10 @@
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
 
+#include "gfxPrefs.h"
 #include "gfxTypes.h"
+#include "gfxFontFamilyList.h"
+#include "gfxBlur.h"
 #include "nsRect.h"
 
 #include "qcms.h"
@@ -23,13 +26,11 @@
 #include "mozilla/layers/CompositorTypes.h"
 
 class gfxASurface;
-class gfxImageSurface;
 class gfxFont;
 class gfxFontGroup;
 struct gfxFontStyle;
 class gfxUserFontSet;
 class gfxFontEntry;
-class gfxProxyFontEntry;
 class gfxPlatformFontList;
 class gfxTextRun;
 class nsIURI;
@@ -57,6 +58,13 @@ BackendTypeBit(BackendType b)
 }
 }
 
+#define MOZ_PERFORMANCE_WARNING(module, ...) \
+  do { \
+    if (gfxPrefs::PerfWarnings()) { \
+      printf_stderr("[" module "] " __VA_ARGS__); \
+    } \
+  } while (0)
+
 extern cairo_user_data_key_t kDrawTarget;
 
 // pref lang id's for font prefs
@@ -65,42 +73,36 @@ extern cairo_user_data_key_t kDrawTarget;
 
 enum eFontPrefLang {
     eFontPrefLang_Western     =  0,
-    eFontPrefLang_CentEuro    =  1,
-    eFontPrefLang_Japanese    =  2,
-    eFontPrefLang_ChineseTW   =  3,
-    eFontPrefLang_ChineseCN   =  4,
-    eFontPrefLang_ChineseHK   =  5,
-    eFontPrefLang_Korean      =  6,
-    eFontPrefLang_Cyrillic    =  7,
-    eFontPrefLang_Baltic      =  8,
-    eFontPrefLang_Greek       =  9,
-    eFontPrefLang_Turkish     = 10,
-    eFontPrefLang_Thai        = 11,
-    eFontPrefLang_Hebrew      = 12,
-    eFontPrefLang_Arabic      = 13,
-    eFontPrefLang_Devanagari  = 14,
-    eFontPrefLang_Tamil       = 15,
-    eFontPrefLang_Armenian    = 16,
-    eFontPrefLang_Bengali     = 17,
-    eFontPrefLang_Canadian    = 18,
-    eFontPrefLang_Ethiopic    = 19,
-    eFontPrefLang_Georgian    = 20,
-    eFontPrefLang_Gujarati    = 21,
-    eFontPrefLang_Gurmukhi    = 22,
-    eFontPrefLang_Khmer       = 23,
-    eFontPrefLang_Malayalam   = 24,
-    eFontPrefLang_Oriya       = 25,
-    eFontPrefLang_Telugu      = 26,
-    eFontPrefLang_Kannada     = 27,
-    eFontPrefLang_Sinhala     = 28,
-    eFontPrefLang_Tibetan     = 29,
+    eFontPrefLang_Japanese    =  1,
+    eFontPrefLang_ChineseTW   =  2,
+    eFontPrefLang_ChineseCN   =  3,
+    eFontPrefLang_ChineseHK   =  4,
+    eFontPrefLang_Korean      =  5,
+    eFontPrefLang_Cyrillic    =  6,
+    eFontPrefLang_Greek       =  7,
+    eFontPrefLang_Thai        =  8,
+    eFontPrefLang_Hebrew      =  9,
+    eFontPrefLang_Arabic      = 10,
+    eFontPrefLang_Devanagari  = 11,
+    eFontPrefLang_Tamil       = 12,
+    eFontPrefLang_Armenian    = 13,
+    eFontPrefLang_Bengali     = 14,
+    eFontPrefLang_Canadian    = 15,
+    eFontPrefLang_Ethiopic    = 16,
+    eFontPrefLang_Georgian    = 17,
+    eFontPrefLang_Gujarati    = 18,
+    eFontPrefLang_Gurmukhi    = 19,
+    eFontPrefLang_Khmer       = 20,
+    eFontPrefLang_Malayalam   = 21,
+    eFontPrefLang_Oriya       = 22,
+    eFontPrefLang_Telugu      = 23,
+    eFontPrefLang_Kannada     = 24,
+    eFontPrefLang_Sinhala     = 25,
+    eFontPrefLang_Tibetan     = 26,
 
-    eFontPrefLang_LangCount   = 30, // except Others.
+    eFontPrefLang_Others      = 27, // x-unicode
 
-    eFontPrefLang_Others      = 30, // x-unicode
-
-    eFontPrefLang_CJKSet      = 31, // special code for CJK set
-    eFontPrefLang_AllCount    = 32
+    eFontPrefLang_CJKSet      = 28  // special code for CJK set
 };
 
 enum eCMSMode {
@@ -156,7 +158,10 @@ GetBackendName(mozilla::gfx::BackendType aBackend)
 
 class gfxPlatform {
 public:
+    typedef mozilla::gfx::DataSourceSurface DataSourceSurface;
+    typedef mozilla::gfx::DrawTarget DrawTarget;
     typedef mozilla::gfx::IntSize IntSize;
+    typedef mozilla::gfx::SourceSurface SourceSurface;
 
     /**
      * Return a pointer to the current active platform.
@@ -172,6 +177,9 @@ public:
      */
     static void Shutdown();
 
+    static void InitLayersIPC();
+    static void ShutdownLayersIPC();
+
     /**
      * Create an offscreen surface of the given dimensions
      * and image format.
@@ -181,21 +189,6 @@ public:
                              gfxContentType contentType) = 0;
 
     /**
-     * Create an offscreen surface of the given dimensions and image format which
-     * can be converted to a gfxImageSurface without copying. If we can provide
-     * a platform-hosted surface, then we will return that instead of an actual
-     * gfxImageSurface.
-     * Sub-classes should override this method if CreateOffscreenSurface returns a
-     * surface which implements GetAsImageSurface
-     */
-    virtual already_AddRefed<gfxASurface>
-      CreateOffscreenImageSurface(const gfxIntSize& aSize,
-                                  gfxContentType aContentType);
-
-    virtual already_AddRefed<gfxASurface> OptimizeImage(gfxImageSurface *aSurface,
-                                                        gfxImageFormat format);
-
-    /**
      * Beware that these methods may return DrawTargets which are not fully supported
      * on the current platform and might fail silently in subtle ways. This is a massive
      * potential footgun. You should only use these methods for canvas drawing really.
@@ -203,10 +196,10 @@ public:
      * support the DrawTarget we get back.
      * See SupportsAzureContentForDrawTarget.
      */
-    virtual mozilla::RefPtr<mozilla::gfx::DrawTarget>
+    virtual mozilla::TemporaryRef<DrawTarget>
       CreateDrawTargetForSurface(gfxASurface *aSurface, const mozilla::gfx::IntSize& aSize);
 
-    virtual mozilla::RefPtr<mozilla::gfx::DrawTarget>
+    virtual mozilla::TemporaryRef<DrawTarget>
       CreateDrawTargetForUpdateSurface(gfxASurface *aSurface, const mozilla::gfx::IntSize& aSize);
 
     /*
@@ -216,30 +209,41 @@ public:
      * surface, even if aTarget changes.
      * aTarget should not keep a reference to the returned surface because that
      * will cause a cycle.
+     *
+     * This function is static so that it can be accessed from
+     * PluginInstanceChild (where we can't call gfxPlatform::GetPlatform()
+     * because the prefs service can only be accessed from the main process).
      */
-    virtual mozilla::RefPtr<mozilla::gfx::SourceSurface>
+    static mozilla::TemporaryRef<SourceSurface>
       GetSourceSurfaceForSurface(mozilla::gfx::DrawTarget *aTarget, gfxASurface *aSurface);
 
     static void ClearSourceSurfaceForSurface(gfxASurface *aSurface);
 
-    static mozilla::RefPtr<mozilla::gfx::DataSourceSurface>
+    static mozilla::TemporaryRef<DataSourceSurface>
         GetWrappedDataSourceSurface(gfxASurface *aSurface);
 
     virtual mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont);
 
-    virtual already_AddRefed<gfxASurface>
-      GetThebesSurfaceForDrawTarget(mozilla::gfx::DrawTarget *aTarget);
-
-    mozilla::RefPtr<mozilla::gfx::DrawTarget>
+    mozilla::TemporaryRef<DrawTarget>
       CreateOffscreenContentDrawTarget(const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat);
 
-    mozilla::RefPtr<mozilla::gfx::DrawTarget>
+    mozilla::TemporaryRef<DrawTarget>
       CreateOffscreenCanvasDrawTarget(const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat);
 
-    virtual mozilla::RefPtr<mozilla::gfx::DrawTarget>
+    virtual mozilla::TemporaryRef<DrawTarget>
       CreateDrawTargetForData(unsigned char* aData, const mozilla::gfx::IntSize& aSize, 
                               int32_t aStride, mozilla::gfx::SurfaceFormat aFormat);
+
+    /**
+     * Returns true if rendering to data surfaces produces the same results as
+     * rendering to offscreen surfaces on this platform, making it safe to
+     * render content to data surfaces. This is generally false on platforms
+     * which use different backends for each type of DrawTarget.
+     */
+    virtual bool CanRenderContentToDataSurface() const {
+      return false;
+    }
 
     /**
      * Returns true if we should use Azure to render content with aTarget. For
@@ -256,6 +260,8 @@ public:
 
     virtual bool UseAcceleratedSkiaCanvas();
     virtual void InitializeSkiaCacheLimits();
+
+    virtual bool UseTiling() { return gfxPrefs::LayersTilesEnabled(); }
 
     void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
       aObj.DefineProperty("AzureCanvasBackend", GetBackendName(mPreferredCanvasBackend));
@@ -303,19 +309,6 @@ public:
     }
 
     /**
-     * Font name resolver, this returns actual font name(s) by the callback
-     * function. If the font doesn't exist, the callback function is not called.
-     * If the callback function returns false, the aAborted value is set to
-     * true, otherwise, false.
-     */
-    typedef bool (*FontResolverCallback) (const nsAString& aName,
-                                            void *aClosure);
-    virtual nsresult ResolveFontName(const nsAString& aFontName,
-                                     FontResolverCallback aCallback,
-                                     void *aClosure,
-                                     bool& aAborted) = 0;
-
-    /**
      * Resolving a font name to family name. The result MUST be in the result of GetFontList().
      * If the name doesn't in the system, aFamilyName will be empty string, but not failed.
      */
@@ -324,9 +317,10 @@ public:
     /**
      * Create the appropriate platform font group
      */
-    virtual gfxFontGroup *CreateFontGroup(const nsAString& aFamilies,
-                                          const gfxFontStyle *aStyle,
-                                          gfxUserFontSet *aUserFontSet) = 0;
+    virtual gfxFontGroup
+    *CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
+                     const gfxFontStyle *aStyle,
+                     gfxUserFontSet *aUserFontSet) = 0;
                                           
                                           
     /**
@@ -335,8 +329,10 @@ public:
      * Ownership of the returned gfxFontEntry is passed to the caller,
      * who must either AddRef() or delete.
      */
-    virtual gfxFontEntry* LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                          const nsAString& aFontName)
+    virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
+                                          uint16_t aWeight,
+                                          int16_t aStretch,
+                                          bool aItalic)
     { return nullptr; }
 
     /**
@@ -347,8 +343,11 @@ public:
      * Ownership of the returned gfxFontEntry is passed to the caller,
      * who must either AddRef() or delete.
      */
-    virtual gfxFontEntry* MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                           const uint8_t *aFontData,
+    virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
+                                           uint16_t aWeight,
+                                           int16_t aStretch,
+                                           bool aItalic,
+                                           const uint8_t* aFontData,
                                            uint32_t aLength);
 
     /**
@@ -407,13 +406,6 @@ public:
      */
     bool UseGraphiteShaping();
 
-    /**
-     * Whether to use the harfbuzz shaper (depending on script complexity).
-     *
-     * This allows harfbuzz to be enabled selectively via the preferences.
-     */
-    bool UseHarfBuzzForScript(int32_t aScriptCode);
-
     // check whether format is supported on a platform or not (if unclear, returns true)
     virtual bool IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags) { return false; }
 
@@ -462,15 +454,8 @@ public:
 
     static bool OffMainThreadCompositingEnabled();
 
-    /** Use gfxPlatform::GetPref* methods instead of direct calls to Preferences
-     * to get the values for layers preferences.  These will only be evaluated
-     * only once, and remain the same until restart.
-     */
-    static bool GetPrefLayersOffMainThreadCompositionEnabled();
     static bool CanUseDirect3D9();
     static bool CanUseDirect3D11();
-
-    static bool OffMainThreadCompositionRequired();
 
     /**
      * Is it possible to use buffer rotation.  Note that these
@@ -565,19 +550,14 @@ public:
       return nsIntRect(0, 0, bits * sizeOfBit, sizeOfBit);
     }
 
-    /**
-     * Returns true if we should use raw memory to send data to the compositor
-     * rather than using shmems.
-     *
-     * This method should not be called from the compositor thread.
-     */
-    bool PreferMemoryOverShmem() const;
-
     mozilla::gl::SkiaGLGlue* GetSkiaGLGlue();
     void PurgeSkiaCache();
 
     virtual bool IsInGonkEmulator() const { return false; }
 
+    static bool UsesOffMainThreadCompositing();
+
+    bool HasEnoughTotalSystemMemoryForSkiaGL();
 protected:
     gfxPlatform();
     virtual ~gfxPlatform();
@@ -589,7 +569,7 @@ protected:
      * Helper method, creates a draw target for a specific Azure backend.
      * Used by CreateOffscreenDrawTarget.
      */
-    mozilla::RefPtr<mozilla::gfx::DrawTarget>
+    mozilla::TemporaryRef<DrawTarget>
       CreateDrawTargetForBackend(mozilla::gfx::BackendType aBackend,
                                  const mozilla::gfx::IntSize& aSize,
                                  mozilla::gfx::SurfaceFormat aFormat);
@@ -641,14 +621,13 @@ protected:
     // when doing system font fallback
     int8_t  mFallbackUsesCmaps;
 
-    // which scripts should be shaped with harfbuzz
-    int32_t mUseHarfBuzzScripts;
-
     // max character limit for words in word cache
     int32_t mWordCacheCharLimit;
 
     // max number of entries in word cache
     int32_t mWordCacheMaxEntries;
+
+    uint32_t mTotalSystemMemory;
 
 private:
     /**
@@ -663,8 +642,6 @@ private:
     friend void RecordingPrefChanged(const char *aPrefName, void *aClosure);
 
     virtual void GetPlatformCMSOutputProfile(void *&mem, size_t &size);
-
-    virtual bool SupportsOffMainThreadCompositing() { return true; }
 
     nsRefPtr<gfxASurface> mScreenReferenceSurface;
     mozilla::RefPtr<mozilla::gfx::DrawTarget> mScreenReferenceDrawTarget;
@@ -685,7 +662,6 @@ private:
     mozilla::widget::GfxInfoCollector<gfxPlatform> mAzureCanvasBackendCollector;
 
     mozilla::RefPtr<mozilla::gfx::DrawEventRecorder> mRecorder;
-    bool mLayersPreferMemoryOverShmem;
     mozilla::RefPtr<mozilla::gl::SkiaGLGlue> mSkiaGlue;
 };
 

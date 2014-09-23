@@ -27,8 +27,8 @@
 #include "nsWeakReference.h"
 #include "nsHtml5StreamListener.h"
 
-class nsHtml5Parser : public nsIParser,
-                      public nsSupportsWeakReference
+class nsHtml5Parser MOZ_FINAL : public nsIParser,
+                                public nsSupportsWeakReference
 {
   public:
     NS_DECL_AND_IMPL_ZEROING_OPERATOR_NEW
@@ -37,7 +37,6 @@ class nsHtml5Parser : public nsIParser,
     NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsHtml5Parser, nsIParser)
 
     nsHtml5Parser();
-    virtual ~nsHtml5Parser();
 
     /* Start nsIParser */
     /**
@@ -265,6 +264,8 @@ class nsHtml5Parser : public nsIParser,
     void ParseUntilBlocked();
 
   private:
+
+    virtual ~nsHtml5Parser();
 
     // State variables
 

@@ -1,4 +1,4 @@
-/* -*- Mode: Javascript; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 4 -*- */
 
 "use strict";
 
@@ -161,9 +161,10 @@ function loadCallgraph(file)
     }
 
     for (var gcName of [ 'void js::gc::GCRuntime::collect(uint8, int64, uint32, uint32)',
-                         'void js::MinorGC(JSRuntime*, uint32)' ])
+                         'void js::gc::GCRuntime::minorGC(uint32)',
+                         'void js::gc::GCRuntime::minorGC(uint32)' ])
     {
-        assert(gcName in mangledName);
+        assert(gcName in mangledName, "GC function not found: " + gcName);
         addGCFunction(mangledName[gcName], "GC");
     }
 

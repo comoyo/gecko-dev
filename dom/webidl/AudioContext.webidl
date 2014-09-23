@@ -80,4 +80,16 @@ partial interface AudioContext {
   // Read AudioChannel.webidl for more information about this attribute.
   [Pref="media.useAudioChannelService", SetterThrows]
   attribute AudioChannel mozAudioChannelType;
+
+  // These 2 events are dispatched when the AudioContext object is muted by
+  // the AudioChannelService. It's call 'interrupt' because when this event is
+  // dispatched on a HTMLMediaElement, the audio stream is paused.
+  [Pref="media.useAudioChannelService"]
+  attribute EventHandler onmozinterruptbegin;
+
+  [Pref="media.useAudioChannelService"]
+  attribute EventHandler onmozinterruptend;
+
+  // This method is for test only.
+  [ChromeOnly] AudioChannel testAudioChannelInAudioNodeStream();
 };

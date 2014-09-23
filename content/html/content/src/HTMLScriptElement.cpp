@@ -34,7 +34,7 @@ HTMLScriptElement::WrapNode(JSContext *aCx)
   return HTMLScriptElementBinding::Wrap(aCx, this);
 }
 
-HTMLScriptElement::HTMLScriptElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
+HTMLScriptElement::HTMLScriptElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                                      FromParser aFromParser)
   : nsGenericHTMLElement(aNodeInfo)
   , nsScriptElement(aFromParser)
@@ -62,7 +62,7 @@ HTMLScriptElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                                                  aCompileEventHandlers);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  if (aDocument) {
+  if (GetCrossShadowCurrentDoc()) {
     MaybeProcessScript();
   }
 
@@ -86,11 +86,11 @@ HTMLScriptElement::ParseAttribute(int32_t aNamespaceID,
 }
 
 nsresult
-HTMLScriptElement::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
+HTMLScriptElement::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
 {
   *aResult = nullptr;
 
-  already_AddRefed<nsINodeInfo> ni = nsCOMPtr<nsINodeInfo>(aNodeInfo).forget();
+  already_AddRefed<mozilla::dom::NodeInfo> ni = nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();
   HTMLScriptElement* it = new HTMLScriptElement(ni, NOT_FROM_PARSER);
 
   nsCOMPtr<nsINode> kungFuDeathGrip = it;
@@ -137,7 +137,6 @@ NS_IMPL_URI_ATTR(HTMLScriptElement, Src, src)
 NS_IMPL_STRING_ATTR(HTMLScriptElement, Type, type)
 NS_IMPL_STRING_ATTR(HTMLScriptElement, HtmlFor, _for)
 NS_IMPL_STRING_ATTR(HTMLScriptElement, Event, event)
-NS_IMPL_STRING_ATTR(HTMLScriptElement, CrossOrigin, crossorigin)
 
 void
 HTMLScriptElement::SetCharset(const nsAString& aCharset, ErrorResult& rv)
@@ -179,12 +178,6 @@ void
 HTMLScriptElement::SetEvent(const nsAString& aEvent, ErrorResult& rv)
 {
   SetHTMLAttr(nsGkAtoms::event, aEvent, rv);
-}
-
-void
-HTMLScriptElement::SetCrossOrigin(const nsAString& aCrossOrigin, ErrorResult& rv)
-{
-  SetHTMLAttr(nsGkAtoms::crossorigin, aCrossOrigin, rv);
 }
 
 nsresult

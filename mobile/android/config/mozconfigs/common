@@ -15,7 +15,7 @@ ac_add_options --enable-elf-hack
 
 ANDROID_NDK_VERSION="r8e"
 ANDROID_NDK_VERSION_32BIT="r8c"
-ANDROID_SDK_VERSION="17"
+ANDROID_SDK_VERSION="20"
 
 # Build Fennec
 ac_add_options --enable-application=mobile/android
@@ -35,6 +35,8 @@ ac_add_options --enable-update-channel=${MOZ_UPDATE_CHANNEL}
 
 # Treat warnings as errors in directories with FAIL_ON_WARNINGS.
 ac_add_options --enable-warnings-as-errors
+
+ac_add_options --with-mozilla-api-keyfile=/builds/mozilla-api.key
 
 # Package js shell.
 export MOZ_PACKAGE_JSSHELL=1

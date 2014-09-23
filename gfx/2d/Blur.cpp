@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/gfx/Blur.h"
+#include "Blur.h"
 
 #include <algorithm>
 #include <math.h>
@@ -14,6 +14,7 @@
 #include "mozilla/Constants.h"
 
 #include "2D.h"
+#include "DataSurfaceHelpers.h"
 #include "Tools.h"
 
 using namespace std;
@@ -334,7 +335,7 @@ AlphaBoxBlur::AlphaBoxBlur(const Rect& aRect,
                            const Rect* aSkipRect)
  : mSpreadRadius(aSpreadRadius),
    mBlurRadius(aBlurRadius),
-   mSurfaceAllocationSize(-1)
+   mSurfaceAllocationSize(0)
 {
   Rect rect(aRect);
   rect.Inflate(Size(aBlurRadius + aSpreadRadius));
@@ -383,9 +384,9 @@ AlphaBoxBlur::AlphaBoxBlur(const Rect& aRect,
 
     // We need to leave room for an additional 3 bytes for a potential overrun
     // in our blurring code.
-    CheckedInt<int32_t> size = CheckedInt<int32_t>(mStride) * mRect.height + 3;
-    if (size.isValid()) {
-      mSurfaceAllocationSize = size.value();
+    size_t size = BufferSizeFromStrideAndHeight(mStride, mRect.height, 3);
+    if (size != 0) {
+      mSurfaceAllocationSize = size;
     }
   }
 }
@@ -399,13 +400,13 @@ AlphaBoxBlur::AlphaBoxBlur(const Rect& aRect,
     mSpreadRadius(),
     mBlurRadius(CalculateBlurRadius(Point(aSigmaX, aSigmaY))),
     mStride(aStride),
-    mSurfaceAllocationSize(-1)
+    mSurfaceAllocationSize(0)
 {
   IntRect intRect;
   if (aRect.ToIntRect(&intRect)) {
-    CheckedInt<int32_t> minDataSize = CheckedInt<int32_t>(intRect.width)*intRect.height;
-    if (minDataSize.isValid()) {
-      mSurfaceAllocationSize = minDataSize.value();
+    size_t minDataSize = BufferSizeFromStrideAndHeight(intRect.width, intRect.height);
+    if (minDataSize != 0) {
+      mSurfaceAllocationSize = minDataSize;
     }
   }
 }
@@ -444,7 +445,7 @@ AlphaBoxBlur::GetDirtyRect()
   return nullptr;
 }
 
-int32_t
+size_t
 AlphaBoxBlur::GetSurfaceAllocationSize() const
 {
   return mSurfaceAllocationSize;
@@ -497,7 +498,11 @@ AlphaBoxBlur::Blur(uint8_t* aData)
 
       // No need to use CheckedInt here - we have validated it in the constructor.
       size_t szB = stride * size.height;
-      uint8_t* tmpData = new uint8_t[szB];
+      uint8_t* tmpData = new (std::nothrow) uint8_t[szB];
+      if (!tmpData) {
+        return;
+      }
+
       memset(tmpData, 0, szB);
 
       uint8_t* a = aData;
@@ -528,7 +533,13 @@ AlphaBoxBlur::Blur(uint8_t* aData)
 
       // We need to leave room for an additional 12 bytes for a maximum overrun
       // of 3 pixels in the blurring code.
-      AlignedArray<uint32_t> integralImage((integralImageStride / 4) * integralImageSize.height + 12);
+      size_t bufLen = BufferSizeFromStrideAndHeight(integralImageStride, integralImageSize.height, 12);
+      if (bufLen == 0) {
+        return;
+      }
+      // bufLen is a byte count, but here we want a multiple of 32-bit ints, so
+      // we divide by 4.
+      AlignedArray<uint32_t> integralImage((bufLen / 4) + ((bufLen % 4) ? 1 : 0));
 
       if (!integralImage) {
         return;
@@ -723,8 +734,8 @@ static const Float GAUSSIAN_SCALE_FACTOR = Float((3 * sqrt(2 * M_PI) / 4) * 1.5)
 IntSize
 AlphaBoxBlur::CalculateBlurRadius(const Point& aStd)
 {
-    IntSize size(static_cast<int32_t>(floor(aStd.x * GAUSSIAN_SCALE_FACTOR + 0.5)),
-                 static_cast<int32_t>(floor(aStd.y * GAUSSIAN_SCALE_FACTOR + 0.5)));
+    IntSize size(static_cast<int32_t>(floor(aStd.x * GAUSSIAN_SCALE_FACTOR + 0.5f)),
+                 static_cast<int32_t>(floor(aStd.y * GAUSSIAN_SCALE_FACTOR + 0.5f)));
 
     return size;
 }

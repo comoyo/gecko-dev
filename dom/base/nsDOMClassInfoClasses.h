@@ -4,8 +4,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 // IWYU pragma: private, include "nsDOMClassInfoID.h"
 
-DOMCI_CLASS(Window)
-DOMCI_CLASS(Location)
 DOMCI_CLASS(DOMPrototype)
 DOMCI_CLASS(DOMConstructor)
 
@@ -27,9 +25,6 @@ DOMCI_CLASS(TreeSelection)
 DOMCI_CLASS(TreeContentView)
 #endif
 
-// DOM Chrome Window class, almost identical to Window
-DOMCI_CLASS(ChromeWindow)
-
 #ifdef MOZ_XUL
 DOMCI_CLASS(XULTemplateBuilder)
 DOMCI_CLASS(XULTreeBuilder)
@@ -42,31 +37,17 @@ DOMCI_CLASS(TreeColumn)
 DOMCI_CLASS(CSSMozDocumentRule)
 DOMCI_CLASS(CSSSupportsRule)
 
-// WindowUtils
-DOMCI_CLASS(WindowUtils)
-
 // XSLTProcessor
 DOMCI_CLASS(XSLTProcessor)
 
 // DOM Level 3 XPath objects
-DOMCI_CLASS(XPathExpression)
 DOMCI_CLASS(XPathNSResolver)
-DOMCI_CLASS(XPathResult)
-
-// WhatWG WebApps Objects
-DOMCI_CLASS(Storage)
 
 DOMCI_CLASS(Blob)
 DOMCI_CLASS(File)
 
-// DOM modal content window class, almost identical to Window
-DOMCI_CLASS(ModalContentWindow)
-
-DOMCI_CLASS(MozMobileMessageManager)
 DOMCI_CLASS(MozSmsMessage)
 DOMCI_CLASS(MozMmsMessage)
-DOMCI_CLASS(MozSmsFilter)
-DOMCI_CLASS(MozSmsSegmentInfo)
 DOMCI_CLASS(MozMobileMessageThread)
 
 // @font-face in CSS
@@ -79,11 +60,13 @@ DOMCI_CLASS(ChromeMessageSender)
 DOMCI_CLASS(MozCSSKeyframeRule)
 DOMCI_CLASS(MozCSSKeyframesRule)
 
+// @counter-style in CSS
+DOMCI_CLASS(CSSCounterStyleRule)
+
 DOMCI_CLASS(CSSPageRule)
 
 DOMCI_CLASS(CSSFontFeatureValuesRule)
 
-DOMCI_CLASS(UserDataHandler)
 DOMCI_CLASS(XULControlElement)
 DOMCI_CLASS(XULLabeledControlElement)
 DOMCI_CLASS(XULButtonElement)

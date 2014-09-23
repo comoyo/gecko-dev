@@ -7,22 +7,32 @@
 #ifndef __FFmpegH264Decoder_h__
 #define __FFmpegH264Decoder_h__
 
-#include "nsTPriorityQueue.h"
-
 #include "FFmpegDataDecoder.h"
 
 namespace mozilla
 {
 
-class FFmpegH264Decoder : public FFmpegDataDecoder
+template <int V>
+class FFmpegH264Decoder : public FFmpegDataDecoder<V>
+{
+};
+
+template <>
+class FFmpegH264Decoder<LIBAV_VER> : public FFmpegDataDecoder<LIBAV_VER>
 {
   typedef mozilla::layers::Image Image;
   typedef mozilla::layers::ImageContainer ImageContainer;
 
+  enum DecodeResult {
+    DECODE_FRAME,
+    DECODE_NO_FRAME,
+    DECODE_ERROR
+  };
+
 public:
   FFmpegH264Decoder(MediaTaskQueue* aTaskQueue,
                     MediaDataDecoderCallback* aCallback,
-                    const mp4_demuxer::VideoDecoderConfig &aConfig,
+                    const mp4_demuxer::VideoDecoderConfig& aConfig,
                     ImageContainer* aImageContainer);
   virtual ~FFmpegH264Decoder();
 
@@ -33,6 +43,8 @@ public:
 
 private:
   void DecodeFrame(mp4_demuxer::MP4Sample* aSample);
+  DecodeResult DoDecodeFrame(mp4_demuxer::MP4Sample* aSample);
+  void DoDrain();
   void OutputDelayedFrames();
 
   /**
@@ -45,37 +57,10 @@ private:
                                  AVFrame* aFrame);
 
   static int AllocateBufferCb(AVCodecContext* aCodecContext, AVFrame* aFrame);
+  static void ReleaseBufferCb(AVCodecContext* aCodecContext, AVFrame* aFrame);
 
   MediaDataDecoderCallback* mCallback;
   nsRefPtr<ImageContainer> mImageContainer;
-
-  /**
-   * Pass Image back from the allocator to our DoDecode method.
-   * We *should* return the image back through ffmpeg wrapped in an AVFrame like
-   * we're meant to. However, if avcodec_decode_video2 fails, it returns a
-   * completely different frame from the one holding our image and it will be
-   * leaked.
-   * This could be handled in the future by wrapping our Image in a reference
-   * counted AVBuffer and letting ffmpeg hold the nsAutoPtr<Image>, but
-   * currently we have to support older versions of ffmpeg which lack
-   * refcounting.
-   */
-  nsRefPtr<Image> mCurrentImage;
-
-  struct VideoDataComparator
-  {
-    bool LessThan(VideoData* const &a, VideoData* const &b) const
-    {
-      return a->mTime < b->mTime;
-    }
-  };
-
-  /**
-   * FFmpeg returns frames in DTS order, so we need to keep a heap of the
-   * previous MAX_B_FRAMES + 1 frames (all B frames in a GOP + one P frame)
-   * ordered by PTS to make sure we present video frames in the intended order.
-   */
-  nsTPriorityQueue<VideoData*, VideoDataComparator> mDelayedFrames;
 };
 
 } // namespace mozilla

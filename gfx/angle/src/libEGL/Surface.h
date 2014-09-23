@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2002-2012 The ANGLE Project Authors. All rights reserved.
+// Copyright (c) 2002-2014 The ANGLE Project Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -11,7 +11,6 @@
 #ifndef LIBEGL_SURFACE_H_
 #define LIBEGL_SURFACE_H_
 
-#define EGLAPI
 #include <EGL/egl.h>
 
 #include "common/angleutils.h"
@@ -34,10 +33,10 @@ class Config;
 class Surface
 {
   public:
-    Surface(Display *display, const egl::Config *config, HWND window, EGLint postSubBufferSupported);
+    Surface(Display *display, const egl::Config *config, HWND window, EGLint fixedSize, EGLint width, EGLint height, EGLint postSubBufferSupported);
     Surface(Display *display, const egl::Config *config, HANDLE shareHandle, EGLint width, EGLint height, EGLenum textureFormat, EGLenum textureTarget);
 
-    ~Surface();
+    virtual ~Surface();
 
     bool initialize();
     void release();
@@ -47,9 +46,6 @@ class Surface
     bool swap();
     bool postSubBuffer(EGLint x, EGLint y, EGLint width, EGLint height);
 
-    virtual EGLint getWidth() const;
-    virtual EGLint getHeight() const;
-
     virtual EGLint isPostSubBufferSupported() const;
 
     virtual rx::SwapChain *getSwapChain() const;
@@ -57,12 +53,20 @@ class Surface
     void setSwapInterval(EGLint interval);
     bool checkForOutOfDateSwapChain();   // Returns true if swapchain changed due to resize or interval update
 
+    virtual EGLint getConfigID() const;
+    virtual EGLint getWidth() const;
+    virtual EGLint getHeight() const;
+    virtual EGLint getPixelAspectRatio() const;
+    virtual EGLenum getRenderBuffer() const;
+    virtual EGLenum getSwapBehavior() const;
     virtual EGLenum getTextureFormat() const;
     virtual EGLenum getTextureTarget() const;
     virtual EGLenum getFormat() const;
 
     virtual void setBoundTexture(gl::Texture2D *texture);
     virtual gl::Texture2D *getBoundTexture() const;
+
+    EGLint isFixedSize() const;
 
 private:
     DISALLOW_COPY_AND_ASSIGN(Surface);
@@ -99,7 +103,8 @@ private:
 //  EGLenum vgColorSpace;          // Color space for OpenVG
     EGLint mSwapInterval;
     EGLint mPostSubBufferSupported;
-    
+    EGLint mFixedSize;
+
     bool mSwapIntervalDirty;
     gl::Texture2D *mTexture;
 };

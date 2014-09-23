@@ -7,6 +7,8 @@
 
 #include "webrtc/common_video/libyuv/include/scaler.h"
 
+#include "prinrval.h" // For PRIntervalTime
+
 namespace webrtc {
 
 class H261EncoderImpl : public H261Encoder {
@@ -95,6 +97,7 @@ class H261EncoderImpl : public H261Encoder {
                   VideoFrameType& frame_type);
 
   const uint8_t* PackI420Frame(const I420VideoFrame& frame);
+  bool ShouldDropFrameToMaintainRate();
 
   EncodedImage encoded_image_;
   CodecSpecificInfo encoded_image_info_;
@@ -118,6 +121,8 @@ class H261EncoderImpl : public H261Encoder {
 
   int64_t prev_second_render_time_ms_;
   int num_frames_prev_second_render_;
+  uint32_t max_framerate_;
+  PRIntervalTime last_frame_time_;
 };  // end of H261EncoderImpl class
 
 

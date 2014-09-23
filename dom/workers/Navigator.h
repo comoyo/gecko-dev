@@ -28,21 +28,29 @@ class WorkerNavigator MOZ_FINAL : public nsWrapperCache
   nsString mAppVersion;
   nsString mPlatform;
   nsString mUserAgent;
+  nsTArray<nsString> mLanguages;
   bool mOnline;
 
   WorkerNavigator(const nsAString& aAppName,
                   const nsAString& aAppVersion,
                   const nsAString& aPlatform,
                   const nsAString& aUserAgent,
+                  const nsTArray<nsString>& aLanguages,
                   bool aOnline)
     : mAppName(aAppName)
     , mAppVersion(aAppVersion)
     , mPlatform(aPlatform)
     , mUserAgent(aUserAgent)
+    , mLanguages(aLanguages)
     , mOnline(aOnline)
   {
     MOZ_COUNT_CTOR(WorkerNavigator);
     SetIsDOMBinding();
+  }
+
+  ~WorkerNavigator()
+  {
+    MOZ_COUNT_DTOR(WorkerNavigator);
   }
 
 public:
@@ -58,11 +66,6 @@ public:
 
   nsISupports* GetParentObject() const {
     return nullptr;
-  }
-
-  ~WorkerNavigator()
-  {
-    MOZ_COUNT_DTOR(WorkerNavigator);
   }
 
   void GetAppCodeName(nsString& aAppCodeName) const
@@ -92,6 +95,20 @@ public:
     return false;
   }
 
+  void GetLanguage(nsString& aLanguage) const
+  {
+    if (mLanguages.Length() >= 1) {
+      aLanguage.Assign(mLanguages[0]);
+    } else {
+      aLanguage.Truncate();
+    }
+  }
+
+  void GetLanguages(nsTArray<nsString>& aLanguages) const
+  {
+    aLanguages = mLanguages;
+  }
+
   void GetUserAgent(nsString& aUserAgent) const
   {
     aUserAgent = mUserAgent;
@@ -108,8 +125,11 @@ public:
     mOnline = aOnline;
   }
 
+  void SetLanguages(const nsTArray<nsString>& aLanguages);
+
   already_AddRefed<Promise> GetDataStores(JSContext* aCx,
                                           const nsAString& aName,
+                                          const nsAString& aOwner,
                                           ErrorResult& aRv);
 };
 

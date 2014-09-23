@@ -12,7 +12,7 @@
 class qsObjectHelper;
 namespace mozilla {
 namespace dom {
-class NativePropertiesHolder;
+struct NativePropertiesHolder;
 }
 }
 
@@ -123,10 +123,6 @@ void
 xpc_qsThrowBadSetterValue(JSContext *cx, nsresult rv, JSObject *obj,
                           uint16_t name_index);
 
-
-bool
-xpc_qsGetterOnlyPropertyStub(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
-                             bool strict, JS::MutableHandleValue vp);
 
 bool
 xpc_qsGetterOnlyNativeStub(JSContext *cx, unsigned argc, jsval *vp);
@@ -281,7 +277,7 @@ protected:
  * the string from garbage collection. The caller must leave the jsval alone
  * for the lifetime of the xpc_qsDOMString.
  */
-class xpc_qsDOMString : public xpc_qsBasicString<nsAString, nsDependentString>
+class xpc_qsDOMString : public xpc_qsBasicString<nsAString, nsAutoString>
 {
 public:
     xpc_qsDOMString(JSContext *cx, JS::HandleValue v,

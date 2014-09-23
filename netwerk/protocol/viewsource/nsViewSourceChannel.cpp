@@ -452,6 +452,22 @@ nsViewSourceChannel::SetOwner(nsISupports* aOwner)
 }
 
 NS_IMETHODIMP
+nsViewSourceChannel::GetLoadInfo(nsILoadInfo* *aLoadInfo)
+{
+    NS_ENSURE_TRUE(mChannel, NS_ERROR_FAILURE);
+
+    return mChannel->GetLoadInfo(aLoadInfo);
+}
+
+NS_IMETHODIMP
+nsViewSourceChannel::SetLoadInfo(nsILoadInfo* aLoadInfo)
+{
+    NS_ENSURE_TRUE(mChannel, NS_ERROR_FAILURE);
+
+    return mChannel->SetLoadInfo(aLoadInfo);
+}
+
+NS_IMETHODIMP
 nsViewSourceChannel::GetNotificationCallbacks(nsIInterfaceRequestor* *aNotificationCallbacks)
 {
     NS_ENSURE_TRUE(mChannel, NS_ERROR_FAILURE);
@@ -649,6 +665,20 @@ nsViewSourceChannel::SetAllowPipelining(bool aAllowPipelining)
 }
 
 NS_IMETHODIMP
+nsViewSourceChannel::GetAllowSTS(bool *aAllowSTS)
+{
+    return !mHttpChannel ? NS_ERROR_NULL_POINTER :
+        mHttpChannel->GetAllowSTS(aAllowSTS);
+}
+
+NS_IMETHODIMP
+nsViewSourceChannel::SetAllowSTS(bool aAllowSTS)
+{
+    return !mHttpChannel ? NS_ERROR_NULL_POINTER :
+        mHttpChannel->SetAllowSTS(aAllowSTS);
+}
+
+NS_IMETHODIMP
 nsViewSourceChannel::GetRedirectionLimit(uint32_t *aRedirectionLimit)
 {
     return !mHttpChannel ? NS_ERROR_NULL_POINTER :
@@ -691,10 +721,6 @@ nsViewSourceChannel::GetResponseHeader(const nsACString & aHeader,
         return NS_ERROR_NULL_POINTER;
 
     if (!aHeader.Equals(NS_LITERAL_CSTRING("Content-Type"),
-                        nsCaseInsensitiveCStringComparator()) &&
-        !aHeader.Equals(NS_LITERAL_CSTRING("X-Content-Security-Policy"),
-                        nsCaseInsensitiveCStringComparator()) &&
-        !aHeader.Equals(NS_LITERAL_CSTRING("X-Content-Security-Policy-Report-Only"),
                         nsCaseInsensitiveCStringComparator()) &&
         !aHeader.Equals(NS_LITERAL_CSTRING("Content-Security-Policy"),
                         nsCaseInsensitiveCStringComparator()) &&

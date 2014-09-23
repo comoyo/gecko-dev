@@ -12,12 +12,18 @@
 #include "nsStyleContext.h"
 #include "nsRenderingContext.h"
 #include "nsGkAtoms.h"
+#include "nsPresShell.h"
 #include "nsIPresShell.h"
 #include "nsDisplayList.h"
 #include "nsCSSFrameConstructor.h"
 #include "nsFrameManager.h"
 #include "gfxPlatform.h"
-
+#include "nsPrintfCString.h"
+// for touchcaret
+#include "nsContentList.h"
+#include "nsContentCreatorFunctions.h"
+#include "nsContentUtils.h"
+#include "nsStyleSet.h"
 // for focus
 #include "nsIScrollableFrame.h"
 #ifdef DEBUG_CANVAS_FOCUS
@@ -40,7 +46,88 @@ NS_IMPL_FRAMEARENA_HELPERS(nsCanvasFrame)
 
 NS_QUERYFRAME_HEAD(nsCanvasFrame)
   NS_QUERYFRAME_ENTRY(nsCanvasFrame)
+  NS_QUERYFRAME_ENTRY(nsIAnonymousContentCreator)
 NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
+
+nsresult
+nsCanvasFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
+{
+  if (!mContent) {
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIDocument> doc = mContent->OwnerDoc();
+  nsresult rv = NS_OK;
+  ErrorResult er;
+  // We won't create touch caret element if preference is not enabled.
+  if (PresShell::TouchCaretPrefEnabled()) {
+    nsRefPtr<dom::NodeInfo> nodeInfo;
+
+    // Create and append touch caret frame.
+    nodeInfo = doc->NodeInfoManager()->GetNodeInfo(nsGkAtoms::div, nullptr,
+                                                   kNameSpaceID_XHTML,
+                                                   nsIDOMNode::ELEMENT_NODE);
+    NS_ENSURE_TRUE(nodeInfo, NS_ERROR_OUT_OF_MEMORY);
+
+    rv = NS_NewHTMLElement(getter_AddRefs(mTouchCaretElement), nodeInfo.forget(),
+                           mozilla::dom::NOT_FROM_PARSER);
+    NS_ENSURE_SUCCESS(rv, rv);
+    aElements.AppendElement(mTouchCaretElement);
+
+    // Add a _moz_anonclass attribute as touch caret selector.
+    mTouchCaretElement->SetAttribute(NS_LITERAL_STRING("_moz_anonclass"),
+                                     NS_LITERAL_STRING("mozTouchCaret"), er);
+    NS_ENSURE_SUCCESS(er.ErrorCode(), er.ErrorCode());
+
+    // Set touch caret to visibility: hidden by default.
+    nsAutoString classValue;
+    classValue.AppendLiteral("moz-touchcaret hidden");
+    rv = mTouchCaretElement->SetAttr(kNameSpaceID_None, nsGkAtoms::_class,
+                                     classValue, true);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  if (PresShell::SelectionCaretPrefEnabled()) {
+    // Selection caret
+    mSelectionCaretsStartElement = doc->CreateHTMLElement(nsGkAtoms::div);
+    aElements.AppendElement(mSelectionCaretsStartElement);
+
+    mSelectionCaretsEndElement = doc->CreateHTMLElement(nsGkAtoms::div);
+    aElements.AppendElement(mSelectionCaretsEndElement);
+
+    mSelectionCaretsStartElement->SetAttribute(NS_LITERAL_STRING("_moz_anonclass"),
+                                               NS_LITERAL_STRING("mozTouchCaret"), er);
+    rv = mSelectionCaretsStartElement->SetAttr(kNameSpaceID_None, nsGkAtoms::_class,
+                                               NS_LITERAL_STRING("moz-selectioncaret-left hidden"),
+                                               true);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    mSelectionCaretsEndElement->SetAttribute(NS_LITERAL_STRING("_moz_anonclass"),
+                                             NS_LITERAL_STRING("mozTouchCaret"), er);
+    rv = mSelectionCaretsEndElement->SetAttr(kNameSpaceID_None, nsGkAtoms::_class,
+                                             NS_LITERAL_STRING("moz-selectioncaret-right hidden"),
+                                             true);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  return NS_OK;
+}
+
+void
+nsCanvasFrame::AppendAnonymousContentTo(nsTArray<nsIContent*>& aElements, uint32_t aFilter)
+{
+  if (mTouchCaretElement) {
+    aElements.AppendElement(mTouchCaretElement);
+  }
+
+  if (mSelectionCaretsStartElement) {
+    aElements.AppendElement(mSelectionCaretsStartElement);
+  }
+
+  if (mSelectionCaretsEndElement) {
+    aElements.AppendElement(mSelectionCaretsEndElement);
+  }
+}
 
 void
 nsCanvasFrame::DestroyFrom(nsIFrame* aDestructRoot)
@@ -51,6 +138,9 @@ nsCanvasFrame::DestroyFrom(nsIFrame* aDestructRoot)
     sf->RemoveScrollPositionListener(this);
   }
 
+  nsContentUtils::DestroyAnonymousContent(&mTouchCaretElement);
+  nsContentUtils::DestroyAnonymousContent(&mSelectionCaretsStartElement);
+  nsContentUtils::DestroyAnonymousContent(&mSelectionCaretsEndElement);
   nsContainerFrame::DestroyFrom(aDestructRoot);
 }
 
@@ -98,9 +188,14 @@ nsCanvasFrame::AppendFrames(ChildListID     aListID,
                             nsFrameList&    aFrameList)
 {
   MOZ_ASSERT(aListID == kPrincipalList, "unexpected child list");
-  MOZ_ASSERT(mFrames.IsEmpty(), "already have a child frame");
-  MOZ_ASSERT(aFrameList.FirstChild() == aFrameList.LastChild(),
-             "Only one principal child frame allowed");
+  if (!mFrames.IsEmpty()) {
+    for (nsFrameList::Enumerator e(aFrameList); !e.AtEnd(); e.Next()) {
+      // We only allow native anonymous child frame for touch caret,
+      // which its placeholder is added to the Principal child lists.
+      MOZ_ASSERT(e.get()->GetContent()->IsInNativeAnonymousSubtree(),
+                 "invalid child list");
+    }
+  }
   nsFrame::VerifyDirtyBitSet(aFrameList);
   nsContainerFrame::AppendFrames(aListID, aFrameList);
 }
@@ -121,7 +216,6 @@ nsCanvasFrame::RemoveFrame(ChildListID     aListID,
                            nsIFrame*       aOldFrame)
 {
   MOZ_ASSERT(aListID == kPrincipalList, "unexpected child list");
-  MOZ_ASSERT(aOldFrame == mFrames.FirstChild(), "unknown aOldFrame");
   nsContainerFrame::RemoveFrame(aListID, aOldFrame);
 }
 #endif
@@ -153,15 +247,15 @@ nsDisplayCanvasBackgroundColor::Paint(nsDisplayListBuilder* aBuilder,
   }
 }
 
-static void BlitSurface(gfxContext* aDest, const gfxRect& aRect, gfxASurface* aSource)
+#ifdef MOZ_DUMP_PAINTING
+void
+nsDisplayCanvasBackgroundColor::WriteDebugInfo(nsACString& aTo)
 {
-  aDest->Translate(gfxPoint(aRect.x, aRect.y));
-  aDest->SetSource(aSource);
-  aDest->NewPath();
-  aDest->Rectangle(gfxRect(0, 0, aRect.width, aRect.height));
-  aDest->Fill();
-  aDest->Translate(-gfxPoint(aRect.x, aRect.y));
+  aTo += nsPrintfCString(" (rgba %d,%d,%d,%d)",
+          NS_GET_R(mColor), NS_GET_G(mColor),
+          NS_GET_B(mColor), NS_GET_A(mColor));
 }
+#endif
 
 static void BlitSurface(DrawTarget* aDest, const gfxRect& aRect, DrawTarget* aSource)
 {
@@ -181,9 +275,7 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
 
   nsRefPtr<nsRenderingContext> context;
   nsRefPtr<gfxContext> dest = aCtx->ThebesContext();
-  nsRefPtr<gfxASurface> surf;
   RefPtr<DrawTarget> dt;
-  nsRefPtr<gfxContext> ctx;
   gfxRect destRect;
 #ifndef MOZ_GFX_OPTIMIZE_MOBILE
   if (IsSingleFixedPositionImage(aBuilder, bgClipRect, &destRect) &&
@@ -192,32 +284,17 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
     // Snap image rectangle to nearest pixel boundaries. This is the right way
     // to snap for this context, because we checked HasNonIntegerTranslation above.
     destRect.Round();
-    if (dest->IsCairo()) {
-      surf = static_cast<gfxASurface*>(Frame()->Properties().Get(nsIFrame::CachedBackgroundImage()));
-      nsRefPtr<gfxASurface> destSurf = dest->CurrentSurface();
-      if (surf && surf->GetType() == destSurf->GetType()) {
-        BlitSurface(dest, destRect, surf);
-        return;
-      }
-      surf = destSurf->CreateSimilarSurface(
-          gfxContentType::COLOR_ALPHA,
-          gfxIntSize(ceil(destRect.width), ceil(destRect.height)));
-    } else {
-      dt = static_cast<DrawTarget*>(Frame()->Properties().Get(nsIFrame::CachedBackgroundImageDT()));
-      DrawTarget* destDT = dest->GetDrawTarget();
-      if (dt) {
-        BlitSurface(destDT, destRect, dt);
-        return;
-      }
-      dt = destDT->CreateSimilarDrawTarget(IntSize(ceil(destRect.width), ceil(destRect.height)), SurfaceFormat::B8G8R8A8);
+    dt = static_cast<DrawTarget*>(Frame()->Properties().Get(nsIFrame::CachedBackgroundImageDT()));
+    DrawTarget* destDT = dest->GetDrawTarget();
+    if (dt) {
+      BlitSurface(destDT, destRect, dt);
+      return;
     }
-    if (surf || dt) {
-      if (surf) {
-        ctx = new gfxContext(surf);
-      } else {
-        ctx = new gfxContext(dt);
-      }
-      ctx->Translate(-gfxPoint(destRect.x, destRect.y));
+    dt = destDT->CreateSimilarDrawTarget(IntSize(ceil(destRect.width), ceil(destRect.height)), SurfaceFormat::B8G8R8A8);
+    if (dt) {
+      nsRefPtr<gfxContext> ctx = new gfxContext(dt);
+      ctx->SetMatrix(
+        ctx->CurrentMatrix().Translate(-destRect.x, -destRect.y));
       context = new nsRenderingContext();
       context->Init(aCtx->DeviceContext(), ctx);
     }
@@ -225,15 +302,10 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
 #endif
 
   PaintInternal(aBuilder,
-                (surf || dt) ? context.get() : aCtx,
-                (surf || dt) ? bgClipRect: mVisibleRect,
+                dt ? context.get() : aCtx,
+                dt ? bgClipRect: mVisibleRect,
                 &bgClipRect);
 
-  if (surf) {
-    BlitSurface(dest, destRect, surf);
-    frame->Properties().Set(nsIFrame::CachedBackgroundImage(),
-                            surf.forget().take());
-  }
   if (dt) {
     BlitSurface(dest->GetDrawTarget(), destRect, dt);
     frame->Properties().Set(nsIFrame::CachedBackgroundImageDT(), dt.forget().drop());
@@ -322,13 +394,23 @@ nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       return;
     }
 
+    bool needBlendContainer = false;
+
     // Create separate items for each background layer.
     NS_FOR_VISIBLE_BACKGROUND_LAYERS_BACK_TO_FRONT(i, bg) {
       if (bg->mLayers[i].mImage.IsEmpty()) {
         continue;
       }
+      if (bg->mLayers[i].mBlendMode != NS_STYLE_BLEND_NORMAL) {
+        needBlendContainer = true;
+      }
       aLists.BorderBackground()->AppendNewToTop(
         new (aBuilder) nsDisplayCanvasBackgroundImage(aBuilder, this, i, bg));
+    }
+
+    if (needBlendContainer) {
+      aLists.BorderBackground()->AppendNewToTop(
+        new (aBuilder) nsDisplayBlendContainer(aBuilder, this, aLists.BorderBackground()));
     }
   }
 
@@ -394,26 +476,26 @@ nsCanvasFrame::PaintFocus(nsRenderingContext& aRenderingContext, nsPoint aPt)
 }
 
 /* virtual */ nscoord
-nsCanvasFrame::GetMinWidth(nsRenderingContext *aRenderingContext)
+nsCanvasFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 {
   nscoord result;
   DISPLAY_MIN_WIDTH(this, result);
   if (mFrames.IsEmpty())
     result = 0;
   else
-    result = mFrames.FirstChild()->GetMinWidth(aRenderingContext);
+    result = mFrames.FirstChild()->GetMinISize(aRenderingContext);
   return result;
 }
 
 /* virtual */ nscoord
-nsCanvasFrame::GetPrefWidth(nsRenderingContext *aRenderingContext)
+nsCanvasFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
 {
   nscoord result;
   DISPLAY_PREF_WIDTH(this, result);
   if (mFrames.IsEmpty())
     result = 0;
   else
-    result = mFrames.FirstChild()->GetPrefWidth(aRenderingContext);
+    result = mFrames.FirstChild()->GetPrefISize(aRenderingContext);
   return result;
 }
 
@@ -466,9 +548,9 @@ nsCanvasFrame::Reflow(nsPresContext*           aPresContext,
     nsIFrame* kidFrame = mFrames.FirstChild();
     bool kidDirty = (kidFrame->GetStateBits() & NS_FRAME_IS_DIRTY) != 0;
 
-    nsHTMLReflowState kidReflowState(aPresContext, aReflowState, kidFrame,
-                                     nsSize(aReflowState.AvailableWidth(),
-                                            aReflowState.AvailableHeight()));
+    nsHTMLReflowState
+      kidReflowState(aPresContext, aReflowState, kidFrame,
+                     aReflowState.AvailableSize(kidFrame->GetWritingMode()));
 
     if (aReflowState.mFlags.mVResize &&
         (kidFrame->GetStateBits() & NS_FRAME_CONTAINS_RELATIVE_HEIGHT)) {
@@ -526,14 +608,17 @@ nsCanvasFrame::Reflow(nsPresContext*           aPresContext,
     // Return our desired size. Normally it's what we're told, but
     // sometimes we can be given an unconstrained height (when a window
     // is sizing-to-content), and we should compute our desired height.
-    aDesiredSize.Width() = aReflowState.ComputedWidth();
-    if (aReflowState.ComputedHeight() == NS_UNCONSTRAINEDSIZE) {
-      aDesiredSize.Height() = kidFrame->GetRect().height +
-        kidReflowState.ComputedPhysicalMargin().TopBottom();
+    WritingMode wm = aReflowState.GetWritingMode();
+    LogicalSize finalSize(wm);
+    finalSize.ISize(wm) = aReflowState.ComputedISize();
+    if (aReflowState.ComputedBSize() == NS_UNCONSTRAINEDSIZE) {
+      finalSize.BSize(wm) = kidFrame->GetLogicalSize(wm).BSize(wm) +
+        kidReflowState.ComputedLogicalMargin().BStartEnd(wm);
     } else {
-      aDesiredSize.Height() = aReflowState.ComputedHeight();
+      finalSize.BSize(wm) = aReflowState.ComputedBSize();
     }
 
+    aDesiredSize.SetSize(wm, finalSize);
     aDesiredSize.SetOverflowAreasToDesiredBounds();
     aDesiredSize.mOverflowAreas.UnionWith(
       kidDesiredSize.mOverflowAreas + kidPt);

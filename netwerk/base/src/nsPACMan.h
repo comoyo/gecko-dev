@@ -24,6 +24,7 @@
 class nsPACMan;
 class nsISystemProxySettings;
 class nsIThread;
+class WaitForThreadShutdown;
 
 /**
  * This class defines a callback interface used by AsyncGetProxyForURI.
@@ -149,7 +150,7 @@ public:
     return IsPACURI(tmp);
   }
 
-  NS_HIDDEN_(nsresult) Init(nsISystemProxySettings *);
+  nsresult Init(nsISystemProxySettings *);
   static nsPACMan *sInstance;
 
   // PAC thread operations only
@@ -164,6 +165,7 @@ private:
   friend class PendingPACQuery;
   friend class PACLoadComplete;
   friend class ExecutePACThreadAction;
+  friend class WaitForThreadShutdown;
 
   ~nsPACMan();
 

@@ -4,26 +4,28 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ListView;
 
+import org.mozilla.gecko.home.HomePager;
+
 public class testHistory extends AboutHomeTest {
     private View mFirstChild;
 
     public void testHistory() {
         blockForGeckoReady();
 
-        String url = getAbsoluteUrl("/robocop/robocop_blank_01.html");
-        String url2 = getAbsoluteUrl("/robocop/robocop_blank_02.html");
-        String url3 = getAbsoluteUrl("/robocop/robocop_blank_03.html");
+        String url = getAbsoluteUrl(StringHelper.ROBOCOP_BLANK_PAGE_01_URL);
+        String url2 = getAbsoluteUrl(StringHelper.ROBOCOP_BLANK_PAGE_02_URL);
+        String url3 = getAbsoluteUrl(StringHelper.ROBOCOP_BLANK_PAGE_03_URL);
 
         inputAndLoadUrl(url);
-        verifyPageTitle("Browser Blank Page 01");
+        verifyPageTitle(StringHelper.ROBOCOP_BLANK_PAGE_01_URL);
         inputAndLoadUrl(url2);
-        verifyPageTitle("Browser Blank Page 02");
+        verifyPageTitle(StringHelper.ROBOCOP_BLANK_PAGE_02_URL);
         inputAndLoadUrl(url3);
-        verifyPageTitle("Browser Blank Page 03");
+        verifyPageTitle(StringHelper.ROBOCOP_BLANK_PAGE_03_URL);
 
-        openAboutHomeTab(AboutHomeTabs.MOST_RECENT);
+        openAboutHomeTab(AboutHomeTabs.HISTORY);
 
-        final ListView hList = findListViewWithTag("most_recent");
+        final ListView hList = findListViewWithTag(HomePager.LIST_TAG_HISTORY);
         mAsserter.is(waitForNonEmptyListToLoad(hList), true, "list is properly loaded");
 
         // Click on the history item and wait for the page to load
@@ -60,7 +62,7 @@ public class testHistory extends AboutHomeTest {
 
         // The first item here (since it was just visited) should be a "Switch to tab" item
         // i.e. don't expect a DOMCOntentLoaded event
-        verifyPageTitle("Browser Blank Page 03");
+        verifyPageTitle(StringHelper.ROBOCOP_BLANK_PAGE_03_URL);
         verifyUrl(url3);
     }
 }

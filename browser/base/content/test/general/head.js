@@ -7,6 +7,26 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
 
+function closeAllNotifications () {
+  let notificationBox = document.getElementById("global-notificationbox");
+
+  if (!notificationBox || !notificationBox.currentNotification) {
+    return Promise.resolve();
+  }
+
+  let deferred = Promise.defer();
+  for (let notification of notificationBox.allNotifications) {
+    waitForNotificationClose(notification, function () {
+      if (notificationBox.allNotifications.length === 0) {
+        deferred.resolve();
+      }
+    });
+    notification.close();
+  }
+
+  return deferred.promise;
+}
+
 function whenDelayedStartupFinished(aWindow, aCallback) {
   Services.obs.addObserver(function observer(aSubject, aTopic) {
     if (aWindow == aSubject) {
@@ -82,6 +102,25 @@ function waitForCondition(condition, nextTest, errorMsg) {
   var moveOn = function() { clearInterval(interval); nextTest(); };
 }
 
+function promiseWaitForCondition(aConditionFn) {
+  let deferred = Promise.defer();
+  waitForCondition(aConditionFn, deferred.resolve, "Condition didn't pass.");
+  return deferred.promise;
+}
+
+function promiseWaitForEvent(object, eventName, capturing = false) {
+  return new Promise((resolve) => {
+    function listener(event) {
+      info("Saw " + eventName);
+      object.removeEventListener(eventName, listener, capturing);
+      resolve(event);
+    }
+
+    info("Waiting for " + eventName);
+    object.addEventListener(eventName, listener, capturing);
+  });
+}
+
 function getTestPlugin(aName) {
   var pluginName = aName || "Test Plug-in";
   var ph = Cc["@mozilla.org/plugin/host;1"].getService(Ci.nsIPluginHost);
@@ -149,6 +188,37 @@ function whenNewWindowLoaded(aOptions, aCallback) {
     win.removeEventListener("load", onLoad, false);
     aCallback(win);
   }, false);
+}
+
+function promiseWindowClosed(win) {
+  let deferred = Promise.defer();
+  win.addEventListener("unload", function onunload() {
+    win.removeEventListener("unload", onunload);
+    deferred.resolve();
+  });
+  win.close();
+  return deferred.promise;
+}
+
+function promiseOpenAndLoadWindow(aOptions, aWaitForDelayedStartup=false) {
+  let deferred = Promise.defer();
+  let win = OpenBrowserWindow(aOptions);
+  if (aWaitForDelayedStartup) {
+    Services.obs.addObserver(function onDS(aSubject, aTopic, aData) {
+      if (aSubject != win) {
+        return;
+      }
+      Services.obs.removeObserver(onDS, "browser-delayed-startup-finished");
+      deferred.resolve(win);
+    }, "browser-delayed-startup-finished", false);
+
+  } else {
+    win.addEventListener("load", function onLoad() {
+      win.removeEventListener("load", onLoad);
+      deferred.resolve(win);
+    });
+  }
+  return deferred.promise;
 }
 
 /**
@@ -219,11 +289,13 @@ function whenNewTabLoaded(aWindow, aCallback) {
 }
 
 function whenTabLoaded(aTab, aCallback) {
-  let browser = aTab.linkedBrowser;
-  browser.addEventListener("load", function onLoad() {
-    browser.removeEventListener("load", onLoad, true);
-    executeSoon(aCallback);
-  }, true);
+  promiseTabLoadEvent(aTab).then(aCallback);
+}
+
+function promiseTabLoaded(aTab) {
+  let deferred = Promise.defer();
+  whenTabLoaded(aTab, deferred.resolve);
+  return deferred.promise;
 }
 
 function addVisits(aPlaceInfo, aCallback) {
@@ -293,6 +365,40 @@ function promiseHistoryClearedState(aURIs, aShouldBeCleared) {
 }
 
 /**
+ * Allows waiting for an observer notification once.
+ *
+ * @param topic
+ *        Notification topic to observe.
+ *
+ * @return {Promise}
+ * @resolves The array [subject, data] from the observed notification.
+ * @rejects Never.
+ */
+function promiseTopicObserved(topic)
+{
+  let deferred = Promise.defer();
+  info("Waiting for observer topic " + topic);
+  Services.obs.addObserver(function PTO_observe(subject, topic, data) {
+    Services.obs.removeObserver(PTO_observe, topic);
+    deferred.resolve([subject, data]);
+  }, topic, false);
+  return deferred.promise;
+}
+
+/**
+ * Clears history asynchronously.
+ *
+ * @return {Promise}
+ * @resolves When history has been cleared.
+ * @rejects Never.
+ */
+function promiseClearHistory() {
+  let promise = promiseTopicObserved(PlacesUtils.TOPIC_EXPIRATION_FINISHED);
+  PlacesUtils.bhistory.removeAllPages();
+  return promise;
+}
+
+/**
  * Waits for the next top-level document load in the current browser.  The URI
  * of the document is compared against aExpectedURL.  The load is then stopped
  * before it actually starts.
@@ -301,26 +407,67 @@ function promiseHistoryClearedState(aURIs, aShouldBeCleared) {
  *        The URL of the document that is expected to load.
  * @return promise
  */
-function waitForDocLoadAndStopIt(aExpectedURL) {
+function waitForDocLoadAndStopIt(aExpectedURL, aBrowser=gBrowser.selectedBrowser) {
+  function content_script() {
+    let { interfaces: Ci, utils: Cu } = Components;
+    Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+    let wp = docShell.QueryInterface(Ci.nsIWebProgress);
+
+    let progressListener = {
+      onStateChange: function (webProgress, req, flags, status) {
+        dump("waitForDocLoadAndStopIt: onStateChange " + flags.toString(16) + ": " + req.name + "\n");
+        let docStart = Ci.nsIWebProgressListener.STATE_IS_DOCUMENT |
+                       Ci.nsIWebProgressListener.STATE_START;
+        if (((flags & docStart) == docStart) && webProgress.isTopLevel) {
+          dump("waitForDocLoadAndStopIt: Document start: " +
+               req.QueryInterface(Ci.nsIChannel).URI.spec + "\n");
+          req.cancel(Components.results.NS_ERROR_FAILURE);
+          wp.removeProgressListener(progressListener);
+          sendAsyncMessage("Test:WaitForDocLoadAndStopIt", { uri: req.originalURI.spec });
+        }
+      },
+      QueryInterface: XPCOMUtils.generateQI(["nsISupportsWeakReference"])
+    };
+    wp.addProgressListener(progressListener, wp.NOTIFY_ALL);
+  }
+
+  return new Promise((resolve, reject) => {
+    function complete({ data }) {
+      is(data.uri, aExpectedURL, "waitForDocLoadAndStopIt: The expected URL was loaded");
+      mm.removeMessageListener("Test:WaitForDocLoadAndStopIt", complete);
+      resolve();
+    }
+
+    let mm = aBrowser.messageManager;
+    mm.loadFrameScript("data:,(" + content_script.toString() + ")();", true);
+    mm.addMessageListener("Test:WaitForDocLoadAndStopIt", complete);
+    info("waitForDocLoadAndStopIt: Waiting for URL: " + aExpectedURL);
+  });
+}
+
+/**
+ * Waits for the next load to complete in the current browser.
+ *
+ * @return promise
+ */
+function waitForDocLoadComplete(aBrowser=gBrowser) {
   let deferred = Promise.defer();
   let progressListener = {
     onStateChange: function (webProgress, req, flags, status) {
-      info("waitForDocLoadAndStopIt: onStateChange: " + req.name);
-      let docStart = Ci.nsIWebProgressListener.STATE_IS_DOCUMENT |
-                     Ci.nsIWebProgressListener.STATE_START;
-      if ((flags & docStart) && webProgress.isTopLevel) {
-        info("waitForDocLoadAndStopIt: Document start: " +
-             req.QueryInterface(Ci.nsIChannel).URI.spec);
-        is(req.originalURI.spec, aExpectedURL,
-           "waitForDocLoadAndStopIt: The expected URL was loaded");
-        req.cancel(Components.results.NS_ERROR_FAILURE);
-        gBrowser.removeProgressListener(progressListener);
+      let docStart = Ci.nsIWebProgressListener.STATE_IS_NETWORK |
+                     Ci.nsIWebProgressListener.STATE_STOP;
+      info("Saw state " + flags.toString(16));
+      if ((flags & docStart) == docStart) {
+        aBrowser.removeProgressListener(progressListener);
+        info("Browser loaded");
         deferred.resolve();
       }
     },
+    QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
+                                           Ci.nsISupportsWeakReference])
   };
-  gBrowser.addProgressListener(progressListener);
-  info("waitForDocLoadAndStopIt: Waiting for URL: " + aExpectedURL);
+  aBrowser.addProgressListener(progressListener);
+  info("Waiting for browser load");
   return deferred.promise;
 }
 
@@ -358,8 +505,7 @@ let FullZoomHelper = {
     let didLoad = false;
     let didZoom = false;
 
-    tab.linkedBrowser.addEventListener("load", function (event) {
-      event.currentTarget.removeEventListener("load", arguments.callee, true);
+    promiseTabLoadEvent(tab).then(event => {
       didLoad = true;
       if (didZoom)
         deferred.resolve();
@@ -432,3 +578,182 @@ let FullZoomHelper = {
     };
   },
 };
+
+/**
+ * Waits for a load (or custom) event to finish in a given tab. If provided
+ * load an uri into the tab.
+ *
+ * @param tab
+ *        The tab to load into.
+ * @param [optional] url
+ *        The url to load, or the current url.
+ * @param [optional] event
+ *        The load event type to wait for.  Defaults to "load".
+ * @return {Promise} resolved when the event is handled.
+ * @resolves to the received event
+ * @rejects if a valid load event is not received within a meaningful interval
+ */
+function promiseTabLoadEvent(tab, url, eventType="load")
+{
+  let deferred = Promise.defer();
+  info("Wait tab event: " + eventType);
+
+  function handle(event) {
+    if (event.originalTarget != tab.linkedBrowser.contentDocument ||
+        event.target.location.href == "about:blank" ||
+        (url && event.target.location.href != url)) {
+      info("Skipping spurious '" + eventType + "'' event" +
+           " for " + event.target.location.href);
+      return;
+    }
+    clearTimeout(timeout);
+    tab.linkedBrowser.removeEventListener(eventType, handle, true);
+    info("Tab event received: " + eventType);
+    deferred.resolve(event);
+  }
+
+  let timeout = setTimeout(() => {
+    tab.linkedBrowser.removeEventListener(eventType, handle, true);
+    deferred.reject(new Error("Timed out while waiting for a '" + eventType + "'' event"));
+  }, 30000);
+
+  tab.linkedBrowser.addEventListener(eventType, handle, true, true);
+  if (url)
+    tab.linkedBrowser.loadURI(url);
+  return deferred.promise;
+}
+
+function assertWebRTCIndicatorStatus(expected) {
+  let ui = Cu.import("resource:///modules/webrtcUI.jsm", {}).webrtcUI;
+  let expectedState = expected ? "visible" : "hidden";
+  let msg = "WebRTC indicator " + expectedState;
+  is(ui.showGlobalIndicator, !!expected, msg);
+
+  let expectVideo = false, expectAudio = false, expectScreen = false;
+  if (expected) {
+    if (expected.video)
+      expectVideo = true;
+    if (expected.audio)
+      expectAudio = true;
+    if (expected.screen)
+      expectScreen = true;
+  }
+  is(ui.showCameraIndicator, expectVideo, "camera global indicator as expected");
+  is(ui.showMicrophoneIndicator, expectAudio, "microphone global indicator as expected");
+  is(ui.showScreenSharingIndicator, expectScreen, "screen global indicator as expected");
+
+  let windows = Services.wm.getEnumerator("navigator:browser");
+  while (windows.hasMoreElements()) {
+    let win = windows.getNext();
+    let menu = win.document.getElementById("tabSharingMenu");
+    is(menu && !menu.hidden, !!expected, "WebRTC menu should be " + expectedState);
+  }
+
+  if (!("nsISystemStatusBar" in Ci)) {
+    let indicator = Services.wm.getEnumerator("Browser:WebRTCGlobalIndicator");
+    let hasWindow = indicator.hasMoreElements();
+    is(hasWindow, !!expected, "popup " + msg);
+    if (hasWindow) {
+      let docElt = indicator.getNext().document.documentElement;
+      for (let item of ["video", "audio", "screen"]) {
+        let expectedValue = (expected && expected[item]) ? "true" : "";
+        is(docElt.getAttribute("sharing" + item), expectedValue,
+           item + " global indicator attribute as expected");
+      }
+
+      ok(!indicator.hasMoreElements(), "only one global indicator window");
+    }
+  }
+}
+
+function makeActionURI(action, params) {
+  let url = "moz-action:" + action + "," + JSON.stringify(params);
+  return NetUtil.newURI(url);
+}
+
+function is_hidden(element) {
+  var style = element.ownerDocument.defaultView.getComputedStyle(element, "");
+  if (style.display == "none")
+    return true;
+  if (style.visibility != "visible")
+    return true;
+  if (style.display == "-moz-popup")
+    return ["hiding","closed"].indexOf(element.state) != -1;
+
+  // Hiding a parent element will hide all its children
+  if (element.parentNode != element.ownerDocument)
+    return is_hidden(element.parentNode);
+
+  return false;
+}
+
+function is_visible(element) {
+  var style = element.ownerDocument.defaultView.getComputedStyle(element, "");
+  if (style.display == "none")
+    return false;
+  if (style.visibility != "visible")
+    return false;
+  if (style.display == "-moz-popup" && element.state != "open")
+    return false;
+
+  // Hiding a parent element will hide all its children
+  if (element.parentNode != element.ownerDocument)
+    return is_visible(element.parentNode);
+
+  return true;
+}
+
+function is_element_visible(element, msg) {
+  isnot(element, null, "Element should not be null, when checking visibility");
+  ok(is_visible(element), msg);
+}
+
+function is_element_hidden(element, msg) {
+  isnot(element, null, "Element should not be null, when checking visibility");
+  ok(is_hidden(element), msg);
+}
+
+function promisePopupEvent(popup, eventSuffix) {
+  let endState = {shown: "open", hidden: "closed"}[eventSuffix];
+
+  if (popup.state = endState)
+    return Promise.resolve();
+
+  let eventType = "popup" + eventSuffix;
+  let deferred = Promise.defer();
+  popup.addEventListener(eventType, function onPopupShown(event) {
+    popup.removeEventListener(eventType, onPopupShown);
+    deferred.resolve();
+  });
+
+  return deferred.promise;
+}
+
+function promisePopupShown(popup) {
+  return promisePopupEvent(popup, "shown");
+}
+
+function promisePopupHidden(popup) {
+  return promisePopupEvent(popup, "hidden");
+}
+
+let gURLBarOnSearchComplete = null;
+function promiseSearchComplete() {
+  info("Waiting for onSearchComplete");
+  let deferred = Promise.defer();
+  
+  if (!gURLBarOnSearchComplete) {
+    gURLBarOnSearchComplete = gURLBar.onSearchComplete;
+    registerCleanupFunction(() => {
+      gURLBar.onSearchComplete = gURLBarOnSearchComplete;
+    });
+  }
+
+  gURLBar.onSearchComplete = function () {
+    ok(gURLBar.popupOpen, "The autocomplete popup is correctly open");
+    gURLBarOnSearchComplete.apply(gURLBar);
+    deferred.resolve();
+  }
+  
+  return deferred.promise;
+}

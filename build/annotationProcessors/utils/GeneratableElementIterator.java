@@ -44,7 +44,7 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
         System.arraycopy(aCtors, 0, objs, offset, aCtors.length);
 
         // Sort the elements to ensure determinism.
-        Arrays.sort(objs, new AlphabeticAnnotatableEntityComparator());
+        Arrays.sort(objs, new AlphabeticAnnotatableEntityComparator<Member>());
         mObjects = objs;
 
         // Check for "Wrap ALL the things" flag.
@@ -73,19 +73,14 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
                 final String annotationTypeName = annotationType.getName();
                 if (annotationTypeName.equals("org.mozilla.gecko.mozglue.generatorannotations.WrapElementForJNI")) {
                     String stubName = null;
-                    boolean isStaticStub = false;
                     boolean isMultithreadedStub = false;
                     boolean noThrow = false;
+                    boolean narrowChars = false;
                     try {
                         // Determine the explicitly-given name of the stub to generate, if any.
                         final Method stubNameMethod = annotationType.getDeclaredMethod("stubName");
                         stubNameMethod.setAccessible(true);
                         stubName = (String) stubNameMethod.invoke(annotation);
-
-                        // Detemine if the generated stub should be static.
-                        final Method staticStubMethod = annotationType.getDeclaredMethod("generateStatic");
-                        staticStubMethod.setAccessible(true);
-                        isStaticStub = (Boolean) staticStubMethod.invoke(annotation);
 
                         // Determine if the generated stub is to allow calls from multiple threads.
                         final Method multithreadedStubMethod = annotationType.getDeclaredMethod("allowMultithread");
@@ -96,6 +91,11 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
                         final Method noThrowMethod = annotationType.getDeclaredMethod("noThrow");
                         noThrowMethod.setAccessible(true);
                         noThrow = (Boolean) noThrowMethod.invoke(annotation);
+
+                        // Determine if strings should be wide or narrow
+                        final Method narrowCharsMethod = annotationType.getDeclaredMethod("narrowChars");
+                        narrowCharsMethod.setAccessible(true);
+                        narrowChars = (Boolean) narrowCharsMethod.invoke(annotation);
 
                     } catch (NoSuchMethodException e) {
                         System.err.println("Unable to find expected field on WrapElementForJNI annotation. Did the signature change?");
@@ -118,7 +118,7 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
                     }
 
                     AnnotationInfo annotationInfo = new AnnotationInfo(
-                        stubName, isStaticStub, isMultithreadedStub, noThrow);
+                        stubName, isMultithreadedStub, noThrow, narrowChars);
                     mNextReturnValue = new AnnotatableEntity(candidateElement, annotationInfo);
                     return;
                 }

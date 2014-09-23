@@ -8,6 +8,7 @@
 #include <utility>                      // for pair
 #include "ContentHost.h"                // for ContentHostDoubleBuffered, etc
 #include "Effects.h"                    // for EffectMask, Effect, etc
+#include "gfxUtils.h"
 #include "ImageHost.h"                  // for ImageHostBuffered, etc
 #include "TiledContentHost.h"           // for TiledContentHost
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
@@ -146,12 +147,23 @@ CompositableHost::AddMaskEffect(EffectChain& aEffects,
 {
   RefPtr<TextureSource> source;
   RefPtr<TextureHost> host = GetAsTextureHost();
-  if (host && host->Lock()) {
-    source = host->GetTextureSources();
+
+  if (!host) {
+    NS_WARNING("Using compositable with no valid TextureHost as mask");
+    return false;
   }
 
+  if (!host->Lock()) {
+    NS_WARNING("Failed to lock the mask texture");
+    return false;
+  }
+
+  source = host->GetTextureSources();
+  MOZ_ASSERT(source);
+
   if (!source) {
-    NS_WARNING("Using compositable with no texture host as mask layer");
+    NS_WARNING("The TextureHost was successfully locked but can't provide a TextureSource");
+    host->Unlock();
     return false;
   }
 
@@ -193,6 +205,11 @@ CompositableHost::Create(const TextureInfo& aTextureInfo)
   case CompositableType::IMAGE:
     result = new ImageHost(aTextureInfo);
     break;
+#ifdef MOZ_WIDGET_GONK
+  case CompositableType::IMAGE_OVERLAY:
+    result = new ImageHostOverlay(aTextureInfo);
+    break;
+#endif
   case CompositableType::CONTENT_SINGLE:
     result = new ContentHostSingleBuffered(aTextureInfo);
     break;
@@ -213,7 +230,7 @@ CompositableHost::Create(const TextureInfo& aTextureInfo)
 
 #ifdef MOZ_DUMP_PAINTING
 void
-CompositableHost::DumpTextureHost(FILE* aFile, TextureHost* aTexture)
+CompositableHost::DumpTextureHost(std::stringstream& aStream, TextureHost* aTexture)
 {
   if (!aTexture) {
     return;
@@ -227,11 +244,8 @@ CompositableHost::DumpTextureHost(FILE* aFile, TextureHost* aTexture)
                                                                  dSurf->GetSize(),
                                                                  dSurf->Stride(),
                                                                  dSurf->GetFormat());
-  nsRefPtr<gfxASurface> surf = platform->GetThebesSurfaceForDrawTarget(dt);
-  if (!surf) {
-    return;
-  }
-  surf->DumpAsDataURL(aFile ? aFile : stderr);
+  // TODO stream surface
+  gfxUtils::DumpAsDataURI(dt, stderr);
 }
 #endif
 

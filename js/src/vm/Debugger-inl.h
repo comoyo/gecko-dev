@@ -17,9 +17,16 @@ js::Debugger::onLeaveFrame(JSContext *cx, AbstractFramePtr frame, bool ok)
     /* Traps must be cleared from eval frames, see slowPathOnLeaveFrame. */
     bool evalTraps = frame.isEvalFrame() &&
                      frame.script()->hasAnyBreakpointsOrStepMode();
-    if (!cx->compartment()->getDebuggees().empty() || evalTraps)
+    if (cx->compartment()->debugMode() || evalTraps)
         ok = slowPathOnLeaveFrame(cx, frame, ok);
     return ok;
+}
+
+/* static */ inline js::Debugger *
+js::Debugger::fromJSObject(JSObject *obj)
+{
+    JS_ASSERT(js::GetObjectClass(obj) == &jsclass);
+    return (Debugger *) obj->getPrivate();
 }
 
 #endif /* vm_Debugger_inl_h */

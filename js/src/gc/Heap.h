@@ -7,6 +7,7 @@
 #ifndef gc_Heap_h
 #define gc_Heap_h
 
+#include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/PodOperations.h"
 
@@ -19,7 +20,9 @@
 
 #include "ds/BitArray.h"
 #include "gc/Memory.h"
+#include "js/GCAPI.h"
 #include "js/HeapAPI.h"
+#include "js/TracingAPI.h"
 
 struct JSCompartment;
 
@@ -27,7 +30,7 @@ struct JSRuntime;
 
 namespace JS {
 namespace shadow {
-class Runtime;
+struct Runtime;
 }
 }
 
@@ -35,12 +38,26 @@ namespace js {
 
 class FreeOp;
 
+#ifdef DEBUG
+extern bool
+RuntimeFromMainThreadIsHeapMajorCollecting(JS::shadow::Zone *shadowZone);
+
+// Barriers can't be triggered during backend Ion compilation, which may run on
+// a helper thread.
+extern bool
+CurrentThreadIsIonCompiling();
+#endif
+
 namespace gc {
 
 struct Arena;
 class ArenaList;
+class SortedArenaList;
 struct ArenaHeader;
 struct Chunk;
+
+extern void
+MarkKind(JSTracer *trc, void **thingp, JSGCTraceKind kind);
 
 /*
  * This flag allows an allocation site to request a specific heap based upon the
@@ -75,6 +92,7 @@ enum AllocKind {
     FINALIZE_FAT_INLINE_STRING,
     FINALIZE_STRING,
     FINALIZE_EXTERNAL_STRING,
+    FINALIZE_SYMBOL,
     FINALIZE_JITCODE,
     FINALIZE_LAST = FINALIZE_JITCODE
 };
@@ -82,29 +100,55 @@ enum AllocKind {
 static const unsigned FINALIZE_LIMIT = FINALIZE_LAST + 1;
 static const unsigned FINALIZE_OBJECT_LIMIT = FINALIZE_OBJECT_LAST + 1;
 
+static inline JSGCTraceKind
+MapAllocToTraceKind(AllocKind kind)
+{
+    static const JSGCTraceKind map[] = {
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT0 */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT0_BACKGROUND */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT2 */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT2_BACKGROUND */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT4 */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT4_BACKGROUND */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT8 */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT8_BACKGROUND */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT12 */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT12_BACKGROUND */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT16 */
+        JSTRACE_OBJECT,     /* FINALIZE_OBJECT16_BACKGROUND */
+        JSTRACE_SCRIPT,     /* FINALIZE_SCRIPT */
+        JSTRACE_LAZY_SCRIPT,/* FINALIZE_LAZY_SCRIPT */
+        JSTRACE_SHAPE,      /* FINALIZE_SHAPE */
+        JSTRACE_BASE_SHAPE, /* FINALIZE_BASE_SHAPE */
+        JSTRACE_TYPE_OBJECT,/* FINALIZE_TYPE_OBJECT */
+        JSTRACE_STRING,     /* FINALIZE_FAT_INLINE_STRING */
+        JSTRACE_STRING,     /* FINALIZE_STRING */
+        JSTRACE_STRING,     /* FINALIZE_EXTERNAL_STRING */
+        JSTRACE_SYMBOL,     /* FINALIZE_SYMBOL */
+        JSTRACE_JITCODE,    /* FINALIZE_JITCODE */
+    };
+    JS_STATIC_ASSERT(JS_ARRAY_LENGTH(map) == FINALIZE_LIMIT);
+    return map[kind];
+}
+
 /*
  * This must be an upper bound, but we do not need the least upper bound, so
  * we just exclude non-background objects.
  */
 static const size_t MAX_BACKGROUND_FINALIZE_KINDS = FINALIZE_LIMIT - FINALIZE_OBJECT_LIMIT / 2;
 
-/*
- * A GC cell is the base class for all GC things.
- */
+class TenuredCell;
+
+// A GC cell is the base class for all GC things.
 struct Cell
 {
   public:
-    inline ArenaHeader *arenaHeader() const;
-    inline AllocKind tenuredGetAllocKind() const;
-    MOZ_ALWAYS_INLINE bool isMarked(uint32_t color = BLACK) const;
-    MOZ_ALWAYS_INLINE bool markIfUnmarked(uint32_t color = BLACK) const;
-    MOZ_ALWAYS_INLINE void unmark(uint32_t color) const;
+    MOZ_ALWAYS_INLINE bool isTenured() const { return !IsInsideNursery(this); }
+    MOZ_ALWAYS_INLINE const TenuredCell *asTenured() const;
+    MOZ_ALWAYS_INLINE TenuredCell *asTenured();
 
     inline JSRuntime *runtimeFromMainThread() const;
     inline JS::shadow::Runtime *shadowRuntimeFromMainThread() const;
-    inline JS::Zone *tenuredZone() const;
-    inline JS::Zone *tenuredZoneFromAnyThread() const;
-    inline bool tenuredIsInsideZone(JS::Zone *zone) const;
 
     // Note: Unrestricted access to the runtime of a GC thing from an arbitrary
     // thread can easily lead to races. Use this method very carefully.
@@ -113,14 +157,60 @@ struct Cell
 
     inline StoreBuffer *storeBuffer() const;
 
+    static MOZ_ALWAYS_INLINE bool needWriteBarrierPre(JS::Zone *zone);
+
 #ifdef DEBUG
     inline bool isAligned() const;
-    inline bool isTenured() const;
 #endif
 
   protected:
     inline uintptr_t address() const;
     inline Chunk *chunk() const;
+};
+
+// A GC TenuredCell gets behaviors that are valid for things in the Tenured
+// heap, such as access to the arena header and mark bits.
+class TenuredCell : public Cell
+{
+  public:
+    // Construct a TenuredCell from a void*, making various sanity assertions.
+    static MOZ_ALWAYS_INLINE TenuredCell *fromPointer(void *ptr);
+    static MOZ_ALWAYS_INLINE const TenuredCell *fromPointer(const void *ptr);
+
+    // Mark bit management.
+    MOZ_ALWAYS_INLINE bool isMarked(uint32_t color = BLACK) const;
+    MOZ_ALWAYS_INLINE bool markIfUnmarked(uint32_t color = BLACK) const;
+    MOZ_ALWAYS_INLINE void unmark(uint32_t color) const;
+    MOZ_ALWAYS_INLINE void copyMarkBitsFrom(const TenuredCell *src);
+
+    // Note: this is in TenuredCell because ObjectImpl subclasses are sometimes
+    // used tagged.
+    static MOZ_ALWAYS_INLINE bool isNullLike(const Cell *thing) { return !thing; }
+
+    // Access to the arena header.
+    inline ArenaHeader *arenaHeader() const;
+    inline AllocKind getAllocKind() const;
+    inline JS::Zone *zone() const;
+    inline JS::Zone *zoneFromAnyThread() const;
+    inline bool isInsideZone(JS::Zone *zone) const;
+
+    MOZ_ALWAYS_INLINE JS::shadow::Zone *shadowZone() const {
+        return JS::shadow::Zone::asShadowZone(zone());
+    }
+    MOZ_ALWAYS_INLINE JS::shadow::Zone *shadowZoneFromAnyThread() const {
+        return JS::shadow::Zone::asShadowZone(zoneFromAnyThread());
+    }
+
+    static MOZ_ALWAYS_INLINE void readBarrier(TenuredCell *thing);
+    static MOZ_ALWAYS_INLINE void writeBarrierPre(TenuredCell *thing);
+
+    static MOZ_ALWAYS_INLINE void writeBarrierPost(TenuredCell *thing, void *cellp);
+    static MOZ_ALWAYS_INLINE void writeBarrierPostRelocate(TenuredCell *thing, void *cellp);
+    static MOZ_ALWAYS_INLINE void writeBarrierPostRemove(TenuredCell *thing, void *cellp);
+
+#ifdef DEBUG
+    inline bool isAligned() const;
+#endif
 };
 
 /*
@@ -181,8 +271,7 @@ class FreeSpan
         first = firstArg;
         last = lastArg;
         FreeSpan *lastSpan = reinterpret_cast<FreeSpan*>(last);
-        lastSpan->first = 0;
-        lastSpan->last = 0;
+        lastSpan->initAsEmpty();
         JS_ASSERT(!isEmpty());
         checkSpan(thingSize);
     }
@@ -190,6 +279,14 @@ class FreeSpan
     bool isEmpty() const {
         checkSpan();
         return !first;
+    }
+
+    static size_t offsetOfFirst() {
+        return offsetof(FreeSpan, first);
+    }
+
+    static size_t offsetOfLast() {
+        return offsetof(FreeSpan, last);
     }
 
     // Like nextSpan(), but no checking of the following span is done.
@@ -527,6 +624,8 @@ struct ArenaHeader : public JS::shadow::ArenaHeader
     inline ArenaHeader *getNextAllocDuringSweep() const;
     inline void setNextAllocDuringSweep(ArenaHeader *aheader);
     inline void unsetAllocDuringSweep();
+
+    void unmarkAll();
 };
 
 struct Arena
@@ -597,7 +696,7 @@ struct Arena
     void setAsFullyUnused(AllocKind thingKind);
 
     template <typename T>
-    bool finalize(FreeOp *fop, AllocKind thingKind, size_t thingSize);
+    size_t finalize(FreeOp *fop, AllocKind thingKind, size_t thingSize);
 };
 
 static_assert(sizeof(Arena) == ArenaSize, "The hardcoded arena size must match the struct size.");
@@ -699,7 +798,12 @@ const size_t BytesPerArenaWithHeader = ArenaSize + ArenaBitmapBytes;
 const size_t ChunkDecommitBitmapBytes = ChunkSize / ArenaSize / JS_BITS_PER_BYTE;
 const size_t ChunkBytesAvailable = ChunkSize - sizeof(ChunkInfo) - ChunkDecommitBitmapBytes;
 const size_t ArenasPerChunk = ChunkBytesAvailable / BytesPerArenaWithHeader;
+
+#ifdef JS_GC_SMALL_CHUNK_SIZE
+static_assert(ArenasPerChunk == 62, "Do not accidentally change our heap's density.");
+#else
 static_assert(ArenasPerChunk == 252, "Do not accidentally change our heap's density.");
+#endif
 
 /* A chunk bitmap contains enough mark bits for all the cells in a chunk. */
 struct ChunkBitmap
@@ -744,6 +848,12 @@ struct ChunkBitmap
         uintptr_t *word, mask;
         getMarkWordAndMask(cell, color, &word, &mask);
         *word &= ~mask;
+    }
+
+    MOZ_ALWAYS_INLINE void copyMarkBit(Cell *dst, const TenuredCell *src, uint32_t color) {
+        uintptr_t *word, mask;
+        getMarkWordAndMask(dst, color, &word, &mask);
+        *word = (*word & ~mask) | (src->isMarked(color) ? mask : 0);
     }
 
     void clear() {
@@ -828,18 +938,12 @@ struct Chunk
     ArenaHeader *allocateArena(JS::Zone *zone, AllocKind kind);
 
     void releaseArena(ArenaHeader *aheader);
-    void recycleArena(ArenaHeader *aheader, ArenaList &dest, AllocKind thingKind);
+    void recycleArena(ArenaHeader *aheader, SortedArenaList &dest, AllocKind thingKind,
+                      size_t thingsPerArena);
 
     static Chunk *allocate(JSRuntime *rt);
 
     void decommitAllArenas(JSRuntime *rt);
-
-    /* Must be called with the GC lock taken. */
-    static inline void release(JSRuntime *rt, Chunk *chunk);
-    static inline void releaseList(JSRuntime *rt, Chunk *chunkListHead);
-
-    /* Must be called with the GC lock taken. */
-    inline void prepareToBeFreed(JSRuntime *rt);
 
     /*
      * Assuming that the info.prevp points to the next field of the previous
@@ -883,6 +987,54 @@ static_assert(js::gc::ChunkLocationOffset == offsetof(Chunk, info) +
                                              offsetof(ChunkInfo, trailer) +
                                              offsetof(ChunkTrailer, location),
               "The hardcoded API location offset must match the actual offset.");
+
+/*
+ * Tracks the used sizes for owned heap data and automatically maintains the
+ * memory usage relationship between GCRuntime and Zones.
+ */
+class HeapUsage
+{
+    /*
+     * A heap usage that contains our parent's heap usage, or null if this is
+     * the top-level usage container.
+     */
+    HeapUsage *parent_;
+
+    /*
+     * The approximate number of bytes in use on the GC heap, to the nearest
+     * ArenaSize. This does not include any malloc data. It also does not
+     * include not-actively-used addresses that are still reserved at the OS
+     * level for GC usage. It is atomic because it is updated by both the main
+     * and GC helper threads.
+     */
+    mozilla::Atomic<size_t, mozilla::ReleaseAcquire> gcBytes_;
+
+  public:
+    explicit HeapUsage(HeapUsage *parent)
+      : parent_(parent),
+        gcBytes_(0)
+    {}
+
+    size_t gcBytes() const { return gcBytes_; }
+
+    void addGCArena() {
+        gcBytes_ += ArenaSize;
+        if (parent_)
+            parent_->addGCArena();
+    }
+    void removeGCArena() {
+        MOZ_ASSERT(gcBytes_ >= ArenaSize);
+        gcBytes_ -= ArenaSize;
+        if (parent_)
+            parent_->removeGCArena();
+    }
+
+    /* Pair to adoptArenas. Adopts the attendant usage statistics. */
+    void adopt(HeapUsage &other) {
+        gcBytes_ += other.gcBytes_;
+        other.gcBytes_ = 0;
+    }
+};
 
 inline uintptr_t
 ArenaHeader::address() const
@@ -986,21 +1138,26 @@ ArenaHeader::unsetAllocDuringSweep()
 }
 
 static void
-AssertValidColor(const void *thing, uint32_t color)
+AssertValidColor(const TenuredCell *thing, uint32_t color)
 {
 #ifdef DEBUG
-    ArenaHeader *aheader = reinterpret_cast<const Cell *>(thing)->arenaHeader();
+    ArenaHeader *aheader = thing->arenaHeader();
     JS_ASSERT(color < aheader->getThingSize() / CellSize);
 #endif
 }
 
-inline ArenaHeader *
-Cell::arenaHeader() const
+MOZ_ALWAYS_INLINE const TenuredCell *
+Cell::asTenured() const
 {
     JS_ASSERT(isTenured());
-    uintptr_t addr = address();
-    addr &= ~ArenaMask;
-    return reinterpret_cast<ArenaHeader *>(addr);
+    return static_cast<const TenuredCell *>(this);
+}
+
+MOZ_ALWAYS_INLINE TenuredCell *
+Cell::asTenured()
+{
+    JS_ASSERT(isTenured());
+    return static_cast<TenuredCell *>(this);
 }
 
 inline JSRuntime *
@@ -1029,72 +1186,6 @@ Cell::shadowRuntimeFromAnyThread() const
     return reinterpret_cast<JS::shadow::Runtime*>(runtimeFromAnyThread());
 }
 
-bool
-Cell::isMarked(uint32_t color /* = BLACK */) const
-{
-    JS_ASSERT(isTenured());
-    JS_ASSERT(arenaHeader()->allocated());
-    AssertValidColor(this, color);
-    return chunk()->bitmap.isMarked(this, color);
-}
-
-bool
-Cell::markIfUnmarked(uint32_t color /* = BLACK */) const
-{
-    JS_ASSERT(isTenured());
-    AssertValidColor(this, color);
-    return chunk()->bitmap.markIfUnmarked(this, color);
-}
-
-void
-Cell::unmark(uint32_t color) const
-{
-    JS_ASSERT(isTenured());
-    JS_ASSERT(color != BLACK);
-    AssertValidColor(this, color);
-    chunk()->bitmap.unmark(this, color);
-}
-
-JS::Zone *
-Cell::tenuredZone() const
-{
-    JS::Zone *zone = arenaHeader()->zone;
-    JS_ASSERT(CurrentThreadCanAccessZone(zone));
-    JS_ASSERT(isTenured());
-    return zone;
-}
-
-JS::Zone *
-Cell::tenuredZoneFromAnyThread() const
-{
-    JS_ASSERT(isTenured());
-    return arenaHeader()->zone;
-}
-
-bool
-Cell::tenuredIsInsideZone(JS::Zone *zone) const
-{
-    JS_ASSERT(isTenured());
-    return zone == arenaHeader()->zone;
-}
-
-#ifdef DEBUG
-bool
-Cell::isAligned() const
-{
-    return Arena::isAligned(address(), arenaHeader()->getThingSize());
-}
-
-bool
-Cell::isTenured() const
-{
-#ifdef JSGC_GENERATIONAL
-    return !IsInsideNursery(this);
-#endif
-    return true;
-}
-#endif
-
 inline uintptr_t
 Cell::address() const
 {
@@ -1109,7 +1200,7 @@ Cell::chunk() const
 {
     uintptr_t addr = uintptr_t(this);
     JS_ASSERT(addr % CellSize == 0);
-    addr &= ~(ChunkSize - 1);
+    addr &= ~ChunkMask;
     return reinterpret_cast<Chunk *>(addr);
 }
 
@@ -1133,14 +1224,176 @@ InFreeList(ArenaHeader *aheader, void *thing)
     return firstSpan.inFreeList(addr);
 }
 
-} /* namespace gc */
+/* static */ MOZ_ALWAYS_INLINE bool
+Cell::needWriteBarrierPre(JS::Zone *zone) {
+#ifdef JSGC_INCREMENTAL
+    return JS::shadow::Zone::asShadowZone(zone)->needsIncrementalBarrier();
+#else
+    return false;
+#endif
+}
 
-gc::AllocKind
-gc::Cell::tenuredGetAllocKind() const
+/* static */ MOZ_ALWAYS_INLINE TenuredCell *
+TenuredCell::fromPointer(void *ptr)
+{
+    JS_ASSERT(static_cast<TenuredCell *>(ptr)->isTenured());
+    return static_cast<TenuredCell *>(ptr);
+}
+
+/* static */ MOZ_ALWAYS_INLINE const TenuredCell *
+TenuredCell::fromPointer(const void *ptr)
+{
+    JS_ASSERT(static_cast<const TenuredCell *>(ptr)->isTenured());
+    return static_cast<const TenuredCell *>(ptr);
+}
+
+bool
+TenuredCell::isMarked(uint32_t color /* = BLACK */) const
+{
+    JS_ASSERT(arenaHeader()->allocated());
+    AssertValidColor(this, color);
+    return chunk()->bitmap.isMarked(this, color);
+}
+
+bool
+TenuredCell::markIfUnmarked(uint32_t color /* = BLACK */) const
+{
+    AssertValidColor(this, color);
+    return chunk()->bitmap.markIfUnmarked(this, color);
+}
+
+void
+TenuredCell::unmark(uint32_t color) const
+{
+    JS_ASSERT(color != BLACK);
+    AssertValidColor(this, color);
+    chunk()->bitmap.unmark(this, color);
+}
+
+void
+TenuredCell::copyMarkBitsFrom(const TenuredCell *src)
+{
+    ChunkBitmap &bitmap = chunk()->bitmap;
+    bitmap.copyMarkBit(this, src, BLACK);
+    bitmap.copyMarkBit(this, src, GRAY);
+}
+
+inline ArenaHeader *
+TenuredCell::arenaHeader() const
+{
+    JS_ASSERT(isTenured());
+    uintptr_t addr = address();
+    addr &= ~ArenaMask;
+    return reinterpret_cast<ArenaHeader *>(addr);
+}
+
+AllocKind
+TenuredCell::getAllocKind() const
 {
     return arenaHeader()->getAllocKind();
 }
 
+JS::Zone *
+TenuredCell::zone() const
+{
+    JS::Zone *zone = arenaHeader()->zone;
+    JS_ASSERT(CurrentThreadCanAccessZone(zone));
+    return zone;
+}
+
+JS::Zone *
+TenuredCell::zoneFromAnyThread() const
+{
+    return arenaHeader()->zone;
+}
+
+bool
+TenuredCell::isInsideZone(JS::Zone *zone) const
+{
+    return zone == arenaHeader()->zone;
+}
+
+/* static */ MOZ_ALWAYS_INLINE void
+TenuredCell::readBarrier(TenuredCell *thing)
+{
+#ifdef JSGC_INCREMENTAL
+    JS_ASSERT(!CurrentThreadIsIonCompiling());
+    JS_ASSERT(!isNullLike(thing));
+    JS::shadow::Zone *shadowZone = thing->shadowZoneFromAnyThread();
+    if (shadowZone->needsIncrementalBarrier()) {
+        MOZ_ASSERT(!RuntimeFromMainThreadIsHeapMajorCollecting(shadowZone));
+        void *tmp = thing;
+        shadowZone->barrierTracer()->setTracingName("read barrier");
+        MarkKind(shadowZone->barrierTracer(), &tmp,
+                         MapAllocToTraceKind(thing->getAllocKind()));
+        JS_ASSERT(tmp == thing);
+    }
+    if (JS::GCThingIsMarkedGray(thing))
+        JS::UnmarkGrayGCThingRecursively(thing, MapAllocToTraceKind(thing->getAllocKind()));
+#endif
+}
+
+/* static */ MOZ_ALWAYS_INLINE void
+TenuredCell::writeBarrierPre(TenuredCell *thing) {
+#ifdef JSGC_INCREMENTAL
+    JS_ASSERT(!CurrentThreadIsIonCompiling());
+    if (isNullLike(thing) || !thing->shadowRuntimeFromAnyThread()->needsIncrementalBarrier())
+        return;
+
+    JS::shadow::Zone *shadowZone = thing->shadowZoneFromAnyThread();
+    if (shadowZone->needsIncrementalBarrier()) {
+        MOZ_ASSERT(!RuntimeFromMainThreadIsHeapMajorCollecting(shadowZone));
+        void *tmp = thing;
+        shadowZone->barrierTracer()->setTracingName("pre barrier");
+        MarkKind(shadowZone->barrierTracer(), &tmp,
+                         MapAllocToTraceKind(thing->getAllocKind()));
+        JS_ASSERT(tmp == thing);
+    }
+#endif
+}
+
+static MOZ_ALWAYS_INLINE void
+AssertValidToSkipBarrier(TenuredCell *thing)
+{
+    JS_ASSERT(!IsInsideNursery(thing));
+    JS_ASSERT_IF(thing, MapAllocToTraceKind(thing->getAllocKind()) != JSTRACE_OBJECT);
+}
+
+/* static */ MOZ_ALWAYS_INLINE void
+TenuredCell::writeBarrierPost(TenuredCell *thing, void *cellp)
+{
+    AssertValidToSkipBarrier(thing);
+}
+
+/* static */ MOZ_ALWAYS_INLINE void
+TenuredCell::writeBarrierPostRelocate(TenuredCell *thing, void *cellp)
+{
+    AssertValidToSkipBarrier(thing);
+}
+
+/* static */ MOZ_ALWAYS_INLINE void
+TenuredCell::writeBarrierPostRemove(TenuredCell *thing, void *cellp)
+{
+    AssertValidToSkipBarrier(thing);
+}
+
+#ifdef DEBUG
+bool
+Cell::isAligned() const
+{
+    if (!isTenured())
+        return true;
+    return asTenured()->isAligned();
+}
+
+bool
+TenuredCell::isAligned() const
+{
+    return Arena::isAligned(address(), arenaHeader()->getThingSize());
+}
+#endif
+
+} /* namespace gc */
 } /* namespace js */
 
 #endif /* gc_Heap_h */

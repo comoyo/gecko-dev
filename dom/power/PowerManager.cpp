@@ -78,9 +78,9 @@ PowerManager::Reboot(ErrorResult& aRv)
 }
 
 void
-PowerManager::FactoryReset()
+PowerManager::FactoryReset(mozilla::dom::FactoryResetReason& aReason)
 {
-  hal::FactoryReset();
+  hal::FactoryReset(aReason);
 }
 
 void
@@ -152,6 +152,18 @@ void
 PowerManager::SetScreenEnabled(bool aEnabled)
 {
   hal::SetScreenEnabled(aEnabled);
+}
+
+bool
+PowerManager::KeyLightEnabled()
+{
+  return hal::GetKeyLightEnabled();
+}
+
+void
+PowerManager::SetKeyLightEnabled(bool aEnabled)
+{
+  hal::SetKeyLightEnabled(aEnabled);
 }
 
 double

@@ -102,8 +102,6 @@ using namespace mozilla::places;
 // for repeating stuff.  These are milliseconds between "now" cache refreshes.
 #define RENEW_CACHED_NOW_TIMEOUT ((int32_t)3 * PR_MSEC_PER_SEC)
 
-static const int64_t USECS_PER_DAY = (int64_t)PR_USEC_PER_SEC * 60 * 60 * 24;
-
 // character-set annotation
 #define CHARSET_ANNO NS_LITERAL_CSTRING("URIProperties/characterSet")
 
@@ -116,13 +114,13 @@ static const int64_t USECS_PER_DAY = (int64_t)PR_USEC_PER_SEC * 60 * 60 * 24;
   (HISTORY_ADDITIONAL_DATE_CONT_NUM + \
    std::min(6, (int32_t)ceilf((float)_daysFromOldestVisit/30)))
 // Max number of containers, used to initialize the params hash.
-#define HISTORY_DATE_CONT_MAX 10
+#define HISTORY_DATE_CONT_LENGTH 8
 
-// Initial size of the embed visits cache.
-#define EMBED_VISITS_INITIAL_CACHE_SIZE 128
+// Initial length of the embed visits cache.
+#define EMBED_VISITS_INITIAL_CACHE_LENGTH 64
 
-// Initial size of the recent events caches.
-#define RECENT_EVENTS_INITIAL_CACHE_SIZE 128
+// Initial length of the recent events cache.
+#define RECENT_EVENTS_INITIAL_CACHE_LENGTH 64
 
 // Observed topics.
 #ifdef MOZ_XUL
@@ -217,7 +215,7 @@ void GetTagsSqlFragment(int64_t aTagsFolder,
 class UpdateBatchScoper
 {
 public:
-  UpdateBatchScoper(nsNavHistory& aNavHistory) : mNavHistory(aNavHistory)
+  explicit UpdateBatchScoper(nsNavHistory& aNavHistory) : mNavHistory(aNavHistory)
   {
     mNavHistory.BeginUpdateBatch();
   }
@@ -257,10 +255,10 @@ nsNavHistory::nsNavHistory()
   : mBatchLevel(0)
   , mBatchDBTransaction(nullptr)
   , mCachedNow(0)
-  , mRecentTyped(RECENT_EVENTS_INITIAL_CACHE_SIZE)
-  , mRecentLink(RECENT_EVENTS_INITIAL_CACHE_SIZE)
-  , mRecentBookmark(RECENT_EVENTS_INITIAL_CACHE_SIZE)
-  , mEmbedVisits(EMBED_VISITS_INITIAL_CACHE_SIZE)
+  , mRecentTyped(RECENT_EVENTS_INITIAL_CACHE_LENGTH)
+  , mRecentLink(RECENT_EVENTS_INITIAL_CACHE_LENGTH)
+  , mRecentBookmark(RECENT_EVENTS_INITIAL_CACHE_LENGTH)
+  , mEmbedVisits(EMBED_VISITS_INITIAL_CACHE_LENGTH)
   , mHistoryEnabled(true)
   , mNumVisitsForFrecency(10)
   , mTagsFolder(-1)
@@ -2192,8 +2190,8 @@ nsNavHistory::GetQueryResults(nsNavHistoryQueryResultNode *aResultNode,
 
   nsCString queryString;
   bool paramsPresent = false;
-  nsNavHistory::StringHash addParams(HISTORY_DATE_CONT_MAX);
-  nsresult rv = ConstructQueryString(aQueries, aOptions, queryString, 
+  nsNavHistory::StringHash addParams(HISTORY_DATE_CONT_LENGTH);
+  nsresult rv = ConstructQueryString(aQueries, aOptions, queryString,
                                      paramsPresent, addParams);
   NS_ENSURE_SUCCESS(rv,rv);
 
@@ -2269,7 +2267,9 @@ nsresult
 nsNavHistory::BeginUpdateBatch()
 {
   if (mBatchLevel++ == 0) {
-    mBatchDBTransaction = new mozStorageTransaction(mDB->MainConn(), false);
+    mBatchDBTransaction = new mozStorageTransaction(mDB->MainConn(), false,
+                                                    mozIStorageConnection::TRANSACTION_DEFERRED,
+                                                    true);
 
     NOTIFY_OBSERVERS(mCanNotify, mCacheObservers, mObservers,
                      nsINavHistoryObserver, OnBeginUpdateBatch());
@@ -2334,7 +2334,9 @@ nsNavHistory::RemovePagesInternal(const nsCString& aPlaceIdsQueryString)
   if (aPlaceIdsQueryString.IsEmpty())
     return NS_OK;
 
-  mozStorageTransaction transaction(mDB->MainConn(), false);
+  mozStorageTransaction transaction(mDB->MainConn(), false,
+                                    mozIStorageConnection::TRANSACTION_DEFERRED,
+                                    true);
 
   // Delete all visits for the specified place ids.
   nsresult rv = mDB->MainConn()->ExecuteSimpleSQL(
@@ -2726,7 +2728,9 @@ nsNavHistory::RemoveVisitsByTimeframe(PRTime aBeginTime, PRTime aEndTime)
   // force a full refresh calling onEndUpdateBatch (will call Refresh())
   UpdateBatchScoper batch(*this); // sends Begin/EndUpdateBatch to observers
 
-  mozStorageTransaction transaction(mDB->MainConn(), false);
+  mozStorageTransaction transaction(mDB->MainConn(), false,
+                                    mozIStorageConnection::TRANSACTION_DEFERRED,
+                                    true);
 
   // Delete all visits within the timeframe.
   nsCOMPtr<mozIStorageStatement> deleteVisitsStmt = mDB->GetStatement(
@@ -2856,71 +2860,6 @@ nsNavHistory::MarkPageAsFollowedLink(nsIURI *aURI)
 }
 
 
-// nsNavHistory::SetCharsetForURI
-//
-// Sets the character-set for a URI.
-// If aCharset is empty remove character-set annotation for aURI.
-
-NS_IMETHODIMP
-nsNavHistory::SetCharsetForURI(nsIURI* aURI,
-                               const nsAString& aCharset)
-{
-  PLACES_WARN_DEPRECATED();
-
-  NS_ASSERTION(NS_IsMainThread(), "This can only be called on the main thread");
-  NS_ENSURE_ARG(aURI);
-
-  nsAnnotationService* annosvc = nsAnnotationService::GetAnnotationService();
-  NS_ENSURE_TRUE(annosvc, NS_ERROR_OUT_OF_MEMORY);
-
-  if (aCharset.IsEmpty()) {
-    // remove the current page character-set annotation
-    nsresult rv = annosvc->RemovePageAnnotation(aURI, CHARSET_ANNO);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-  else {
-    // Set page character-set annotation, silently overwrite if already exists
-    nsresult rv = annosvc->SetPageAnnotationString(aURI, CHARSET_ANNO,
-                                                   aCharset, 0,
-                                                   nsAnnotationService::EXPIRE_NEVER);
-    if (rv == NS_ERROR_INVALID_ARG) {
-      // We don't have this page.  Silently fail.
-      return NS_OK;
-    }
-    else if (NS_FAILED(rv))
-      return rv;
-  }
-
-  return NS_OK;
-}
-
-
-// nsNavHistory::GetCharsetForURI
-//
-// Get the last saved character-set for a URI.
-
-NS_IMETHODIMP
-nsNavHistory::GetCharsetForURI(nsIURI* aURI, 
-                               nsAString& aCharset)
-{
-  PLACES_WARN_DEPRECATED();
-
-  NS_ASSERTION(NS_IsMainThread(), "This can only be called on the main thread");
-  NS_ENSURE_ARG(aURI);
-
-  nsAnnotationService* annosvc = nsAnnotationService::GetAnnotationService();
-  NS_ENSURE_TRUE(annosvc, NS_ERROR_OUT_OF_MEMORY);
-
-  nsAutoString charset;
-  nsresult rv = annosvc->GetPageAnnotationString(aURI, CHARSET_ANNO, aCharset);
-  if (NS_FAILED(rv)) {
-    // be sure to return an empty string if character-set is not found
-    aCharset.Truncate();
-  }
-  return NS_OK;
-}
-
-
 NS_IMETHODIMP
 nsNavHistory::GetPageTitle(nsIURI* aURI, nsAString& aTitle)
 {
@@ -3034,7 +2973,7 @@ nsNavHistory::AsyncExecuteLegacyQueries(nsINavHistoryQuery** aQueries,
 
   nsCString queryString;
   bool paramsPresent = false;
-  nsNavHistory::StringHash addParams(HISTORY_DATE_CONT_MAX);
+  nsNavHistory::StringHash addParams(HISTORY_DATE_CONT_LENGTH);
   nsresult rv = ConstructQueryString(queries, options, queryString,
                                      paramsPresent, addParams);
   NS_ENSURE_SUCCESS(rv,rv);
@@ -3258,7 +3197,7 @@ class ConditionBuilder
 {
 public:
 
-  ConditionBuilder(int32_t aQueryIndex): mQueryIndex(aQueryIndex)
+  explicit ConditionBuilder(int32_t aQueryIndex): mQueryIndex(aQueryIndex)
   { }
 
   ConditionBuilder& Condition(const char* aStr)
@@ -3651,7 +3590,7 @@ const int64_t UNDEFINED_URN_VALUE = -1;
 
 // Create a urn (like
 // urn:places-persist:place:group=0&group=1&sort=1&type=1,,%28local%20files%29)
-// to be used to persist the open state of this container in localstore.rdf
+// to be used to persist the open state of this container
 nsresult
 CreatePlacesPersistURN(nsNavHistoryQueryResultNode *aResultNode, 
                        int64_t aValue, const nsCString& aTitle, nsCString& aURN)

@@ -40,7 +40,7 @@ class ExitAppShellRunnable : public nsRunnable
   nsCOMPtr<nsIAppShell> mAppShell;
 
 public:
-  ExitAppShellRunnable(nsIAppShell* aAppShell)
+  explicit ExitAppShellRunnable(nsIAppShell* aAppShell)
   : mAppShell(aAppShell)
   { }
 
@@ -70,7 +70,7 @@ class CheckStableStateRunnable : public nsRunnable
   bool mShouldHaveRun;
 
 public:
-  CheckStableStateRunnable(bool aShouldHaveRun)
+  explicit CheckStableStateRunnable(bool aShouldHaveRun)
   : mShouldHaveRun(aShouldHaveRun)
   { }
 
@@ -93,7 +93,7 @@ protected:
   nsCOMPtr<nsIAppShell> mAppShell;
 
 public:
-  ScheduleStableStateRunnable(nsIAppShell* aAppShell)
+  explicit ScheduleStableStateRunnable(nsIAppShell* aAppShell)
   : CheckStableStateRunnable(false), mAppShell(aAppShell)
   { }
 
@@ -117,7 +117,7 @@ class NextTestRunnable : public nsRunnable
   nsCOMPtr<nsIAppShell> mAppShell;
 
 public:
-  NextTestRunnable(nsIAppShell* aAppShell)
+  explicit NextTestRunnable(nsIAppShell* aAppShell)
   : mAppShell(aAppShell)
   { }
 
@@ -127,7 +127,7 @@ public:
 class ScheduleNestedStableStateRunnable : public ScheduleStableStateRunnable
 {
 public:
-  ScheduleNestedStableStateRunnable(nsIAppShell* aAppShell)
+  explicit ScheduleNestedStableStateRunnable(nsIAppShell* aAppShell)
   : ScheduleStableStateRunnable(aAppShell)
   { }
 
@@ -166,10 +166,12 @@ class EventListener MOZ_FINAL : public nsIDOMEventListener
   static nsIDOMWindowUtils* sWindowUtils;
   static nsIAppShell* sAppShell;
 
+  ~EventListener() {}
+
 public:
   NS_DECL_ISUPPORTS
 
-  EventListener(nsIAppShell* aAppShell)
+  explicit EventListener(nsIAppShell* aAppShell)
   : mAppShell(aAppShell)
   { }
 
@@ -407,7 +409,7 @@ Test4Internal(nsIAppShell* aAppShell)
   uint32_t flags = nsIWebBrowserChrome::CHROME_DEFAULT;
 
   nsCOMPtr<nsIXULWindow> xulWindow;
-  if (NS_FAILED(appService->CreateTopLevelWindow(nullptr, uri, flags, 100, 100,
+  if (NS_FAILED(appService->CreateTopLevelWindow(nullptr, uri, flags, 100, 100, nullptr,
                                                  getter_AddRefs(xulWindow)))) {
     fail("Failed to create new window");
     return false;

@@ -4,7 +4,7 @@
 Cu.import("resource://services-sync/engines/tabs.js");
 Cu.import("resource://services-sync/service.js");
 Cu.import("resource://services-sync/util.js");
-Cu.import("resource://testing-common/services-common/utils.js");
+Cu.import("resource://testing-common/services/common/utils.js");
 
 function getMockStore() {
   let engine = new TabEngine(Service);
@@ -27,19 +27,19 @@ function test_create() {
   do_check_eq(Svc.Prefs.get("notifyTabState"), 1);
 
   _("Create a second record");
-  let rec = {id: "id2",
-             clientName: "clientName2",
-             cleartext: "cleartext2",
-             modified: 2000};
+  rec = {id: "id2",
+         clientName: "clientName2",
+         cleartext: "cleartext2",
+         modified: 2000};
   store.applyIncoming(rec);
   do_check_eq(store._remoteClients["id2"], "cleartext2");
   do_check_eq(Svc.Prefs.get("notifyTabState"), 0);
 
   _("Create a third record");
-  let rec = {id: "id3",
-             clientName: "clientName3",
-             cleartext: "cleartext3",
-             modified: 3000};
+  rec = {id: "id3",
+         clientName: "clientName3",
+         cleartext: "cleartext3",
+         modified: 3000};
   store.applyIncoming(rec);
   do_check_eq(store._remoteClients["id3"], "cleartext3");
   do_check_eq(Svc.Prefs.get("notifyTabState"), 0);

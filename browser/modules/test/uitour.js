@@ -174,4 +174,13 @@ if (typeof Mozilla == 'undefined') {
 			configuration: configName,
 		});
 	};
+
+	Mozilla.UITour.showFirefoxAccounts = function() {
+		_sendEvent('showFirefoxAccounts');
+	};
+
+	Mozilla.UITour.resetFirefox = function() {
+		_sendEvent('resetFirefox');
+	};
+
 })();

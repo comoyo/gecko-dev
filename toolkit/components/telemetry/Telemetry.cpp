@@ -77,7 +77,7 @@ template<class EntryType>
 class AutoHashtable : public nsTHashtable<EntryType>
 {
 public:
-  AutoHashtable(uint32_t initSize = PL_DHASH_MIN_SIZE);
+  explicit AutoHashtable(uint32_t initLength = PL_DHASH_DEFAULT_INITIAL_LENGTH);
   typedef bool (*ReflectEntryFunc)(EntryType *entry, JSContext *cx, JS::Handle<JSObject*> obj);
   bool ReflectIntoJS(ReflectEntryFunc entryFunc, JSContext *cx, JS::Handle<JSObject*> obj);
 private:
@@ -90,8 +90,8 @@ private:
 };
 
 template<class EntryType>
-AutoHashtable<EntryType>::AutoHashtable(uint32_t initSize)
-  : nsTHashtable<EntryType>(initSize)
+AutoHashtable<EntryType>::AutoHashtable(uint32_t initLength)
+  : nsTHashtable<EntryType>(initLength)
 {
 }
 
@@ -306,7 +306,7 @@ class TelemetryIOInterposeObserver : public IOInterposeObserver
   };
 
 public:
-  TelemetryIOInterposeObserver(nsIFile* aXreDir);
+  explicit TelemetryIOInterposeObserver(nsIFile* aXreDir);
 
   /**
    * An implementation of Observe that records statistics of all
@@ -410,7 +410,10 @@ void TelemetryIOInterposeObserver::AddPath(const nsAString& aPath,
 {
   mSafeDirs.AppendElement(SafeDir(aPath, aSubstName));
 }
- 
+
+// Threshold for reporting slow main-thread I/O (50 milliseconds).
+const TimeDuration kTelemetryReportThreshold = TimeDuration::FromMilliseconds(50);
+
 void TelemetryIOInterposeObserver::Observe(Observation& aOb)
 {
   // We only report main-thread I/O
@@ -421,6 +424,10 @@ void TelemetryIOInterposeObserver::Observe(Observation& aOb)
   if (aOb.ObservedOperation() == OpNextStage) {
     mCurStage = NextStage(mCurStage);
     MOZ_ASSERT(mCurStage < NUM_STAGES);
+    return;
+  }
+
+  if (aOb.Duration() < kTelemetryReportThreshold) {
     return;
   }
 
@@ -557,8 +564,6 @@ class TelemetryImpl MOZ_FINAL
   NS_DECL_NSIMEMORYREPORTER
 
 public:
-  ~TelemetryImpl();
-
   void InitMemoryReporter();
 
   static bool CanRecord();
@@ -587,6 +592,7 @@ public:
 
 private:
   TelemetryImpl();
+  ~TelemetryImpl();
 
   static nsCString SanitizeSQL(const nsACString& sql);
 
@@ -633,7 +639,7 @@ private:
   AddonMapType mAddonMap;
 
   // This is used for speedy string->Telemetry::ID conversions
-  typedef nsBaseHashtableET<nsCharPtrHashKey, Telemetry::ID> CharPtrEntryType;
+  typedef nsBaseHashtableET<nsDepCharHashKey, Telemetry::ID> CharPtrEntryType;
   typedef AutoHashtable<CharPtrEntryType> HistogramMapType;
   HistogramMapType mHistogramMap;
   bool mCanRecord;
@@ -664,7 +670,7 @@ MOZ_DEFINE_MALLOC_SIZE_OF(TelemetryMallocSizeOf)
 
 NS_IMETHODIMP
 TelemetryImpl::CollectReports(nsIHandleReportCallback* aHandleReport,
-                              nsISupports* aData)
+                              nsISupports* aData, bool aAnonymize)
 {
   return MOZ_COLLECT_REPORT(
     "explicit/telemetry", KIND_HEAP, UNITS_BYTES,
@@ -708,7 +714,8 @@ bool
 IsExpired(const char *expiration){
   static Version current_version = Version(MOZ_APP_VERSION);
   MOZ_ASSERT(expiration);
-  return strcmp(expiration, "never") && (mozilla::Version(expiration) <= current_version);
+  return strcmp(expiration, "never") && strcmp(expiration, "default") &&
+    (mozilla::Version(expiration) <= current_version);
 }
 
 bool
@@ -2059,31 +2066,46 @@ CreateJSTimeHistogram(JSContext* cx, const Telemetry::TimeHistogram& time)
 }
 
 static JSObject*
-CreateJSHangHistogram(JSContext* cx, const Telemetry::HangHistogram& hang)
+CreateJSHangStack(JSContext* cx, const Telemetry::HangStack& stack)
 {
-  JS::RootedObject ret(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+  JS::RootedObject ret(cx, JS_NewArrayObject(cx, stack.length()));
   if (!ret) {
     return nullptr;
   }
-
-  const Telemetry::HangHistogram::Stack& hangStack = hang.GetStack();
-  JS::RootedObject stack(cx,
-    JS_NewArrayObject(cx, hangStack.length()));
-  if (!ret) {
-    return nullptr;
-  }
-  for (size_t i = 0; i < hangStack.length(); i++) {
-    JS::RootedString string(cx, JS_NewStringCopyZ(cx, hangStack[i]));
-    if (!JS_SetElement(cx, stack, i, string)) {
+  for (size_t i = 0; i < stack.length(); i++) {
+    JS::RootedString string(cx, JS_NewStringCopyZ(cx, stack[i]));
+    if (!JS_SetElement(cx, ret, i, string)) {
       return nullptr;
     }
   }
+  return ret;
+}
 
+static JSObject*
+CreateJSHangHistogram(JSContext* cx, const Telemetry::HangHistogram& hang)
+{
+  JS::RootedObject ret(cx,
+    JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+  if (!ret) {
+    return nullptr;
+  }
+
+  JS::RootedObject stack(cx, CreateJSHangStack(cx, hang.GetStack()));
   JS::RootedObject time(cx, CreateJSTimeHistogram(cx, hang));
-  if (!time ||
+
+  if (!stack ||
+      !time ||
       !JS_DefineProperty(cx, ret, "stack", stack, JSPROP_ENUMERATE) ||
       !JS_DefineProperty(cx, ret, "histogram", time, JSPROP_ENUMERATE)) {
     return nullptr;
+  }
+
+  if (!hang.GetNativeStack().empty()) {
+    JS::RootedObject native(cx, CreateJSHangStack(cx, hang.GetNativeStack()));
+    if (!native ||
+        !JS_DefineProperty(cx, ret, "nativeStack", native, JSPROP_ENUMERATE)) {
+      return nullptr;
+    }
   }
   return ret;
 }
@@ -2597,15 +2619,16 @@ size_t
 TelemetryImpl::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
 {
   size_t n = aMallocSizeOf(this);
+
   // Ignore the hashtables in mAddonMap; they are not significant.
   n += mAddonMap.SizeOfExcludingThis(nullptr, aMallocSizeOf);
   n += mHistogramMap.SizeOfExcludingThis(nullptr, aMallocSizeOf);
   { // Scope for mHashMutex lock
     MutexAutoLock lock(mHashMutex);
-    n += mPrivateSQL.SizeOfExcludingThis(nullptr, aMallocSizeOf);
-    n += mSanitizedSQL.SizeOfExcludingThis(nullptr, aMallocSizeOf);
+    n += mPrivateSQL.SizeOfExcludingThis(aMallocSizeOf);
+    n += mSanitizedSQL.SizeOfExcludingThis(aMallocSizeOf);
   }
-  n += mTrackedDBs.SizeOfExcludingThis(nullptr, aMallocSizeOf);
+  n += mTrackedDBs.SizeOfExcludingThis(aMallocSizeOf);
   { // Scope for mHangReportsMutex lock
     MutexAutoLock lock(mHangReportsMutex);
     n += mHangReports.SizeOfExcludingThis();
@@ -3027,15 +3050,63 @@ TimeHistogram::Add(PRIntervalTime aTime)
   operator[](index)++;
 }
 
+const char*
+HangStack::InfallibleAppendViaBuffer(const char* aText, size_t aLength)
+{
+  MOZ_ASSERT(this->canAppendWithoutRealloc(1));
+  // Include null-terminator in length count.
+  MOZ_ASSERT(mBuffer.canAppendWithoutRealloc(aLength + 1));
+
+  const char* const entry = mBuffer.end();
+  mBuffer.infallibleAppend(aText, aLength);
+  mBuffer.infallibleAppend('\0'); // Explicitly append null-terminator
+  this->infallibleAppend(entry);
+  return entry;
+}
+
+const char*
+HangStack::AppendViaBuffer(const char* aText, size_t aLength)
+{
+  if (!this->reserve(this->length() + 1)) {
+    return nullptr;
+  }
+
+  // Keep track of the previous buffer in case we need to adjust pointers later.
+  const char* const prevStart = mBuffer.begin();
+  const char* const prevEnd = mBuffer.end();
+
+  // Include null-terminator in length count.
+  if (!mBuffer.reserve(mBuffer.length() + aLength + 1)) {
+    return nullptr;
+  }
+
+  if (prevStart != mBuffer.begin()) {
+    // The buffer has moved; we have to adjust pointers in the stack.
+    for (const char** entry = this->begin(); entry != this->end(); entry++) {
+      if (*entry >= prevStart && *entry < prevEnd) {
+        // Move from old buffer to new buffer.
+        *entry += mBuffer.begin() - prevStart;
+      }
+    }
+  }
+
+  return InfallibleAppendViaBuffer(aText, aLength);
+}
+
 uint32_t
-HangHistogram::GetHash(const Stack& aStack)
+HangHistogram::GetHash(const HangStack& aStack)
 {
   uint32_t hash = 0;
   for (const char* const* label = aStack.begin();
        label != aStack.end(); label++) {
-    /* We only need to hash the pointer instead of the text content
-       because we are assuming constant pointers */
-    hash = AddToHash(hash, *label);
+    /* If the string is within our buffer, we need to hash its content.
+       Otherwise, the string is statically allocated, and we only need
+       to hash the pointer instead of the content. */
+    if (aStack.IsInBuffer(*label)) {
+      hash = AddToHash(hash, HashString(*label));
+    } else {
+      hash = AddToHash(hash, *label);
+    }
   }
   return hash;
 }
@@ -3049,7 +3120,7 @@ HangHistogram::operator==(const HangHistogram& aOther) const
   if (mStack.length() != aOther.mStack.length()) {
     return false;
   }
-  return PodEqual(mStack.begin(), aOther.mStack.begin(), mStack.length());
+  return mStack == aOther.mStack;
 }
 
 

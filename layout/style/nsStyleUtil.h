@@ -9,6 +9,7 @@
 #include "nsCSSProperty.h"
 #include "nsString.h"
 #include "nsTArrayForwardDeclare.h"
+#include "gfxFontFamilyList.h"
 
 class nsCSSValue;
 class nsStringComparator;
@@ -18,7 +19,7 @@ class nsIPrincipal;
 class nsIURI;
 struct gfxFontFeature;
 struct gfxAlternateValue;
-class nsCSSValueList;
+struct nsCSSValueList;
 
 // Style utility functions
 class nsStyleUtil {
@@ -42,6 +43,10 @@ public:
   static bool AppendEscapedCSSIdent(const nsAString& aIdent,
                                     nsAString& aResult);
 
+  static void
+  AppendEscapedCSSFontFamilyList(const mozilla::FontFamilyList& aFamilyList,
+                                 nsAString& aResult);
+
   // Append a bitmask-valued property's value(s) (space-separated) to aResult.
   static void AppendBitmaskCSSValue(nsCSSProperty aProperty,
                                     int32_t aMaskedValue,
@@ -59,10 +64,15 @@ public:
   static void AppendFontFeatureSettings(const nsCSSValue& src,
                                         nsAString& aResult);
 
+  static void AppendUnicodeRange(const nsCSSValue& aValue, nsAString& aResult);
+
   static void AppendCSSNumber(float aNumber, nsAString& aResult)
   {
     aResult.AppendFloat(aNumber);
   }
+
+  static void AppendSerializedFontSrc(const nsCSSValue& aValue,
+                                      nsAString& aResult);
 
   // convert bitmask value to keyword name for a functional alternate
   static void GetFunctionalAlternatesName(int32_t aFeature,
@@ -103,6 +113,23 @@ public:
   static bool IsSignificantChild(nsIContent* aChild,
                                    bool aTextIsSignificant,
                                    bool aWhitespaceIsSignificant);
+
+  /*
+   * Should we treat the given "flex-basis" value as "main-size"?
+   *
+   * In a horizontal flex container, this is merely a check for whether
+   * aFlexBasis has the enumerated value NS_STYLE_FLEX_BASIS_MAIN_SIZE.
+   *
+   * In a vertical flex container, we *also* treat other enumerated
+   * values (like "NS_STYLE_WIDTH_MAX_CONTENT") as if they were "main-size"
+   * (and return true from this function), because we don't currently support
+   * those other values for vertical/height-flavored properties. So, if we
+   * encounter them, we fall back to behaving as if we had flex-basis's initial
+   * value.
+   */
+  static bool IsFlexBasisMainSize(const nsStyleCoord& aFlexBasis,
+                                  bool aIsMainAxisHorizontal);
+
   /*
    *  Does this principal have a CSP that blocks the application of
    *  inline styles? Returns false if application of the style should

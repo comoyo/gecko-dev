@@ -6,6 +6,7 @@
 
 #include "nsNSSIOLayer.h"
 
+#include "pkix/ScopedPtr.h"
 #include "pkix/pkixtypes.h"
 #include "nsNSSComponent.h"
 #include "mozilla/Casting.h"
@@ -13,6 +14,7 @@
 #include "mozilla/Telemetry.h"
 
 #include "prlog.h"
+#include "prmem.h"
 #include "prnetdb.h"
 #include "nsIPrefService.h"
 #include "nsIClientAuthDialogs.h"
@@ -23,7 +25,6 @@
 #include "nsPrintfCString.h"
 #include "SSLServerCertVerification.h"
 #include "nsNSSCertHelper.h"
-#include "nsNSSCleaner.h"
 
 #ifndef MOZ_NO_EV_CERTS
 #include "nsIDocShell.h"
@@ -39,6 +40,7 @@
 #include "SharedSSLState.h"
 #include "mozilla/Preferences.h"
 #include "nsContentUtils.h"
+#include "NSSCertDBTrustDomain.h"
 #include "NSSErrorsService.h"
 
 #include "ssl.h"
@@ -64,8 +66,6 @@ using namespace mozilla::psm;
                        //file.
 
 namespace {
-
-NSSCleanupAutoPtrClass(void, PR_FREEIF)
 
 void
 getSiteKey(const nsACString& hostName, uint16_t port,
@@ -136,12 +136,18 @@ nsNSSSocketInfo::nsNSSSocketInfo(SharedSSLState& aState, uint32_t providerFlags)
     mKEAExpected(nsISSLSocketControl::KEY_EXCHANGE_UNKNOWN),
     mKEAKeyBits(0),
     mSSLVersionUsed(nsISSLSocketControl::SSL_VERSION_UNKNOWN),
+    mMACAlgorithmUsed(nsISSLSocketControl::SSL_MAC_UNKNOWN),
     mProviderFlags(providerFlags),
     mSocketCreationTimestamp(TimeStamp::Now()),
-    mPlaintextBytesRead(0)
+    mPlaintextBytesRead(0),
+    mClientCert(nullptr)
 {
   mTLSVersionRange.min = 0;
   mTLSVersionRange.max = 0;
+}
+
+nsNSSSocketInfo::~nsNSSSocketInfo()
+{
 }
 
 NS_IMPL_ISUPPORTS_INHERITED(nsNSSSocketInfo, TransportSecurityInfo,
@@ -187,6 +193,36 @@ NS_IMETHODIMP
 nsNSSSocketInfo::GetSSLVersionUsed(int16_t* aSSLVersionUsed)
 {
   *aSSLVersionUsed = mSSLVersionUsed;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsNSSSocketInfo::GetSSLVersionOffered(int16_t* aSSLVersionOffered)
+{
+  *aSSLVersionOffered = mTLSVersionRange.max;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsNSSSocketInfo::GetMACAlgorithmUsed(int16_t* aMac)
+{
+  *aMac = mMACAlgorithmUsed;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsNSSSocketInfo::GetClientCert(nsIX509Cert** aClientCert)
+{
+  NS_ENSURE_ARG_POINTER(aClientCert);
+  *aClientCert = mClientCert;
+  NS_IF_ADDREF(*aClientCert);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsNSSSocketInfo::SetClientCert(nsIX509Cert* aClientCert)
+{
+  mClientCert = aClientCert;
   return NS_OK;
 }
 
@@ -386,16 +422,45 @@ nsNSSSocketInfo::JoinConnection(const nsACString& npnProtocol,
 
   ScopedCERTCertificate nssCert;
 
-  nsCOMPtr<nsIX509Cert2> cert2 = do_QueryInterface(SSLStatus()->mServerCert);
-  if (cert2)
-    nssCert = cert2->GetCert();
+  nsCOMPtr<nsIX509Cert> cert(SSLStatus()->mServerCert);
+  if (cert) {
+    nssCert = cert->GetCert();
+  }
 
-  if (!nssCert)
+  if (!nssCert) {
     return NS_OK;
+  }
 
-  if (CERT_VerifyCertName(nssCert, PromiseFlatCString(hostname).get()) !=
-      SECSuccess)
+  // Attempt to verify the joinee's certificate using the joining hostname.
+  // This ensures that any hostname-specific verification logic (e.g. key
+  // pinning) is satisfied by the joinee's certificate chain.
+  // This verification only uses local information; since we're on the network
+  // thread, we would be blocking on ourselves if we attempted any network i/o.
+  // TODO(bug 1056935): The certificate chain built by this verification may be
+  // different than the certificate chain originally built during the joined
+  // connection's TLS handshake. Consequently, we may report a wrong and/or
+  // misleading certificate chain for HTTP transactions coalesced onto this
+  // connection. This may become problematic in the future. For example,
+  // if/when we begin relying on intermediate certificates being stored in the
+  // securityInfo of a cached HTTPS response, that cached certificate chain may
+  // actually be the wrong chain. We should consider having JoinConnection
+  // return the certificate chain built here, so that the calling Necko code
+  // can associate the correct certificate chain with the HTTP transactions it
+  // is trying to join onto this connection.
+  RefPtr<SharedCertVerifier> certVerifier(GetDefaultCertVerifier());
+  if (!certVerifier) {
     return NS_OK;
+  }
+  nsAutoCString hostnameFlat(PromiseFlatCString(hostname));
+  CertVerifier::Flags flags = CertVerifier::FLAG_LOCAL_ONLY;
+  SECStatus rv = certVerifier->VerifySSLServerCert(nssCert, nullptr,
+                                                   mozilla::pkix::Now(),
+                                                   nullptr, hostnameFlat.get(),
+                                                   false, flags, nullptr,
+                                                   nullptr);
+  if (rv != SECSuccess) {
+    return NS_OK;
+  }
 
   // All tests pass - this is joinable
   mJoined = true;
@@ -492,7 +557,7 @@ nsNSSSocketInfo::SetFileDescPtr(PRFileDesc* aFilePtr)
 class PreviousCertRunnable : public SyncRunnableBase
 {
 public:
-  PreviousCertRunnable(nsIInterfaceRequestor* callbacks)
+  explicit PreviousCertRunnable(nsIInterfaceRequestor* callbacks)
     : mCallbacks(callbacks)
   {
   }
@@ -572,7 +637,7 @@ nsNSSSocketInfo::SetCertVerificationResult(PRErrorCode errorCode,
 
   if (mPlaintextBytesRead && !errorCode) {
     Telemetry::Accumulate(Telemetry::SSL_BYTES_BEFORE_CERT_CALLBACK,
-                          SafeCast<uint32_t>(mPlaintextBytesRead));
+                          AssertedCast<uint32_t>(mPlaintextBytesRead));
   }
 
   mCertVerificationState = after_cert_verification;
@@ -1197,7 +1262,7 @@ nsSSLIOLayerHelpers::nsSSLIOLayerHelpers()
   : mRenegoUnrestrictedSites(nullptr)
   , mTreatUnsafeNegotiationAsBroken(false)
   , mWarnLevelMissingRFC5746(1)
-  , mTLSIntoleranceInfo(16)
+  , mTLSIntoleranceInfo()
   , mFalseStartRequireNPN(true)
   , mFalseStartRequireForwardSecrecy(false)
   , mutex("nsSSLIOLayerHelpers.mutex")
@@ -1375,7 +1440,9 @@ class PrefObserver : public nsIObserver {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIOBSERVER
-  PrefObserver(nsSSLIOLayerHelpers* aOwner) : mOwner(aOwner) {}
+  explicit PrefObserver(nsSSLIOLayerHelpers* aOwner) : mOwner(aOwner) {}
+
+protected:
   virtual ~PrefObserver() {}
 private:
   nsSSLIOLayerHelpers* mOwner;
@@ -1500,7 +1567,7 @@ nsSSLIOLayerHelpers::Init()
     nsSSLPlaintextLayerMethods.recv = PlaintextRecv;
   }
 
-  mRenegoUnrestrictedSites = new nsTHashtable<nsCStringHashKey>(16);
+  mRenegoUnrestrictedSites = new nsTHashtable<nsCStringHashKey>();
 
   nsCString unrestricted_hosts;
   Preferences::GetCString("security.ssl.renego_unrestricted_hosts", &unrestricted_hosts);
@@ -1732,16 +1799,16 @@ nsGetUserCertChoice(SSM_UserCertChoice* certChoice)
 {
   char* mode = nullptr;
   nsresult ret;
-  
+
   NS_ENSURE_ARG_POINTER(certChoice);
-  
+
   nsCOMPtr<nsIPrefBranch> pref = do_GetService(NS_PREFSERVICE_CONTRACTID);
-  
+
   ret = pref->GetCharPref("security.default_personal_cert", &mode);
   if (NS_FAILED(ret)) {
     goto loser;
   }
-  
+
   if (PL_strcmp(mode, "Select Automatically") == 0) {
     *certChoice = AUTO;
   } else if (PL_strcmp(mode, "Ask Every Time") == 0) {
@@ -1879,9 +1946,9 @@ ClientAuthDataRunnable::RunOnTargetThread()
 {
   PLArenaPool* arena = nullptr;
   char** caNameStrings;
-  mozilla::pkix::ScopedCERTCertificate cert;
+  ScopedCERTCertificate cert;
   ScopedSECKEYPrivateKey privKey;
-  mozilla::pkix::ScopedCERTCertList certList;
+  ScopedCERTCertList certList;
   CERTCertListNode* node;
   ScopedCERTCertNicknames nicknames;
   int keyError = 0; // used for private key retrieval error
@@ -1889,6 +1956,29 @@ ClientAuthDataRunnable::RunOnTargetThread()
   int32_t NumberOfCerts = 0;
   void* wincx = mSocketInfo;
   nsresult rv;
+
+  nsCOMPtr<nsIX509Cert> socketClientCert;
+  mSocketInfo->GetClientCert(getter_AddRefs(socketClientCert));
+
+  // If a client cert preference was set on the socket info, use that and skip
+  // the client cert UI and/or search of the user's past cert decisions.
+  if (socketClientCert) {
+    cert = socketClientCert->GetCert();
+    if (!cert) {
+      goto loser;
+    }
+
+    // Get the private key
+    privKey = PK11_FindKeyByAnyCert(cert.get(), wincx);
+    if (!privKey) {
+      goto loser;
+    }
+
+    *mPRetCert = cert.forget();
+    *mPRetKey = privKey.forget();
+    mRV = SECSuccess;
+    return;
+  }
 
   // create caNameStrings
   arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
@@ -2073,16 +2163,15 @@ ClientAuthDataRunnable::RunOnTargetThread()
       NS_ASSERTION(nicknames->numnicknames == NumberOfCerts, "nicknames->numnicknames != NumberOfCerts");
 
       // Get CN and O of the subject and O of the issuer
-      char* ccn = CERT_GetCommonName(&mServerCert->subject);
-      void* v = ccn;
-      voidCleaner ccnCleaner(v);
-      NS_ConvertUTF8toUTF16 cn(ccn);
+      mozilla::pkix::ScopedPtr<char, PORT_Free_string> ccn(
+        CERT_GetCommonName(&mServerCert->subject));
+      NS_ConvertUTF8toUTF16 cn(ccn.get());
 
       int32_t port;
       mSocketInfo->GetPort(&port);
 
       nsString cn_host_port;
-      if (ccn && strcmp(ccn, hostname) == 0) {
+      if (ccn && strcmp(ccn.get(), hostname) == 0) {
         cn_host_port.Append(cn);
         cn_host_port.Append(':');
         cn_host_port.AppendInt(port);
@@ -2225,7 +2314,7 @@ done:
     PORT_FreeArena(arena, false);
   }
 
-  *mPRetCert = cert.release();
+  *mPRetCert = cert.forget();
   *mPRetKey = privKey.forget();
 
   if (mRV == SECFailure) {
@@ -2303,6 +2392,8 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
     return NS_ERROR_FAILURE;
   }
 
+ uint16_t maxEnabledVersion = range.max;
+
   infoObject->SharedState().IOLayerHelpers()
     .adjustForTLSIntolerance(infoObject->GetHostName(), infoObject->GetPort(),
                              range);
@@ -2315,6 +2406,16 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
     return NS_ERROR_FAILURE;
   }
   infoObject->SetTLSVersionRange(range);
+
+  // when adjustForTLSIntolerance tweaks the maximum version downward,
+  // we tell the server using this SCSV so they can detect a downgrade attack
+  if (range.max < maxEnabledVersion) {
+    PR_LOG(gPIPNSSLog, PR_LOG_DEBUG,
+           ("[%p] nsSSLIOLayerSetOptions: enabling TLS_FALLBACK_SCSV\n", fd));
+    if (SECSuccess != SSL_OptionSet(fd, SSL_ENABLE_FALLBACK_SCSV, true)) {
+      return NS_ERROR_FAILURE;
+    }
+  }
 
   bool enabled = infoObject->SharedState().IsOCSPStaplingEnabled();
   if (SECSuccess != SSL_OptionSet(fd, SSL_ENABLE_OCSP_STAPLING, enabled)) {

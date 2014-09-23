@@ -143,9 +143,23 @@ GetScreenEnabled()
 }
 
 void
-SetScreenEnabled(bool enabled)
+SetScreenEnabled(bool aEnabled)
 {
-  Hal()->SendSetScreenEnabled(enabled);
+  Hal()->SendSetScreenEnabled(aEnabled);
+}
+
+bool
+GetKeyLightEnabled()
+{
+  bool enabled = false;
+  Hal()->SendGetKeyLightEnabled(&enabled);
+  return enabled;
+}
+
+void
+SetKeyLightEnabled(bool aEnabled)
+{
+  Hal()->SendSetKeyLightEnabled(aEnabled);
 }
 
 bool
@@ -157,9 +171,9 @@ GetCpuSleepAllowed()
 }
 
 void
-SetCpuSleepAllowed(bool allowed)
+SetCpuSleepAllowed(bool aAllowed)
 {
-  Hal()->SendSetCpuSleepAllowed(allowed);
+  Hal()->SendSetCpuSleepAllowed(aAllowed);
 }
 
 double
@@ -171,25 +185,9 @@ GetScreenBrightness()
 }
 
 void
-SetScreenBrightness(double brightness)
+SetScreenBrightness(double aBrightness)
 {
-  Hal()->SendSetScreenBrightness(brightness);
-}
-
-bool
-SetLight(hal::LightType light, const hal::LightConfiguration& aConfig)
-{
-  bool status;
-  Hal()->SendSetLight(light, aConfig, &status);
-  return status;
-}
-
-bool
-GetLight(hal::LightType light, hal::LightConfiguration* aConfig)
-{
-  bool status;
-  Hal()->SendGetLight(light, aConfig, &status);
-  return status;
+  Hal()->SendSetScreenBrightness(aBrightness);
 }
 
 void 
@@ -330,7 +328,9 @@ GetCurrentSwitchState(SwitchDevice aDevice)
 void
 NotifySwitchStateFromInputDevice(SwitchDevice aDevice, SwitchState aState)
 {
-  Hal()->SendNotifySwitchStateFromInputDevice(aDevice, aState);
+  unused << aDevice;
+  unused << aState;
+  NS_RUNTIMEABORT("Only the main process may notify switch state change.");
 }
 
 bool
@@ -426,9 +426,13 @@ CancelFMRadioSeek()
 }
 
 void
-FactoryReset()
+FactoryReset(FactoryResetReason& aReason)
 {
-  Hal()->SendFactoryReset();
+  if (aReason == FactoryResetReason::Normal) {
+    Hal()->SendFactoryReset(NS_LITERAL_STRING("normal"));
+  } else if (aReason == FactoryResetReason::Wipe) {
+    Hal()->SendFactoryReset(NS_LITERAL_STRING("wipe"));
+  }
 }
 
 void
@@ -441,6 +445,12 @@ void
 StopDiskSpaceWatcher()
 {
   NS_RUNTIMEABORT("StopDiskSpaceWatcher() can't be called from sandboxed contexts.");
+}
+
+bool IsHeadphoneEventFromInputDev()
+{
+  NS_RUNTIMEABORT("IsHeadphoneEventFromInputDev() cannot be called from sandboxed contexts.");
+  return false;
 }
 
 class HalParent : public PHalParent
@@ -591,86 +601,82 @@ public:
   }
 
   virtual bool
-  RecvGetScreenEnabled(bool *enabled) MOZ_OVERRIDE
+  RecvGetScreenEnabled(bool* aEnabled) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    *enabled = hal::GetScreenEnabled();
+    *aEnabled = hal::GetScreenEnabled();
     return true;
   }
 
   virtual bool
-  RecvSetScreenEnabled(const bool &enabled) MOZ_OVERRIDE
+  RecvSetScreenEnabled(const bool& aEnabled) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    hal::SetScreenEnabled(enabled);
+    hal::SetScreenEnabled(aEnabled);
     return true;
   }
 
   virtual bool
-  RecvGetCpuSleepAllowed(bool *allowed) MOZ_OVERRIDE
+  RecvGetKeyLightEnabled(bool* aEnabled) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    *allowed = hal::GetCpuSleepAllowed();
+    *aEnabled = hal::GetKeyLightEnabled();
     return true;
   }
 
   virtual bool
-  RecvSetCpuSleepAllowed(const bool &allowed) MOZ_OVERRIDE
+  RecvSetKeyLightEnabled(const bool& aEnabled) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    hal::SetCpuSleepAllowed(allowed);
+    hal::SetKeyLightEnabled(aEnabled);
     return true;
   }
 
   virtual bool
-  RecvGetScreenBrightness(double *brightness) MOZ_OVERRIDE
+  RecvGetCpuSleepAllowed(bool* aAllowed) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    *brightness = hal::GetScreenBrightness();
+    *aAllowed = hal::GetCpuSleepAllowed();
     return true;
   }
 
   virtual bool
-  RecvSetScreenBrightness(const double &brightness) MOZ_OVERRIDE
+  RecvSetCpuSleepAllowed(const bool& aAllowed) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    hal::SetScreenBrightness(brightness);
+    hal::SetCpuSleepAllowed(aAllowed);
     return true;
   }
 
   virtual bool
-  RecvSetLight(const LightType& aLight,  const hal::LightConfiguration& aConfig, bool *status) MOZ_OVERRIDE
+  RecvGetScreenBrightness(double* aBrightness) MOZ_OVERRIDE
   {
-    // XXX currently, the hardware key light and screen backlight are
-    // controlled as a unit.  Those are set through the power API, and
-    // there's no other way to poke lights currently, so we require
-    // "power" privileges here.
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    *status = hal::SetLight(aLight, aConfig);
+    *aBrightness = hal::GetScreenBrightness();
     return true;
   }
 
   virtual bool
-  RecvGetLight(const LightType& aLight, LightConfiguration* aConfig, bool* status) MOZ_OVERRIDE
+  RecvSetScreenBrightness(const double& aBrightness) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    *status = hal::GetLight(aLight, aConfig);
+    hal::SetScreenBrightness(aBrightness);
     return true;
   }
 
@@ -828,14 +834,6 @@ public:
     return true;
   }
 
-  virtual bool
-  RecvNotifySwitchStateFromInputDevice(const SwitchDevice& aDevice,
-                                       const SwitchState& aState) MOZ_OVERRIDE
-  {
-    hal::NotifySwitchStateFromInputDevice(aDevice, aState);
-    return true;
-  }
-
   void Notify(const int64_t& aClockDeltaMS)
   {
     unused << SendNotifySystemClockChange(aClockDeltaMS);
@@ -847,12 +845,23 @@ public:
   }
 
   virtual bool
-  RecvFactoryReset()
+  RecvFactoryReset(const nsString& aReason) MOZ_OVERRIDE
   {
     if (!AssertAppProcessPermission(this, "power")) {
       return false;
     }
-    hal::FactoryReset();
+
+    FactoryResetReason reason = FactoryResetReason::Normal;
+    if (aReason.EqualsLiteral("normal")) {
+      reason = FactoryResetReason::Normal;
+    } else if (aReason.EqualsLiteral("wipe")) {
+      reason = FactoryResetReason::Wipe;
+    } else {
+      // Invalid factory reset reason. That should never happen.
+      return false;
+    }
+
+    hal::FactoryReset(reason);
     return true;
   }
 

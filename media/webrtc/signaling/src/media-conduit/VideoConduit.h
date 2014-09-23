@@ -10,7 +10,12 @@
 
 #include "MediaConduitInterface.h"
 #include "MediaEngineWrapper.h"
+#include "CodecStatistics.h"
+#include "LoadManagerFactory.h"
+#include "LoadManager.h"
 
+// conflicts with #include of scoped_ptr.h
+#undef FF
 // Video Engine Includes
 #include "webrtc/common_types.h"
 #ifdef FF
@@ -194,6 +199,8 @@ public:
 #endif
   }
 
+  virtual uint64_t CodecPluginID();
+
   unsigned short SendingWidth() {
     return mSendingWidth;
   }
@@ -216,31 +223,8 @@ public:
     return 0;
   }
 
-  WebrtcVideoConduit():
-                      mOtherDirection(nullptr),
-                      mShutDown(false),
-                      mVideoEngine(nullptr),
-                      mTransport(nullptr),
-                      mRenderer(nullptr),
-                      mPtrExtCapture(nullptr),
-                      mEngineTransmitting(false),
-                      mEngineReceiving(false),
-                      mChannel(-1),
-                      mCapId(-1),
-                      mCurSendCodecConfig(nullptr),
-                      mSendingWidth(0),
-                      mSendingHeight(0),
-                      mReceivingWidth(640),
-                      mReceivingHeight(480),
-                      mVideoLatencyTestEnable(false),
-                      mVideoLatencyAvg(0),
-                      mMinBitrate(200),
-                      mStartBitrate(300),
-                      mMaxBitrate(2000)
-  {
-  }
-
-  virtual ~WebrtcVideoConduit() ;
+  WebrtcVideoConduit();
+  virtual ~WebrtcVideoConduit();
 
   MediaConduitErrorCode Init(WebrtcVideoConduit *other);
 
@@ -248,6 +232,16 @@ public:
   webrtc::VideoEngine* GetVideoEngine() { return mVideoEngine; }
   bool GetLocalSSRC(unsigned int* ssrc);
   bool GetRemoteSSRC(unsigned int* ssrc);
+  bool GetVideoEncoderStats(double* framerateMean,
+                            double* framerateStdDev,
+                            double* bitrateMean,
+                            double* bitrateStdDev,
+                            uint32_t* droppedFrames);
+  bool GetVideoDecoderStats(double* framerateMean,
+                            double* framerateStdDev,
+                            double* bitrateMean,
+                            double* bitrateStdDev,
+                            uint32_t* discardedPackets);
   bool GetAVStats(int32_t* jitterBufferDelayMs,
                   int32_t* playoutBufferDelayMs,
                   int32_t* avSyncOffsetMs);
@@ -342,6 +336,13 @@ private:
 
   nsAutoPtr<VideoCodecConfig> mExternalSendCodec;
   nsAutoPtr<VideoCodecConfig> mExternalRecvCodec;
+  nsAutoPtr<VideoEncoder> mExternalSendCodecHandle;
+  nsAutoPtr<VideoDecoder> mExternalRecvCodecHandle;
+
+  // statistics object for video codec;
+  nsAutoPtr<VideoCodecStatistics> mVideoCodecStat;
+
+  nsAutoPtr<LoadManager> mLoadManager;
 };
 
 } // end namespace

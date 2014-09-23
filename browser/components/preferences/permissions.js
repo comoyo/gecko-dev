@@ -1,4 +1,4 @@
-/* -*- Mode: Java; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 4 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -203,6 +203,11 @@ var gPermissionManager = {
   {
     if (aTopic == "perm-changed") {
       var permission = aSubject.QueryInterface(Components.interfaces.nsIPermission);
+
+      // Ignore unrelated permission types.
+      if (permission.type != this._type)
+        return;
+
       if (aData == "added") {
         this._addPermissionToList(permission);
         ++this._view._rowCount;
@@ -231,10 +236,17 @@ var gPermissionManager = {
         }
         this._tree.treeBoxObject.invalidate();
       }
-      // No UI other than this window causes this method to be sent a "deleted"
-      // notification, so we don't need to implement it since Delete is handled
-      // directly by the Permission Removal handlers. If that ever changes, those
-      // implementations will have to move into here. 
+      else if (aData == "deleted") {
+        for (var i = 0; i < this._permissions.length; i++) {
+          if (this._permissions[i].host == permission.host) {
+            this._permissions.splice(i, 1);
+            this._view._rowCount--;
+            this._tree.treeBoxObject.rowCountChanged(this._view.rowCount - 1, -1);
+            this._tree.treeBoxObject.invalidate();
+            break;
+          }
+        }
+      }
     }
   },
   

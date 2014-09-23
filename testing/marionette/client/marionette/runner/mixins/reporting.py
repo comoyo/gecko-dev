@@ -50,7 +50,7 @@ class HTMLReportingTestRunnerMixin(object):
         errors = sum([len(results.errors) for results in results_list])
         passes = sum([results.passed for results in results_list])
         unexpected_passes = sum([len(results.unexpectedSuccesses) for results in results_list])
-        test_time = self.elapsedtime.total_seconds()
+        test_time = self.elapsedtime
         test_logs = []
 
         def _extract_html_from_result(result):
@@ -189,7 +189,7 @@ class HTMLReportingTestRunnerMixin(object):
                 html.script(raw(pkg_resources.resource_string(
                     __name__, os.path.sep.join(['resources', 'htmlreport', 'main.js']))),
                     type='text/javascript'),
-                html.p('Report generated on %s at %s by %s %s' % (
+                html.p('Report generated on %s at %s by %s version %s' % (
                     generated.strftime('%d-%b-%Y'),
                     generated.strftime('%H:%M:%S'),
                     self.html_name, self.html_version)),
@@ -253,6 +253,7 @@ class HTMLReportingTestResultMixin(object):
             self.marionette.switch_to_frame()
             debug['settings'] = json.dumps(self.marionette.execute_async_script("""
 SpecialPowers.addPermission('settings-read', true, document);
+SpecialPowers.addPermission('settings-api-read', true, document);
 var req = window.navigator.mozSettings.createLock().get('*');
 req.onsuccess = function() {
   marionetteScriptFinished(req.result);

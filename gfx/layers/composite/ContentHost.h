@@ -23,7 +23,7 @@
 #include "mozilla/layers/LayersTypes.h"  // for etc
 #include "mozilla/layers/TextureHost.h"  // for TextureHost
 #include "mozilla/mozalloc.h"           // for operator delete
-#include "nsAutoPtr.h"                  // for nsAutoPtr
+#include "mozilla/UniquePtr.h"          // for UniquePtr
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_RUNTIMEABORT
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
@@ -64,12 +64,16 @@ public:
                             const nsIntRegion& aOldValidRegionBack,
                             nsIntRegion* aUpdatedRegionBack) = 0;
 
-  virtual void SetPaintWillResample(bool aResample) { }
+  virtual void SetPaintWillResample(bool aResample) { mPaintWillResample = aResample; }
+  bool PaintWillResample() { return mPaintWillResample; }
 
 protected:
-  ContentHost(const TextureInfo& aTextureInfo)
+  explicit ContentHost(const TextureInfo& aTextureInfo)
     : CompositableHost(aTextureInfo)
+    , mPaintWillResample(false)
   {}
+
+  bool mPaintWillResample;
 };
 
 /**
@@ -89,7 +93,7 @@ public:
   typedef RotatedContentBuffer::ContentType ContentType;
   typedef RotatedContentBuffer::PaintState PaintState;
 
-  ContentHostBase(const TextureInfo& aTextureInfo);
+  explicit ContentHostBase(const TextureInfo& aTextureInfo);
   virtual ~ContentHostBase();
 
   virtual void Composite(EffectChain& aEffectChain,
@@ -97,16 +101,12 @@ public:
                          const gfx::Matrix4x4& aTransform,
                          const gfx::Filter& aFilter,
                          const gfx::Rect& aClipRect,
-                         const nsIntRegion* aVisibleRegion = nullptr,
-                         TiledLayerProperties* aLayerProperties = nullptr);
-
-  virtual void SetPaintWillResample(bool aResample) { mPaintWillResample = aResample; }
-
-  virtual bool Lock() = 0;
-  virtual void Unlock() = 0;
+                         const nsIntRegion* aVisibleRegion = nullptr);
 
   virtual NewTextureSource* GetTextureSource() = 0;
   virtual NewTextureSource* GetTextureSourceOnWhite() = 0;
+
+  virtual TemporaryRef<TexturedEffect> GenEffect(const gfx::Filter& aFilter) MOZ_OVERRIDE;
 
 protected:
   virtual nsIntPoint GetOriginOffset()
@@ -114,11 +114,9 @@ protected:
     return mBufferRect.TopLeft() - mBufferRotation;
   }
 
-  bool PaintWillResample() { return mPaintWillResample; }
 
   nsIntRect mBufferRect;
   nsIntPoint mBufferRotation;
-  bool mPaintWillResample;
   bool mInitialised;
 };
 
@@ -129,7 +127,7 @@ protected:
 class ContentHostTexture : public ContentHostBase
 {
 public:
-  ContentHostTexture(const TextureInfo& aTextureInfo)
+  explicit ContentHostTexture(const TextureInfo& aTextureInfo)
     : ContentHostBase(aTextureInfo)
     , mLocked(false)
   { }
@@ -139,18 +137,18 @@ public:
 #ifdef MOZ_DUMP_PAINTING
   virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
-  virtual void Dump(FILE* aFile=nullptr,
+  virtual void Dump(std::stringstream& aStream,
                     const char* aPrefix="",
                     bool aDumpHtml=false) MOZ_OVERRIDE;
 #endif
 
-  virtual void PrintInfo(nsACString& aTo, const char* aPrefix) MOZ_OVERRIDE;
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) MOZ_OVERRIDE;
 
   virtual void UseTextureHost(TextureHost* aTexture) MOZ_OVERRIDE;
   virtual void UseComponentAlphaTextures(TextureHost* aTextureOnBlack,
                                          TextureHost* aTextureOnWhite) MOZ_OVERRIDE;
 
-  virtual bool Lock() {
+  virtual bool Lock() MOZ_OVERRIDE {
     MOZ_ASSERT(!mLocked);
     if (!mTextureHost) {
       return false;
@@ -166,7 +164,7 @@ public:
     mLocked = true;
     return true;
   }
-  virtual void Unlock() {
+  virtual void Unlock() MOZ_OVERRIDE {
     MOZ_ASSERT(mLocked);
     mTextureHost->Unlock();
     if (mTextureHostOnWhite) {
@@ -175,11 +173,11 @@ public:
     mLocked = false;
   }
 
-  virtual NewTextureSource* GetTextureSource() {
+  virtual NewTextureSource* GetTextureSource() MOZ_OVERRIDE {
     MOZ_ASSERT(mLocked);
     return mTextureHost->GetTextureSources();
   }
-  virtual NewTextureSource* GetTextureSourceOnWhite() {
+  virtual NewTextureSource* GetTextureSourceOnWhite() MOZ_OVERRIDE {
     MOZ_ASSERT(mLocked);
     if (mTextureHostOnWhite) {
       return mTextureHostOnWhite->GetTextureSources();
@@ -203,7 +201,7 @@ protected:
 class ContentHostDoubleBuffered : public ContentHostTexture
 {
 public:
-  ContentHostDoubleBuffered(const TextureInfo& aTextureInfo)
+  explicit ContentHostDoubleBuffered(const TextureInfo& aTextureInfo)
     : ContentHostTexture(aTextureInfo)
   {}
 
@@ -227,7 +225,7 @@ protected:
 class ContentHostSingleBuffered : public ContentHostTexture
 {
 public:
-  ContentHostSingleBuffered(const TextureInfo& aTextureInfo)
+  explicit ContentHostSingleBuffered(const TextureInfo& aTextureInfo)
     : ContentHostTexture(aTextureInfo)
   {}
   virtual ~ContentHostSingleBuffered() {}
@@ -253,7 +251,7 @@ public:
 class ContentHostIncremental : public ContentHostBase
 {
 public:
-  ContentHostIncremental(const TextureInfo& aTextureInfo);
+  explicit ContentHostIncremental(const TextureInfo& aTextureInfo);
   ~ContentHostIncremental();
 
   virtual CompositableType GetType() { return CompositableType::BUFFER_CONTENT_INC; }
@@ -279,24 +277,22 @@ public:
     return false;
   }
 
-  virtual void PrintInfo(nsACString& aTo, const char* aPrefix) MOZ_OVERRIDE;
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) MOZ_OVERRIDE;
 
-  virtual void DestroyTextures();
-
-  virtual bool Lock() {
+  virtual bool Lock() MOZ_OVERRIDE {
     MOZ_ASSERT(!mLocked);
     ProcessTextureUpdates();
     mLocked = true;
     return true;
   }
 
-  virtual void Unlock() {
+  virtual void Unlock() MOZ_OVERRIDE {
     MOZ_ASSERT(mLocked);
     mLocked = false;
   }
 
-  virtual NewTextureSource* GetTextureSource();
-  virtual NewTextureSource* GetTextureSourceOnWhite();
+  virtual NewTextureSource* GetTextureSource() MOZ_OVERRIDE;
+  virtual NewTextureSource* GetTextureSourceOnWhite() MOZ_OVERRIDE;
 
 private:
 
@@ -378,7 +374,7 @@ private:
     nsIntPoint mBufferRotation;
   };
 
-  nsTArray<nsAutoPtr<Request> > mUpdateList;
+  nsTArray<UniquePtr<Request> > mUpdateList;
 
   // Specific to OGL to avoid exposing methods on TextureSource that only
   // have one implementation.

@@ -26,6 +26,8 @@ class nsContainerBoxObject : public nsBoxObject,
                              public nsIEditorBoxObject,
                              public nsIIFrameBoxObject
 {
+protected:
+  virtual ~nsContainerBoxObject() {}
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSICONTAINERBOXOBJECT
@@ -63,8 +65,7 @@ NS_IMETHODIMP nsContainerBoxObject::GetDocShell(nsIDocShell** aResult)
   // No nsSubDocumentFrame available for mContent, try if there's a mapping
   // between mContent's document to mContent's subdocument.
 
-  // XXXbz sXBL/XBL2 issue -- ownerDocument or currentDocument?
-  nsIDocument *doc = mContent->GetDocument();
+  nsIDocument *doc = mContent->GetComposedDoc();
 
   if (!doc) {
     return NS_OK;

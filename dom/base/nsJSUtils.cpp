@@ -63,21 +63,6 @@ nsJSUtils::GetStaticScriptContext(JSObject* aObj)
   return nativeGlobal->GetScriptContext();
 }
 
-nsIScriptGlobalObject *
-nsJSUtils::GetDynamicScriptGlobal(JSContext* aContext)
-{
-  nsIScriptContext *scriptCX = GetDynamicScriptContext(aContext);
-  if (!scriptCX)
-    return nullptr;
-  return scriptCX->GetGlobalObject();
-}
-
-nsIScriptContext *
-nsJSUtils::GetDynamicScriptContext(JSContext *aContext)
-{
-  return GetScriptContextFromJSContext(aContext);
-}
-
 uint64_t
 nsJSUtils::GetCurrentlyRunningCodeInnerWindowID(JSContext *aContext)
 {
@@ -118,13 +103,12 @@ nsJSUtils::ReportPendingException(JSContext *aContext)
       // otherwise default global) of aContext, so use that here.
       nsIScriptContext* scx = GetScriptContextFromJSContext(aContext);
       JS::Rooted<JSObject*> scope(aContext);
-      scope = scx ? scx->GetWindowProxy()
-                  : js::DefaultObjectForContextOrNull(aContext);
+      scope = scx ? scx->GetWindowProxy() : nullptr;
       if (!scope) {
         // The SafeJSContext has no default object associated with it.
         MOZ_ASSERT(NS_IsMainThread());
         MOZ_ASSERT(aContext == nsContentUtils::GetSafeJSContext());
-        scope = xpc::GetSafeJSContextGlobal();
+        scope = xpc::UnprivilegedJunkScope(); // Usage approved by bholley
       }
       JSAutoCompartment ac(aContext, scope);
       JS_ReportPendingException(aContext);
@@ -157,12 +141,13 @@ nsJSUtils::CompileFunction(JSContext* aCx,
   }
 
   // Compile.
-  JSFunction* fun = JS::CompileFunction(aCx, aTarget, aOptions,
-                                        PromiseFlatCString(aName).get(),
-                                        aArgCount, aArgArray,
-                                        PromiseFlatString(aBody).get(),
-                                        aBody.Length());
-  if (!fun) {
+  JS::Rooted<JSFunction*> fun(aCx);
+  if (!JS::CompileFunction(aCx, aTarget, aOptions,
+                           PromiseFlatCString(aName).get(),
+                           aArgCount, aArgArray,
+                           PromiseFlatString(aBody).get(),
+                           aBody.Length(), &fun))
+  {
     ReportPendingException(aCx);
     return NS_ERROR_FAILURE;
   }
@@ -196,7 +181,9 @@ nsJSUtils::EvaluateString(JSContext* aCx,
                           JS::MutableHandle<JS::Value> aRetValue,
                           void **aOffThreadToken)
 {
-  PROFILER_LABEL("JS", "EvaluateString");
+  PROFILER_LABEL("nsJSUtils", "EvaluateString",
+    js::ProfileEntry::Category::JS);
+
   MOZ_ASSERT_IF(aCompileOptions.versionSet,
                 aCompileOptions.version != JSVERSION_UNKNOWN);
   MOZ_ASSERT_IF(aEvaluateOptions.coerceToString, aEvaluateOptions.needResult);
@@ -224,7 +211,7 @@ nsJSUtils::EvaluateString(JSContext* aCx,
   if (!aEvaluateOptions.reportUncaught) {
     // We need to prevent AutoLastFrameCheck from reporting and clearing
     // any pending exceptions.
-    dontReport.construct(aCx);
+    dontReport.emplace(aCx);
   }
 
   // Scope the JSAutoCompartment so that we can later wrap the return value
@@ -331,8 +318,5 @@ JSObject* GetDefaultScopeFromJSContext(JSContext *cx)
   // the cx, so in those cases we need to fetch it via the scx
   // instead.
   nsIScriptContext *scx = GetScriptContextFromJSContext(cx);
-  if (scx) {
-    return scx->GetWindowProxy();
-  }
-  return js::DefaultObjectForContextOrNull(cx);
+  return  scx ? scx->GetWindowProxy() : nullptr;
 }

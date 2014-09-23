@@ -9,7 +9,7 @@
 #include "mozilla/dom/telephony/TelephonyCommon.h"
 #include "mozilla/dom/telephony/PTelephonyParent.h"
 #include "mozilla/dom/telephony/PTelephonyRequestParent.h"
-#include "nsITelephonyProvider.h"
+#include "nsITelephonyService.h"
 
 BEGIN_TELEPHONY_NAMESPACE
 
@@ -113,6 +113,9 @@ protected:
 
   virtual void
   ActorDestroy(ActorDestroyReason why);
+
+  nsresult
+  SendResponse(const IPCTelephonyResponse& aResponse);
 
 private:
   bool mActorDestroyed;

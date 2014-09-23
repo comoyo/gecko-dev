@@ -21,12 +21,13 @@
 #include "nsIFilePicker.h"
 #include "nsIContentPrefService2.h"
 #include "mozilla/Decimal.h"
+#include "nsContentUtils.h"
+#include "nsTextEditorState.h"
 
 class nsDOMFileList;
 class nsIRadioGroupContainer;
 class nsIRadioGroupVisitor;
 class nsIRadioVisitor;
-class nsTextEditorState;
 
 namespace mozilla {
 
@@ -39,6 +40,9 @@ class Date;
 class DirPickerFileListBuilderTask;
 
 class UploadLastDir MOZ_FINAL : public nsIObserver, public nsSupportsWeakReference {
+
+  ~UploadLastDir() {}
+
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
@@ -65,13 +69,13 @@ public:
 
   class ContentPrefCallback MOZ_FINAL : public nsIContentPrefCallback2
   {
-    public:
+    virtual ~ContentPrefCallback()
+    { }
+
+  public:
     ContentPrefCallback(nsIFilePicker* aFilePicker, nsIFilePickerShownCallback* aFpCallback)
     : mFilePicker(aFilePicker)
     , mFpCallback(aFpCallback)
-    { }
-
-    virtual ~ContentPrefCallback()
     { }
 
     NS_DECL_ISUPPORTS
@@ -101,9 +105,8 @@ public:
   using nsIConstraintValidation::Validity;
   using nsGenericHTMLFormElementWithState::GetForm;
 
-  HTMLInputElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
+  HTMLInputElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                    mozilla::dom::FromParser aFromParser);
-  virtual ~HTMLInputElement();
 
   NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLInputElement, input)
 
@@ -234,7 +237,7 @@ public:
    */
   already_AddRefed<nsIDOMHTMLInputElement> GetSelectedRadioButton();
 
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLInputElement,
                                            nsGenericHTMLFormElementWithState)
@@ -246,6 +249,28 @@ public:
   static void DestroyUploadLastDir();
 
   void MaybeLoadImage();
+
+  void SetSelectionProperties(const nsTextEditorState::SelectionProperties& aProps)
+  {
+    MOZ_ASSERT(mType == NS_FORM_INPUT_NUMBER);
+    mSelectionCached = true;
+    mSelectionProperties = aProps;
+  }
+  bool IsSelectionCached() const
+  {
+    MOZ_ASSERT(mType == NS_FORM_INPUT_NUMBER);
+    return mSelectionCached;
+  }
+  void ClearSelectionCached()
+  {
+    MOZ_ASSERT(mType == NS_FORM_INPUT_NUMBER);
+    mSelectionCached = false;
+  }
+  nsTextEditorState::SelectionProperties& GetSelectionProperties()
+  {
+    MOZ_ASSERT(mType == NS_FORM_INPUT_NUMBER);
+    return mSelectionProperties;
+  }
 
   // nsITimerCallback
   NS_DECL_NSITIMERCALLBACK
@@ -366,6 +391,8 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::autocomplete, aValue, aRv);
   }
+
+  void GetAutocompleteInfo(Nullable<AutocompleteInfo>& aInfo);
 
   bool Autofocus() const
   {
@@ -720,6 +747,8 @@ public:
   static Decimal StringToDecimal(const nsAString& aValue);
 
 protected:
+  virtual ~HTMLInputElement();
+
   virtual JSObject* WrapNode(JSContext* aCx) MOZ_OVERRIDE;
 
   // Pull IsSingleLineTextControl into our scope, otherwise it'd be hidden
@@ -931,6 +960,11 @@ protected:
    * Returns if valueAsNumber attribute applies for the current type.
    */
   bool DoesValueAsNumberApply() const { return DoesMinMaxApply(); }
+
+  /**
+   * Returns if autocomplete attribute applies for the current type.
+   */
+  bool DoesAutocompleteApply() const;
 
   /**
    * Returns if the maxlength attribute applies for the current type.
@@ -1248,6 +1282,13 @@ protected:
    */
   nsCOMPtr<nsITimer> mProgressTimer;
 
+  /**
+   * The selection properties cache for number controls.  This is needed because
+   * the number controls don't recycle their text field, so the normal cache in
+   * nsTextEditorState cannot do its job.
+   */
+  nsTextEditorState::SelectionProperties mSelectionProperties;
+
   // Step scale factor values, for input types that have one.
   static const Decimal kStepScaleFactorDate;
   static const Decimal kStepScaleFactorNumberRange;
@@ -1268,6 +1309,7 @@ protected:
    * @see nsIFormControl.h (specifically NS_FORM_INPUT_*)
    */
   uint8_t                  mType;
+  nsContentUtils::AutocompleteAttrState mAutocompleteAttrState;
   bool                     mDisabledChanged     : 1;
   bool                     mValueChanged        : 1;
   bool                     mCheckedChanged      : 1;
@@ -1287,6 +1329,7 @@ protected:
   bool                     mNumberControlSpinnerIsSpinning : 1;
   bool                     mNumberControlSpinnerSpinsUp : 1;
   bool                     mPickerRunning : 1;
+  bool                     mSelectionCached : 1;
 
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
@@ -1319,7 +1362,7 @@ private:
     nsFilePickerFilter()
       : mFilterMask(0), mIsTrusted(false) {}
 
-    nsFilePickerFilter(int32_t aFilterMask)
+    explicit nsFilePickerFilter(int32_t aFilterMask)
       : mFilterMask(aFilterMask), mIsTrusted(true) {}
 
     nsFilePickerFilter(const nsString& aTitle,
@@ -1362,12 +1405,12 @@ private:
   class nsFilePickerShownCallback
     : public nsIFilePickerShownCallback
   {
-  public:
-    nsFilePickerShownCallback(HTMLInputElement* aInput,
-                              nsIFilePicker* aFilePicker);
     virtual ~nsFilePickerShownCallback()
     { }
 
+  public:
+    nsFilePickerShownCallback(HTMLInputElement* aInput,
+                              nsIFilePicker* aFilePicker);
     NS_DECL_ISUPPORTS
 
     NS_IMETHOD Done(int16_t aResult) MOZ_OVERRIDE;

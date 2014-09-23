@@ -4,6 +4,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+DIRS += ['gmp-plugin']
 if CONFIG['MOZ_WEBRTC']:
     DIRS += ['bridge']
 
@@ -12,7 +13,8 @@ if CONFIG['MOZ_WEBRTC']:
         '/media/webrtc/trunk',
     ]
 
-TEST_DIRS += ['tests/mochitest', 'tests/ipc', 'tests/identity']
+    MOCHITEST_MANIFESTS += ['tests/mochitest/mochitest.ini']
+    WEBRTC_SIGNALLING_TEST_MANIFESTS += ['tests/mochitest/steeplechase.ini']
 
 XPIDL_SOURCES += [
     'nsIDOMMediaStream.idl',
@@ -40,11 +42,10 @@ EXTRA_COMPONENTS += [
     'PeerConnection.manifest',
 ]
 
-JS_MODULES_PATH = 'modules/media'
-
-EXTRA_JS_MODULES += [
+EXTRA_JS_MODULES.media += [
     'IdpProxy.jsm',
     'PeerConnectionIdp.jsm',
+    'RTCStatsReport.jsm',
 ]
 
 if CONFIG['MOZ_B2G']:
@@ -60,9 +61,14 @@ FAIL_ON_WARNINGS = True
 LOCAL_INCLUDES += [
     '../base',
     '../camera',
-    '/caps/include',
+    '/caps',
 ]
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
-FINAL_LIBRARY = 'gklayout'
+FINAL_LIBRARY = 'xul'
+
+MOCHITEST_MANIFESTS += [
+    'tests/identity/mochitest.ini',
+    'tests/ipc/mochitest.ini',
+]

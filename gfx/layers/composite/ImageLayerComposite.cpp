@@ -54,6 +54,7 @@ ImageLayerComposite::SetCompositableHost(CompositableHost* aHost)
     case CompositableType::BUFFER_IMAGE_SINGLE:
     case CompositableType::BUFFER_IMAGE_BUFFERED:
     case CompositableType::IMAGE:
+    case CompositableType::IMAGE_OVERLAY:
       mImageHost = aHost;
       return true;
     default:
@@ -107,7 +108,7 @@ ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
   mImageHost->Composite(effectChain,
                         GetEffectiveOpacity(),
                         GetEffectiveTransform(),
-                        gfx::ToFilter(mFilter),
+                        GetEffectFilter(),
                         clipRect);
   mImageHost->BumpFlashCounter();
 }
@@ -161,17 +162,29 @@ ImageLayerComposite::CleanupResources()
   mImageHost = nullptr;
 }
 
-nsACString&
-ImageLayerComposite::PrintInfo(nsACString& aTo, const char* aPrefix)
+gfx::Filter
+ImageLayerComposite::GetEffectFilter()
 {
-  ImageLayer::PrintInfo(aTo, aPrefix);
+  return gfx::ToFilter(mFilter);
+}
+
+void
+ImageLayerComposite::GenEffectChain(EffectChain& aEffect)
+{
+  aEffect.mLayerRef = this;
+  aEffect.mPrimaryEffect = mImageHost->GenEffect(GetEffectFilter());
+}
+
+void
+ImageLayerComposite::PrintInfo(std::stringstream& aStream, const char* aPrefix)
+{
+  ImageLayer::PrintInfo(aStream, aPrefix);
   if (mImageHost && mImageHost->IsAttached()) {
-    aTo += "\n";
+    aStream << "\n";
     nsAutoCString pfx(aPrefix);
     pfx += "  ";
-    mImageHost->PrintInfo(aTo, pfx.get());
+    mImageHost->PrintInfo(aStream, pfx.get());
   }
-  return aTo;
 }
 
 } /* layers */

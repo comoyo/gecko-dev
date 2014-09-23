@@ -38,7 +38,7 @@ NS_IMPL_ISUPPORTS_INHERITED(SVGScriptElement, SVGScriptElementBase,
 //----------------------------------------------------------------------
 // Implementation
 
-SVGScriptElement::SVGScriptElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
+SVGScriptElement::SVGScriptElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                                    FromParser aFromParser)
   : SVGScriptElementBase(aNodeInfo)
   , nsScriptElement(aFromParser)
@@ -46,15 +46,19 @@ SVGScriptElement::SVGScriptElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
   AddMutationObserver(this);
 }
 
+SVGScriptElement::~SVGScriptElement()
+{
+}
+
 //----------------------------------------------------------------------
 // nsIDOMNode methods
 
 nsresult
-SVGScriptElement::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
+SVGScriptElement::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
 {
   *aResult = nullptr;
 
-  already_AddRefed<nsINodeInfo> ni = nsCOMPtr<nsINodeInfo>(aNodeInfo).forget();
+  already_AddRefed<mozilla::dom::NodeInfo> ni = nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();
   SVGScriptElement* it = new SVGScriptElement(ni, NOT_FROM_PARSER);
 
   nsCOMPtr<nsINode> kungFuDeathGrip = it;
@@ -87,15 +91,19 @@ SVGScriptElement::SetType(const nsAString & aType, ErrorResult& rv)
 }
 
 void
-SVGScriptElement::GetCrossOrigin(nsAString & aOrigin)
+SVGScriptElement::GetCrossOrigin(nsAString & aCrossOrigin)
 {
-  GetAttr(kNameSpaceID_None, nsGkAtoms::crossorigin, aOrigin);
+  // Null for both missing and invalid defaults is ok, since we
+  // always parse to an enum value, so we don't need an invalid
+  // default, and we _want_ the missing default to be null.
+  GetEnumAttr(nsGkAtoms::crossorigin, nullptr, aCrossOrigin);
 }
 
 void
-SVGScriptElement::SetCrossOrigin(const nsAString & aOrigin, ErrorResult& rv)
+SVGScriptElement::SetCrossOrigin(const nsAString & aCrossOrigin,
+                                 ErrorResult& aError)
 {
-  rv = SetAttr(kNameSpaceID_None, nsGkAtoms::crossorigin, aOrigin, true);
+  SetOrRemoveNullableStringAttr(nsGkAtoms::crossorigin, aCrossOrigin, aError);
 }
 
 already_AddRefed<SVGAnimatedString>

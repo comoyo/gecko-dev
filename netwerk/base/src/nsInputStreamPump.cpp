@@ -400,7 +400,9 @@ nsInputStreamPump::OnInputStreamReady(nsIAsyncInputStream *stream)
 {
     LOG(("nsInputStreamPump::OnInputStreamReady [this=%p]\n", this));
 
-    PROFILER_LABEL("Input", "nsInputStreamPump::OnInputStreamReady");
+    PROFILER_LABEL("nsInputStreamPump", "OnInputStreamReady",
+        js::ProfileEntry::Category::NETWORK);
+
     // this function has been called from a PLEvent, so we can safely call
     // any listener or progress sink methods directly from here.
 
@@ -467,6 +469,16 @@ nsInputStreamPump::OnInputStreamReady(nsIAsyncInputStream *stream)
         // EnsureWaiting isn't blocked by it.
         mProcessingCallbacks = false;
 
+        // We must break the loop when we're switching event delivery to another
+        // thread and the input stream pump is suspended, otherwise
+        // OnStateStop() might be called off the main thread. See bug 1026951
+        // comment #107 for the exact scenario.
+        if (mSuspendCount && mRetargeting) {
+            mState = nextState;
+            mWaitingForInputStreamReady = false;
+            break;
+        }
+
         // Wait asynchronously if there is still data to transfer, or we're
         // switching event delivery to another thread.
         if (!mSuspendCount && (stillTransferring || mRetargeting)) {
@@ -494,7 +506,9 @@ nsInputStreamPump::OnStateStart()
 {
     mMonitor.AssertCurrentThreadIn();
 
-    PROFILER_LABEL("nsInputStreamPump", "OnStateStart");
+    PROFILER_LABEL("nsInputStreamPump", "OnStateStart",
+        js::ProfileEntry::Category::NETWORK);
+
     LOG(("  OnStateStart [this=%p]\n", this));
 
     nsresult rv;
@@ -531,7 +545,9 @@ nsInputStreamPump::OnStateTransfer()
 {
     mMonitor.AssertCurrentThreadIn();
 
-    PROFILER_LABEL("Input", "nsInputStreamPump::OnStateTransfer");
+    PROFILER_LABEL("nsInputStreamPump", "OnStateTransfer",
+        js::ProfileEntry::Category::NETWORK);
+
     LOG(("  OnStateTransfer [this=%p]\n", this));
 
     // if canceled, go directly to STATE_STOP...
@@ -674,7 +690,9 @@ nsInputStreamPump::OnStateStop()
         return STATE_IDLE;
     }
 
-    PROFILER_LABEL("Input", "nsInputStreamPump::OnStateTransfer");
+    PROFILER_LABEL("nsInputStreamPump", "OnStateStop",
+        js::ProfileEntry::Category::NETWORK);
+
     LOG(("  OnStateStop [this=%p status=%x]\n", this, mStatus));
 
     // if an error occurred, we must be sure to pass the error onto the async

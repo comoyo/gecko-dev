@@ -41,7 +41,7 @@ public:
   typedef const int64_t& KeyType;
   typedef const int64_t* KeyTypePointer;
 
-  nsTrimInt64HashKey(KeyTypePointer aKey) : mValue(*aKey) { }
+  explicit nsTrimInt64HashKey(KeyTypePointer aKey) : mValue(*aKey) { }
   nsTrimInt64HashKey(const nsTrimInt64HashKey& toCopy) : mValue(toCopy.mValue) { }
   ~nsTrimInt64HashKey() { }
 
@@ -135,8 +135,7 @@ public:
 
 public:
   // two-stage init, use NewHistoryResult to construct
-  nsNavHistoryResult(nsNavHistoryContainerResultNode* mRoot);
-  virtual ~nsNavHistoryResult();
+  explicit nsNavHistoryResult(nsNavHistoryContainerResultNode* mRoot);
   nsresult Init(nsINavHistoryQuery** aQueries,
                 uint32_t aQueryCount,
                 nsNavHistoryQueryOptions *aOptions);
@@ -184,6 +183,9 @@ public:
 
   ContainerObserverList mRefreshParticipants;
   void requestRefresh(nsNavHistoryContainerResultNode* aContainer);
+
+protected:
+  virtual ~nsNavHistoryResult();
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsNavHistoryResult, NS_NAVHISTORYRESULT_IID)
@@ -257,7 +259,6 @@ public:
   nsNavHistoryResultNode(const nsACString& aURI, const nsACString& aTitle,
                          uint32_t aAccessCount, PRTime aTime,
                          const nsACString& aIconURI);
-  virtual ~nsNavHistoryResultNode() {}
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_NAVHISTORYRESULTNODE_IID)
 
@@ -289,6 +290,9 @@ public:
                            int64_t aParentId,
                            const nsACString& aGUID,
                            const nsACString& aParentGUID);
+
+protected:
+  virtual ~nsNavHistoryResultNode() {}
 
 public:
 
@@ -434,7 +438,6 @@ public:
     bool aReadOnly, nsNavHistoryQueryOptions* aOptions);
 
   virtual nsresult Refresh();
-  virtual ~nsNavHistoryContainerResultNode();
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_NAVHISTORYCONTAINERRESULTNODE_IID)
 
@@ -576,14 +579,12 @@ public:
   int32_t FindChild(nsNavHistoryResultNode* aNode)
     { return mChildren.IndexOf(aNode); }
 
-  nsresult InsertChildAt(nsNavHistoryResultNode* aNode, int32_t aIndex,
-                         bool aIsTemporary = false);
+  nsresult InsertChildAt(nsNavHistoryResultNode* aNode, int32_t aIndex);
   nsresult InsertSortedChild(nsNavHistoryResultNode* aNode,
-                             bool aIsTemporary = false,
                              bool aIgnoreDuplicates = false);
   bool EnsureItemPosition(uint32_t aIndex);
 
-  nsresult RemoveChildAt(int32_t aIndex, bool aIsTemporary = false);
+  nsresult RemoveChildAt(int32_t aIndex);
 
   void RecursiveFindURIs(bool aOnlyOne,
                          nsNavHistoryContainerResultNode* aContainer,
@@ -598,6 +599,7 @@ public:
                         bool aRecursive, bool aOnlyOne);
 
 protected:
+  virtual ~nsNavHistoryContainerResultNode();
 
   enum AsyncCanceledState {
     NOT_CANCELED, CANCELED, CANCELED_RESTART_NEEDED
@@ -620,7 +622,8 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsNavHistoryContainerResultNode,
 //    bookmark notifications.
 
 class nsNavHistoryQueryResultNode : public nsNavHistoryContainerResultNode,
-                                    public nsINavHistoryQueryResultNode
+                                    public nsINavHistoryQueryResultNode,
+                                    public nsINavBookmarkObserver
 {
 public:
   nsNavHistoryQueryResultNode(const nsACString& aTitle,
@@ -635,8 +638,6 @@ public:
                               PRTime aTime,
                               const nsCOMArray<nsNavHistoryQuery>& aQueries,
                               nsNavHistoryQueryOptions* aOptions);
-
-  virtual ~nsNavHistoryQueryResultNode();
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_FORWARD_COMMON_RESULTNODE_TO_BASE
@@ -692,6 +693,9 @@ public:
 
   // Tracks transition type filters shared by all mQueries.
   nsTArray<uint32_t> mTransitions;
+
+protected:
+  virtual ~nsNavHistoryQueryResultNode();
 };
 
 
@@ -702,14 +706,13 @@ public:
 
 class nsNavHistoryFolderResultNode : public nsNavHistoryContainerResultNode,
                                      public nsINavHistoryQueryResultNode,
+                                     public nsINavBookmarkObserver,
                                      public mozilla::places::AsyncStatementCallback
 {
 public:
   nsNavHistoryFolderResultNode(const nsACString& aTitle,
                                nsNavHistoryQueryOptions* options,
                                int64_t aFolderId);
-
-  virtual ~nsNavHistoryFolderResultNode();
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_FORWARD_COMMON_RESULTNODE_TO_BASE_NO_GETITEMMID
@@ -733,9 +736,8 @@ public:
   virtual nsresult OpenContainerAsync();
   NS_DECL_ASYNCSTATEMENTCALLBACK
 
-  // This object implements a bookmark observer interface without deriving from
-  // the bookmark observers. This is called from the result's actual observer
-  // and it knows all observers are FolderResultNodes
+  // This object implements a bookmark observer interface. This is called from the
+  // result's actual observer and it knows all observers are FolderResultNodes
   NS_DECL_NSINAVBOOKMARKOBSERVER
 
   virtual void OnRemoving();
@@ -757,6 +759,9 @@ public:
 
   nsNavHistoryResultNode* FindChildById(int64_t aItemId,
                                         uint32_t* aNodeIndex);
+
+protected:
+  virtual ~nsNavHistoryFolderResultNode();
 
 private:
 

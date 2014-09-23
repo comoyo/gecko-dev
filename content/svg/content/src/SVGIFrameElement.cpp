@@ -46,10 +46,14 @@ NS_IMPL_ISUPPORTS_INHERITED(SVGIFrameElement, SVGIFrameElementBase,
 //----------------------------------------------------------------------
 // Implementation
 
-SVGIFrameElement::SVGIFrameElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
+SVGIFrameElement::SVGIFrameElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                                    FromParser aFromParser)
   : SVGIFrameElementBase(aNodeInfo)
   , nsElementFrameLoaderOwner(aFromParser)
+{
+}
+
+SVGIFrameElement::~SVGIFrameElement()
 {
 }
 
@@ -60,9 +64,6 @@ SVGIFrameElement::SVGIFrameElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
 SVGIFrameElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
                                            TransformTypes aWhich) const
 {
-  NS_ABORT_IF_FALSE(aWhich != eChildToUserSpace || aMatrix.IsIdentity(),
-                    "Skipping eUserSpaceToParent transforms makes no sense");
-
   // 'transform' attribute:
   gfxMatrix fromUserSpace =
     SVGGraphicsElement::PrependLocalTransformsTo(aMatrix, aWhich);
@@ -73,7 +74,7 @@ SVGIFrameElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
   float x, y;
   const_cast<SVGIFrameElement*>(this)->
     GetAnimatedLengthValues(&x, &y, nullptr);
-  gfxMatrix toUserSpace = gfxMatrix().Translate(gfxPoint(x, y));
+  gfxMatrix toUserSpace = gfxMatrix::Translation(x, y);
   if (aWhich == eChildToUserSpace) {
     return toUserSpace;
   }
@@ -86,10 +87,10 @@ SVGIFrameElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
 // nsIDOMNode methods
 
 nsresult
-SVGIFrameElement::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
+SVGIFrameElement::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
 {
   *aResult = nullptr;
-  already_AddRefed<nsINodeInfo> ni = nsCOMPtr<nsINodeInfo>(aNodeInfo).forget();
+  already_AddRefed<mozilla::dom::NodeInfo> ni = nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();
   SVGIFrameElement *it = new SVGIFrameElement(ni, NOT_FROM_PARSER);
 
   nsCOMPtr<nsINode> kungFuDeathGrip = it;
@@ -275,7 +276,8 @@ SVGIFrameElement::BindToTree(nsIDocument* aDocument,
     NS_ASSERTION(!nsContentUtils::IsSafeToRunScript(),
                  "Missing a script blocker!");
 
-    PROFILER_LABEL("SVGIFrameElement", "BindToTree");
+    PROFILER_LABEL("SVGIFrameElement", "BindToTree",
+      js::ProfileEntry::Category::OTHER);
 
     // We're in a document now.  Kick off the frame load.
     LoadSrc();

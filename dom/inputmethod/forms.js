@@ -1,4 +1,4 @@
-/* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- /
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- /
 /* vim: set shiftwidth=2 tabstop=2 autoindent cindent expandtab: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -17,6 +17,10 @@ Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 XPCOMUtils.defineLazyServiceGetter(Services, "fm",
                                    "@mozilla.org/focus-manager;1",
                                    "nsIFocusManager");
+
+XPCOMUtils.defineLazyServiceGetter(Services, "threadManager",
+                                   "@mozilla.org/thread-manager;1",
+                                   "nsIThreadManager");
 
 XPCOMUtils.defineLazyGetter(this, "domWindowUtils", function () {
   return content.QueryInterface(Ci.nsIInterfaceRequestor)
@@ -224,6 +228,7 @@ let FormAssistant = {
   _documentEncoder: null,
   _editor: null,
   _editing: false,
+  _selectionPrivate: null,
 
   get focusedElement() {
     if (this._focusedElement && Cu.isDeadWrapper(this._focusedElement))
@@ -244,15 +249,14 @@ let FormAssistant = {
       return;
 
     if (this.focusedElement) {
-      this.focusedElement.removeEventListener('mousedown', this);
-      this.focusedElement.removeEventListener('mouseup', this);
       this.focusedElement.removeEventListener('compositionend', this);
       if (this._observer) {
         this._observer.disconnect();
         this._observer = null;
       }
-      if (!element) {
-        this.focusedElement.blur();
+      if (this._selectionPrivate) {
+        this._selectionPrivate.removeSelectionListener(this);
+        this._selectionPrivate = null;
       }
     }
 
@@ -269,8 +273,6 @@ let FormAssistant = {
     }
 
     if (element) {
-      element.addEventListener('mousedown', this);
-      element.addEventListener('mouseup', this);
       element.addEventListener('compositionend', this);
       if (isContentEditable(element)) {
         this._documentEncoder = getDocumentEncoder(element);
@@ -280,6 +282,12 @@ let FormAssistant = {
         // Add a nsIEditorObserver to monitor the text content of the focused
         // element.
         this._editor.addEditorObserver(this);
+
+        let selection = this._editor.selection;
+        if (selection) {
+          this._selectionPrivate = selection.QueryInterface(Ci.nsISelectionPrivate);
+          this._selectionPrivate.addSelectionListener(this);
+        }
       }
 
       // If our focusedElement is removed from DOM we want to handle it properly
@@ -291,8 +299,9 @@ let FormAssistant = {
           });
         });
         if (del && element === self.focusedElement) {
-          // item was deleted, fake a blur so all state gets set correctly
-          self.handleEvent({ target: element, type: "blur" });
+          self.hideKeyboard();
+          self.selectionStart = -1;
+          self.selectionEnd = -1;
         }
       });
 
@@ -303,6 +312,10 @@ let FormAssistant = {
     }
 
     this.focusedElement = element;
+  },
+
+  notifySelectionChanged: function(aDocument, aSelection, aReason) {
+    this.updateSelection();
   },
 
   get documentEncoder() {
@@ -367,38 +380,17 @@ let FormAssistant = {
           break;
         }
         // fall through
-      case "blur":
       case "submit":
+        if (this.focusedElement) {
+          this.focusedElement.blur();
+        }
+        break;
+
+      case "blur":
         if (this.focusedElement) {
           this.hideKeyboard();
           this.selectionStart = -1;
           this.selectionEnd = -1;
-        }
-        break;
-
-      case 'mousedown':
-         if (!this.focusedElement) {
-          break;
-        }
-
-        // We only listen for this event on the currently focused element.
-        // When the mouse goes down, note the cursor/selection position
-        this.updateSelection();
-        break;
-
-      case 'mouseup':
-        if (!this.focusedElement) {
-          break;
-        }
-
-        // We only listen for this event on the currently focused element.
-        // When the mouse goes up, see if the cursor has moved (or the
-        // selection changed) since the mouse went down. If it has, we
-        // need to tell the keyboard about it
-        range = getSelectionRange(this.focusedElement);
-        if (range[0] !== this.selectionStart ||
-            range[1] !== this.selectionEnd) {
-          this.updateSelection();
         }
         break;
 
@@ -423,25 +415,12 @@ let FormAssistant = {
         }
         break;
 
-      case "input":
-        if (this.focusedElement) {
-          // When the text content changes, notify the keyboard
-          this.updateSelection();
-        }
-        break;
-
       case "keydown":
         if (!this.focusedElement) {
           break;
         }
 
         CompositionManager.endComposition('');
-
-        // We use 'setTimeout' to wait until the input element accomplishes the
-        // change in selection range.
-        content.setTimeout(function() {
-          this.updateSelection();
-        }.bind(this), 0);
         break;
 
       case "keyup":
@@ -450,7 +429,6 @@ let FormAssistant = {
         }
 
         CompositionManager.endComposition('');
-
         break;
 
       case "compositionend":
@@ -461,6 +439,13 @@ let FormAssistant = {
         CompositionManager.onCompositionEnd();
         break;
     }
+  },
+
+  waitForNextTick: function(callback) {
+    var tm = Services.threadManager;
+    tm.mainThread.dispatch({
+      run: callback,
+    }, Components.interfaces.nsIThread.DISPATCH_NORMAL);
   },
 
   receiveMessage: function fa_receiveMessage(msg) {
@@ -508,24 +493,26 @@ let FormAssistant = {
       case "Forms:Input:SendKey":
         CompositionManager.endComposition('');
 
+        let flags = domWindowUtils.KEY_FLAG_NOT_SYNTHESIZED_FOR_TESTS;
         this._editing = true;
         let doKeypress = domWindowUtils.sendKeyEvent('keydown', json.keyCode,
-                                  json.charCode, json.modifiers);
+                                                     json.charCode, json.modifiers, flags);
         if (doKeypress) {
           domWindowUtils.sendKeyEvent('keypress', json.keyCode,
-                                  json.charCode, json.modifiers);
+                                      json.charCode, json.modifiers, flags);
         }
 
         if(!json.repeat) {
           domWindowUtils.sendKeyEvent('keyup', json.keyCode,
-                                    json.charCode, json.modifiers);
+                                      json.charCode, json.modifiers, flags);
         }
 
         this._editing = false;
 
         if (json.requestId && doKeypress) {
           sendAsyncMessage("Forms:SendKey:Result:OK", {
-            requestId: json.requestId
+            requestId: json.requestId,
+            selectioninfo: this.getSelectionInfo()
           });
         }
         else if (json.requestId && !doKeypress) {
@@ -563,7 +550,10 @@ let FormAssistant = {
         break;
 
       case "Forms:Select:Blur": {
-        this.setFocusedElement(null);
+        if (this.focusedElement) {
+          this.focusedElement.blur();
+        }
+
         break;
       }
 
@@ -582,8 +572,6 @@ let FormAssistant = {
           }
           break;
         }
-
-        this.updateSelection();
 
         if (json.requestId) {
           sendAsyncMessage("Forms:SetSelectionRange:Result:OK", {
@@ -651,6 +639,7 @@ let FormAssistant = {
                                           json.clauses);
         sendAsyncMessage("Forms:SetComposition:Result:OK", {
           requestId: json.requestId,
+          selectioninfo: this.getSelectionInfo()
         });
         break;
       }
@@ -659,6 +648,7 @@ let FormAssistant = {
         CompositionManager.endComposition(json.text);
         sendAsyncMessage("Forms:EndComposition:Result:OK", {
           requestId: json.requestId,
+          selectioninfo: this.getSelectionInfo()
         });
         break;
       }
@@ -676,15 +666,35 @@ let FormAssistant = {
 
     this.setFocusedElement(target);
 
-    let kbOpened = this.sendKeyboardState(target);
-    if (this.isTextInputElement(target))
-      this.isKeyboardOpened = kbOpened;
+    let count = this._focusCounter;
+    this.waitForNextTick(function fa_showKeyboardSync() {
+      if (count !== this._focusCounter) {
+        return;
+      }
+
+      let kbOpened = this.sendKeyboardState(target);
+      if (this.isTextInputElement(target))
+        this.isKeyboardOpened = kbOpened;
+    }.bind(this));
   },
 
   hideKeyboard: function fa_hideKeyboard() {
-    sendAsyncMessage("Forms:Input", { "type": "blur" });
-    this.isKeyboardOpened = false;
     this.setFocusedElement(null);
+
+    let count = this._focusCounter;
+
+    // Wait for the next tick before unset the focused element and etc.
+    // If the user move from one input from another,
+    // the remote process should get one Forms:Input message instead of two.
+    this.waitForNextTick(function fa_hideKeyboardSync() {
+      if (count !== this._focusCounter ||
+          !this.isKeyboardOpened) {
+        return;
+      }
+
+      this.isKeyboardOpened = false;
+      sendAsyncMessage("Forms:Input", { "type": "blur" });
+    }.bind(this));
   },
 
   isFocusableElement: function fa_isFocusableElement(element) {
@@ -757,15 +767,29 @@ let FormAssistant = {
     };
   },
 
+  _selectionTimeout: null,
+
   // Notify when the selection range changes
   updateSelection: function fa_updateSelection() {
-    if (!this.focusedElement) {
-      return;
+    // A call to setSelectionRange on input field causes 2 selection changes
+    // one to [0,0] and one to actual value. Both are sent in same tick.
+    // Prevent firing two events in that scenario, always only use the last 1.
+    //
+    // It is also a workaround for Bug 1053048, which prevents
+    // getSelectionInfo() accessing selectionStart or selectionEnd in the
+    // callback function of nsISelectionListener::NotifySelectionChanged().
+    if (this._selectionTimeout) {
+      content.clearTimeout(this._selectionTimeout);
     }
-    let selectionInfo = this.getSelectionInfo();
-    if (selectionInfo.changed) {
-      sendAsyncMessage("Forms:SelectionChange", this.getSelectionInfo());
-    }
+    this._selectionTimeout = content.setTimeout(function() {
+      if (!this.focusedElement) {
+        return;
+      }
+      let selectionInfo = this.getSelectionInfo();
+      if (selectionInfo.changed) {
+        sendAsyncMessage("Forms:SelectionChange", selectionInfo);
+      }
+    }.bind(this), 0);
   }
 };
 

@@ -56,11 +56,11 @@ public:
 
   size_t HeapSizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const;
   size_t NonHeapSizeOfExcludingThis() const;
+  bool OnHeap() const;
 
 protected:
   bool Lock(void** aBuf);
   void Unlock();
-  bool OnHeap() const;
 
 private:
   void* mBuf;
@@ -79,18 +79,11 @@ private:
 class VolatileBufferPtr_base {
 public:
   explicit VolatileBufferPtr_base(VolatileBuffer* vbuf) : mVBuf(vbuf) {
-    if (vbuf) {
-      mPurged = !vbuf->Lock(&mMapping);
-    } else {
-      mMapping = nullptr;
-      mPurged = false;
-    }
+    Lock();
   }
 
   ~VolatileBufferPtr_base() {
-    if (mVBuf) {
-      mVBuf->Unlock();
-    }
+    Unlock();
   }
 
   bool WasBufferPurged() const {
@@ -98,11 +91,32 @@ public:
   }
 
 protected:
+  RefPtr<VolatileBuffer> mVBuf;
   void* mMapping;
 
+  void Set(VolatileBuffer* vbuf) {
+    Unlock();
+    mVBuf = vbuf;
+    Lock();
+  }
+
 private:
-  RefPtr<VolatileBuffer> mVBuf;
   bool mPurged;
+
+  void Lock() {
+    if (mVBuf) {
+      mPurged = !mVBuf->Lock(&mMapping);
+    } else {
+      mMapping = nullptr;
+      mPurged = false;
+    }
+  }
+
+  void Unlock() {
+    if (mVBuf) {
+      mVBuf->Unlock();
+    }
+  }
 };
 
 template <class T>
@@ -110,10 +124,34 @@ class VolatileBufferPtr : public VolatileBufferPtr_base
 {
 public:
   explicit VolatileBufferPtr(VolatileBuffer* vbuf) : VolatileBufferPtr_base(vbuf) {}
+  VolatileBufferPtr() : VolatileBufferPtr_base(nullptr) {}
+
+  VolatileBufferPtr(VolatileBufferPtr&& aOther)
+    : VolatileBufferPtr_base(aOther.mVBuf)
+  {
+    aOther.Set(nullptr);
+  }
 
   operator T*() const {
     return (T*) mMapping;
   }
+
+  VolatileBufferPtr& operator=(VolatileBuffer* aVBuf)
+  {
+    Set(aVBuf);
+    return *this;
+  }
+
+  VolatileBufferPtr& operator=(VolatileBufferPtr&& aOther)
+  {
+    MOZ_ASSERT(this != &aOther, "Self-moves are prohibited");
+    Set(aOther.mVBuf);
+    aOther.Set(nullptr);
+    return *this;
+  }
+
+private:
+  VolatileBufferPtr(VolatileBufferPtr const& vbufptr) MOZ_DELETE;
 };
 
 }; /* namespace mozilla */

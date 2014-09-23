@@ -29,7 +29,7 @@ struct GradientCacheKey : public PLDHashEntryHdr {
     : mStops(aStops), mExtend(aExtend), mBackendType(aBackendType)
   { }
 
-  GradientCacheKey(const GradientCacheKey* aOther)
+  explicit GradientCacheKey(const GradientCacheKey* aOther)
     : mStops(aOther->mStops), mExtend(aOther->mExtend), mBackendType(aOther->mBackendType)
   { }
 
@@ -183,7 +183,8 @@ gfxGradientCache::GetGradientStops(DrawTarget *aDT, nsTArray<GradientStop>& aSto
   if (!gGradientCache) {
     gGradientCache = new GradientCache();
   }
-  GradientCacheData* cached = gGradientCache->Lookup(aStops, aExtend, aDT->GetType());
+  GradientCacheData* cached =
+    gGradientCache->Lookup(aStops, aExtend, aDT->GetBackendType());
   return cached ? cached->mStops : nullptr;
 }
 
@@ -196,12 +197,22 @@ gfxGradientCache::GetOrCreateGradientStops(DrawTarget *aDT, nsTArray<GradientSto
     if (!gs) {
       return nullptr;
     }
-    GradientCacheData *cached = new GradientCacheData(gs, GradientCacheKey(aStops, aExtend, aDT->GetType()));
+    GradientCacheData *cached =
+      new GradientCacheData(gs, GradientCacheKey(aStops, aExtend,
+                                                 aDT->GetBackendType()));
     if (!gGradientCache->RegisterEntry(cached)) {
       delete cached;
     }
   }
   return gs;
+}
+
+void
+gfxGradientCache::PurgeAllCaches()
+{
+  if (gGradientCache) {
+    gGradientCache->AgeAllGenerations();
+  }
 }
 
 void

@@ -92,10 +92,10 @@ struct ScopedArrayBufferContentsTraits {
 };
 
 struct ScopedArrayBufferContents: public Scoped<ScopedArrayBufferContentsTraits> {
-  ScopedArrayBufferContents(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM):
+  explicit ScopedArrayBufferContents(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM):
     Scoped<ScopedArrayBufferContentsTraits>(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_TO_PARENT)
   { }
-  ScopedArrayBufferContents(const ArrayBufferContents& v
+  explicit ScopedArrayBufferContents(const ArrayBufferContents& v
                             MOZ_GUARD_OBJECT_NOTIFIER_PARAM):
     Scoped<ScopedArrayBufferContentsTraits>(v MOZ_GUARD_OBJECT_NOTIFIER_PARAM_TO_PARENT)
   { }
@@ -114,7 +114,7 @@ struct ScopedArrayBufferContents: public Scoped<ScopedArrayBufferContentsTraits>
   bool Allocate(uint32_t length) {
     dispose();
     ArrayBufferContents& value = rwget();
-    void *ptr = JS_AllocateArrayBufferContents(/*no context available*/nullptr, length);
+    void *ptr = calloc(1, length);
     if (ptr) {
       value.data = (uint8_t *) ptr;
       value.nbytes = length;
@@ -171,16 +171,11 @@ public:
    * @param aStartDate The instant at which the operation was
    * requested.  Used to collect Telemetry statistics.
    */
-  AbstractResult(TimeStamp aStartDate)
+  explicit AbstractResult(TimeStamp aStartDate)
     : mStartDate(aStartDate)
   {
     MOZ_ASSERT(NS_IsMainThread());
     mozilla::HoldJSObjects(this);
-  }
-  virtual ~AbstractResult() {
-    MOZ_ASSERT(NS_IsMainThread());
-    DropJSData();
-    mozilla::DropJSObjects(this);
   }
 
   /**
@@ -207,6 +202,12 @@ public:
   }
 
 protected:
+  virtual ~AbstractResult() {
+    MOZ_ASSERT(NS_IsMainThread());
+    DropJSData();
+    mozilla::DropJSObjects(this);
+  }
+
   virtual nsresult GetCacheableResult(JSContext *cx, JS::MutableHandleValue aResult) = 0;
 
 private:
@@ -276,7 +277,7 @@ AbstractResult::GetResult(JSContext *cx, JS::MutableHandleValue aResult)
 class StringResult MOZ_FINAL : public AbstractResult
 {
 public:
-  StringResult(TimeStamp aStartDate)
+  explicit StringResult(TimeStamp aStartDate)
     : AbstractResult(aStartDate)
   {
   }
@@ -327,7 +328,7 @@ StringResult::GetCacheableResult(JSContext* cx, JS::MutableHandleValue aResult)
 class TypedArrayResult MOZ_FINAL : public AbstractResult
 {
 public:
-  TypedArrayResult(TimeStamp aStartDate)
+  explicit TypedArrayResult(TimeStamp aStartDate)
     : AbstractResult(aStartDate)
   {
   }

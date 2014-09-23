@@ -627,11 +627,17 @@ void MediaPipeline::PacketReceived(TransportLayer *layer,
 }
 
 nsresult MediaPipelineTransmit::Init() {
+  AttachToTrack(track_id_);
+
+  return MediaPipeline::Init();
+}
+
+void MediaPipelineTransmit::AttachToTrack(TrackID track_id) {
   char track_id_string[11];
   ASSERT_ON_THREAD(main_thread_);
 
   // We can replace this when we are allowed to do streams or std::to_string
-  PR_snprintf(track_id_string, sizeof(track_id_string), "%d", track_id_);
+  PR_snprintf(track_id_string, sizeof(track_id_string), "%d", track_id);
 
   description_ = pc_ + "| ";
   description_ += conduit_->type() == MediaSessionConduit::AUDIO ?
@@ -657,8 +663,6 @@ nsresult MediaPipelineTransmit::Init() {
   // this enables the unit tests that can't fiddle with principals and the like
   listener_->SetEnabled(true);
 #endif
-
-  return MediaPipeline::Init();
 }
 
 #ifdef MOZILLA_INTERNAL_API
@@ -691,6 +695,23 @@ nsresult MediaPipelineTransmit::TransportReady_s(TransportInfo &info) {
     listener_->SetActive(true);
   }
 
+  return NS_OK;
+}
+
+nsresult MediaPipelineTransmit::ReplaceTrack(DOMMediaStream *domstream,
+                                             TrackID track_id) {
+  // MainThread, checked in calls we make
+  MOZ_MTLOG(ML_DEBUG, "Reattaching pipeline to stream "
+            << static_cast<void *>(domstream->GetStream()) << " conduit type=" <<
+            (conduit_->type() == MediaSessionConduit::AUDIO ?"audio":"video"));
+
+  if (domstream_) { // may be excessive paranoia
+    DetachMediaStream();
+  }
+  domstream_ = domstream; // Detach clears it
+  stream_ = domstream->GetStream();
+  //track_id_ = track_id; not threadsafe to change this; and we don't need to
+  AttachToTrack(track_id);
   return NS_OK;
 }
 
@@ -942,6 +963,15 @@ NotifyQueuedTrackChanges(MediaStreamGraph* graph, TrackID tid,
   }
 }
 
+// I420 buffer size macros
+#define YSIZE(x,y) ((x)*(y))
+#define CRSIZE(x,y) ((((x)+1) >> 1) * (((y)+1) >> 1))
+#define I420SIZE(x,y) (YSIZE((x),(y)) + 2 * CRSIZE((x),(y)))
+
+// XXX NOTE: this code will have to change when we get support for multiple tracks of type
+// in a MediaStream and especially in a PeerConnection stream.  bug 1056650
+// It should be matching on the "correct" track for the pipeline, not just "any video track".
+
 void MediaPipelineTransmit::PipelineListener::
 NewData(MediaStreamGraph* graph, TrackID tid,
         TrackRate rate,
@@ -953,15 +983,25 @@ NewData(MediaStreamGraph* graph, TrackID tid,
     return;
   }
 
+  if (track_id_ != TRACK_INVALID) {
+    if (tid != track_id_) {
+      return;
+    }
+  } else if (conduit_->type() !=
+             (media.GetType() == MediaSegment::AUDIO ? MediaSessionConduit::AUDIO :
+                                                       MediaSessionConduit::VIDEO)) {
+    // Ignore data in case we have a muxed stream
+    return;
+  } else {
+    // Don't lock during normal media flow except on first sample
+    MutexAutoLock lock(mMutex);
+    track_id_ = track_id_external_ = tid;
+  }
+
   // TODO(ekr@rtfm.com): For now assume that we have only one
   // track type and it's destined for us
   // See bug 784517
   if (media.GetType() == MediaSegment::AUDIO) {
-    if (conduit_->type() != MediaSessionConduit::AUDIO) {
-      // Ignore data in case we have a muxed stream
-      return;
-    }
-
     AudioSegment* audio = const_cast<AudioSegment *>(
         static_cast<const AudioSegment *>(&media));
 
@@ -973,11 +1013,6 @@ NewData(MediaStreamGraph* graph, TrackID tid,
     }
   } else if (media.GetType() == MediaSegment::VIDEO) {
 #ifdef MOZILLA_INTERNAL_API
-    if (conduit_->type() != MediaSessionConduit::VIDEO) {
-      // Ignore data in case we have a muxed stream
-      return;
-    }
-
     VideoSegment* video = const_cast<VideoSegment *>(
         static_cast<const VideoSegment *>(&media));
 
@@ -1103,15 +1138,10 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
     return;
   }
 
-  gfx::IntSize size = img->GetSize();
-  if ((size.width & 1) != 0 || (size.height & 1) != 0) {
-    MOZ_ASSERT(false, "Can't handle odd-sized images");
-    return;
-  }
-
   if (!enabled_ || chunk.mFrame.GetForceBlack()) {
-    uint32_t yPlaneLen = size.width*size.height;
-    uint32_t cbcrPlaneLen = yPlaneLen/2;
+    gfx::IntSize size = img->GetSize();
+    uint32_t yPlaneLen = YSIZE(size.width, size.height);
+    uint32_t cbcrPlaneLen = 2 * CRSIZE(size.width, size.height);
     uint32_t length = yPlaneLen + cbcrPlaneLen;
 
     // Send a black image.
@@ -1119,6 +1149,7 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
     static const fallible_t fallible = fallible_t();
     pixelData = new (fallible) uint8_t[length];
     if (pixelData) {
+      // YCrCb black = 0x10 0x80 0x80
       memset(pixelData, 0x10, yPlaneLen);
       // Fill Cb/Cr planes
       memset(pixelData + yPlaneLen, 0x80, cbcrPlaneLen);
@@ -1144,10 +1175,12 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
     android::sp<android::GraphicBuffer> graphicBuffer = nativeImage->GetGraphicBuffer();
     void *basePtr;
     graphicBuffer->lock(android::GraphicBuffer::USAGE_SW_READ_MASK, &basePtr);
+    uint32_t width = graphicBuffer->getWidth();
+    uint32_t height = graphicBuffer->getHeight();
     conduit->SendVideoFrame(static_cast<unsigned char*>(basePtr),
-                            (graphicBuffer->getWidth() * graphicBuffer->getHeight() * 3) / 2,
-                            graphicBuffer->getWidth(),
-                            graphicBuffer->getHeight(),
+                            I420SIZE(width, height),
+                            width,
+                            height,
                             mozilla::kVideoNV21, 0);
     graphicBuffer->unlock();
   } else
@@ -1172,8 +1205,9 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
 
     // SendVideoFrame only supports contiguous YCrCb 4:2:0 buffers
     // Verify it's contiguous and in the right order
-    MOZ_ASSERT(cb == (y + width*height) &&
-               cr == (cb + width*height/4));
+    MOZ_ASSERT(cb == (y + YSIZE(width, height)) &&
+               cr == (cb + CRSIZE(width, height)) &&
+               length == I420SIZE(width, height));
     // XXX Consider making this a non-debug-only check if we ever implement
     // any subclasses of PlanarYCbCrImage that allow disjoint buffers such
     // that y+3(width*height)/2 might go outside the allocation.
@@ -1194,12 +1228,12 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
     int half_width = (size.width + 1) >> 1;
     int half_height = (size.height + 1) >> 1;
     int c_size = half_width * half_height;
-    int buffer_size = size.width * size.height + 2 * c_size;
-    uint8* yuv = (uint8*) malloc(buffer_size);
+    int buffer_size = YSIZE(size.width, size.height) + 2 * c_size;
+    uint8* yuv = (uint8*) malloc(buffer_size); // fallible
     if (!yuv)
       return;
 
-    int cb_offset = size.width * size.height;
+    int cb_offset = YSIZE(size.width, size.height);
     int cr_offset = cb_offset + c_size;
     RefPtr<gfx::SourceSurface> tempSurf = rgb->GetAsSourceSurface();
     RefPtr<gfx::DataSourceSurface> surf = tempSurf->GetDataSurface();
@@ -1225,6 +1259,7 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
         MOZ_ASSERT(PR_FALSE);
     }
     conduit->SendVideoFrame(yuv, buffer_size, size.width, size.height, mozilla::kVideoI420, 0);
+    free(yuv);
   } else {
     MOZ_MTLOG(ML_ERROR, "Unsupported video format");
     MOZ_ASSERT(PR_FALSE);
@@ -1272,7 +1307,8 @@ static void AddTrackAndListener(MediaStream* source,
 
     virtual void Run() MOZ_OVERRIDE {
       StreamTime current_end = mStream->GetBufferEnd();
-      TrackTicks current_ticks = TimeToTicksRoundUp(track_rate_, current_end);
+      TrackTicks current_ticks =
+        mStream->TimeToTicksRoundUp(track_rate_, current_end);
 
       mStream->AddListenerImpl(listener_.forget());
 
@@ -1281,14 +1317,14 @@ static void AddTrackAndListener(MediaStream* source,
 
       if (current_end != 0L) {
         MOZ_MTLOG(ML_DEBUG, "added track @ " << current_end <<
-                  " -> " << MediaTimeToSeconds(current_end));
+                  " -> " << mStream->StreamTimeToSeconds(current_end));
       }
 
       // To avoid assertions, we need to insert a dummy segment that covers up
       // to the "start" time for the track
       segment_->AppendNullData(current_ticks);
       mStream->AsSourceStream()->AddTrack(track_id_, track_rate_,
-                                          current_ticks, segment_);
+                                          current_ticks, segment_.forget());
       // AdvanceKnownTracksTicksTime(HEAT_DEATH_OF_UNIVERSE) means that in
       // theory per the API, we can't add more tracks before that
       // time. However, the impl actually allows it, and it avoids a whole
@@ -1303,7 +1339,7 @@ static void AddTrackAndListener(MediaStream* source,
    private:
     TrackID track_id_;
     TrackRate track_rate_;
-    MediaSegment* segment_;
+    nsAutoPtr<MediaSegment> segment_;
     nsRefPtr<MediaStreamListener> listener_;
     const RefPtr<TrackAddedCallback> completed_;
   };
@@ -1340,7 +1376,8 @@ NotifyPull(MediaStreamGraph* graph, StreamTime desired_time) {
   }
 
   // This comparison is done in total time to avoid accumulated roundoff errors.
-  while (TicksToTimeRoundDown(track_rate_, played_ticks_) < desired_time) {
+  while (source_->TicksToTimeRoundDown(track_rate_, played_ticks_) <
+         desired_time) {
     // TODO(ekr@rtfm.com): Is there a way to avoid mallocating here?  Or reduce the size?
     // Max size given mono is 480*2*1 = 960 (48KHz)
 #define AUDIO_SAMPLE_BUFFER_MAX 1000
@@ -1364,7 +1401,7 @@ NotifyPull(MediaStreamGraph* graph, StreamTime desired_time) {
       MOZ_MTLOG(ML_ERROR, "Audio conduit failed (" << err
                 << ") to return data @ " << played_ticks_
                 << " (desired " << desired_time << " -> "
-                << MediaTimeToSeconds(desired_time) << ")");
+                << source_->StreamTimeToSeconds(desired_time) << ")");
       MOZ_ASSERT(err == kMediaConduitNoError);
       samples_length = (track_rate_/100)*sizeof(uint16_t); // if this is not enough we'll loop and provide more
       memset(samples_data, '\0', samples_length);
@@ -1483,7 +1520,7 @@ NotifyPull(MediaStreamGraph* graph, StreamTime desired_time) {
 
 #ifdef MOZILLA_INTERNAL_API
   nsRefPtr<layers::Image> image = image_;
-  TrackTicks target = TimeToTicksRoundUp(USECS_PER_S, desired_time);
+  TrackTicks target = source_->TimeToTicksRoundUp(USECS_PER_S, desired_time);
   TrackTicks delta = target - played_ticks_;
 
   // Don't append if we've already provided a frame that supposedly

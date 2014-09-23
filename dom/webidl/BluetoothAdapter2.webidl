@@ -32,24 +32,6 @@ dictionary MediaPlayStatus
   DOMString   playStatus = "";
 };
 
-enum BluetoothAdapterState
-{
-  "disabled",
-  "disabling",
-  "enabled",
-  "enabling"
-};
-
-enum BluetoothAdapterAttribute
-{
-  "unknown",
-  "state",
-  "address",
-  "name",
-  "discoverable",
-  "discovering"
-};
-
 [CheckPermissions="bluetooth"]
 interface BluetoothAdapter : EventTarget {
   readonly attribute BluetoothAdapterState  state;
@@ -58,18 +40,17 @@ interface BluetoothAdapter : EventTarget {
   readonly attribute boolean                discoverable;
   readonly attribute boolean                discovering;
 
-  // array of type BluetoothDevice[]
-  [GetterThrows]
-  readonly attribute any            devices;
+  [AvailableIn=CertifiedApps]
+  readonly attribute BluetoothPairingListener pairingReqs;
 
-  // array of type DOMString[]
-  [GetterThrows]
-  readonly attribute any            uuids;
+  // Fired when attribute(s) of BluetoothAdapter changed
+           attribute EventHandler   onattributechanged;
 
-           attribute EventHandler   ondevicefound;
+  // Fired when a remote device gets paired with the adapter
+           attribute EventHandler   ondevicepaired;
 
-  // Fired when pairing process is completed
-           attribute EventHandler   onpairedstatuschanged;
+  // Fired when a remote device gets unpaired from the adapter
+           attribute EventHandler   ondeviceunpaired;
 
   // Fired when a2dp connection status changed
            attribute EventHandler   ona2dpstatuschanged;
@@ -83,43 +64,37 @@ interface BluetoothAdapter : EventTarget {
   // Fired when remote devices query current media play status
            attribute EventHandler   onrequestmediaplaystatus;
 
-  // Fired when attributes of BluetoothAdapter changed
-           attribute EventHandler   onattributechanged;
-
-  [NewObject, Throws]
-  DOMRequest setName(DOMString name);
-  [NewObject, Throws]
-  DOMRequest setDiscoverable(boolean discoverable);
-  [NewObject, Throws]
-  DOMRequest startDiscovery();
-  [NewObject, Throws]
-  DOMRequest stopDiscovery();
-  [NewObject, Throws]
-  DOMRequest pair(DOMString deviceAddress);
-  [NewObject, Throws]
-  DOMRequest unpair(DOMString deviceAddress);
-  [NewObject, Throws]
-  DOMRequest getPairedDevices();
-  [NewObject, Throws]
-  DOMRequest getConnectedDevices(unsigned short serviceUuid);
-  [NewObject, Throws]
-  DOMRequest setPinCode(DOMString deviceAddress, DOMString pinCode);
-  [NewObject, Throws]
-  DOMRequest setPasskey(DOMString deviceAddress, unsigned long passkey);
-  [NewObject, Throws]
-  DOMRequest setPairingConfirmation(DOMString deviceAddress, boolean confirmation);
-
   /**
    * Enable/Disable a local bluetooth adapter by asynchronus methods and return
    * its result through a Promise.
-   * Several onattributechanged event would be triggered during processing the
-   * request, and the last one would indicate adapter.state becomes
-   * enabled/disabled.
+   *
+   * Several onattributechanged events would be triggered during processing the
+   * request, and the last one indicates adapter.state becomes enabled/disabled.
    */
-  // Promise<void>
-  Promise enable();
-  // Promise<void>
-  Promise disable();
+  [NewObject, Throws]
+  Promise<void> enable();
+  [NewObject, Throws]
+  Promise<void> disable();
+
+  [NewObject, Throws]
+  Promise<void> setName(DOMString aName);
+  [NewObject, Throws]
+  Promise<void> setDiscoverable(boolean aDiscoverable);
+
+  [NewObject, Throws]
+  Promise<BluetoothDiscoveryHandle> startDiscovery();
+  [NewObject, Throws]
+  Promise<void> stopDiscovery();
+
+  [NewObject, Throws]
+  Promise<void> pair(DOMString deviceAddress);
+  [NewObject, Throws]
+  Promise<void> unpair(DOMString deviceAddress);
+
+  sequence<BluetoothDevice> getPairedDevices();
+
+  [NewObject, Throws]
+  DOMRequest getConnectedDevices(unsigned short serviceUuid);
 
   /**
    * Connect/Disconnect to a specific service of a target remote device.
@@ -183,3 +158,22 @@ interface BluetoothAdapter : EventTarget {
   [NewObject,Throws]
   DOMRequest sendMediaPlayStatus(optional MediaPlayStatus mediaPlayStatus);
 };
+
+enum BluetoothAdapterState
+{
+  "disabled",
+  "disabling",
+  "enabled",
+  "enabling"
+};
+
+enum BluetoothAdapterAttribute
+{
+  "unknown",
+  "state",
+  "address",
+  "name",
+  "discoverable",
+  "discovering"
+};
+

@@ -10,7 +10,7 @@ extern "C"
 #include "ccapi_types.h"
 }
 
-#include "sigslot.h"
+#include "mozIGeckoMediaPluginService.h"
 
 class nsIThread;
 class nsIEventTarget;
@@ -32,12 +32,13 @@ namespace CSF
     class StreamObserver
     {
     public:
-    	virtual void registerStream(cc_call_handle_t call, int streamId, bool isVideo) = 0;
-    	virtual void deregisterStream(cc_call_handle_t call, int streamId) = 0;
-    	virtual void dtmfBurst(int digit, int direction, int duration) = 0;
-    	virtual void sendIFrame(cc_call_handle_t call) = 0;
+    	  virtual void registerStream(cc_call_handle_t call, int streamId, bool isVideo) = 0;
+    	  virtual void deregisterStream(cc_call_handle_t call, int streamId) = 0;
+    	  virtual void dtmfBurst(int digit, int direction, int duration) = 0;
+    	  virtual void sendIFrame(cc_call_handle_t call) = 0;
     };
-    class VcmSIPCCBinding : public sigslot::has_slots<>
+
+    class VcmSIPCCBinding
     {
     public:
         VcmSIPCCBinding ();
@@ -61,28 +62,25 @@ namespace CSF
 
         static int getAudioCodecs();
         static int getVideoCodecs();
+        static int getVideoCodecsGmp();
+        static int getVideoCodecsHw();
 
-	static void setMainThread(nsIThread *thread);
-	static nsIThread *getMainThread();
-	static nsIEventTarget *getSTSThread();
-
-	static void setSTSThread(nsIEventTarget *thread);
-
-	static void connectCandidateSignal(mozilla::NrIceMediaStream* stream);
+        static void setMainThread(nsIThread *thread);
+        static nsIThread *getMainThread();
 
         static nsCOMPtr<nsIPrefBranch> getPrefBranch();
 
+        static int gVideoCodecGmpMask;
     private:
-	void CandidateReady(mozilla::NrIceMediaStream* stream,
-			    const std::string& candidate);
-
+        nsCOMPtr<mozIGeckoMediaPluginService> mGMPService;
         static VcmSIPCCBinding * gSelf;
         StreamObserver* streamObserver;
         MediaProviderObserver *mediaProviderObserver;
+        static bool gInitGmpCodecs;
         static int gAudioCodecMask;
         static int gVideoCodecMask;
-	static nsIThread *gMainThread;
-	static nsIEventTarget *gSTSThread;
+        static nsIThread *gMainThread;
+        static nsIEventTarget *gSTSThread;
         static nsCOMPtr<nsIPrefBranch> gBranch;
     };
 }

@@ -476,7 +476,7 @@
                         label="&syncSetup.label;"
                         accesskey="&syncSetup.accesskey;"
                         observes="sync-setup-state"
-                        oncommand="gSyncUI.openSetup()"/>
+                        oncommand="gSyncUI.openSetup(null, 'menubar')"/>
               <menuitem id="sync-syncnowitem"
                         label="&syncSyncNowItem.label;"
                         accesskey="&syncSyncNowItem.accesskey;"
@@ -486,7 +486,7 @@
                         label="&syncReAuthItem.label;"
                         accesskey="&syncReAuthItem.accesskey;"
                         observes="sync-reauth-state"
-                        oncommand="gSyncUI.openSignInAgainPage();"/>
+                        oncommand="gSyncUI.openSignInAgainPage('menubar');"/>
 #endif
               <menuseparator id="devToolsSeparator"/>
               <menu id="webDeveloperMenu"
@@ -503,6 +503,9 @@
                   <menuitem id="menu_devAppMgr"
                             observes="devtoolsMenuBroadcaster_DevAppMgr"
                             accesskey="&devAppMgrMenu.accesskey;"/>
+                  <menuitem id="menu_webide"
+                            observes="devtoolsMenuBroadcaster_webide"
+                            accesskey="&webide.accesskey;"/>
                   <menuitem id="menu_browserToolbox"
                             observes="devtoolsMenuBroadcaster_BrowserToolbox"
                             accesskey="&browserToolboxMenu.accesskey;"/>

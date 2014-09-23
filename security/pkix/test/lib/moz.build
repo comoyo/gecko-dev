@@ -20,11 +20,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-UNIFIED_SOURCES += [
+SOURCES += [
+    'pkixtestnss.cpp',
     'pkixtestutil.cpp',
 ]
 
-LIBRARY_NAME = 'pkixtestutil'
+Library('pkixtestutil')
 
 LOCAL_INCLUDES += [
     '../../include',

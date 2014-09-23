@@ -274,19 +274,12 @@ interface nsIXPCFunctionThisTranslator : nsISupports
     { 0xbd, 0xd6, 0x0, 0x0, 0x64, 0x65, 0x73, 0x74 } }
 %}
 
-[noscript, uuid(47fbe8ff-0507-4647-9ea7-e0e1fc76c995)]
+[noscript, uuid(a632b020-331f-11e4-8c21-0800200c9a66)]
 interface nsIXPConnect : nsISupports
 {
 %{ C++
   NS_DEFINE_STATIC_CID_ACCESSOR(NS_XPCONNECT_CID)
 %}
-
-    /**
-     * Initializes classes on a global object that has already been created.
-     */
-    void
-    initClasses(in JSContextPtr aJSContext,
-                in JSObjectPtr  aGlobalJSObj);
 
     /**
      * Creates a new global object using the given aCOMObj as the global
@@ -441,8 +434,6 @@ interface nsIXPConnect : nsISupports
     void debugDumpJSStack(in boolean showArgs,
                           in boolean showLocals,
                           in boolean showThisProps);
-    void debugDumpEvalInJSStackFrame(in uint32_t aFrameNumber,
-                                     in string aSourceText);
 
     /**
     * wrapJSAggregatedToNative is just like wrapJS except it is used in cases
@@ -518,10 +509,6 @@ interface nsIXPConnect : nsISupports
      *           the script. The actual evaluation will happen on a new
      *           temporary context.
      * @param sandbox The sandbox object to evaluate the script in.
-     * @param returnStringOnly The only results to come out of the
-     *                         computation (including exceptions) will
-     *                         be coerced into strings created in the
-     *                         sandbox.
      * @return The result of the evaluation as a jsval. If the caller
      *         intends to use the return value from this call the caller
      *         is responsible for rooting the jsval before making a call
@@ -529,8 +516,7 @@ interface nsIXPConnect : nsISupports
      */
     [noscript] jsval evalInSandboxObject(in AString source, in string filename,
                                          in JSContextPtr cx,
-                                         in JSObjectPtr sandbox,
-                                         in boolean returnStringOnly);
+                                         in JSObjectPtr sandbox);
 
     /**
      * Whether or not XPConnect should report all JS exceptions when returning
@@ -573,16 +559,6 @@ interface nsIXPConnect : nsISupports
     nsIXPConnectJSObjectHolder holdObject(in JSContextPtr aJSContext,
                                           in JSObjectPtr aObject);
 
-    /**
-     * When we place the browser in JS debug mode, there can't be any
-     * JS on the stack. This is because we currently activate debugMode 
-     * on all scripts in the JSRuntime when the debugger is activated.
-     * This method will turn debug mode on or off when the context 
-     * stack reaches zero length.
-     */
-    [noscript] void setDebugModeWhenPossible(in boolean mode,
-                                             in boolean allowSyncDisable);
-
     [noscript] void writeScript(in nsIObjectOutputStream aStream,
                                 in JSContextPtr aJSContext,
                                 in JSScriptPtr aJSScript);
@@ -596,11 +572,4 @@ interface nsIXPConnect : nsISupports
 
     [noscript] JSObjectPtr readFunction(in nsIObjectInputStream aStream,
                                         in JSContextPtr aJSContext);
-
-    /**
-     * This function should be called in JavaScript error reporters
-     * to signal that they are ignoring the error. In this case,
-     * XPConnect can print a warning to the console.
-     */
-    [noscript] void markErrorUnreported(in JSContextPtr aJSContext);
 };

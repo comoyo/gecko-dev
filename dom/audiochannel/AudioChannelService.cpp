@@ -23,7 +23,6 @@
 
 #ifdef MOZ_WIDGET_GONK
 #include "nsJSUtils.h"
-#include "nsCxPusher.h"
 #include "nsIAudioManager.h"
 #include "SpeakerManagerService.h"
 #define NS_AUDIOMANAGER_CONTRACTID "@mozilla.org/telephony/audiomanager;1"
@@ -59,6 +58,20 @@ AudioChannelService::GetAudioChannelService()
     return AudioChannelServiceChild::GetAudioChannelService();
   }
 
+  return gAudioChannelService;
+
+}
+
+// static
+AudioChannelService*
+AudioChannelService::GetOrCreateAudioChannelService()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    return AudioChannelServiceChild::GetOrCreateAudioChannelService();
+  }
+
   // If we already exist, exit early
   if (gAudioChannelService) {
     return gAudioChannelService;
@@ -66,7 +79,7 @@ AudioChannelService::GetAudioChannelService()
 
   // Create new instance, register, return
   nsRefPtr<AudioChannelService> service = new AudioChannelService();
-  NS_ENSURE_TRUE(service, nullptr);
+  MOZ_ASSERT(service);
 
   gAudioChannelService = service;
   return gAudioChannelService;
@@ -151,6 +164,13 @@ AudioChannelService::RegisterType(AudioChannel aChannel, uint64_t aChildID,
   mChannelCounters[type].AppendElement(aChildID);
 
   if (XRE_GetProcessType() == GeckoProcessType_Default) {
+
+    // We must keep the childIds in order to decide which app is allowed to play
+    // with then telephony channel.
+    if (aChannel == AudioChannel::Telephony) {
+      RegisterTelephonyChild(aChildID);
+    }
+
     // Since there is another telephony registered, we can unregister old one
     // immediately.
     if (mDeferTelChannelTimer && aChannel == AudioChannel::Telephony) {
@@ -183,7 +203,7 @@ AudioChannelService::RegisterType(AudioChannel aChannel, uint64_t aChildID,
     // In order to avoid race conditions, it's safer to notify any existing
     // agent any time a new one is registered.
     SendAudioChannelChangedNotification(aChildID);
-    Notify();
+    SendNotification();
   }
 }
 
@@ -234,15 +254,21 @@ AudioChannelService::UnregisterType(AudioChannel aChannel,
   // There are two reasons to defer the decrease of telephony channel.
   // 1. User can have time to remove device from his ear before music resuming.
   // 2. Give BT SCO to be disconnected before starting to connect A2DP.
-  if (XRE_GetProcessType() == GeckoProcessType_Default &&
-      aChannel == AudioChannel::Telephony &&
-      (mChannelCounters[AUDIO_CHANNEL_INT_TELEPHONY_HIDDEN].Length() +
-       mChannelCounters[AUDIO_CHANNEL_INT_TELEPHONY].Length()) == 1) {
-    mTimerElementHidden = aElementHidden;
-    mTimerChildID = aChildID;
-    mDeferTelChannelTimer = do_CreateInstance("@mozilla.org/timer;1");
-    mDeferTelChannelTimer->InitWithCallback(this, 1500, nsITimer::TYPE_ONE_SHOT);
-    return;
+  if (XRE_GetProcessType() == GeckoProcessType_Default) {
+
+    if (aChannel == AudioChannel::Telephony) {
+      UnregisterTelephonyChild(aChildID);
+    }
+
+    if (aChannel == AudioChannel::Telephony &&
+        (mChannelCounters[AUDIO_CHANNEL_INT_TELEPHONY_HIDDEN].Length() +
+         mChannelCounters[AUDIO_CHANNEL_INT_TELEPHONY].Length()) == 1) {
+      mTimerElementHidden = aElementHidden;
+      mTimerChildID = aChildID;
+      mDeferTelChannelTimer = do_CreateInstance("@mozilla.org/timer;1");
+      mDeferTelChannelTimer->InitWithCallback(this, 1500, nsITimer::TYPE_ONE_SHOT);
+      return;
+    }
   }
 
   UnregisterTypeInternal(aChannel, aElementHidden, aChildID, aWithVideo);
@@ -277,7 +303,7 @@ AudioChannelService::UnregisterTypeInternal(AudioChannel aChannel,
     }
 
     SendAudioChannelChangedNotification(aChildID);
-    Notify();
+    SendNotification();
   }
 }
 
@@ -348,7 +374,7 @@ AudioChannelService::GetStateInternal(AudioChannel aChannel, uint64_t aChildID,
       (aChannel == AudioChannel::Content ||
        (aChannel == AudioChannel::Normal &&
         mWithVideoChildIDs.Contains(aChildID)))) {
-    Notify();
+    SendNotification();
   }
 
   SendAudioChannelChangedNotification(aChildID);
@@ -358,7 +384,7 @@ AudioChannelService::GetStateInternal(AudioChannel aChannel, uint64_t aChildID,
     if (CheckVolumeFadedCondition(newType, aElementHidden)) {
       return AUDIO_CHANNEL_STATE_FADED;
     }
-    return AUDIO_CHANNEL_STATE_NORMAL;
+    return CheckTelephonyPolicy(aChannel, aChildID);
   }
 
   // We are not visible, maybe we have to mute.
@@ -387,7 +413,34 @@ AudioChannelService::GetStateInternal(AudioChannel aChannel, uint64_t aChildID,
     return AUDIO_CHANNEL_STATE_MUTED;
   }
 
-  return AUDIO_CHANNEL_STATE_NORMAL;
+  return CheckTelephonyPolicy(aChannel, aChildID);
+}
+
+AudioChannelState
+AudioChannelService::CheckTelephonyPolicy(AudioChannel aChannel,
+                                          uint64_t aChildID)
+{
+  // Only the latest childID is allowed to play with telephony channel.
+  if (aChannel != AudioChannel::Telephony) {
+    return AUDIO_CHANNEL_STATE_NORMAL;
+  }
+
+  MOZ_ASSERT(!mTelephonyChildren.IsEmpty());
+
+#if DEBUG
+  bool found = false;
+  for (uint32_t i = 0, len = mTelephonyChildren.Length(); i < len; ++i) {
+    if (mTelephonyChildren[i].mChildID == aChildID) {
+      found = true;
+      break;
+    }
+  }
+
+  MOZ_ASSERT(found);
+#endif
+
+  return mTelephonyChildren.LastElement().mChildID == aChildID
+           ? AUDIO_CHANNEL_STATE_NORMAL : AUDIO_CHANNEL_STATE_MUTED;
 }
 
 bool
@@ -546,14 +599,18 @@ AudioChannelService::SendAudioChannelChangedNotification(uint64_t aChildID)
        kMozAudioChannelAttributeTable[index].value > higher &&
        kMozAudioChannelAttributeTable[index].value > (int16_t)AudioChannel::Normal;
        --index) {
-    if (kMozAudioChannelAttributeTable[index].value == (int16_t)AudioChannel::Content &&
-      mPlayableHiddenContentChildID != CONTENT_PROCESS_ID_UNKNOWN) {
-      higher = kMozAudioChannelAttributeTable[index].value;
-    }
-
     // Each channel type will be split to fg and bg for recording the state,
     // so here need to do a translation.
-    if (!mChannelCounters[index * 2 + 1].IsEmpty()) {
+    if (mChannelCounters[index * 2 + 1].IsEmpty()) {
+      continue;
+    }
+
+    if (kMozAudioChannelAttributeTable[index].value == (int16_t)AudioChannel::Content) {
+      if (mPlayableHiddenContentChildID != CONTENT_PROCESS_ID_UNKNOWN) {
+        higher = kMozAudioChannelAttributeTable[index].value;
+        break;
+      }
+    } else {
       higher = kMozAudioChannelAttributeTable[index].value;
       break;
     }
@@ -601,10 +658,41 @@ AudioChannelService::NotifyEnumerator(AudioChannelAgent* aAgent,
   return PL_DHASH_NEXT;
 }
 
+class NotifyRunnable : public nsRunnable
+{
+public:
+  explicit NotifyRunnable(AudioChannelService* aService)
+    : mService(aService)
+  {}
+
+  NS_IMETHOD Run()
+  {
+    mService->Notify();
+    return NS_OK;
+  }
+
+private:
+  nsRefPtr<AudioChannelService> mService;
+};
+
+void
+AudioChannelService::SendNotification()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (mRunnable) {
+    return;
+  }
+
+  mRunnable = new NotifyRunnable(this);
+  NS_DispatchToCurrentThread(mRunnable);
+}
+
 void
 AudioChannelService::Notify()
 {
   MOZ_ASSERT(NS_IsMainThread());
+  mRunnable = nullptr;
 
   // Notify any agent for the main process.
   mAgents.EnumerateRead(NotifyEnumerator, nullptr);
@@ -699,7 +787,7 @@ AudioChannelService::Observe(nsISupports* aSubject, const char* aTopic, const ch
       // that table contains only agents running on the same process.
 
       SendAudioChannelChangedNotification(childID);
-      Notify();
+      SendNotification();
 
       if (mDefChannelChildID == childID) {
         SetDefaultVolumeControlChannelInternal(-1, false, childID);
@@ -732,7 +820,7 @@ AudioChannelService::Observe(nsISupports* aSubject, const char* aTopic, const ch
     if (!jsKey) {
       return NS_OK;
     }
-    nsDependentJSString keyStr;
+    nsAutoJSString keyStr;
     if (!keyStr.init(cx, jsKey) || keyStr.Find("audio.volume.", 0, false)) {
       return NS_OK;
     }
@@ -817,7 +905,7 @@ AudioChannelService::GetInternalType(AudioChannel aChannel,
 
 struct RefreshAgentsVolumeData
 {
-  RefreshAgentsVolumeData(nsPIDOMWindow* aWindow)
+  explicit RefreshAgentsVolumeData(nsPIDOMWindow* aWindow)
     : mWindow(aWindow)
   {}
 
@@ -858,7 +946,7 @@ AudioChannelService::RefreshAgentsVolume(nsPIDOMWindow* aWindow)
 
 struct CountWindowData
 {
-  CountWindowData(nsIDOMWindow* aWindow)
+  explicit CountWindowData(nsIDOMWindow* aWindow)
     : mWindow(aWindow)
     , mCount(0)
   {}
@@ -954,4 +1042,40 @@ AudioChannelService::GetDefaultAudioChannelString(nsAString& aString)
       }
     }
   }
+}
+
+void
+AudioChannelService::RegisterTelephonyChild(uint64_t aChildID)
+{
+  for (uint32_t i = 0, len = mTelephonyChildren.Length(); i < len; ++i) {
+    if (mTelephonyChildren[i].mChildID == aChildID) {
+      ++mTelephonyChildren[i].mInstances;
+
+      if (i != len - 1) {
+        TelephonyChild child = mTelephonyChildren[i];
+        mTelephonyChildren.RemoveElementAt(i);
+        mTelephonyChildren.AppendElement(child);
+      }
+
+      return;
+    }
+  }
+
+  mTelephonyChildren.AppendElement(TelephonyChild(aChildID));
+}
+
+void
+AudioChannelService::UnregisterTelephonyChild(uint64_t aChildID)
+{
+  for (uint32_t i = 0, len = mTelephonyChildren.Length(); i < len; ++i) {
+    if (mTelephonyChildren[i].mChildID == aChildID) {
+      if (!--mTelephonyChildren[i].mInstances) {
+        mTelephonyChildren.RemoveElementAt(i);
+      }
+
+      return;
+    }
+  }
+
+  MOZ_ASSERT(false, "This should not happen.");
 }

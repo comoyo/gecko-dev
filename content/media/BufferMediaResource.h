@@ -33,11 +33,13 @@ public:
     MOZ_COUNT_CTOR(BufferMediaResource);
   }
 
+protected:
   virtual ~BufferMediaResource()
   {
     MOZ_COUNT_DTOR(BufferMediaResource);
   }
 
+private:
   virtual nsresult Close() { return NS_OK; }
   virtual void Suspend(bool aCloseImmediately) {}
   virtual void Resume() {}
@@ -104,7 +106,7 @@ public:
 
   virtual void Pin() {}
   virtual void Unpin() {}
-  virtual double GetDownloadRate(bool* aIsReliable) { return 0.; }
+  virtual double GetDownloadRate(bool* aIsReliable) { *aIsReliable = false; return 0.; }
   virtual int64_t GetLength() { return mLength; }
   virtual int64_t GetNextCachedData(int64_t aOffset) { return aOffset; }
   virtual int64_t GetCachedDataEnd(int64_t aOffset) { return mLength; }

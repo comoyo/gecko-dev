@@ -11,6 +11,7 @@
 #include "nsCOMPtr.h"
 #include "nsString.h"
 #include "nsTArray.h"
+#include "nsWeakPtr.h"
 
 class nsString;
 class nsDataObj;
@@ -22,7 +23,7 @@ class nsDataObj;
 //
 struct DataStruct
 {
-  DataStruct ( const char* aFlavor )
+  explicit DataStruct ( const char* aFlavor )
     : mDataLen(0), mFlavor(aFlavor), mCacheFileName(nullptr) { }
   ~DataStruct();
   
@@ -59,13 +60,13 @@ class nsTransferable : public nsITransferable
 public:
 
   nsTransferable();
-  virtual ~nsTransferable();
 
     // nsISupports
   NS_DECL_ISUPPORTS
   NS_DECL_NSITRANSFERABLE
 
 protected:
+  virtual ~nsTransferable();
 
     // get flavors w/out converter
   nsresult GetTransferDataFlavors(nsISupportsArray** aDataFlavorList);
@@ -73,6 +74,7 @@ protected:
   nsTArray<DataStruct> mDataArray;
   nsCOMPtr<nsIFormatConverter> mFormatConv;
   bool mPrivateData;
+  nsWeakPtr mRequestingNode;
 #if DEBUG
   bool mInitialized;
 #endif

@@ -42,7 +42,7 @@ MediaStreamAudioSourceNode::MediaStreamAudioSourceNode(AudioContext* aContext,
   ProcessedMediaStream* outputStream = static_cast<ProcessedMediaStream*>(mStream.get());
   mInputPort = outputStream->AllocateInputPort(aMediaStream->GetStream(),
                                                MediaInputPort::FLAG_BLOCK_INPUT);
-  mInputStream->AddConsumerToKeepAlive(this);
+  mInputStream->AddConsumerToKeepAlive(static_cast<nsIDOMEventTarget*>(this));
 
   PrincipalChanged(mInputStream); // trigger enabling/disabling of the connector
   mInputStream->AddPrincipalChangeObserver(this);
@@ -73,12 +73,15 @@ void
 MediaStreamAudioSourceNode::PrincipalChanged(DOMMediaStream* ms)
 {
   bool subsumes = false;
-  nsIDocument* doc = Context()->GetParentObject()->GetExtantDoc();
-  if (doc) {
-    nsIPrincipal* docPrincipal = doc->NodePrincipal();
-    nsIPrincipal* streamPrincipal = mInputStream->GetPrincipal();
-    if (NS_FAILED(docPrincipal->Subsumes(streamPrincipal, &subsumes))) {
-      subsumes = false;
+  nsPIDOMWindow* parent = Context()->GetParentObject();
+  if (parent) {
+    nsIDocument* doc = parent->GetExtantDoc();
+    if (doc) {
+      nsIPrincipal* docPrincipal = doc->NodePrincipal();
+      nsIPrincipal* streamPrincipal = mInputStream->GetPrincipal();
+      if (NS_FAILED(docPrincipal->Subsumes(streamPrincipal, &subsumes))) {
+        subsumes = false;
+      }
     }
   }
   auto stream = static_cast<AudioNodeExternalInputStream*>(mStream.get());

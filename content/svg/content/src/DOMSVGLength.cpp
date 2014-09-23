@@ -67,7 +67,7 @@ NS_INTERFACE_MAP_END
 class MOZ_STACK_CLASS AutoChangeLengthNotifier
 {
 public:
-  AutoChangeLengthNotifier(DOMSVGLength* aLength MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+  explicit AutoChangeLengthNotifier(DOMSVGLength* aLength MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
     : mLength(aLength)
   {
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
@@ -168,6 +168,25 @@ DOMSVGLength::GetTearOff(nsSVGLength2* aVal, nsSVGElement* aSVGElement,
   }
 
   return domLength.forget();
+}
+
+DOMSVGLength*
+DOMSVGLength::Copy()
+{
+  NS_ASSERTION(HasOwner() || IsReflectingAttribute(), "unexpected caller");
+  DOMSVGLength *copy = new DOMSVGLength();
+  uint16_t unit;
+  float value;
+  if (mVal) {
+    unit = mVal->mSpecifiedUnitType;
+    value = mIsAnimValItem ? mVal->mAnimVal : mVal->mBaseVal;
+  } else {
+    SVGLength &length = InternalItem();
+    unit = length.GetUnit();
+    value = length.GetValueInCurrentUnits();
+  }
+  copy->NewValueSpecifiedUnits(unit, value);
+  return copy;
 }
 
 uint16_t

@@ -10,14 +10,6 @@
 <pre id="test">
 <script class="testbody" type='application/javascript;version=1.8'>
 
-SimpleTest.expectAssertions(0, 2);
-
-if (navigator.platform.startsWith("Win")) {
-  SimpleTest.expectAssertions(0, 1);
-} else if (navigator.platform.startsWith("Mac")) {
-  SimpleTest.expectAssertions(0, 2);
-}
-
 let manager = new MediaTestManager;
 
 function rangeCheck(lhs, rhs, threshold) {
@@ -80,15 +72,14 @@ function onpaused(e) {
 function afterNullPlaybackRate(e) {
   var t = e.target;
 
-  t.testedForNull = true;
-
-  if (t.gotEnded) {
+  // skip if we have received 'ended' event or 'ended' event is pending.
+  if (t.gotEnded || t.ended) {
     return;
   }
-  // The currentTime won't be perfectly equal because of the latency
-  // compensation. We expect no more that 300ms difference.
-  let THRESHOLD = 0.3;
-  ok(rangeCheck(t.currentTime, t.oldCurrentTime, THRESHOLD), "Current time should not change when playbackRate is null (" + t.currentTime + " " + t.oldCurrentTime + ").");
+
+  t.testedForNull = true;
+
+  ok(t.currentTime == t.oldCurrentTime, "Current time should not change when playbackRate is null (" + t.currentTime + " " + t.oldCurrentTime + ").");
   ok(!t.paused, "The element should not be in paused state.");
   t.removeEventListener("paused", onpaused);
   is(t.pausedReceived, undefined, "Paused event should not have been received.");
@@ -99,17 +90,11 @@ function afterNullPlaybackRate(e) {
 }
 
 function onended(e) {
-  var t = e.target,
-      playtime = (Date.now() - t.timestamp - t.bufferingTime) / 1000,
-      mediaTime = t.duration - t.oldCurrentTime;
-
-  if (!(t.testedForSlowdown && t.testedForNull)) {
-    t.gotEnded = true;
-    t.skippedFastPart = true;
-  }
+  var t = e.target;
+  t.gotEnded = true;
 
   t.bufferingTime = 0;
-  // We got "ended" too early, skip these tests.
+  // If we got "ended" too early, skip these tests.
   if (t.testedForSlowdown && t.testedForNull) {
     is(t.playbackRate, FAST_RATE, "The playback rate should still be "+FAST_RATE+".");
     ok(!t.muted, "The audio should be muted when playing at high speed, but should not appear as such.");
@@ -126,9 +111,7 @@ function onratechange(e) {
 }
 
 function finish_test(element) {
-  if (element.parentNode)
-    element.parentNode.removeChild(element);
-  element.src="";
+  removeNodeAndSource(element);
   manager.finished(element.token);
 }
 

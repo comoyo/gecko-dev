@@ -1,5 +1,3 @@
-/* -*- Mode: js; js-indent-level: 2; indent-tabs-mode: nil; tab-width: 2 -*- */
-/* vim: set shiftwidth=2 tabstop=2 autoindent cindent expandtab: */
 /*
  * Copyright 2013 Mozilla Foundation
  *
@@ -82,6 +80,22 @@ function getDOMWindow(aChannel) {
                   aChannel.loadGroup.notificationCallbacks;
   var win = requestor.getInterface(Components.interfaces.nsIDOMWindow);
   return win;
+}
+
+function makeContentReadable(obj, window) {
+  if (Cu.cloneInto) {
+    return Cu.cloneInto(obj, window);
+  }
+  // TODO remove for Firefox 32+
+  if (typeof obj !== 'object' || obj === null) {
+    return obj;
+  }
+  var expose = {};
+  for (let k in obj) {
+    expose[k] = "rw";
+  }
+  obj.__exposedProps__ = expose;
+  return obj;
 }
 
 function parseQueryString(qs) {
@@ -413,13 +427,6 @@ ChromeActions.prototype = {
                       .getService(Ci.nsIClipboardHelper);
     clipboard.copyString(data);
   },
-  unsafeSetClipboard: function (data) {
-    if (typeof data !== 'string') {
-      return;
-    }
-    let clipboard = Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper);
-    clipboard.copyString(data);
-  },
   endActivation: function () {
     if (ActivationQueue.currentNonActive === this) {
       ActivationQueue.activateNext();
@@ -536,9 +543,7 @@ RequestListener.prototype.receive = function(event) {
   }
   if (sync) {
     var response = actions[action].call(this.actions, data);
-    var detail = event.detail;
-    detail.__exposedProps__ = {response: 'r'};
-    detail.response = response;
+    event.detail.response = response;
   } else {
     var response;
     if (event.detail.callback) {
@@ -548,9 +553,10 @@ RequestListener.prototype.receive = function(event) {
         try {
           var listener = doc.createEvent('CustomEvent');
           listener.initCustomEvent('shumway.response', true, false,
-                                   {response: response,
-                                    cookie: cookie,
-                                    __exposedProps__: {response: 'r', cookie: 'r'}});
+                                   makeContentReadable({
+                                     response: response,
+                                     cookie: cookie
+                                   }, doc.defaultView));
 
           return message.dispatchEvent(listener);
         } catch (e) {
@@ -664,35 +670,29 @@ var ActivationQueue = {
 
 function activateShumwayScripts(window, preview) {
   function loadScripts(scripts, callback) {
-    function scriptLoaded() {
-      leftToLoad--;
-      if (leftToLoad === 0) {
+    function loadScript(i) {
+      if (i >= scripts.length) {
         callback();
+        return;
       }
-    }
-    var leftToLoad = scripts.length;
-    var document = window.document.wrappedJSObject;
-    var head = document.getElementsByTagName('head')[0];
-    for (var i = 0; i < scripts.length; i++) {
       var script = document.createElement('script');
       script.type = "text/javascript";
       script.src = scripts[i];
-      script.onload = scriptLoaded;
+      script.onload = function () {
+        loadScript(i + 1);
+      };
       head.appendChild(script);
     }
+    var document = window.document.wrappedJSObject;
+    var head = document.getElementsByTagName('head')[0];
+    loadScript(0);
   }
 
   function initScripts() {
-    if (preview) {
-      loadScripts(['resource://shumway/web/preview.js'], function () {
-        window.wrappedJSObject.runSniffer();
-      });
-    } else {
-      loadScripts(['resource://shumway/shumway.js',
-                   'resource://shumway/web/avm-sandbox.js'], function () {
-        window.wrappedJSObject.runViewer();
-      });
-    }
+    loadScripts(['resource://shumway/shumway.gfx.js',
+                 'resource://shumway/web/viewer.js'], function () {
+      window.wrappedJSObject.runViewer();
+    });
   }
 
   window.wrappedJSObject.SHUMWAY_ROOT = "resource://shumway/";
@@ -752,11 +752,11 @@ function initExternalCom(wrappedWindow, wrappedObject, targetDocument) {
       var args = Array.prototype.slice.call(arguments, 0);
       wrappedWindow.console.log('__flash__callIn: ' + functionName);
       var e = targetDocument.createEvent('CustomEvent');
-      e.initCustomEvent('shumway.remote', true, false, {
+      e.initCustomEvent('shumway.remote', true, false, makeContentReadable({
         functionName: functionName,
         args: args,
-        __exposedProps__: {args: 'r', functionName: 'r', result: 'rw'}
-      });
+        result: undefined
+      }, targetDocument.defaultView));
       targetDocument.dispatchEvent(e);
       return e.detail.result;
     };

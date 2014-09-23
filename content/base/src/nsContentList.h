@@ -27,6 +27,7 @@
 #include "nsWrapperCache.h"
 #include "nsHashKeys.h"
 #include "mozilla/HashFunctions.h"
+#include "mozilla/dom/NameSpaceConstants.h"
 
 namespace mozilla {
 namespace dom {
@@ -42,7 +43,6 @@ public:
   {
     SetIsDOMBinding();
   }
-  virtual ~nsBaseContentList();
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
@@ -100,6 +100,8 @@ public:
     mElements.SetCapacity(aCapacity);
   }
 protected:
+  virtual ~nsBaseContentList();
+
   /**
    * To be called from non-destructor locations (e.g. unlink) that want to
    * remove from caches.  Cacheable subclasses should override.
@@ -115,8 +117,8 @@ protected:
 class nsSimpleContentList : public nsBaseContentList
 {
 public:
-  nsSimpleContentList(nsINode *aRoot) : nsBaseContentList(),
-                                        mRoot(aRoot)
+  explicit nsSimpleContentList(nsINode* aRoot) : nsBaseContentList(),
+                                                 mRoot(aRoot)
   {
   }
 
@@ -129,6 +131,9 @@ public:
     return mRoot;
   }
   virtual JSObject* WrapObject(JSContext *cx) MOZ_OVERRIDE;
+
+protected:
+  virtual ~nsSimpleContentList() {}
 
 private:
   // This has to be a strong reference, the root might go away before the list.
@@ -248,12 +253,13 @@ public:
                 nsIAtom* aMatchAtom = nullptr,
                 int32_t aMatchNameSpaceId = kNameSpaceID_None,
                 bool aFuncMayDependOnAttr = true);
-  virtual ~nsContentList();
 
   // nsWrapperCache
   using nsWrapperCache::GetWrapperPreserveColor;
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 protected:
+  virtual ~nsContentList();
+
   virtual JSObject* GetWrapperPreserveColorInternal() MOZ_OVERRIDE
   {
     return nsWrapperCache::GetWrapperPreserveColor();
@@ -284,9 +290,9 @@ public:
                                  nsTArray<nsString>& aNames) MOZ_OVERRIDE;
 
   // nsContentList public methods
-  NS_HIDDEN_(uint32_t) Length(bool aDoFlush);
-  NS_HIDDEN_(nsIContent*) Item(uint32_t aIndex, bool aDoFlush);
-  NS_HIDDEN_(mozilla::dom::Element*)
+  uint32_t Length(bool aDoFlush);
+  nsIContent* Item(uint32_t aIndex, bool aDoFlush);
+  mozilla::dom::Element*
   NamedItem(const nsAString& aName, bool aDoFlush);
 
   // nsIMutationObserver

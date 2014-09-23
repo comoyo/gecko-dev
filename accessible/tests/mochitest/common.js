@@ -12,6 +12,8 @@ const nsIAccessibleTextChangeEvent =
   Components.interfaces.nsIAccessibleTextChangeEvent;
 const nsIAccessibleVirtualCursorChangeEvent =
   Components.interfaces.nsIAccessibleVirtualCursorChangeEvent;
+const nsIAccessibleObjectAttributeChangedEvent =
+  Components.interfaces.nsIAccessibleObjectAttributeChangedEvent;
 
 const nsIAccessibleStates = Components.interfaces.nsIAccessibleStates;
 const nsIAccessibleRole = Components.interfaces.nsIAccessibleRole;
@@ -83,7 +85,7 @@ const kEmbedChar = String.fromCharCode(0xfffc);
 const kDiscBulletChar = String.fromCharCode(0x2022);
 const kDiscBulletText = kDiscBulletChar + " ";
 const kCircleBulletText = String.fromCharCode(0x25e6) + " ";
-const kSquareBulletText = String.fromCharCode(0x25aa) + " ";
+const kSquareBulletText = String.fromCharCode(0x25fe) + " ";
 
 const MAX_TRIM_LENGTH = 100;
 
@@ -237,7 +239,7 @@ function getAccessible(aAccOrElmOrID, aInterfaces, aElmObj, aDoNotFailIf)
 
     if (!acc) {
       if (!(aDoNotFailIf & DONOTFAIL_IF_NO_ACC))
-        ok(false, "Can't get accessible for " + aAccOrElmOrID);
+        ok(false, "Can't get accessible for " + prettyName(aAccOrElmOrID));
 
       return null;
     }

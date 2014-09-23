@@ -21,6 +21,7 @@
 #include "mozilla/EventForwards.h"
 #include "InputData.h"
 #include "Units.h"
+#include "FrameMetrics.h"
 
 //#define FORCE_ALOG 1
 
@@ -453,13 +454,6 @@ public:
         return event;
     }
 
-    static AndroidGeckoEvent* MakeDrawEvent(const nsIntRect& aRect) {
-        AndroidGeckoEvent *event = new AndroidGeckoEvent();
-        event->Init(DRAW);
-        event->mRect = aRect;
-        return event;
-    }
-
     static AndroidGeckoEvent* MakeFromJavaObject(JNIEnv *jenv, jobject jobj) {
         AndroidGeckoEvent *event = new AndroidGeckoEvent();
         event->Init(jenv, jobj);
@@ -485,6 +479,14 @@ public:
         event->Init(ADD_OBSERVER);
         event->mCharacters.Assign(key);
         event->mObserver = observer;
+        return event;
+    }
+
+    static AndroidGeckoEvent* MakeApzInputEvent(const MultiTouchInput& aInput, const mozilla::layers::ScrollableLayerGuid& aGuid) {
+        AndroidGeckoEvent* event = new AndroidGeckoEvent();
+        event->Init(APZ_INPUT_EVENT);
+        event->mApzInput = aInput;
+        event->mApzGuid = aGuid;
         return event;
     }
 
@@ -544,11 +546,13 @@ public:
     float GamepadButtonValue() { return mGamepadButtonValue; }
     const nsTArray<float>& GamepadValues() { return mGamepadValues; }
     int RequestId() { return mCount; } // for convenience
+    bool CanCoalesceWith(AndroidGeckoEvent* ae);
     WidgetTouchEvent MakeTouchEvent(nsIWidget* widget);
     MultiTouchInput MakeMultiTouchInput(nsIWidget* widget);
     WidgetMouseEvent MakeMouseEvent(nsIWidget* widget);
     void UnionRect(nsIntRect const& aRect);
     nsIObserver *Observer() { return mObserver; }
+    mozilla::layers::ScrollableLayerGuid ApzGuid();
 
 protected:
     int mAction;
@@ -588,6 +592,8 @@ protected:
     nsTArray<float> mGamepadValues;
     nsCOMPtr<nsIObserver> mObserver;
     nsTArray<nsString> mPrefNames;
+    MultiTouchInput mApzInput;
+    mozilla::layers::ScrollableLayerGuid mApzGuid;
 
     void ReadIntArray(nsTArray<int> &aVals,
                       JNIEnv *jenv,
@@ -682,13 +688,13 @@ public:
         SENSOR_EVENT = 3,
         LOCATION_EVENT = 5,
         IME_EVENT = 6,
-        DRAW = 7,
         SIZE_CHANGED = 8,
         APP_BACKGROUNDING = 9,
         APP_FOREGROUNDING = 10,
         LOAD_URI = 12,
         NOOP = 15,
         FORCED_RESIZE = 16, // used internally in nsAppShell/nsWindow
+        APZ_INPUT_EVENT = 17, // used internally in AndroidJNI/nsAppShell/nsWindow
         BROADCAST = 19,
         VIEWPORT = 20,
         VISITED = 21,
@@ -714,6 +720,7 @@ public:
         TELEMETRY_UI_EVENT = 44,
         GAMEPAD_ADDREMOVE = 45,
         GAMEPAD_DATA = 46,
+        LONG_PRESS = 47,
         dummy_java_enum_list_end
     };
 
@@ -738,6 +745,7 @@ public:
         IME_UPDATE_COMPOSITION = 4,
         IME_REMOVE_COMPOSITION = 5,
         IME_ACKNOWLEDGE_FOCUS = 6,
+        IME_COMPOSE_TEXT = 7,
         dummy_ime_enum_list_end
     };
 
@@ -756,6 +764,12 @@ class nsJNIString : public nsString
 {
 public:
     nsJNIString(jstring jstr, JNIEnv *jenv);
+};
+
+class nsJNICString : public nsCString
+{
+public:
+    nsJNICString(jstring jstr, JNIEnv *jenv);
 };
 
 }

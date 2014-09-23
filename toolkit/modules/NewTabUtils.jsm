@@ -42,8 +42,9 @@ XPCOMUtils.defineLazyGetter(this, "gUnicodeConverter", function () {
   return converter;
 });
 
-// The preference that tells whether this feature is enabled.
+// Boolean preferences that control newtab content
 const PREF_NEWTAB_ENABLED = "browser.newtabpage.enabled";
+const PREF_NEWTAB_ENHANCED = "browser.newtabpage.enhanced";
 
 // The preference that tells the number of rows of the newtab grid.
 const PREF_NEWTAB_ROWS = "browser.newtabpage.rows";
@@ -210,6 +211,11 @@ let AllPages = {
   _enabled: null,
 
   /**
+   * Cached value that tells whether the New Tab Page feature is enhanced.
+   */
+  _enhanced: null,
+
+  /**
    * Adds a page to the internal list of pages.
    * @param aPage The page to register.
    */
@@ -244,6 +250,24 @@ let AllPages = {
   set enabled(aEnabled) {
     if (this.enabled != aEnabled)
       Services.prefs.setBoolPref(PREF_NEWTAB_ENABLED, !!aEnabled);
+  },
+
+  /**
+   * Returns whether the history tiles are enhanced.
+   */
+  get enhanced() {
+    if (this._enhanced === null)
+      this._enhanced = Services.prefs.getBoolPref(PREF_NEWTAB_ENHANCED);
+
+    return this._enhanced;
+  },
+
+  /**
+   * Enables or disables the enhancement of history tiles feature.
+   */
+  set enhanced(aEnhanced) {
+    if (this.enhanced != aEnhanced)
+      Services.prefs.setBoolPref(PREF_NEWTAB_ENHANCED, !!aEnhanced);
   },
 
   /**
@@ -288,7 +312,14 @@ let AllPages = {
   observe: function AllPages_observe(aSubject, aTopic, aData) {
     if (aTopic == "nsPref:changed") {
       // Clear the cached value.
-      this._enabled = null;
+      switch (aData) {
+        case PREF_NEWTAB_ENABLED:
+          this._enabled = null;
+          break;
+        case PREF_NEWTAB_ENHANCED:
+          this._enhanced = null;
+          break;
+      }
     }
     // and all notifications get forwarded to each page.
     this._pages.forEach(function (aPage) {
@@ -302,6 +333,7 @@ let AllPages = {
    */
   _addObserver: function AllPages_addObserver() {
     Services.prefs.addObserver(PREF_NEWTAB_ENABLED, this, true);
+    Services.prefs.addObserver(PREF_NEWTAB_ENHANCED, this, true);
     Services.obs.addObserver(this, "page-thumbnail:create", true);
     this._addObserver = function () {};
   },
@@ -573,9 +605,7 @@ let PlacesProvider = {
               title: title,
               frecency: frecency,
               lastVisitDate: lastVisitDate,
-              bgColor: "transparent",
               type: "history",
-              imageURI: null,
             });
           }
         }
@@ -602,8 +632,7 @@ let PlacesProvider = {
             i++;
         }
         for (let link of outOfOrder) {
-          i = BinarySearch.insertionIndexOf(links, link,
-                                            Links.compareLinks.bind(Links));
+          i = BinarySearch.insertionIndexOf(Links.compareLinks, links, link);
           links.splice(i, 0, link);
         }
 
@@ -650,6 +679,7 @@ let PlacesProvider = {
         url: aURI.spec,
         frecency: aNewFrecency,
         lastVisitDate: aLastVisitDate,
+        type: "history",
       });
     }
   },
@@ -798,8 +828,19 @@ let Links = {
     let pinnedLinks = Array.slice(PinnedLinks.links);
     let links = this._getMergedProviderLinks();
 
-    // Filter blocked and pinned links.
+    let sites = new Set();
+    for (let link of pinnedLinks) {
+      if (link)
+        sites.add(NewTabUtils.extractSite(link.url));
+    }
+
+    // Filter blocked and pinned links and duplicate base domains.
     links = links.filter(function (link) {
+      let site = NewTabUtils.extractSite(link.url);
+      if (site == null || sites.has(site))
+        return false;
+      sites.add(site);
+
       return !BlockedLinks.isBlocked(link) && !PinnedLinks.isPinned(link);
     });
 
@@ -829,6 +870,8 @@ let Links = {
    * @return A negative number if aLink1 is ordered before aLink2, zero if
    *         aLink1 and aLink2 have the same ordering, or a positive number if
    *         aLink1 is ordered after aLink2.
+   *
+   * @note compareLinks's this object is bound to Links below.
    */
   compareLinks: function Links_compareLinks(aLink1, aLink2) {
     for (let prop of this._sortProperties) {
@@ -917,58 +960,55 @@ let Links = {
       return;
 
     let { sortedLinks, linkMap } = links;
-
-    // Nothing to do if the list is full and the link isn't in it and shouldn't
-    // be in it.
-    if (!linkMap.has(aLink.url) &&
-        sortedLinks.length &&
-        sortedLinks.length == aProvider.maxNumLinks) {
-      let lastLink = sortedLinks[sortedLinks.length - 1];
-      if (this.compareLinks(lastLink, aLink) < 0)
-        return;
-    }
-
+    let existingLink = linkMap.get(aLink.url);
+    let insertionLink = null;
     let updatePages = false;
 
-    // Update the title in O(1).
-    if ("title" in aLink) {
-      let link = linkMap.get(aLink.url);
-      if (link && link.title != aLink.title) {
-        link.title = aLink.title;
+    if (existingLink) {
+      // Update our copy's position in O(lg n) by first removing it from its
+      // list.  It's important to do this before modifying its properties.
+      if (this._sortProperties.some(prop => prop in aLink)) {
+        let idx = this._indexOf(sortedLinks, existingLink);
+        if (idx < 0) {
+          throw new Error("Link should be in _sortedLinks if in _linkMap");
+        }
+        sortedLinks.splice(idx, 1);
+        // Update our copy's properties.
+        for (let prop of this._sortProperties) {
+          if (prop in aLink) {
+            existingLink[prop] = aLink[prop];
+          }
+        }
+        // Finally, reinsert our copy below.
+        insertionLink = existingLink;
+      }
+      // Update our copy's title in O(1).
+      if ("title" in aLink && aLink.title != existingLink.title) {
+        existingLink.title = aLink.title;
         updatePages = true;
       }
     }
+    else if (this._sortProperties.every(prop => prop in aLink)) {
+      // Before doing the O(lg n) insertion below, do an O(1) check for the
+      // common case where the new link is too low-ranked to be in the list.
+      if (sortedLinks.length && sortedLinks.length == aProvider.maxNumLinks) {
+        let lastLink = sortedLinks[sortedLinks.length - 1];
+        if (this.compareLinks(lastLink, aLink) < 0) {
+          return;
+        }
+      }
+      // Copy the link object so that changes later made to it by the caller
+      // don't affect our copy.
+      insertionLink = {};
+      for (let prop in aLink) {
+        insertionLink[prop] = aLink[prop];
+      }
+      linkMap.set(aLink.url, insertionLink);
+    }
 
-    // Update the link's position in O(lg n).
-    if (this._sortProperties.some((prop) => prop in aLink)) {
-      let link = linkMap.get(aLink.url);
-      if (link) {
-        // The link is already in the list.
-        let idx = this._indexOf(sortedLinks, link);
-        if (idx < 0)
-          throw new Error("Link should be in _sortedLinks if in _linkMap");
-        sortedLinks.splice(idx, 1);
-        for (let prop of this._sortProperties) {
-          if (prop in aLink)
-            link[prop] = aLink[prop];
-        }
-      }
-      else {
-        // The link is new.
-        for (let prop of this._sortProperties) {
-          if (!(prop in aLink))
-            throw new Error("New link missing required sort property: " + prop);
-        }
-        // Copy the link object so that if the caller changes it, it doesn't
-        // screw up our bookkeeping.
-        link = {};
-        for (let [prop, val] of Iterator(aLink)) {
-          link[prop] = val;
-        }
-        linkMap.set(link.url, link);
-      }
-      let idx = this._insertionIndexOf(sortedLinks, link);
-      sortedLinks.splice(idx, 0, link);
+    if (insertionLink) {
+      let idx = this._insertionIndexOf(sortedLinks, insertionLink);
+      sortedLinks.splice(idx, 0, insertionLink);
       if (sortedLinks.length > aProvider.maxNumLinks) {
         let lastLink = sortedLinks.pop();
         linkMap.delete(lastLink.url);
@@ -998,7 +1038,7 @@ let Links = {
   },
 
   _binsearch: function Links__binsearch(aArray, aLink, aMethod) {
-    return BinarySearch[aMethod](aArray, aLink, this.compareLinks.bind(this));
+    return BinarySearch[aMethod](this.compareLinks, aArray, aLink);
   },
 
   /**
@@ -1026,6 +1066,8 @@ let Links = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
                                          Ci.nsISupportsWeakReference])
 };
+
+Links.compareLinks = Links.compareLinks.bind(Links);
 
 /**
  * Singleton used to collect telemetry data.
@@ -1129,6 +1171,24 @@ let ExpirationFilter = {
  */
 this.NewTabUtils = {
   _initialized: false,
+
+  /**
+   * Extract a "site" from a url in a way that multiple urls of a "site" returns
+   * the same "site."
+   * @param aUrl Url spec string
+   * @return The "site" string or null
+   */
+  extractSite: function Links_extractSite(url) {
+    let uri;
+    try {
+      uri = Services.io.newURI(url, null, null);
+    } catch (ex) {
+      return null;
+    }
+
+    // Strip off common subdomains of the same site (e.g., www, load balancer)
+    return uri.asciiHost.replace(/^(m|mobile|www\d*)\./, "");
+  },
 
   init: function NewTabUtils_init() {
     if (this.initWithoutProviders()) {

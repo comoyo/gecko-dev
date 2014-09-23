@@ -1,6 +1,5 @@
-#include "precompiled.h"
 //
-// Copyright (c) 2002-2013 The ANGLE Project Authors. All rights reserved.
+// Copyright (c) 2002-2014 The ANGLE Project Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -11,8 +10,6 @@
 #include "libGLESv2/Program.h"
 #include "libGLESv2/ProgramBinary.h"
 #include "libGLESv2/ResourceManager.h"
-
-#include <algorithm>
 
 namespace gl
 {
@@ -97,32 +94,36 @@ void InfoLog::append(const char *format, ...)
         return;
     }
 
-    char info[1024];
-
     va_list vararg;
     va_start(vararg, format);
-    vsnprintf(info, sizeof(info), format, vararg);
+    size_t infoLength = vsnprintf(NULL, 0, format, vararg);
     va_end(vararg);
 
-    size_t infoLength = strlen(info);
+    char *logPointer = NULL;
 
     if (!mInfoLog)
     {
         mInfoLog = new char[infoLength + 2];
-        strcpy(mInfoLog, info);
-        strcpy(mInfoLog + infoLength, "\n");
+        logPointer = mInfoLog;
     }
     else
     {
-        size_t logLength = strlen(mInfoLog);
-        char *newLog = new char[logLength + infoLength + 2];
+        size_t currentlogLength = strlen(mInfoLog);
+        char *newLog = new char[currentlogLength + infoLength + 2];
         strcpy(newLog, mInfoLog);
-        strcpy(newLog + logLength, info);
-        strcpy(newLog + logLength + infoLength, "\n");
 
         delete[] mInfoLog;
         mInfoLog = newLog;
+
+        logPointer = mInfoLog + currentlogLength;
     }
+
+    va_start(vararg, format);
+    vsnprintf(logPointer, infoLength, format, vararg);
+    va_end(vararg);
+
+    logPointer[infoLength] = 0;
+    strcpy(logPointer + infoLength, "\n");
 }
 
 void InfoLog::reset()
@@ -143,6 +144,8 @@ Program::Program(rx::Renderer *renderer, ResourceManager *manager, GLuint handle
     mLinked = false;
     mRefCount = 0;
     mRenderer = renderer;
+
+    resetUniformBlockBindings();
 }
 
 Program::~Program()
@@ -169,7 +172,7 @@ bool Program::attachShader(Shader *shader)
             return false;
         }
 
-        mVertexShader = (VertexShader*)shader;
+        mVertexShader = shader;
         mVertexShader->addRef();
     }
     else if (shader->getType() == GL_FRAGMENT_SHADER)
@@ -179,7 +182,7 @@ bool Program::attachShader(Shader *shader)
             return false;
         }
 
-        mFragmentShader = (FragmentShader*)shader;
+        mFragmentShader = shader;
         mFragmentShader->addRef();
     }
     else UNREACHABLE();
@@ -240,14 +243,16 @@ void Program::bindAttributeLocation(GLuint index, const char *name)
 // Links the HLSL code of the vertex and pixel shader by matching up their varyings,
 // compiling them into binaries, determining the attribute mappings, and collecting
 // a list of uniforms
-bool Program::link()
+bool Program::link(const Caps &caps)
 {
     unlink(false);
 
     mInfoLog.reset();
+    resetUniformBlockBindings();
 
     mProgramBinary.set(new ProgramBinary(mRenderer));
-    mLinked = mProgramBinary->link(mInfoLog, mAttributeBindings, mFragmentShader, mVertexShader);
+    mLinked = mProgramBinary->link(mInfoLog, mAttributeBindings, mFragmentShader, mVertexShader,
+                                   mTransformFeedbackVaryings, mTransformFeedbackBufferMode, caps);
 
     return mLinked;
 }
@@ -292,19 +297,19 @@ bool Program::isLinked()
     return mLinked;
 }
 
-ProgramBinary* Program::getProgramBinary()
+ProgramBinary* Program::getProgramBinary() const
 {
     return mProgramBinary.get();
 }
 
-bool Program::setProgramBinary(const void *binary, GLsizei length)
+bool Program::setProgramBinary(GLenum binaryFormat, const void *binary, GLsizei length)
 {
     unlink(false);
 
     mInfoLog.reset();
 
     mProgramBinary.set(new ProgramBinary(mRenderer));
-    mLinked = mProgramBinary->load(mInfoLog, binary, length);
+    mLinked = mProgramBinary->load(mInfoLog, binaryFormat, binary, length);
     if (!mLinked)
     {
         mProgramBinary.set(NULL);
@@ -496,14 +501,14 @@ bool Program::isFlaggedForDeletion() const
     return mDeleteStatus;
 }
 
-void Program::validate()
+void Program::validate(const Caps &caps)
 {
     mInfoLog.reset();
 
     ProgramBinary *programBinary = getProgramBinary();
     if (isLinked() && programBinary)
     {
-        programBinary->validate(mInfoLog);
+        programBinary->validate(mInfoLog, caps);
     }
     else
     {
@@ -521,6 +526,134 @@ bool Program::isValidated() const
     else
     {
         return false;
+    }
+}
+
+GLint Program::getActiveUniformBlockCount()
+{
+    ProgramBinary *programBinary = getProgramBinary();
+    if (programBinary)
+    {
+        return static_cast<GLint>(programBinary->getActiveUniformBlockCount());
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+GLint Program::getActiveUniformBlockMaxLength()
+{
+    ProgramBinary *programBinary = getProgramBinary();
+    if (programBinary)
+    {
+        return static_cast<GLint>(programBinary->getActiveUniformBlockMaxLength());
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+void Program::bindUniformBlock(GLuint uniformBlockIndex, GLuint uniformBlockBinding)
+{
+    mUniformBlockBindings[uniformBlockIndex] = uniformBlockBinding;
+}
+
+GLuint Program::getUniformBlockBinding(GLuint uniformBlockIndex) const
+{
+    return mUniformBlockBindings[uniformBlockIndex];
+}
+
+void Program::resetUniformBlockBindings()
+{
+    for (unsigned int blockId = 0; blockId < IMPLEMENTATION_MAX_COMBINED_SHADER_UNIFORM_BUFFERS; blockId++)
+    {
+        mUniformBlockBindings[blockId] = 0;
+    }
+}
+
+void Program::setTransformFeedbackVaryings(GLsizei count, const GLchar *const *varyings, GLenum bufferMode)
+{
+    mTransformFeedbackVaryings.resize(count);
+    for (GLsizei i = 0; i < count; i++)
+    {
+        mTransformFeedbackVaryings[i] = varyings[i];
+    }
+
+    mTransformFeedbackBufferMode = bufferMode;
+}
+
+void Program::getTransformFeedbackVarying(GLuint index, GLsizei bufSize, GLsizei *length, GLsizei *size, GLenum *type, GLchar *name) const
+{
+    ProgramBinary *programBinary = getProgramBinary();
+    if (programBinary && index < programBinary->getTransformFeedbackVaryingCount())
+    {
+        const LinkedVarying &varying = programBinary->getTransformFeedbackVarying(index);
+        GLsizei lastNameIdx = std::min(bufSize - 1, static_cast<GLsizei>(varying.name.length()));
+        if (length)
+        {
+            *length = lastNameIdx;
+        }
+        if (size)
+        {
+            *size = varying.size;
+        }
+        if (type)
+        {
+            *type = varying.type;
+        }
+        if (name)
+        {
+            memcpy(name, varying.name.c_str(), lastNameIdx);
+            name[lastNameIdx] = '\0';
+        }
+    }
+}
+
+GLsizei Program::getTransformFeedbackVaryingCount() const
+{
+    ProgramBinary *programBinary = getProgramBinary();
+    if (programBinary)
+    {
+        return static_cast<GLsizei>(programBinary->getTransformFeedbackVaryingCount());
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+GLsizei Program::getTransformFeedbackVaryingMaxLength() const
+{
+    ProgramBinary *programBinary = getProgramBinary();
+    if (programBinary)
+    {
+        GLsizei maxSize = 0;
+        for (size_t i = 0; i < programBinary->getTransformFeedbackVaryingCount(); i++)
+        {
+            const LinkedVarying &varying = programBinary->getTransformFeedbackVarying(i);
+            maxSize = std::max(maxSize, static_cast<GLsizei>(varying.name.length() + 1));
+        }
+
+        return maxSize;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+GLenum Program::getTransformFeedbackBufferMode() const
+{
+    ProgramBinary *programBinary = getProgramBinary();
+    if (programBinary)
+    {
+        return programBinary->getTransformFeedbackBufferMode();
+    }
+    else
+    {
+        return mTransformFeedbackBufferMode;
     }
 }
 

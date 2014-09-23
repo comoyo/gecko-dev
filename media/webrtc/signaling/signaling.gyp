@@ -50,8 +50,11 @@
         './include',
         './src/sipcc/include',
         './src/sipcc/cpr/include',
-        '../../../ipc/chromium/src',
-        '../../../ipc/chromium/src/base/third_party/nspr',
+        './src/sipcc/core/includes',
+        './src/sipcc/core/gsm/h',
+        './src/sipcc/core/common',
+        './src/sipcc/core/sipstack/h',
+        './src/sipcc/core/sdp',
         '../../../xpcom/base',
         '../../../dom/base',
         '../../../content/media',
@@ -61,11 +64,7 @@
         '../trunk/webrtc/video_engine/include',
         '../trunk/webrtc/voice_engine/include',
         '../trunk/webrtc/modules/interface',
-        '../trunk/webrtc/peerconnection',
         '../../libyuv/include',
-        '../../../netwerk/srtp/src/include',
-        '../../../netwerk/srtp/src/crypto/include',
-        '../../../ipc/chromium/src',
         '../../mtransport/third_party/nrappkit/src/util/libekr',
       ],
 
@@ -88,6 +87,11 @@
         './src/media-conduit/AudioConduit.cpp',
         './src/media-conduit/VideoConduit.h',
         './src/media-conduit/VideoConduit.cpp',
+        './src/media-conduit/CodecStatistics.h',
+        './src/media-conduit/CodecStatistics.cpp',
+        './src/media-conduit/RunningStat.h',
+        './src/media-conduit/GmpVideoCodec.cpp',
+        './src/media-conduit/WebrtcGmpVideoCodec.cpp',
         # Common
         './src/common/CommonTypes.h',
         './src/common/csf_common.h',
@@ -98,6 +102,8 @@
         # Browser Logging
         './src/common/browser_logging/CSFLog.cpp',
         './src/common/browser_logging/CSFLog.h',
+        './src/common/browser_logging/WebRtcLog.cpp',
+        './src/common/browser_logging/WebRtcLog.h',
         # Browser Logging
         './src/common/time_profiling/timecard.c',
         './src/common/time_profiling/timecard.h',
@@ -160,8 +166,6 @@
         './src/mediapipeline/MediaPipeline.cpp',
         './src/mediapipeline/MediaPipelineFilter.h',
         './src/mediapipeline/MediaPipelineFilter.cpp',
-        './src/mediapipeline/SrtpFlow.h',
-        './src/mediapipeline/SrtpFlow.cpp',
       ],
 
       #
@@ -194,12 +198,28 @@
       # Conditionals
       #
       'conditions': [
+        # hack so I can change the include flow for SrtpFlow
+        ['build_with_mozilla==1', {
+          'sources': [
+            './src/mediapipeline/SrtpFlow.h',
+            './src/mediapipeline/SrtpFlow.cpp',
+          ],
+          'include_dirs!': [
+            '../trunk/webrtc',
+          ],
+          'include_dirs': [
+            '../../../netwerk/srtp/src/include',
+            '../../../netwerk/srtp/src/crypto/include',
+          ],
+        }],
         ['moz_webrtc_omx==1', {
           'sources': [
             './src/media-conduit/WebrtcOMXH264VideoCodec.cpp',
             './src/media-conduit/OMXVideoCodec.cpp',
           ],
           'include_dirs': [
+            # hack on hack to re-add it after SrtpFlow removes it
+            '../../webrtc/trunk/webrtc',
             '../../../content/media/omx',
             '../../../gfx/layers/client',
           ],
@@ -238,6 +258,7 @@
           ],
 
           'defines': [
+            'OS_LINUX',
             'SIP_OS_LINUX',
             '_GNU_SOURCE',
             'LINUX',
@@ -252,6 +273,7 @@
           'include_dirs': [
           ],
           'defines': [
+            'OS_WIN',
             'SIP_OS_WINDOWS',
             'WIN32',
             'GIPS_VER=3480',
@@ -279,6 +301,7 @@
           'include_dirs': [
           ],
           'defines': [
+            'OS_MACOSX',
             'SIP_OS_OSX',
             'OSX',
             '_FORTIFY_SOURCE=2',
@@ -314,10 +337,6 @@
         './src/sipcc/plat/common',
         '../../../media/mtransport',
         '../../../dom/base',
-        '../trunk/third_party/libsrtp/srtp/include',
-        '../trunk/third_party/libsrtp/srtp/crypto/include',
-        # Danger: this is to include config.h. This could be bad.
-        '../trunk/third_party/libsrtp/config',
         '../../../netwerk/sctp/datachannel',
       ],
 
@@ -391,8 +410,6 @@
         './src/sipcc/core/common/subscription_handler.h',
         './src/sipcc/core/common/text_strings.c',
         './src/sipcc/core/common/text_strings.h',
-        './src/sipcc/core/common/thread_monitor.h',
-        './src/sipcc/core/common/thread_monitor.c',
         './src/sipcc/core/common/ui.c',
         # GSM
         './src/sipcc/core/gsm/ccapi.c',

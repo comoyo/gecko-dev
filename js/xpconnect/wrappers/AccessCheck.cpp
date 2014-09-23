@@ -14,6 +14,7 @@
 
 #include "jsfriendapi.h"
 #include "mozilla/dom/BindingUtils.h"
+#include "mozilla/dom/LocationBinding.h"
 #include "mozilla/dom/WindowBinding.h"
 #include "nsIDOMWindowCollection.h"
 #include "nsJSUtils.h"
@@ -90,40 +91,22 @@ AccessCheck::getPrincipal(JSCompartment *compartment)
     return GetCompartmentPrincipal(compartment);
 }
 
-#define NAME(ch, str, cases)                                                  \
-    case ch: if (!strcmp(name, str)) switch (propChars[0]) { cases }; break;
-#define PROP(ch, actions) case ch: { actions }; break;
-#define RW(str) if (JS_FlatStringEqualsAscii(prop, str)) return true;
-#define R(str) if (!set && JS_FlatStringEqualsAscii(prop, str)) return true;
-#define W(str) if (set && JS_FlatStringEqualsAscii(prop, str)) return true;
-
-// Hardcoded policy for cross origin property access. This was culled from the
-// preferences file (all.js). We don't want users to overwrite highly sensitive
-// security policies.
+// Hardcoded policy for cross origin property access. See the HTML5 Spec.
 static bool
 IsPermitted(const char *name, JSFlatString *prop, bool set)
 {
-    size_t propLength;
-    const jschar *propChars =
-        JS_GetInternedStringCharsAndLength(JS_FORGET_STRING_FLATNESS(prop), &propLength);
+    size_t propLength = JS_GetStringLength(JS_FORGET_STRING_FLATNESS(prop));
     if (!propLength)
         return false;
-    switch (name[0]) {
-        NAME('L', "Location",
-             PROP('h', W("href"))
-             PROP('r', R("replace")))
-        case 'W':
-            if (!strcmp(name, "Window"))
-                return dom::WindowBinding::IsPermitted(prop, propChars[0], set);
-            break;
-    }
+
+    char16_t propChar0 = JS_GetFlatStringCharAt(prop, 0);
+    if (name[0] == 'L' && !strcmp(name, "Location"))
+        return dom::LocationBinding::IsPermitted(prop, propChar0, set);
+    if (name[0] == 'W' && !strcmp(name, "Window"))
+        return dom::WindowBinding::IsPermitted(prop, propChar0, set);
+
     return false;
 }
-
-#undef NAME
-#undef RW
-#undef R
-#undef W
 
 static bool
 IsFrameId(JSContext *cx, JSObject *objArg, jsid idArg)
@@ -148,7 +131,11 @@ IsFrameId(JSContext *cx, JSObject *objArg, jsid idArg)
     if (JSID_IS_INT(id)) {
         col->Item(JSID_TO_INT(id), getter_AddRefs(domwin));
     } else if (JSID_IS_STRING(id)) {
-        col->NamedItem(nsDependentJSString(id), getter_AddRefs(domwin));
+        nsAutoJSString idAsString;
+        if (!idAsString.init(cx, JSID_TO_STRING(id))) {
+            return false;
+        }
+        col->NamedItem(idAsString, getter_AddRefs(domwin));
     }
 
     return domwin != nullptr;
@@ -161,20 +148,23 @@ IsWindow(const char *name)
 }
 
 bool
-AccessCheck::isCrossOriginAccessPermitted(JSContext *cx, JSObject *wrapperArg, jsid idArg,
+AccessCheck::isCrossOriginAccessPermitted(JSContext *cx, HandleObject wrapper, HandleId id,
                                           Wrapper::Action act)
 {
     if (act == Wrapper::CALL)
         return false;
 
-    RootedId id(cx, idArg);
-    RootedObject wrapper(cx, wrapperArg);
-    RootedObject obj(cx, Wrapper::wrappedObject(wrapper));
-
-    // For XOWs, we generally want to deny enumerate-like operations, but fail
-    // silently (see CrossOriginAccessiblePropertiesOnly::deny).
     if (act == Wrapper::ENUMERATE)
-        return false;
+        return true;
+
+    // For the case of getting a property descriptor, we allow if either GET or SET
+    // is allowed, and rely on FilteringWrapper to filter out any disallowed accessors.
+    if (act == Wrapper::GET_PROPERTY_DESCRIPTOR) {
+        return isCrossOriginAccessPermitted(cx, wrapper, id, Wrapper::GET) ||
+               isCrossOriginAccessPermitted(cx, wrapper, id, Wrapper::SET);
+    }
+
+    RootedObject obj(cx, Wrapper::wrappedObject(wrapper));
 
     const char *name;
     const js::Class *clasp = js::GetObjectClass(obj);
@@ -195,11 +185,24 @@ AccessCheck::isCrossOriginAccessPermitted(JSContext *cx, JSObject *wrapperArg, j
     // Check for frame IDs. If we're resolving named frames, make sure to only
     // resolve ones that don't shadow native properties. See bug 860494.
     if (IsWindow(name)) {
-        if (JSID_IS_STRING(id) && !XrayUtils::IsXrayResolving(cx, wrapper, id)) {
+        if (JSID_IS_STRING(id)) {
             bool wouldShadow = false;
             if (!XrayUtils::HasNativeProperty(cx, wrapper, id, &wouldShadow) ||
                 wouldShadow)
             {
+                // If the named subframe matches the name of a DOM constructor,
+                // the global resolve triggered by the HasNativeProperty call
+                // above will try to perform a CheckedUnwrap on |wrapper|, and
+                // throw a security error if it fails. That exception isn't
+                // really useful for our callers, so we silence it and just
+                // deny access to the property (since it matched a builtin).
+                //
+                // Note that this would be a problem if the resolve code ever
+                // tried to CheckedUnwrap the wrapper _before_ concluding that
+                // the name corresponds to a builtin global property, since it
+                // would mean that we'd never permit cross-origin named subframe
+                // access (something we regrettably need to support).
+                JS_ClearPendingException(cx);
                 return false;
             }
         }
@@ -218,14 +221,20 @@ EnterAndThrow(JSContext *cx, JSObject *wrapper, const char *msg)
 }
 
 bool
-ExposedPropertiesOnly::check(JSContext *cx, JSObject *wrapperArg, jsid idArg, Wrapper::Action act)
+ExposedPropertiesOnly::check(JSContext *cx, HandleObject wrapper, HandleId id, Wrapper::Action act)
 {
-    RootedObject wrapper(cx, wrapperArg);
-    RootedId id(cx, idArg);
     RootedObject wrappedObject(cx, Wrapper::wrappedObject(wrapper));
 
     if (act == Wrapper::CALL)
         return true;
+
+
+    // For the case of getting a property descriptor, we allow if either GET or SET
+    // is allowed, and rely on FilteringWrapper to filter out any disallowed accessors.
+    if (act == Wrapper::GET_PROPERTY_DESCRIPTOR) {
+        return check(cx, wrapper, id, Wrapper::GET) ||
+               check(cx, wrapper, id, Wrapper::SET);
+    }
 
     RootedId exposedPropsId(cx, GetRTIdByIndex(cx, XPCJSRuntime::IDX_EXPOSEDPROPS));
 
@@ -288,14 +297,15 @@ ExposedPropertiesOnly::check(JSContext *cx, JSObject *wrapperArg, jsid idArg, Wr
         return false;
     }
 
-    JSString *str = desc.value().toString();
-    size_t length;
-    const jschar *chars = JS_GetStringCharsAndLength(cx, str, &length);
-    if (!chars)
+    JSFlatString *flat = JS_FlattenString(cx, desc.value().toString());
+    if (!flat)
         return false;
 
+    size_t length = JS_GetStringLength(JS_FORGET_STRING_FLATNESS(flat));
+
     for (size_t i = 0; i < length; ++i) {
-        switch (chars[i]) {
+        char16_t ch = JS_GetFlatStringCharAt(flat, i);
+        switch (ch) {
         case 'r':
             if (access & READ) {
                 EnterAndThrow(cx, wrapper, "duplicate 'readable' property flag");
@@ -329,13 +339,6 @@ ExposedPropertiesOnly::check(JSContext *cx, JSObject *wrapperArg, jsid idArg, Wr
     }
 
     return true;
-}
-
-bool
-ExposedPropertiesOnly::allowNativeCall(JSContext *cx, JS::IsAcceptableThis test,
-                                       JS::NativeImpl impl)
-{
-    return js::IsTypedArrayThisCheck(test);
 }
 
 }

@@ -15,8 +15,21 @@ namespace mozilla {
 
 using namespace dom;
 
+already_AddRefed<Touch> SingleTouchData::ToNewDOMTouch() const
+{
+  NS_ABORT_IF_FALSE(NS_IsMainThread(),
+                    "Can only create dom::Touch instances on main thread");
+  nsRefPtr<Touch> touch = new Touch(mIdentifier,
+                                    nsIntPoint(mScreenPoint.x, mScreenPoint.y),
+                                    nsIntPoint(mRadius.width, mRadius.height),
+                                    mRotationAngle,
+                                    mForce);
+  return touch.forget();
+}
+
 MultiTouchInput::MultiTouchInput(const WidgetTouchEvent& aTouchEvent)
-  : InputData(MULTITOUCH_INPUT, aTouchEvent.time, aTouchEvent.modifiers)
+  : InputData(MULTITOUCH_INPUT, aTouchEvent.time, aTouchEvent.timeStamp,
+              aTouchEvent.modifiers)
 {
   NS_ABORT_IF_FALSE(NS_IsMainThread(),
                     "Can only copy from WidgetTouchEvent on main thread");
@@ -31,17 +44,11 @@ MultiTouchInput::MultiTouchInput(const WidgetTouchEvent& aTouchEvent)
     case NS_TOUCH_END:
       mType = MULTITOUCH_END;
       break;
-    case NS_TOUCH_ENTER:
-      mType = MULTITOUCH_ENTER;
-      break;
-    case NS_TOUCH_LEAVE:
-      mType = MULTITOUCH_LEAVE;
-      break;
     case NS_TOUCH_CANCEL:
       mType = MULTITOUCH_CANCEL;
       break;
     default:
-      NS_WARNING("Did not assign a type to a MultiTouchInput");
+      MOZ_ASSERT_UNREACHABLE("Did not assign a type to a MultiTouchInput");
       break;
   }
 
@@ -67,6 +74,47 @@ MultiTouchInput::MultiTouchInput(const WidgetTouchEvent& aTouchEvent)
   }
 }
 
+WidgetTouchEvent
+MultiTouchInput::ToWidgetTouchEvent(nsIWidget* aWidget) const
+{
+  NS_ABORT_IF_FALSE(NS_IsMainThread(),
+                    "Can only convert To WidgetTouchEvent on main thread");
+
+  uint32_t touchType = NS_EVENT_NULL;
+  switch (mType) {
+  case MULTITOUCH_START:
+    touchType = NS_TOUCH_START;
+    break;
+  case MULTITOUCH_MOVE:
+    touchType = NS_TOUCH_MOVE;
+    break;
+  case MULTITOUCH_END:
+    touchType = NS_TOUCH_END;
+    break;
+  case MULTITOUCH_CANCEL:
+    touchType = NS_TOUCH_CANCEL;
+    break;
+  default:
+    MOZ_ASSERT_UNREACHABLE("Did not assign a type to WidgetTouchEvent in MultiTouchInput");
+    break;
+  }
+
+  WidgetTouchEvent event(true, touchType, aWidget);
+  if (touchType == NS_EVENT_NULL) {
+    return event;
+  }
+
+  event.modifiers = this->modifiers;
+  event.time = this->mTime;
+  event.timeStamp = this->mTimeStamp;
+
+  for (size_t i = 0; i < mTouches.Length(); i++) {
+    *event.touches.AppendElement() = mTouches[i].ToNewDOMTouch();
+  }
+
+  return event;
+}
+
 // This conversion from WidgetMouseEvent to MultiTouchInput is needed because on
 // the B2G emulator we can only receive mouse events, but we need to be able
 // to pan correctly. To do this, we convert the events into a format that the
@@ -74,7 +122,8 @@ MultiTouchInput::MultiTouchInput(const WidgetTouchEvent& aTouchEvent)
 // SingleTouchData. It also sends garbage for the identifier, radius, force
 // and rotation angle.
 MultiTouchInput::MultiTouchInput(const WidgetMouseEvent& aMouseEvent)
-  : InputData(MULTITOUCH_INPUT, aMouseEvent.time, aMouseEvent.modifiers)
+  : InputData(MULTITOUCH_INPUT, aMouseEvent.time, aMouseEvent.timeStamp,
+              aMouseEvent.modifiers)
 {
   NS_ABORT_IF_FALSE(NS_IsMainThread(),
                     "Can only copy from WidgetMouseEvent on main thread");

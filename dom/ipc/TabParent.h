@@ -17,6 +17,7 @@
 #include "nsISecureBrowserUI.h"
 #include "nsITabParent.h"
 #include "nsIXULBrowserWindow.h"
+#include "nsWeakReference.h"
 #include "Units.h"
 #include "js/TypeDecls.h"
 
@@ -39,10 +40,14 @@ namespace layout {
 class RenderFrameParent;
 }
 
+namespace widget {
+struct IMENotification;
+}
+
 namespace dom {
 
 class ClonedMessageData;
-class ContentParent;
+class nsIContentParent;
 class Element;
 struct StructuredCloneData;
 
@@ -50,17 +55,19 @@ class TabParent : public PBrowserParent
                 , public nsITabParent 
                 , public nsIAuthPromptProvider
                 , public nsISecureBrowserUI
+                , public nsSupportsWeakReference
                 , public TabContext
 {
     typedef mozilla::dom::ClonedMessageData ClonedMessageData;
     typedef mozilla::layout::ScrollingBehavior ScrollingBehavior;
 
+    virtual ~TabParent();
+
 public:
     // nsITabParent
     NS_DECL_NSITABPARENT
 
-    TabParent(ContentParent* aManager, const TabContext& aContext, uint32_t aChromeFlags);
-    virtual ~TabParent();
+    TabParent(nsIContentParent* aManager, const TabContext& aContext, uint32_t aChromeFlags);
     Element* GetOwnerElement() const { return mFrameElement; }
     void SetOwnerElement(Element* aElement);
 
@@ -125,7 +132,16 @@ public:
                                             const nsString& aName,
                                             const nsString& aFeatures,
                                             bool* aOutWindowOpened) MOZ_OVERRIDE;
-    virtual bool AnswerCreateWindow(PBrowserParent** retval) MOZ_OVERRIDE;
+    virtual bool AnswerCreateWindow(const uint32_t& aChromeFlags,
+                                    const bool& aCalledFromJS,
+                                    const bool& aPositionSpecified,
+                                    const bool& aSizeSpecified,
+                                    const nsString& aURI,
+                                    const nsString& aName,
+                                    const nsString& aFeatures,
+                                    const nsString& aBaseURI,
+                                    bool* aWindowIsNew,
+                                    PBrowserParent** aRetVal) MOZ_OVERRIDE;
     virtual bool RecvSyncMessage(const nsString& aMessage,
                                  const ClonedMessageData& aData,
                                  const InfallibleTArray<CpowEntry>& aCpows,
@@ -147,14 +163,18 @@ public:
                                          const uint32_t& aEnd,
                                          const uint32_t& aNewEnd,
                                          const bool& aCausedByComposition) MOZ_OVERRIDE;
-    virtual bool RecvNotifyIMESelectedCompositionRect(const uint32_t& aOffset,
-                                                      const nsIntRect& aRect,
-                                                      const nsIntRect& aCaretRect) MOZ_OVERRIDE;
+    virtual bool RecvNotifyIMESelectedCompositionRect(
+                   const uint32_t& aOffset,
+                   const InfallibleTArray<nsIntRect>& aRects,
+                   const uint32_t& aCaretOffset,
+                   const nsIntRect& aCaretRect) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMESelection(const uint32_t& aSeqno,
                                         const uint32_t& aAnchor,
                                         const uint32_t& aFocus,
                                         const bool& aCausedByComposition) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMETextHint(const nsString& aText) MOZ_OVERRIDE;
+    virtual bool RecvNotifyIMEMouseButtonEvent(const widget::IMENotification& aEventMessage,
+                                               bool* aConsumedByIME) MOZ_OVERRIDE;
     virtual bool RecvEndIMEComposition(const bool& aCancel,
                                        nsString* aComposition) MOZ_OVERRIDE;
     virtual bool RecvGetInputContext(int32_t* aIMEEnabled,
@@ -196,7 +216,7 @@ public:
     // message-sending functions under a layer of indirection and
     // eating the return values
     void Show(const nsIntSize& size);
-    void UpdateDimensions(const nsRect& rect, const nsIntSize& size);
+    void UpdateDimensions(const nsIntRect& rect, const nsIntSize& size);
     void UpdateFrame(const layers::FrameMetrics& aFrameMetrics);
     void UIResolutionChanged();
     void AcknowledgeScrollUpdate(const ViewID& aScrollId, const uint32_t& aScrollGeneration);
@@ -289,13 +309,15 @@ public:
     static TabParent* GetFrom(nsFrameLoader* aFrameLoader);
     static TabParent* GetFrom(nsIContent* aContent);
 
-    ContentParent* Manager() { return mManager; }
+    nsIContentParent* Manager() { return mManager; }
 
     /**
      * Let managees query if Destroy() is already called so they don't send out
      * messages when the PBrowser actor is being destroyed.
      */
     bool IsDestroyed() const { return mIsDestroyed; }
+
+    already_AddRefed<nsIWidget> GetWidget() const;
 
 protected:
     bool ReceiveMessage(const nsString& aMessage,
@@ -304,6 +326,10 @@ protected:
                         CpowHolder* aCpows,
                         nsIPrincipal* aPrincipal,
                         InfallibleTArray<nsString>* aJSONRetVal = nullptr);
+
+    virtual bool RecvAsyncAuthPrompt(const nsCString& aUri,
+                                     const nsString& aRealm,
+                                     const uint64_t& aCallbackId) MOZ_OVERRIDE;
 
     virtual bool Recv__delete__() MOZ_OVERRIDE;
 
@@ -334,6 +360,8 @@ protected:
                                                         bool* aSuccess) MOZ_OVERRIDE;
     virtual bool DeallocPRenderFrameParent(PRenderFrameParent* aFrame) MOZ_OVERRIDE;
 
+    virtual bool RecvRemotePaintIsReady() MOZ_OVERRIDE;
+
     // IME
     static TabParent *mIMETabParent;
     nsString mIMECacheText;
@@ -348,13 +376,14 @@ protected:
     uint32_t mIMESeqno;
 
     uint32_t mIMECompositionRectOffset;
-    nsIntRect mIMECompositionRect;
+    InfallibleTArray<nsIntRect> mIMECompositionRects;
+    uint32_t mIMECaretOffset;
     nsIntRect mIMECaretRect;
 
     // The number of event series we're currently capturing.
     int32_t mEventCaptureDepth;
 
-    nsRect mRect;
+    nsIntRect mRect;
     nsIntSize mDimensions;
     ScreenOrientation mOrientation;
     float mDPI;
@@ -364,9 +393,8 @@ protected:
 
 private:
     already_AddRefed<nsFrameLoader> GetFrameLoader() const;
-    already_AddRefed<nsIWidget> GetWidget() const;
     layout::RenderFrameParent* GetRenderFrame();
-    nsRefPtr<ContentParent> mManager;
+    nsRefPtr<nsIContentParent> mManager;
     void TryCacheDPIAndScale();
 
     CSSPoint AdjustTapToChildWidget(const CSSPoint& aPoint);

@@ -51,7 +51,7 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase,
                              public nsIDOMHTMLElement
 {
 public:
-  nsGenericHTMLElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+  explicit nsGenericHTMLElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
     : nsGenericHTMLElementBase(aNodeInfo),
       mScrollgrab(false)
   {
@@ -124,11 +124,13 @@ public:
     return GetTokenList(nsGkAtoms::itemprop);
   }
   mozilla::dom::HTMLPropertiesCollection* Properties();
-  JS::Value GetItemValue(JSContext* aCx, JSObject* aScope,
-                         mozilla::ErrorResult& aError);
-  JS::Value GetItemValue(JSContext* aCx, mozilla::ErrorResult& aError)
+  void GetItemValue(JSContext* aCx, JSObject* aScope,
+                    JS::MutableHandle<JS::Value> aRetval,
+                    mozilla::ErrorResult& aError);
+  void GetItemValue(JSContext* aCx, JS::MutableHandle<JS::Value> aRetval,
+                    mozilla::ErrorResult& aError)
   {
-    return GetItemValue(aCx, GetWrapperPreserveColor(), aError);
+    GetItemValue(aCx, GetWrapperPreserveColor(), aRetval, aError);
   }
   void SetItemValue(JSContext* aCx, JS::Value aValue,
                     mozilla::ErrorResult& aError);
@@ -290,6 +292,8 @@ public:
   }
 
 protected:
+  virtual ~nsGenericHTMLElement() {}
+
   // These methods are used to implement element-specific behavior of Get/SetItemValue
   // when an element has @itemprop but no @itemscope.
   virtual void GetItemValueText(nsAString& text);
@@ -465,7 +469,7 @@ public:
     if (!_argc) {
       top = true;
     }
-    mozilla::dom::Element::ScrollIntoView(top);
+    mozilla::dom::Element::ScrollIntoView(top, mozilla::dom::ScrollOptions());
     return NS_OK;
   }
   NS_IMETHOD GetOffsetParent(nsIDOMElement** aOffsetParent) MOZ_FINAL {
@@ -535,6 +539,8 @@ public:
                               bool aCompileEventHandlers) MOZ_OVERRIDE;
   virtual void UnbindFromTree(bool aDeep = true,
                               bool aNullParent = true) MOZ_OVERRIDE;
+
+  MOZ_ALWAYS_INLINE // Avoid a crashy hook from Avast 10 Beta
   nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                    const nsAString& aValue, bool aNotify)
   {
@@ -825,7 +831,12 @@ public:
    * Get the presentation context for this content node.
    * @return the presentation context
    */
-  NS_HIDDEN_(nsPresContext*) GetPresContext();
+  enum PresContextFor
+  {
+    eForComposedDoc,
+    eForUncomposedDoc
+  };
+  nsPresContext* GetPresContext(PresContextFor aFor);
 
   // Form Helper Routines
   /**
@@ -851,7 +862,7 @@ public:
   /**
    * Locate an nsIEditor rooted at this content node, if there is one.
    */
-  NS_HIDDEN_(nsresult) GetEditor(nsIEditor** aEditor);
+  nsresult GetEditor(nsIEditor** aEditor);
 
   /**
    * Helper method for NS_IMPL_URI_ATTR macro.
@@ -864,7 +875,7 @@ public:
    * @param aBaseAttr  name of base attribute.
    * @param aResult    result value [out]
    */
-  NS_HIDDEN_(void) GetURIAttr(nsIAtom* aAttr, nsIAtom* aBaseAttr, nsAString& aResult) const;
+  void GetURIAttr(nsIAtom* aAttr, nsIAtom* aBaseAttr, nsAString& aResult) const;
 
   /**
    * Gets the absolute URI values of an attribute, by resolving any relative
@@ -1002,11 +1013,11 @@ protected:
   }
   void SetHTMLAttr(nsIAtom* aName, const nsAString& aValue, mozilla::ErrorResult& aError)
   {
-    aError = SetAttr(kNameSpaceID_None, aName, aValue, true);
+    mozilla::dom::Element::SetAttr(aName, aValue, aError);
   }
   void UnsetHTMLAttr(nsIAtom* aName, mozilla::ErrorResult& aError)
   {
-    aError = UnsetAttr(kNameSpaceID_None, aName, true);
+    mozilla::dom::Element::UnsetAttr(aName, aError);
   }
   void SetHTMLBoolAttr(nsIAtom* aName, bool aValue, mozilla::ErrorResult& aError)
   {
@@ -1033,7 +1044,7 @@ protected:
    * @param aDefault default-value to return if attribute isn't set.
    * @param aResult  result value [out]
    */
-  NS_HIDDEN_(nsresult) SetAttrHelper(nsIAtom* aAttr, const nsAString& aValue);
+  nsresult SetAttrHelper(nsIAtom* aAttr, const nsAString& aValue);
 
   /**
    * Helper method for NS_IMPL_INT_ATTR macro.
@@ -1044,7 +1055,7 @@ protected:
    * @param aAttr    name of attribute.
    * @param aDefault default-value to return if attribute isn't set.
    */
-  NS_HIDDEN_(int32_t) GetIntAttr(nsIAtom* aAttr, int32_t aDefault) const;
+  int32_t GetIntAttr(nsIAtom* aAttr, int32_t aDefault) const;
 
   /**
    * Helper method for NS_IMPL_INT_ATTR macro.
@@ -1054,7 +1065,7 @@ protected:
    * @param aAttr    name of attribute.
    * @param aValue   Integer value of attribute.
    */
-  NS_HIDDEN_(nsresult) SetIntAttr(nsIAtom* aAttr, int32_t aValue);
+  nsresult SetIntAttr(nsIAtom* aAttr, int32_t aValue);
 
   /**
    * Helper method for NS_IMPL_UINT_ATTR macro.
@@ -1111,36 +1122,7 @@ protected:
    * @param aAttr    name of attribute.
    * @param aResult  result value [out]
    */
-  NS_HIDDEN_(nsresult) GetURIListAttr(nsIAtom* aAttr, nsAString& aResult);
-
-  /**
-   * Helper method for NS_IMPL_ENUM_ATTR_DEFAULT_VALUE.
-   * Gets the enum value string of an attribute and using a default value if
-   * the attribute is missing or the string is an invalid enum value.
-   *
-   * @param aType     the name of the attribute.
-   * @param aDefault  the default value if the attribute is missing or invalid.
-   * @param aResult   string corresponding to the value [out].
-   */
-  NS_HIDDEN_(void) GetEnumAttr(nsIAtom* aAttr,
-                               const char* aDefault,
-                               nsAString& aResult) const;
-
-  /**
-   * Helper method for NS_IMPL_ENUM_ATTR_DEFAULT_MISSING_INVALID_VALUES.
-   * Gets the enum value string of an attribute and using the default missing
-   * value if the attribute is missing or the default invalid value if the
-   * string is an invalid enum value.
-   *
-   * @param aType            the name of the attribute.
-   * @param aDefaultMissing  the default value if the attribute is missing.
-   * @param aDefaultInvalid  the default value if the attribute is invalid.
-   * @param aResult          string corresponding to the value [out].
-   */
-  NS_HIDDEN_(void) GetEnumAttr(nsIAtom* aAttr,
-                               const char* aDefaultMissing,
-                               const char* aDefaultInvalid,
-                               nsAString& aResult) const;
+  nsresult GetURIListAttr(nsIAtom* aAttr, nsAString& aResult);
 
   /**
    * Locates the nsIEditor associated with this node.  In general this is
@@ -1183,7 +1165,7 @@ protected:
    * contentEditable attribute and its value is "false". Otherwise returns
    * eInherit.
    */
-  NS_HIDDEN_(ContentEditableTristate) GetContentEditableValue() const
+  ContentEditableTristate GetContentEditableValue() const
   {
     static const nsIContent::AttrValuesArray values[] =
       { &nsGkAtoms::_false, &nsGkAtoms::_true, &nsGkAtoms::_empty, nullptr };
@@ -1259,8 +1241,7 @@ class nsGenericHTMLFormElement : public nsGenericHTMLElement,
                                  public nsIFormControl
 {
 public:
-  nsGenericHTMLFormElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
-  virtual ~nsGenericHTMLFormElement();
+  explicit nsGenericHTMLFormElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -1344,6 +1325,8 @@ public:
   virtual bool IsLabelable() const MOZ_OVERRIDE;
 
 protected:
+  virtual ~nsGenericHTMLFormElement();
+
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                                  const nsAttrValueOrString* aValue,
                                  bool aNotify) MOZ_OVERRIDE;
@@ -1416,7 +1399,7 @@ protected:
 class nsGenericHTMLFormElementWithState : public nsGenericHTMLFormElement
 {
 public:
-  nsGenericHTMLFormElementWithState(already_AddRefed<nsINodeInfo>& aNodeInfo);
+  explicit nsGenericHTMLFormElementWithState(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   /**
    * Get the presentation state for a piece of content, or create it if it does
@@ -1447,7 +1430,7 @@ public:
    * Called when we have been cloned and adopted, and the information of the
    * node has been changed.
    */
-  virtual void NodeInfoChanged(nsINodeInfo* aOldNodeInfo) MOZ_OVERRIDE;
+  virtual void NodeInfoChanged(mozilla::dom::NodeInfo* aOldNodeInfo) MOZ_OVERRIDE;
 
 protected:
   /* Generates the state key for saving the form state in the session if not
@@ -1683,12 +1666,12 @@ class HTML##_elementName##Element;                                         \
 }                                                                          \
 }                                                                          \
 nsGenericHTMLElement*                                                      \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser = mozilla::dom::NOT_FROM_PARSER);
 
 #define NS_DECLARE_NS_NEW_HTML_ELEMENT_AS_SHARED(_elementName)             \
 inline nsGenericHTMLElement*                                               \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser = mozilla::dom::NOT_FROM_PARSER) \
 {                                                                          \
   return NS_NewHTMLSharedElement(mozilla::Move(aNodeInfo), aFromParser);   \
@@ -1699,7 +1682,7 @@ NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
  */
 #define NS_IMPL_NS_NEW_HTML_ELEMENT(_elementName)                            \
 nsGenericHTMLElement*                                                        \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser)      \
 {                                                                            \
   return new mozilla::dom::HTML##_elementName##Element(aNodeInfo);           \
@@ -1707,7 +1690,7 @@ NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
 
 #define NS_IMPL_NS_NEW_HTML_ELEMENT_CHECK_PARSER(_elementName)               \
 nsGenericHTMLElement*                                                        \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser)      \
 {                                                                            \
   return new mozilla::dom::HTML##_elementName##Element(aNodeInfo,            \
@@ -1717,7 +1700,7 @@ NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
 // Here, we expand 'NS_DECLARE_NS_NEW_HTML_ELEMENT()' by hand.
 // (Calling the macro directly (with no args) produces compiler warnings.)
 nsGenericHTMLElement*
-NS_NewHTMLElement(already_AddRefed<nsINodeInfo>&& aNodeInfo,
+NS_NewHTMLElement(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                   mozilla::dom::FromParser aFromParser = mozilla::dom::NOT_FROM_PARSER);
 
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Shared)
@@ -1762,6 +1745,7 @@ NS_DECLARE_NS_NEW_HTML_ELEMENT(OptGroup)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Option)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Output)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Paragraph)
+NS_DECLARE_NS_NEW_HTML_ELEMENT(Picture)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Pre)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Progress)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Script)

@@ -5,14 +5,13 @@
 
 package org.mozilla.gecko;
 
+import java.nio.ByteBuffer;
+import java.util.concurrent.ArrayBlockingQueue;
+
+import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.gfx.DisplayPortMetrics;
 import org.mozilla.gecko.gfx.ImmutableViewportMetrics;
-import org.mozilla.gecko.mozglue.JNITarget;
-import org.mozilla.gecko.mozglue.generatorannotations.GeneratorOptions;
-import org.mozilla.gecko.mozglue.generatorannotations.WrapEntireClassForJNI;
-import org.mozilla.gecko.mozglue.RobocopTarget;
 
-import android.content.res.Resources;
 import android.graphics.Point;
 import android.graphics.PointF;
 import android.graphics.Rect;
@@ -21,16 +20,13 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorManager;
 import android.location.Address;
 import android.location.Location;
-import android.os.Build;
 import android.os.SystemClock;
-import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.SparseArray;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
-
-import java.nio.ByteBuffer;
-import java.util.concurrent.ArrayBlockingQueue;
+import org.mozilla.gecko.mozglue.JNITarget;
+import org.mozilla.gecko.mozglue.RobocopTarget;
 
 /* We're not allowed to hold on to most events given to us
  * so we save the parts of the events we want to use in GeckoEvent.
@@ -82,7 +78,6 @@ public class GeckoEvent {
         SENSOR_EVENT(3),
         LOCATION_EVENT(5),
         IME_EVENT(6),
-        DRAW(7),
         SIZE_CHANGED(8),
         APP_BACKGROUNDING(9),
         APP_FOREGROUNDING(10),
@@ -111,7 +106,8 @@ public class GeckoEvent {
         TELEMETRY_UI_SESSION_STOP(43),
         TELEMETRY_UI_EVENT(44),
         GAMEPAD_ADDREMOVE(45),
-        GAMEPAD_DATA(46);
+        GAMEPAD_DATA(46),
+        LONG_PRESS(47);
 
         public final int value;
 
@@ -124,8 +120,7 @@ public class GeckoEvent {
      * The DomKeyLocation enum encapsulates the DOM KeyboardEvent's constants.
      * @see https://developer.mozilla.org/en-US/docs/DOM/KeyboardEvent#Key_location_constants
      */
-    @GeneratorOptions(generatedClassName = "JavaDomKeyLocation")
-    @WrapEntireClassForJNI
+    @JNITarget
     public enum DomKeyLocation {
         DOM_KEY_LOCATION_STANDARD(0),
         DOM_KEY_LOCATION_LEFT(1),
@@ -150,7 +145,8 @@ public class GeckoEvent {
         IME_ADD_COMPOSITION_RANGE(3),
         IME_UPDATE_COMPOSITION(4),
         IME_REMOVE_COMPOSITION(5),
-        IME_ACKNOWLEDGE_FOCUS(6);
+        IME_ACKNOWLEDGE_FOCUS(6),
+        IME_COMPOSE_TEXT(7);
 
         public final int value;
 
@@ -332,7 +328,7 @@ public class GeckoEvent {
             case KeyEvent.KEYCODE_DPAD_UP:
                 return true;
             default:
-                if (Build.VERSION.SDK_INT >= 12) {
+                if (Versions.feature12Plus) {
                     return KeyEvent.isGamepadButton(keyCode);
                 }
                 return GeckoEvent.isGamepadButton(keyCode);
@@ -341,7 +337,7 @@ public class GeckoEvent {
 
     /**
      * This method is a replacement for the the KeyEvent.isGamepadButton method to be
-     * compatible with Build.VERSION.SDK_INT < 12. This is an implementantion of the
+     * compatible with Build.VERSION.SDK_INT < 12. This is an implementation of the
      * same method isGamepadButton available after SDK 12.
      * @param keyCode int with the key code (Android key constant from KeyEvent).
      * @return True if the keycode is a gamepad button, such as {@link #KEYCODE_BUTTON_A}.
@@ -423,6 +419,16 @@ public class GeckoEvent {
         return event;
     }
 
+    /**
+     * Creates a GeckoEvent that contains the data from the LongPressEvent, to be
+     * dispatched in CSS pixels relative to gecko's scroll position.
+     */
+    public static GeckoEvent createLongPressEvent(MotionEvent m) {
+        GeckoEvent event = GeckoEvent.get(NativeGeckoEvent.LONG_PRESS);
+        event.initMotionEvent(m, false);
+        return event;
+    }
+
     private void initMotionEvent(MotionEvent m, boolean keepInViewCoordinates) {
         mAction = m.getActionMasked();
         mTime = (System.currentTimeMillis() - SystemClock.elapsedRealtime()) + m.getEventTime();
@@ -471,38 +477,30 @@ public class GeckoEvent {
 
             mPoints[index] = new Point(Math.round(geckoPoint.x), Math.round(geckoPoint.y));
             mPointIndicies[index] = event.getPointerId(eventIndex);
-            // getToolMajor, getToolMinor and getOrientation are API Level 9 features
-            if (Build.VERSION.SDK_INT >= 9) {
-                double radians = event.getOrientation(eventIndex);
-                mOrientations[index] = (float) Math.toDegrees(radians);
-                // w3c touchevents spec does not allow orientations == 90
-                // this shifts it to -90, which will be shifted to zero below
-                if (mOrientations[index] == 90)
-                    mOrientations[index] = -90;
 
-                // w3c touchevent radius are given by an orientation between 0 and 90
-                // the radius is found by removing the orientation and measuring the x and y
-                // radius of the resulting ellipse
-                // for android orientations >= 0 and < 90, the major axis should correspond to
-                // just reporting the y radius as the major one, and x as minor
-                // however, for a radius < 0, we have to shift the orientation by adding 90, and
-                // reverse which radius is major and minor
-                if (mOrientations[index] < 0) {
-                    mOrientations[index] += 90;
-                    mPointRadii[index] = new Point((int)event.getToolMajor(eventIndex)/2,
-                                                   (int)event.getToolMinor(eventIndex)/2);
-                } else {
-                    mPointRadii[index] = new Point((int)event.getToolMinor(eventIndex)/2,
-                                                   (int)event.getToolMajor(eventIndex)/2);
-                }
+            double radians = event.getOrientation(eventIndex);
+            mOrientations[index] = (float) Math.toDegrees(radians);
+            // w3c touchevents spec does not allow orientations == 90
+            // this shifts it to -90, which will be shifted to zero below
+            if (mOrientations[index] == 90)
+                mOrientations[index] = -90;
+
+            // w3c touchevent radius are given by an orientation between 0 and 90
+            // the radius is found by removing the orientation and measuring the x and y
+            // radius of the resulting ellipse
+            // for android orientations >= 0 and < 90, the major axis should correspond to
+            // just reporting the y radius as the major one, and x as minor
+            // however, for a radius < 0, we have to shift the orientation by adding 90, and
+            // reverse which radius is major and minor
+            if (mOrientations[index] < 0) {
+                mOrientations[index] += 90;
+                mPointRadii[index] = new Point((int)event.getToolMajor(eventIndex)/2,
+                                               (int)event.getToolMinor(eventIndex)/2);
             } else {
-                float size = event.getSize(eventIndex);
-                Resources resources = GeckoAppShell.getContext().getResources();
-                DisplayMetrics displaymetrics = resources.getDisplayMetrics();
-                size = size*Math.min(displaymetrics.heightPixels, displaymetrics.widthPixels);
-                mPointRadii[index] = new Point((int)size,(int)size);
-                mOrientations[index] = 0;
+                mPointRadii[index] = new Point((int)event.getToolMinor(eventIndex)/2,
+                                               (int)event.getToolMajor(eventIndex)/2);
             }
+
             if (!keepInViewCoordinates) {
                 // If we are converting to gecko CSS pixels, then we should adjust the
                 // radii as well
@@ -611,10 +609,17 @@ public class GeckoEvent {
         return event;
     }
 
-    public static GeckoEvent createIMEReplaceEvent(int start, int end,
-                                                   String text) {
+    public static GeckoEvent createIMEReplaceEvent(int start, int end, String text) {
+        return createIMETextEvent(false, start, end, text);
+    }
+
+    public static GeckoEvent createIMEComposeEvent(int start, int end, String text) {
+        return createIMETextEvent(true, start, end, text);
+    }
+
+    private static GeckoEvent createIMETextEvent(boolean compose, int start, int end, String text) {
         GeckoEvent event = GeckoEvent.get(NativeGeckoEvent.IME_EVENT);
-        event.mAction = ImeAction.IME_REPLACE_TEXT.value;
+        event.mAction = (compose ? ImeAction.IME_COMPOSE_TEXT : ImeAction.IME_REPLACE_TEXT).value;
         event.mStart = start;
         event.mEnd = end;
         event.mCharacters = text;
@@ -656,12 +661,6 @@ public class GeckoEvent {
         event.mRangeForeColor = rangeForeColor;
         event.mRangeBackColor = rangeBackColor;
         event.mRangeLineColor = rangeLineColor;
-        return event;
-    }
-
-    public static GeckoEvent createDrawEvent(Rect rect) {
-        GeckoEvent event = GeckoEvent.get(NativeGeckoEvent.DRAW);
-        event.mRect = rect;
         return event;
     }
 

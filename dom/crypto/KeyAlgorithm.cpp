@@ -7,6 +7,7 @@
 #include "mozilla/dom/KeyAlgorithm.h"
 #include "mozilla/dom/WebCryptoCommon.h"
 #include "mozilla/dom/AesKeyAlgorithm.h"
+#include "mozilla/dom/EcKeyAlgorithm.h"
 #include "mozilla/dom/HmacKeyAlgorithm.h"
 #include "mozilla/dom/RsaKeyAlgorithm.h"
 #include "mozilla/dom/RsaHashedKeyAlgorithm.h"
@@ -32,29 +33,8 @@ KeyAlgorithm::KeyAlgorithm(nsIGlobalObject* aGlobal, const nsString& aName)
   SetIsDOMBinding();
 
   // Set mechanism based on algorithm name
-  if (mName.EqualsLiteral(WEBCRYPTO_ALG_AES_CBC)) {
-    mMechanism = CKM_AES_CBC_PAD;
-  } else if (mName.EqualsLiteral(WEBCRYPTO_ALG_AES_CTR)) {
-    mMechanism = CKM_AES_CTR;
-  } else if (mName.EqualsLiteral(WEBCRYPTO_ALG_AES_GCM)) {
-    mMechanism = CKM_AES_GCM;
-  } else if (mName.EqualsLiteral(WEBCRYPTO_ALG_SHA1)) {
-    mMechanism = CKM_SHA_1;
-  } else if (mName.EqualsLiteral(WEBCRYPTO_ALG_SHA224)) {
-    mMechanism = CKM_SHA224;
-  } else if (mName.EqualsLiteral(WEBCRYPTO_ALG_SHA256)) {
-    mMechanism = CKM_SHA256;
-  } else if (mName.EqualsLiteral(WEBCRYPTO_ALG_SHA384)) {
-    mMechanism = CKM_SHA384;
-  } else if (mName.EqualsLiteral(WEBCRYPTO_ALG_SHA512)) {
-    mMechanism = CKM_SHA512;
-  } else if (mName.EqualsLiteral(WEBCRYPTO_ALG_RSAES_PKCS1)) {
-    mMechanism = CKM_RSA_PKCS;
-  } else if (mName.EqualsLiteral(WEBCRYPTO_ALG_RSASSA_PKCS1)) {
-    mMechanism = CKM_RSA_PKCS;
-  } else {
-    mMechanism = UNKNOWN_CK_MECHANISM;
-  }
+  mMechanism = MapAlgorithmNameToMechanism(aName);
+
   // HMAC not handled here, since it requires extra info
 }
 
@@ -66,6 +46,12 @@ JSObject*
 KeyAlgorithm::WrapObject(JSContext* aCx)
 {
   return KeyAlgorithmBinding::Wrap(aCx, this);
+}
+
+nsString
+KeyAlgorithm::ToJwkAlg() const
+{
+  return nsString();
 }
 
 void
@@ -102,6 +88,10 @@ KeyAlgorithm::Create(nsIGlobalObject* aGlobal, JSStructuredCloneReader* aReader)
     }
     case SCTAG_AESKEYALG: {
       algorithm = AesKeyAlgorithm::Create(aGlobal, aReader);
+      break;
+    }
+    case SCTAG_ECKEYALG: {
+      algorithm = EcKeyAlgorithm::Create(aGlobal, aReader);
       break;
     }
     case SCTAG_HMACKEYALG: {

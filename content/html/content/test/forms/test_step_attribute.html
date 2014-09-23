@@ -64,8 +64,12 @@ function checkValidity(aElement, aValidity, aApply, aData)
     is(aElement.validationMessage, "", "There should be no validation message.");
   } else {
     if (aElement.validity.rangeUnderflow) {
-      is(aElement.validationMessage, "Please select a value that is higher than " +
-         aElement.min + ".", "There should be a validation message.");
+      var underflowMsg =
+            (aElement.type == "date" || aElement.type == "time") ?
+            ("Please select a value that is no earlier than " + aElement.min + ".") :
+            ("Please select a value that is no less than " + aElement.min + ".");
+      is(aElement.validationMessage, underflowMsg,
+         "Checking range underflow validation message.");
     } else if (aData.low == aData.high) {
       is(aElement.validationMessage, "Please select a valid value. " +
          "The nearest valid value is " + aData.low + ".",
@@ -77,9 +81,9 @@ function checkValidity(aElement, aValidity, aApply, aData)
     }
   }
 
-  is(aElement.mozMatchesSelector(":valid"), aElement.willValidate && aValidity,
+  is(aElement.matches(":valid"), aElement.willValidate && aValidity,
      (aElement.willValidate && aValidity) ? ":valid should apply" : "valid shouldn't apply");
-  is(aElement.mozMatchesSelector(":invalid"), aElement.willValidate && !aValidity,
+  is(aElement.matches(":invalid"), aElement.willValidate && !aValidity,
      (aElement.wil && aValidity) ? ":invalid shouldn't apply" : "valid should apply");
 }
 
@@ -128,17 +132,12 @@ for (var test of data) {
                                 .getService(SpecialPowers.Ci.nsIProperties);
       var file = dirSvc.get("ProfD", SpecialPowers.Ci.nsIFile);
       file.append('635499_file');
-      var outStream = SpecialPowers.Cc["@mozilla.org/network/file-output-stream;1"].
-                      createInstance(SpecialPowers.Ci.nsIFileOutputStream);
-      outStream.init(file, 0x02 | 0x08 | 0x20, // write, create, truncate
-                     0666, 0);
-      outStream.write("foo", 3);
-      outStream.close();
+      // Only the file's path is used, so it doesn't need to be created.
+      // See also bug 1058977.
 
       SpecialPowers.wrap(input).value = file.path;
       checkValidity(input, true, apply);
 
-      file.remove(false);
       break;
     case 'date':
       // For date, the step is calulated on the timestamp since 1970-01-01

@@ -98,7 +98,7 @@ private:
   };
 
 public:
-  SharedBuffers(float aSampleRate)
+  explicit SharedBuffers(float aSampleRate)
     : mOutputQueue("SharedBuffers::outputQueue")
     , mDelaySoFar(TRACK_TICKS_MAX)
     , mSampleRate(aSampleRate)
@@ -358,7 +358,6 @@ private:
     // Add the delay caused by the main thread
     playbackTick += mSharedBuffers->DelaySoFar();
     // Compute the playback time in the coordinate system of the destination
-    // FIXME: bug 970773
     double playbackTime =
       mSource->DestinationTimeFromTicks(mDestination, playbackTick);
 
@@ -383,43 +382,30 @@ private:
 
       NS_IMETHODIMP Run()
       {
-        // If it's not safe to run scripts right now, schedule this to run later
-        if (!nsContentUtils::IsSafeToRunScript()) {
-          nsContentUtils::AddScriptRunner(this);
+        nsRefPtr<ScriptProcessorNode> node = static_cast<ScriptProcessorNode*>
+          (mStream->Engine()->NodeMainThread());
+        if (!node) {
           return NS_OK;
         }
-
-        nsRefPtr<ScriptProcessorNode> node;
-        {
-          // No need to keep holding the lock for the whole duration of this
-          // function, since we're holding a strong reference to it, so if
-          // we can obtain the reference, we will hold the node alive in
-          // this function.
-          MutexAutoLock lock(mStream->Engine()->NodeMutex());
-          node = static_cast<ScriptProcessorNode*>(mStream->Engine()->Node());
-        }
-        if (!node || !node->Context()) {
-          return NS_OK;
-        }
-
-        // Get the global for the context so that we can enter its compartment.
-        JSObject* global = node->Context()->GetGlobalJSObject();
-        if (NS_WARN_IF(!global)) {
+        AudioContext* context = node->Context();
+        if (!context) {
           return NS_OK;
         }
 
         AutoJSAPI jsapi;
+        if (NS_WARN_IF(!jsapi.Init(node->GetOwner()))) {
+          return NS_OK;
+        }
         JSContext* cx = jsapi.cx();
-        JSAutoCompartment ac(cx, global);
 
         // Create the input buffer
         nsRefPtr<AudioBuffer> inputBuffer;
         if (!mNullInput) {
           ErrorResult rv;
           inputBuffer =
-            AudioBuffer::Create(node->Context(), mInputChannels.Length(),
+            AudioBuffer::Create(context, mInputChannels.Length(),
                                 node->BufferSize(),
-                                node->Context()->SampleRate(), cx, rv);
+                                context->SampleRate(), cx, rv);
           if (rv.Failed()) {
             return NS_OK;
           }
@@ -437,7 +423,7 @@ private:
         nsRefPtr<AudioProcessingEvent> event = new AudioProcessingEvent(node, nullptr, nullptr);
         event->InitEvent(inputBuffer,
                          mInputChannels.Length(),
-                         mPlaybackTime);
+                         context->StreamTimeToDOMTime(mPlaybackTime));
         node->DispatchTrustedEvent(event);
 
         // Steal the output buffers if they have been set.

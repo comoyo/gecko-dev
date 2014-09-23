@@ -71,27 +71,46 @@ function getL10nStrings() {
   }
 }
 
-function getPendingDir() {
+function getDir(name) {
   let directoryService = Cc["@mozilla.org/file/directory_service;1"].
                          getService(Ci.nsIProperties);
-  let pendingDir = directoryService.get("UAppData", Ci.nsIFile);
-  pendingDir.append("Crash Reports");
-  pendingDir.append("pending");
-  return pendingDir;
+  let dir = directoryService.get("UAppData", Ci.nsIFile);
+  dir.append("Crash Reports");
+  dir.append(name);
+  return dir;
+}
+
+function writeFile(dirName, fileName, data) {
+  let path = getDir(dirName);
+  if (!path.exists())
+    path.create(Ci.nsIFile.DIRECTORY_TYPE, 0700);
+  path.append(fileName);
+  var fs = Cc["@mozilla.org/network/file-output-stream;1"].
+           createInstance(Ci.nsIFileOutputStream);
+  // open, write, truncate
+  fs.init(path, -1, -1, 0);
+  var os = Cc["@mozilla.org/intl/converter-output-stream;1"].
+           createInstance(Ci.nsIConverterOutputStream);
+  os.init(fs, "UTF-8", 0, 0x0000);
+  os.writeString(data);
+  os.close();
+  fs.close();
 }
 
 function getPendingMinidump(id) {
-  let pendingDir = getPendingDir();
+  let pendingDir = getDir("pending");
   let dump = pendingDir.clone();
   let extra = pendingDir.clone();
+  let memory = pendingDir.clone();
   dump.append(id + ".dmp");
   extra.append(id + ".extra");
-  return [dump, extra];
+  memory.append(id + ".memory.json.gz");
+  return [dump, extra, memory];
 }
 
 function getAllPendingMinidumpsIDs() {
   let minidumps = [];
-  let pendingDir = getPendingDir();
+  let pendingDir = getDir("pending");
 
   if (!(pendingDir.exists() && pendingDir.isDirectory()))
     return [];
@@ -112,7 +131,7 @@ function getAllPendingMinidumpsIDs() {
 function pruneSavedDumps() {
   const KEEP = 10;
 
-  let pendingDir = getPendingDir();
+  let pendingDir = getDir("pending");
   if (!(pendingDir.exists() && pendingDir.isDirectory()))
     return;
   let entries = pendingDir.directoryEntries;
@@ -123,7 +142,7 @@ function pruneSavedDumps() {
     if (entry.isFile()) {
       let matches = entry.leafName.match(/(.+)\.extra$/);
       if (matches)
-	entriesArray.push(entry);
+        entriesArray.push(entry);
     }
   }
 
@@ -145,6 +164,13 @@ function pruneSavedDumps() {
         let dump = extra.clone();
         dump.leafName = matches[1] + '.dmp';
         dump.remove(false);
+
+        let memory = extra.clone();
+        memory.leafName = matches[1] + '.memory.json.gz';
+        if (memory.exists()) {
+          memory.remove(false);
+        }
+
         extra.remove(false);
       }
     }
@@ -160,35 +186,18 @@ function addFormEntry(doc, form, name, value) {
 }
 
 function writeSubmittedReport(crashID, viewURL) {
-  let directoryService = Cc["@mozilla.org/file/directory_service;1"].
-                           getService(Ci.nsIProperties);
-  let reportFile = directoryService.get("UAppData", Ci.nsIFile);
-  reportFile.append("Crash Reports");
-  reportFile.append("submitted");
-  if (!reportFile.exists())
-    reportFile.create(Ci.nsIFile.DIRECTORY_TYPE, 0700);
-  reportFile.append(crashID + ".txt");
-  var fstream = Cc["@mozilla.org/network/file-output-stream;1"].
-                createInstance(Ci.nsIFileOutputStream);
-  // open, write, truncate
-  fstream.init(reportFile, -1, -1, 0);
-  var os = Cc["@mozilla.org/intl/converter-output-stream;1"].
-           createInstance(Ci.nsIConverterOutputStream);
-  os.init(fstream, "UTF-8", 0, 0x0000);
-
   var data = strings.crashid.replace("%s", crashID);
   if (viewURL)
      data += "\n" + strings.reporturl.replace("%s", viewURL);
 
-  os.writeString(data);
-  os.close();
-  fstream.close();
+  writeFile("submitted", crashID + ".txt", data);
 }
 
 // the Submitter class represents an individual submission.
-function Submitter(id, submitSuccess, submitError, noThrottle,
-                   extraExtraKeyVals) {
+function Submitter(id, recordSubmission, submitSuccess, submitError,
+                   noThrottle, extraExtraKeyVals) {
   this.id = id;
+  this.recordSubmission = recordSubmission;
   this.successCallback = submitSuccess;
   this.errorCallback = submitError;
   this.noThrottle = noThrottle;
@@ -199,12 +208,6 @@ function Submitter(id, submitSuccess, submitError, noThrottle,
 Submitter.prototype = {
   submitSuccess: function Submitter_submitSuccess(ret)
   {
-    if (!ret.CrashID) {
-      this.notifyStatus(FAILED);
-      this.cleanup();
-      return;
-    }
-
     // Write out the details file to submitted/
     writeSubmittedReport(ret.CrashID, ret.ViewURL);
 
@@ -212,6 +215,11 @@ Submitter.prototype = {
     try {
       this.dump.remove(false);
       this.extra.remove(false);
+
+      if (this.memory) {
+        this.memory.remove(false);
+      }
+
       for (let i of this.additionalDumps) {
         i.dump.remove(false);
       }
@@ -231,6 +239,7 @@ Submitter.prototype = {
     this.iframe = null;
     this.dump = null;
     this.extra = null;
+    this.memory = null;
     this.additionalDumps = null;
     // remove this object from the list of active submissions
     let idx = CrashSubmit._activeSubmissions.indexOf(this);
@@ -245,18 +254,12 @@ Submitter.prototype = {
     }
     let serverURL = this.extraKeyVals.ServerURL;
 
-    // Override the submission URL from the environment or prefs.
+    // Override the submission URL from the environment
 
     var envOverride = Cc['@mozilla.org/process/environment;1'].
       getService(Ci.nsIEnvironment).get("MOZ_CRASHREPORTER_URL");
     if (envOverride != '') {
       serverURL = envOverride;
-    }
-    else if ('PluginHang' in this.extraKeyVals) {
-      try {
-        serverURL = Services.prefs.
-          getCharPref("toolkit.crashreporter.pluginHangSubmitURL");
-      } catch(e) { }
     }
 
     let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"]
@@ -277,6 +280,9 @@ Submitter.prototype = {
     }
     // add the minidumps
     formData.append("upload_file_minidump", File(this.dump.path));
+    if (this.memory) {
+      formData.append("memory_report", File(this.memory.path));
+    }
     if (this.additionalDumps.length > 0) {
       let names = [];
       for (let i of this.additionalDumps) {
@@ -286,19 +292,39 @@ Submitter.prototype = {
       }
     }
 
+    let manager = Services.crashmanager;
+    let submissionID = manager.generateSubmissionID();
+
     let self = this;
     xhr.addEventListener("readystatechange", function (aEvt) {
       if (xhr.readyState == 4) {
-        if (xhr.status != 200) {
-          self.notifyStatus(FAILED);
-          self.cleanup();
-        } else {
-          let ret = parseKeyValuePairs(xhr.responseText);
+        let ret =
+          xhr.status == 200 ? parseKeyValuePairs(xhr.responseText) : {};
+        let submitted = !!ret.CrashID;
+
+        if (self.recordSubmission) {
+          let result = submitted ? manager.SUBMISSION_RESULT_OK :
+                                   manager.SUBMISSION_RESULT_FAILED;
+          manager.addSubmissionResult(self.id, submissionID, new Date(),
+                                      result);
+          if (submitted) {
+            manager.setRemoteCrashID(self.id, ret.CrashID);
+          }
+        }
+
+        if (submitted) {
           self.submitSuccess(ret);
+        }
+        else {
+           self.notifyStatus(FAILED);
+           self.cleanup();
         }
       }
     }, false);
 
+    if (this.recordSubmission) {
+      manager.addSubmissionAttempt(this.id, submissionID, new Date());
+    }
     xhr.send(formData);
     return true;
   },
@@ -337,11 +363,19 @@ Submitter.prototype = {
 
   submit: function Submitter_submit()
   {
-    let [dump, extra] = getPendingMinidump(this.id);
+    let [dump, extra, memory] = getPendingMinidump(this.id);
+
     if (!dump.exists() || !extra.exists()) {
       this.notifyStatus(FAILED);
       this.cleanup();
       return false;
+    }
+    this.dump = dump;
+    this.extra = extra;
+
+    // The memory file may or may not exist
+    if (memory.exists()) {
+      this.memory = memory;
     }
 
     let extraKeyVals = parseKeyValuePairsFromFile(extra);
@@ -355,7 +389,7 @@ Submitter.prototype = {
     if ("additional_minidumps" in this.extraKeyVals) {
       let names = this.extraKeyVals.additional_minidumps.split(',');
       for (let name of names) {
-        let [dump, extra] = getPendingMinidump(this.id + "-" + name);
+        let [dump, extra, memory] = getPendingMinidump(this.id + "-" + name);
         if (!dump.exists()) {
           this.notifyStatus(FAILED);
           this.cleanup();
@@ -367,8 +401,6 @@ Submitter.prototype = {
 
     this.notifyStatus(SUBMITTING);
 
-    this.dump = dump;
-    this.extra = extra;
     this.additionalDumps = additionalDumps;
 
     if (!this.submitForm()) {
@@ -390,6 +422,8 @@ this.CrashSubmit = {
    *        Filename (minus .dmp extension) of the minidump to submit.
    * @param params
    *        An object containing any of the following optional parameters:
+   *        - recordSubmission
+   *          If true, a submission event is recorded in CrashManager.
    *        - submitSuccess
    *          A function that will be called if the report is submitted
    *          successfully with two parameters: the id that was passed
@@ -418,11 +452,14 @@ this.CrashSubmit = {
   submit: function CrashSubmit_submit(id, params)
   {
     params = params || {};
+    let recordSubmission = false;
     let submitSuccess = null;
     let submitError = null;
     let noThrottle = false;
     let extraExtraKeyVals = null;
 
+    if ('recordSubmission' in params)
+      recordSubmission = params.recordSubmission;
     if ('submitSuccess' in params)
       submitSuccess = params.submitSuccess;
     if ('submitError' in params)
@@ -432,11 +469,9 @@ this.CrashSubmit = {
     if ('extraExtraKeyVals' in params)
       extraExtraKeyVals = params.extraExtraKeyVals;
 
-    let submitter = new Submitter(id,
-                                  submitSuccess,
-                                  submitError,
-                                  noThrottle,
-                                  extraExtraKeyVals);
+    let submitter = new Submitter(id, recordSubmission,
+                                  submitSuccess, submitError,
+                                  noThrottle, extraExtraKeyVals);
     CrashSubmit._activeSubmissions.push(submitter);
     return submitter.submit();
   },
@@ -448,9 +483,12 @@ this.CrashSubmit = {
    *        Filename (minus .dmp extension) of the minidump to delete.
    */
   delete: function CrashSubmit_delete(id) {
-    let [dump, extra] = getPendingMinidump(id);
-    dump.QueryInterface(Ci.nsIFile).remove(false);
-    extra.QueryInterface(Ci.nsIFile).remove(false);
+    let [dump, extra, memory] = getPendingMinidump(id);
+    dump.remove(false);
+    extra.remove(false);
+    if (memory.exists()) {
+      memory.remove(false);
+    }
   },
 
   /**

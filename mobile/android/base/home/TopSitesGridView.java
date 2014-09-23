@@ -12,14 +12,13 @@ import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.ThumbnailHelper;
 import org.mozilla.gecko.db.BrowserContract.TopSites;
-import org.mozilla.gecko.db.TopSitesCursorWrapper;
 import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
+import org.mozilla.gecko.util.StringUtils;
 
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.database.Cursor;
 import android.graphics.Rect;
-import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.view.View;
@@ -89,8 +88,6 @@ public class TopSitesGridView extends GridView {
         mHorizontalSpacing = a.getDimensionPixelOffset(R.styleable.TopSitesGridView_android_horizontalSpacing, 0x00);
         mVerticalSpacing = a.getDimensionPixelOffset(R.styleable.TopSitesGridView_android_verticalSpacing, 0x00);
         a.recycle();
-
-        mIsHandlingFocusChange = false;
     }
 
     /**
@@ -106,14 +103,14 @@ public class TopSitesGridView extends GridView {
                 TopSitesGridItemView item = (TopSitesGridItemView) view;
 
                 // Decode "user-entered" URLs before loading them.
-                String url = HomeFragment.decodeUserEnteredUrl(item.getUrl());
+                String url = StringUtils.decodeUserEnteredUrl(item.getUrl());
                 int type = item.getType();
 
                 // If the url is empty, the user can pin a site.
                 // If not, navigate to the page given by the url.
                 if (type != TopSites.TYPE_BLANK) {
                     if (mUrlOpenListener != null) {
-                        final String method;
+                        final TelemetryContract.Method method;
                         if (type == TopSites.TYPE_SUGGESTED) {
                             method = TelemetryContract.Method.SUGGESTION;
                         } else {
@@ -278,6 +275,7 @@ public class TopSitesGridView extends GridView {
 
         public TopSitesGridContextMenuInfo(View targetView, int position, long id) {
             super(targetView, position, id);
+            this.itemType = RemoveItemType.HISTORY;
         }
     }
 }

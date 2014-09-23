@@ -12,10 +12,10 @@
 #include "FrameSequence.h"
 #include "nsCOMPtr.h"
 
-class imgFrame;
-
 namespace mozilla {
 namespace image {
+
+class imgFrame;
 
 /**
  * FrameBlender stores and gives access to imgFrames. It also knows how to
@@ -32,7 +32,7 @@ public:
    *
    * If aSequenceToUse is not specified, it will be allocated automatically.
    */
-  FrameBlender(FrameSequence* aSequenceToUse = nullptr);
+  explicit FrameBlender(FrameSequence* aSequenceToUse = nullptr);
   ~FrameBlender();
 
   bool DoBlend(nsIntRect* aDirtyRect, uint32_t aPrevFrameIndex,
@@ -44,16 +44,16 @@ public:
    * Get the @aIndex-th frame, including (if applicable) any results of
    * blending.
    */
-  imgFrame* GetFrame(uint32_t aIndex) const;
+  already_AddRefed<imgFrame> GetFrame(uint32_t aIndex) const;
 
   /**
    * Get the @aIndex-th frame in the frame index, ignoring results of blending.
    */
-  imgFrame* RawGetFrame(uint32_t aIndex) const;
+  already_AddRefed<imgFrame> RawGetFrame(uint32_t aIndex) const;
 
   void InsertFrame(uint32_t framenum, imgFrame* aFrame);
   void RemoveFrame(uint32_t framenum);
-  imgFrame* SwapFrame(uint32_t framenum, imgFrame* aFrame);
+  already_AddRefed<imgFrame> SwapFrame(uint32_t framenum, imgFrame* aFrame);
   void ClearFrames();
 
   /* The total number of frames in this image. */
@@ -78,7 +78,7 @@ public:
   void SetSize(nsIntSize aSize) { mSize = aSize; }
 
   size_t SizeOfDecodedWithComputedFallbackIfHeap(gfxMemoryLocation aLocation,
-                                                 mozilla::MallocSizeOf aMallocSizeOf) const;
+                                                 MallocSizeOf aMallocSizeOf) const;
 
   void ResetAnimation();
 

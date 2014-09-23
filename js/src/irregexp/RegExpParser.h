@@ -42,13 +42,12 @@ namespace frontend {
 namespace irregexp {
 
 bool
-ParsePattern(frontend::TokenStream &ts, LifoAlloc &alloc,
-             const jschar *chars, size_t length, bool multiline,
+ParsePattern(frontend::TokenStream &ts, LifoAlloc &alloc, JSAtom *str,
+             bool multiline, bool match_only,
              RegExpCompileData *data);
 
 bool
-ParsePatternSyntax(frontend::TokenStream &ts, LifoAlloc &alloc,
-                   const jschar *chars, size_t length);
+ParsePatternSyntax(frontend::TokenStream &ts, LifoAlloc &alloc, JSAtom *str);
 
 // A BufferedVector is an automatically growing list, just like (and backed
 // by) a Vector, that is optimized for the case of adding and removing
@@ -139,7 +138,7 @@ class RegExpBuilder
 {
   public:
     explicit RegExpBuilder(LifoAlloc *alloc);
-    void AddCharacter(jschar character);
+    void AddCharacter(char16_t character);
     // "Adds" an empty expression. Does nothing except consume a
     // following quantifier
     void AddEmpty();
@@ -167,14 +166,15 @@ class RegExpBuilder
     mozilla::DebugOnly<LastAdded> last_added_;
 };
 
-// Characters parsed by RegExpParser can be either jschars or kEndMarker.
+// Characters parsed by RegExpParser can be either char16_t or kEndMarker.
 typedef uint32_t widechar;
 
+template <typename CharT>
 class RegExpParser
 {
   public:
     RegExpParser(frontend::TokenStream &ts, LifoAlloc *alloc,
-                 const jschar *chars, const jschar *end, bool multiline_mode);
+                 const CharT *chars, const CharT *end, bool multiline_mode);
 
     RegExpTree* ParsePattern();
     RegExpTree* ParseDisjunction();
@@ -201,7 +201,7 @@ class RegExpParser
     // can be reparsed.
     bool ParseBackReferenceIndex(int* index_out);
 
-    bool ParseClassAtom(jschar* char_class, CharacterRange *char_range);
+    bool ParseClassAtom(char16_t* char_class, CharacterRange *char_range);
     RegExpTree* ReportError(unsigned errorNumber);
     void Advance();
     void Advance(int dist) {
@@ -209,7 +209,7 @@ class RegExpParser
         Advance();
     }
 
-    void Reset(const jschar *pos) {
+    void Reset(const CharT *pos) {
         next_pos_ = pos;
         has_more_ = (pos < end_);
         Advance();
@@ -221,7 +221,7 @@ class RegExpParser
     bool contains_anchor() { return contains_anchor_; }
     void set_contains_anchor() { contains_anchor_ = true; }
     int captures_started() { return captures_ == nullptr ? 0 : captures_->length(); }
-    const jschar *position() { return next_pos_ - 1; }
+    const CharT *position() { return next_pos_ - 1; }
 
     static const int kMaxCaptures = 1 << 16;
     static const widechar kEndMarker = (1 << 21);
@@ -282,7 +282,7 @@ class RegExpParser
     frontend::TokenStream &ts;
     LifoAlloc *alloc;
     RegExpCaptureVector *captures_;
-    const jschar *next_pos_, *end_;
+    const CharT *next_pos_, *end_;
     widechar current_;
     // The capture count is only valid after we have scanned for captures.
     int capture_count_;

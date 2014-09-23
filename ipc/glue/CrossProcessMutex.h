@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include "SharedMemoryBasic.h"
 #include "mozilla/Atomics.h"
+#include "nsAutoPtr.h"
 #endif
 
 namespace IPC {
@@ -41,20 +42,20 @@ typedef mozilla::ipc::SharedMemoryBasic::Handle CrossProcessMutexHandle;
 typedef uintptr_t CrossProcessMutexHandle;
 #endif
 
-class NS_COM_GLUE CrossProcessMutex
+class CrossProcessMutex
 {
 public:
   /**
    * CrossProcessMutex
    * @param name A name which can reference this lock (currently unused)
    **/
-  CrossProcessMutex(const char* aName);
+  explicit CrossProcessMutex(const char* aName);
   /**
    * CrossProcessMutex
    * @param handle A handle of an existing cross process mutex that can be
    *               opened.
    */
-  CrossProcessMutex(CrossProcessMutexHandle aHandle);
+  explicit CrossProcessMutex(CrossProcessMutexHandle aHandle);
 
   /**
    * ~CrossProcessMutex
@@ -100,7 +101,7 @@ private:
 #ifdef XP_WIN
   HANDLE mMutex;
 #elif defined(OS_LINUX)
-  mozilla::ipc::SharedMemoryBasic* mSharedBuffer;
+  nsRefPtr<mozilla::ipc::SharedMemoryBasic> mSharedBuffer;
   pthread_mutex_t* mMutex;
   mozilla::Atomic<int32_t>* mCount;
 #endif

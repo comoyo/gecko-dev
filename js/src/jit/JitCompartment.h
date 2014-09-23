@@ -7,8 +7,6 @@
 #ifndef jit_JitCompartment_h
 #define jit_JitCompartment_h
 
-#ifdef JS_ION
-
 #include "mozilla/MemoryReporting.h"
 
 #include "jsweakcache.h"
@@ -58,6 +56,7 @@ typedef void (*EnterJitCode)(void *code, unsigned argc, Value *argv, Interpreter
                              size_t numStackValues, Value *vp);
 
 class IonBuilder;
+class JitcodeGlobalTable;
 
 // ICStubSpace is an abstraction for allocation policy and storage for stub data.
 // There are two kinds of stubs: optimized stubs and fallback stubs (the latter
@@ -144,14 +143,14 @@ class JitRuntime
 
     // Executable allocator for all code except the main code in an IonScript.
     // Shared with the runtime.
-    JSC::ExecutableAllocator *execAlloc_;
+    ExecutableAllocator *execAlloc_;
 
     // Executable allocator used for allocating the main code in an IonScript.
     // All accesses on this allocator must be protected by the runtime's
     // interrupt lock, as the executable memory may be protected() when
     // requesting an interrupt to force a fault in the Ion code and avoid the
     // need for explicit interrupt checks.
-    JSC::ExecutableAllocator *ionAlloc_;
+    ExecutableAllocator *ionAlloc_;
 
     // Shared post-exception-handler tail
     JitCode *exceptionTail_;
@@ -171,6 +170,9 @@ class JitRuntime
     // Generic bailout table; used if the bailout table overflows.
     JitCode *bailoutHandler_;
 
+    // Bailout handler for parallel execution.
+    JitCode *parallelBailoutHandler_;
+
     // Argument-rectifying thunk, in the case of insufficient arguments passed
     // to a function call site.
     JitCode *argumentsRectifier_;
@@ -185,10 +187,14 @@ class JitRuntime
     // Thunk that calls the GC pre barrier.
     JitCode *valuePreBarrier_;
     JitCode *shapePreBarrier_;
+    JitCode *typeObjectPreBarrier_;
 
     // Thunk to call malloc/free.
     JitCode *mallocStub_;
     JitCode *freeStub_;
+
+    // Thunk called to finish compilation of an IonScript.
+    JitCode *lazyLinkStub_;
 
     // Thunk used by the debugger for breakpoint and step mode.
     JitCode *debugTrapHandler_;
@@ -231,13 +237,17 @@ class JitRuntime
     // their callee.
     js::Value ionReturnOverride_;
 
+    // Global table of jitcode native address => bytecode address mappings.
+    JitcodeGlobalTable *jitcodeGlobalTable_;
+
   private:
+    JitCode *generateLazyLinkStub(JSContext *cx);
     JitCode *generateExceptionTailStub(JSContext *cx);
     JitCode *generateBailoutTailStub(JSContext *cx);
     JitCode *generateEnterJIT(JSContext *cx, EnterJitType type);
     JitCode *generateArgumentsRectifier(JSContext *cx, ExecutionMode mode, void **returnAddrOut);
     JitCode *generateBailoutTable(JSContext *cx, uint32_t frameClass);
-    JitCode *generateBailoutHandler(JSContext *cx);
+    JitCode *generateBailoutHandler(JSContext *cx, ExecutionMode mode);
     JitCode *generateInvalidator(JSContext *cx);
     JitCode *generatePreBarrier(JSContext *cx, MIRType type);
     JitCode *generateMallocStub(JSContext *cx);
@@ -247,7 +257,7 @@ class JitRuntime
     JitCode *generateBaselineDebugModeOSRHandler(JSContext *cx, uint32_t *noFrameRegPopOffsetOut);
     JitCode *generateVMWrapper(JSContext *cx, const VMFunction &f);
 
-    JSC::ExecutableAllocator *createIonAlloc(JSContext *cx);
+    ExecutableAllocator *createIonAlloc(JSContext *cx);
 
   public:
     JitRuntime();
@@ -259,16 +269,16 @@ class JitRuntime
 
     static void Mark(JSTracer *trc);
 
-    JSC::ExecutableAllocator *execAlloc() const {
+    ExecutableAllocator *execAlloc() const {
         return execAlloc_;
     }
 
-    JSC::ExecutableAllocator *getIonAlloc(JSContext *cx) {
+    ExecutableAllocator *getIonAlloc(JSContext *cx) {
         JS_ASSERT(cx->runtime()->currentThreadOwnsInterruptLock());
         return ionAlloc_ ? ionAlloc_ : createIonAlloc(cx);
     }
 
-    JSC::ExecutableAllocator *ionAlloc(JSRuntime *rt) {
+    ExecutableAllocator *ionAlloc(JSRuntime *rt) {
         JS_ASSERT(rt->currentThreadOwnsInterruptLock());
         return ionAlloc_;
     }
@@ -304,8 +314,12 @@ class JitRuntime
     JitCode *getBaselineDebugModeOSRHandler(JSContext *cx);
     void *getBaselineDebugModeOSRHandlerAddress(JSContext *cx, bool popFrameReg);
 
-    JitCode *getGenericBailoutHandler() const {
-        return bailoutHandler_;
+    JitCode *getGenericBailoutHandler(ExecutionMode mode) const {
+        switch (mode) {
+          case SequentialExecution: return bailoutHandler_;
+          case ParallelExecution:   return parallelBailoutHandler_;
+          default:                  MOZ_CRASH("No such execution mode");
+        }
     }
 
     JitCode *getExceptionTail() const {
@@ -322,7 +336,7 @@ class JitRuntime
         switch (mode) {
           case SequentialExecution: return argumentsRectifier_;
           case ParallelExecution:   return parallelArgumentsRectifier_;
-          default:                  MOZ_ASSUME_UNREACHABLE("No such execution mode");
+          default:                  MOZ_CRASH("No such execution mode");
         }
     }
 
@@ -342,12 +356,13 @@ class JitRuntime
         return enterBaselineJIT_->as<EnterJitCode>();
     }
 
-    JitCode *valuePreBarrier() const {
-        return valuePreBarrier_;
-    }
-
-    JitCode *shapePreBarrier() const {
-        return shapePreBarrier_;
+    JitCode *preBarrier(MIRType type) const {
+        switch (type) {
+          case MIRType_Value: return valuePreBarrier_;
+          case MIRType_Shape: return shapePreBarrier_;
+          case MIRType_TypeObject: return typeObjectPreBarrier_;
+          default: MOZ_CRASH();
+        }
     }
 
     JitCode *mallocStub() const {
@@ -356,6 +371,10 @@ class JitRuntime
 
     JitCode *freeStub() const {
         return freeStub_;
+    }
+
+    JitCode *lazyLinkStub() const {
+        return lazyLinkStub_;
     }
 
     bool ensureForkJoinGetSliceStubExists(JSContext *cx);
@@ -375,6 +394,23 @@ class JitRuntime
         JS_ASSERT(!hasIonReturnOverride());
         JS_ASSERT(!v.isMagic());
         ionReturnOverride_ = v;
+    }
+
+    bool hasJitcodeGlobalTable() const {
+        return jitcodeGlobalTable_ != nullptr;
+    }
+
+    JitcodeGlobalTable *getJitcodeGlobalTable() {
+        JS_ASSERT(hasJitcodeGlobalTable());
+        return jitcodeGlobalTable_;
+    }
+
+    bool isNativeToBytecodeMapEnabled(JSRuntime *rt) {
+#ifdef DEBUG
+        return true;
+#else // DEBUG
+        return rt->spsProfiler.enabled();
+#endif // DEBUG
     }
 };
 
@@ -405,10 +441,11 @@ class JitCompartment
 
     // Stub to concatenate two strings inline. Note that it can't be
     // stored in JitRuntime because masm.newGCString bakes in zone-specific
-    // pointers. This has to be a weak pointer to avoid keeping the whole
-    // compartment alive.
-    ReadBarrieredJitCode stringConcatStub_;
-    ReadBarrieredJitCode parallelStringConcatStub_;
+    // pointers. These are weak pointers, but are not declared as ReadBarriered
+    // since they are only read from during Ion compilation, which may occur
+    // off thread and whose barriers are captured during CodeGenerator::link.
+    JitCode *stringConcatStub_;
+    JitCode *parallelStringConcatStub_;
 
     // Set of JSScripts invoked by ForkJoin (i.e. the entry script). These
     // scripts are marked if their respective parallel IonScripts' age is less
@@ -459,10 +496,11 @@ class JitCompartment
     }
 
     bool notifyOfActiveParallelEntryScript(JSContext *cx, HandleScript script);
+    bool hasRecentParallelActivity() const;
 
     void toggleBaselineStubBarriers(bool enabled);
 
-    JSC::ExecutableAllocator *createIonAlloc();
+    ExecutableAllocator *createIonAlloc();
 
   public:
     JitCompartment();
@@ -474,13 +512,13 @@ class JitCompartment
     bool ensureIonStubsExist(JSContext *cx);
 
     void mark(JSTracer *trc, JSCompartment *compartment);
-    void sweep(FreeOp *fop);
+    void sweep(FreeOp *fop, JSCompartment *compartment);
 
-    JitCode *stringConcatStub(ExecutionMode mode) const {
+    JitCode *stringConcatStubNoBarrier(ExecutionMode mode) const {
         switch (mode) {
           case SequentialExecution: return stringConcatStub_;
           case ParallelExecution:   return parallelStringConcatStub_;
-          default:                  MOZ_ASSUME_UNREACHABLE("No such execution mode");
+          default:                  MOZ_CRASH("No such execution mode");
         }
     }
 };
@@ -490,14 +528,6 @@ void InvalidateAll(FreeOp *fop, JS::Zone *zone);
 template <ExecutionMode mode>
 void FinishInvalidation(FreeOp *fop, JSScript *script);
 
-inline bool
-ShouldPreserveParallelJITCode(JSRuntime *rt, JSScript *script, bool increase = false)
-{
-    IonScript *parallelIon = script->parallelIonScript();
-    uint32_t age = increase ? parallelIon->increaseParallelAge() : parallelIon->parallelAge();
-    return age < jit::IonScript::MAX_PARALLEL_AGE && !rt->gc.shouldCleanUpEverything;
-}
-
 // On windows systems, really large frames need to be incrementally touched.
 // The following constant defines the minimum increment of the touch.
 #ifdef XP_WIN
@@ -506,7 +536,5 @@ const unsigned WINDOWS_BIG_FRAME_TOUCH_INCREMENT = 4096 - 1;
 
 } // namespace jit
 } // namespace js
-
-#endif // JS_ION
 
 #endif /* jit_JitCompartment_h */

@@ -213,12 +213,15 @@ static_assert((CSS_PROPERTY_PARSE_PROPERTY_MASK &
 // aliases.
 #define CSS_PROPERTY_ALWAYS_ENABLED_IN_CHROME_OR_CERTIFIED_APP (1<<23)
 
+// This property's unitless values are pixels.
+#define CSS_PROPERTY_NUMBERS_ARE_PIXELS           (1<<24)
+
 /**
  * Types of animatable values.
  */
 enum nsStyleAnimType {
   // requires a custom implementation in
-  // nsStyleAnimation::ExtractComputedValue
+  // StyleAnimationValue::ExtractComputedValue
   eStyleAnimType_Custom,
 
   // nsStyleCoord with animatable values
@@ -310,9 +313,18 @@ public:
   static nsCSSFontDesc LookupFontDesc(const nsAString& aProperty);
   static nsCSSFontDesc LookupFontDesc(const nsACString& aProperty);
 
+  // For @counter-style descriptors
+  static nsCSSCounterDesc LookupCounterDesc(const nsAString& aProperty);
+  static nsCSSCounterDesc LookupCounterDesc(const nsACString& aProperty);
+
+  // For predefined counter styles which need to be lower-cased during parse
+  static bool IsPredefinedCounterStyle(const nsAString& aStyle);
+  static bool IsPredefinedCounterStyle(const nsACString& aStyle);
+
   // Given a property enum, get the string value
   static const nsAFlatCString& GetStringValue(nsCSSProperty aProperty);
   static const nsAFlatCString& GetStringValue(nsCSSFontDesc aFontDesc);
+  static const nsAFlatCString& GetStringValue(nsCSSCounterDesc aCounterDesc);
 
   // Get the property to report the computed value of aProperty as being
   // the computed value of.  aProperty must have the
@@ -554,6 +566,7 @@ public:
   static const KTableValue kAlignContentKTable[];
   static const KTableValue kAlignItemsKTable[];
   static const KTableValue kAlignSelfKTable[];
+  static const KTableValue kFlexBasisKTable[];
   static const KTableValue kFlexDirectionKTable[];
   static const KTableValue kFlexWrapKTable[];
   static const KTableValue kJustifyContentKTable[];
@@ -588,6 +601,7 @@ public:
   static const KTableValue kMathDisplayKTable[];
   static const KTableValue kContextOpacityKTable[];
   static const KTableValue kContextPatternKTable[];
+  static const KTableValue kObjectFitKTable[];
   static const KTableValue kOrientKTable[];
   static const KTableValue kOutlineStyleKTable[];
   static const KTableValue kOutlineColorKTable[];
@@ -636,11 +650,15 @@ public:
   static const KTableValue kVolumeKTable[];
   static const KTableValue kWhitespaceKTable[];
   static const KTableValue kWidthKTable[]; // also min-width, max-width
+  static const KTableValue kWindowDraggingKTable[];
   static const KTableValue kWindowShadowKTable[];
   static const KTableValue kWordBreakKTable[];
   static const KTableValue kWordWrapKTable[];
   static const KTableValue kWritingModeKTable[];
   static const KTableValue kHyphensKTable[];
+  static const KTableValue kCounterSystemKTable[];
+  static const KTableValue kCounterRangeKTable[];
+  static const KTableValue kCounterSpeakAsKTable[];
 };
 
 inline nsCSSProps::EnabledState operator|(nsCSSProps::EnabledState a,

@@ -3,7 +3,9 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
+import sys
 import time
+import traceback
 
 try:
     from unittest import TextTestResult
@@ -18,6 +20,7 @@ testsuites"""
 class StructuredTestResult(TextTestResult):
     def __init__(self, *args, **kwargs):
         self.logger = kwargs.pop('logger')
+        self.test_list = kwargs.pop("test_list", [])
         self.result_callbacks = kwargs.pop('result_callbacks', [])
         self.passed = 0
         self.testsRun = 0
@@ -32,6 +35,9 @@ class StructuredTestResult(TextTestResult):
         return debug_info
 
     def startTestRun(self):
+        # This would be an opportunity to call the logger's suite_start action,
+        # however some users may use multiple suites, and per the structured
+        # logging protocol, this action should only be called once.
         pass
 
     def startTest(self, test):
@@ -42,23 +48,55 @@ class StructuredTestResult(TextTestResult):
         pass
 
     def stopTestRun(self):
+        # This would be an opportunity to call the logger's suite_end action,
+        # however some users may use multiple suites, and per the structured
+        # logging protocol, this action should only be called once.
         pass
+
+    def _extract_err_message(self, err):
+        # Format an exception message in the style of unittest's _exc_info_to_string
+        # while maintaining a division between a traceback and a message.
+        exc_ty, val, _ = err
+        exc_msg = "".join(traceback.format_exception_only(exc_ty, val))
+        if self.buffer:
+            output_msg = "\n".join([sys.stdout.getvalue(), sys.stderr.getvalue()])
+            return "".join([exc_msg, output_msg])
+        return exc_msg.rstrip()
+
+    def _extract_stacktrace(self, err, test):
+        # Format an exception stack in the style of unittest's _exc_info_to_string
+        # while maintaining a division between a traceback and a message.
+        # This is mostly borrowed from unittest.result._exc_info_to_string.
+
+        exctype, value, tb = err
+        while tb and self._is_relevant_tb_level(tb):
+            tb = tb.tb_next
+        # Header usually included by print_exception
+        lines = ["Traceback (most recent call last):\n"]
+        if exctype is test.failureException:
+            length = self._count_relevant_tb_levels(tb)
+            lines += traceback.format_tb(tb, length)
+        else:
+            lines += traceback.format_tb(tb)
+        return "".join(lines)
 
     def addError(self, test, err):
         self.errors.append((test, self._exc_info_to_string(err, test)))
         extra = self.call_callbacks(test, "ERROR")
         self.logger.test_end(test.id(),
-                            "ERROR",
-                             message=self._exc_info_to_string(err, test),
+                             "ERROR",
+                             message=self._extract_err_message(err),
                              expected="PASS",
+                             stack=self._extract_stacktrace(err, test),
                              extra=extra)
 
     def addFailure(self, test, err):
         extra = self.call_callbacks(test, "ERROR")
         self.logger.test_end(test.id(),
                             "FAIL",
-                             message=self._exc_info_to_string(err, test),
+                             message=self._extract_err_message(err),
                              expected="PASS",
+                             stack=self._extract_stacktrace(err, test),
                              extra=extra)
 
     def addSuccess(self, test):
@@ -68,8 +106,9 @@ class StructuredTestResult(TextTestResult):
         extra = self.call_callbacks(test, "ERROR")
         self.logger.test_end(test.id(),
                             "FAIL",
-                             message=self._exc_info_to_string(err, test),
+                             message=self._extract_err_message(err),
                              expected="FAIL",
+                             stack=self._extract_stacktrace(err, test),
                              extra=extra)
 
     def addUnexpectedSuccess(self, test):
@@ -95,9 +134,14 @@ class StructuredTestRunner(unittest.TextTestRunner):
     def __init__(self, **kwargs):
         """TestRunner subclass designed for structured logging.
 
-        :params logger: a StructuredLogger to use for logging the test run.
+        :params logger: A ``StructuredLogger`` to use for logging the test run.
+        :params test_list: An optional list of tests that will be passed along
+            the `suite_start` message.
+
         """
+
         self.logger = kwargs.pop("logger")
+        self.test_list = kwargs.pop("test_list", [])
         self.result_callbacks = kwargs.pop("result_callbacks", [])
         unittest.TextTestRunner.__init__(self, **kwargs)
 
@@ -105,7 +149,8 @@ class StructuredTestRunner(unittest.TextTestRunner):
         return self.resultclass(self.stream,
                                 self.descriptions,
                                 self.verbosity,
-                                logger=self.logger)
+                                logger=self.logger,
+                                test_list=self.test_list)
 
     def run(self, test):
         """Run the given test case or test suite."""
@@ -125,6 +170,5 @@ class StructuredTestRunner(unittest.TextTestRunner):
         stopTime = time.time()
         if hasattr(result, 'time_taken'):
             result.time_taken = stopTime - startTime
-        run = result.testsRun
 
         return result

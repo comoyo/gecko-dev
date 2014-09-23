@@ -29,6 +29,8 @@ public class PasswordsProvider extends SQLiteBridgeContentProvider {
     static final String TABLE_PASSWORDS = "moz_logins";
     static final String TABLE_DELETED_PASSWORDS = "moz_deleted_logins";
 
+    private static final String TELEMETRY_TAG = "SQLITEBRIDGE_PROVIDER_PASSWORDS";
+
     private static final int PASSWORDS = 100;
     private static final int DELETED_PASSWORDS = 101;
 
@@ -76,19 +78,24 @@ public class PasswordsProvider extends SQLiteBridgeContentProvider {
         DELETED_PASSWORDS_PROJECTION_MAP.put(DeletedPasswords.ID, DeletedPasswords.ID);
         DELETED_PASSWORDS_PROJECTION_MAP.put(DeletedPasswords.GUID, DeletedPasswords.GUID);
         DELETED_PASSWORDS_PROJECTION_MAP.put(DeletedPasswords.TIME_DELETED, DeletedPasswords.TIME_DELETED);
-
-        // We don't use .loadMozGlue because we're in a different process,
-        // and we just want to reuse code rather than use the loader lock etc.
-        GeckoLoader.doLoadLibrary("mozglue");
     }
 
     public PasswordsProvider() {
         super(LOG_TAG);
+
+        // We don't use .loadMozGlue because we're in a different process,
+        // and we just want to reuse code rather than use the loader lock etc.
+        GeckoLoader.doLoadLibrary(getContext(), "mozglue");
     }
 
     @Override
     protected String getDBName(){
         return DB_FILENAME;
+    }
+
+    @Override
+    protected String getTelemetryPrefix() {
+        return TELEMETRY_TAG;
     }
 
     @Override

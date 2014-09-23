@@ -5,7 +5,6 @@
 
 #include "gfxPlatformMac.h"
 
-#include "gfxImageSurface.h"
 #include "gfxQuartzSurface.h"
 #include "gfxQuartzImageSurface.h"
 #include "mozilla/gfx/2D.h"
@@ -13,12 +12,14 @@
 #include "gfxMacPlatformFontList.h"
 #include "gfxMacFont.h"
 #include "gfxCoreTextShaper.h"
+#include "gfxTextRun.h"
 #include "gfxUserFontSet.h"
 
 #include "nsTArray.h"
 #include "mozilla/Preferences.h"
 #include "qcms.h"
 #include "gfx2DGlue.h"
+#include "gfxPrefs.h"
 
 #include <dlfcn.h>
 
@@ -105,59 +106,11 @@ gfxPlatformMac::CreateOffscreenSurface(const IntSize& size,
     return newSurface.forget();
 }
 
-already_AddRefed<gfxASurface>
-gfxPlatformMac::CreateOffscreenImageSurface(const gfxIntSize& aSize,
-                                            gfxContentType aContentType)
-{
-    nsRefPtr<gfxASurface> surface =
-        CreateOffscreenSurface(aSize.ToIntSize(), aContentType);
-#ifdef DEBUG
-    nsRefPtr<gfxImageSurface> imageSurface = surface->GetAsImageSurface();
-    NS_ASSERTION(imageSurface, "Surface cannot be converted to a gfxImageSurface");
-#endif
-    return surface.forget();
-}
-
-
-already_AddRefed<gfxASurface>
-gfxPlatformMac::OptimizeImage(gfxImageSurface *aSurface,
-                              gfxImageFormat format)
-{
-    const gfxIntSize& surfaceSize = aSurface->GetSize();
-    nsRefPtr<gfxImageSurface> isurf = aSurface;
-
-    if (format != aSurface->Format()) {
-        isurf = new gfxImageSurface (surfaceSize, format);
-        if (!isurf->CopyFrom (aSurface)) {
-            // don't even bother doing anything more
-            nsRefPtr<gfxASurface> ret = aSurface;
-            return ret.forget();
-        }
-    }
-
-    return nullptr;
-}
-
 TemporaryRef<ScaledFont>
 gfxPlatformMac::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
 {
     gfxMacFont *font = static_cast<gfxMacFont*>(aFont);
     return font->GetScaledFont(aTarget);
-}
-
-nsresult
-gfxPlatformMac::ResolveFontName(const nsAString& aFontName,
-                                FontResolverCallback aCallback,
-                                void *aClosure, bool& aAborted)
-{
-    nsAutoString resolvedName;
-    if (!gfxPlatformFontList::PlatformFontList()->
-             ResolveFontName(aFontName, resolvedName)) {
-        aAborted = false;
-        return NS_OK;
-    }
-    aAborted = !(*aCallback)(resolvedName, aClosure);
-    return NS_OK;
 }
 
 nsresult
@@ -168,30 +121,41 @@ gfxPlatformMac::GetStandardFamilyName(const nsAString& aFontName, nsAString& aFa
 }
 
 gfxFontGroup *
-gfxPlatformMac::CreateFontGroup(const nsAString &aFamilies,
+gfxPlatformMac::CreateFontGroup(const FontFamilyList& aFontFamilyList,
                                 const gfxFontStyle *aStyle,
                                 gfxUserFontSet *aUserFontSet)
 {
-    return new gfxFontGroup(aFamilies, aStyle, aUserFontSet);
+    return new gfxFontGroup(aFontFamilyList, aStyle, aUserFontSet);
 }
 
 // these will move to gfxPlatform once all platforms support the fontlist
 gfxFontEntry* 
-gfxPlatformMac::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                const nsAString& aFontName)
+gfxPlatformMac::LookupLocalFont(const nsAString& aFontName,
+                                uint16_t aWeight,
+                                int16_t aStretch,
+                                bool aItalic)
 {
-    return gfxPlatformFontList::PlatformFontList()->LookupLocalFont(aProxyEntry, 
-                                                                    aFontName);
+    return gfxPlatformFontList::PlatformFontList()->LookupLocalFont(aFontName,
+                                                                    aWeight,
+                                                                    aStretch,
+                                                                    aItalic);
 }
 
 gfxFontEntry* 
-gfxPlatformMac::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                 const uint8_t *aFontData, uint32_t aLength)
+gfxPlatformMac::MakePlatformFont(const nsAString& aFontName,
+                                 uint16_t aWeight,
+                                 int16_t aStretch,
+                                 bool aItalic,
+                                 const uint8_t* aFontData,
+                                 uint32_t aLength)
 {
     // Ownership of aFontData is received here, and passed on to
     // gfxPlatformFontList::MakePlatformFont(), which must ensure the data
     // is released with NS_Free when no longer needed
-    return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aProxyEntry,
+    return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aFontName,
+                                                                     aWeight,
+                                                                     aStretch,
+                                                                     aItalic,
                                                                      aFontData,
                                                                      aLength);
 }
@@ -352,11 +316,11 @@ gfxPlatformMac::GetCommonFallbackFonts(const uint32_t aCh,
         case 0x2a:
         case 0x2b:
         case 0x2e:
+            aFontList.AppendElement(kFontHiraginoKakuGothic);
             aFontList.AppendElement(kFontAppleSymbols);
             aFontList.AppendElement(kFontMenlo);
             aFontList.AppendElement(kFontSTIXGeneral);
             aFontList.AppendElement(kFontGeneva);
-            aFontList.AppendElement(kFontHiraginoKakuGothic);
             aFontList.AppendElement(kFontAppleColorEmoji);
             break;
         case 0x2c:
@@ -428,35 +392,6 @@ gfxPlatformMac::ReadAntiAliasingThreshold()
     return threshold;
 }
 
-already_AddRefed<gfxASurface>
-gfxPlatformMac::GetThebesSurfaceForDrawTarget(DrawTarget *aTarget)
-{
-  if (aTarget->GetType() == BackendType::COREGRAPHICS_ACCELERATED) {
-    RefPtr<SourceSurface> source = aTarget->Snapshot();
-    RefPtr<DataSourceSurface> sourceData = source->GetDataSurface();
-    unsigned char* data = sourceData->GetData();
-    nsRefPtr<gfxImageSurface> surf = new gfxImageSurface(data, ThebesIntSize(sourceData->GetSize()), sourceData->Stride(),
-                                                         gfxImageFormat::ARGB32);
-    // We could fix this by telling gfxImageSurface it owns data.
-    nsRefPtr<gfxImageSurface> cpy = new gfxImageSurface(ThebesIntSize(sourceData->GetSize()), gfxImageFormat::ARGB32);
-    cpy->CopyFrom(surf);
-    return cpy.forget();
-  } else if (aTarget->GetType() == BackendType::COREGRAPHICS) {
-    CGContextRef cg = static_cast<CGContextRef>(aTarget->GetNativeSurface(NativeSurfaceType::CGCONTEXT));
-
-    //XXX: it would be nice to have an implicit conversion from IntSize to gfxIntSize
-    IntSize intSize = aTarget->GetSize();
-    gfxIntSize size(intSize.width, intSize.height);
-
-    nsRefPtr<gfxASurface> surf =
-      new gfxQuartzSurface(cg, size);
-
-    return surf.forget();
-  }
-
-  return gfxPlatform::GetThebesSurfaceForDrawTarget(aTarget);
-}
-
 bool
 gfxPlatformMac::UseAcceleratedCanvas()
 {
@@ -465,9 +400,13 @@ gfxPlatformMac::UseAcceleratedCanvas()
 }
 
 bool
-gfxPlatformMac::SupportsOffMainThreadCompositing()
+gfxPlatformMac::UseTiling()
 {
-  return true;
+  if (gfxPrefs::LayersTilesForceEnabled()) {
+    return true;
+  }
+  // Tiling seems to be slow on 10.6 so disable it until we figure it out
+  return nsCocoaFeatures::OnLionOrLater() && gfxPlatform::UseTiling();
 }
 
 void

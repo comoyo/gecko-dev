@@ -1,4 +1,4 @@
-/* -*- Mode: Java; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 4 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -62,7 +62,7 @@ var gContentPane = {
     params.introText = bundlePreferences.getString("popuppermissionstext");
     document.documentElement.openWindow("Browser:Permissions",
                                         "chrome://browser/content/preferences/permissions.xul",
-                                        "", params);
+                                        "resizable", params);
   },
 
 
@@ -187,6 +187,12 @@ var gContentPane = {
   {
     document.documentElement.openWindow("Browser:TranslationExceptions",
                                         "chrome://browser/content/preferences/translation.xul",
-                                        "", null);
+                                        "resizable", null);
+  },
+
+  openTranslationProviderAttribution: function ()
+  {
+    Components.utils.import("resource:///modules/translation/Translation.jsm");
+    Translation.openProviderAttribution();
   }
 };

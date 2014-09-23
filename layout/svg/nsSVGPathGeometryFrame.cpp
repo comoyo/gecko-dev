@@ -7,11 +7,15 @@
 #include "nsSVGPathGeometryFrame.h"
 
 // Keep others in (case-insensitive) order:
+#include "gfx2DGlue.h"
 #include "gfxContext.h"
 #include "gfxPlatform.h"
 #include "gfxSVGGlyphs.h"
+#include "mozilla/gfx/2D.h"
+#include "mozilla/RefPtr.h"
 #include "nsDisplayList.h"
 #include "nsGkAtoms.h"
+#include "nsLayoutUtils.h"
 #include "nsRenderingContext.h"
 #include "nsSVGEffects.h"
 #include "nsSVGIntegrationUtils.h"
@@ -20,6 +24,7 @@
 #include "nsSVGUtils.h"
 #include "mozilla/ArrayUtils.h"
 #include "SVGAnimatedTransformList.h"
+#include "SVGContentUtils.h"
 #include "SVGGraphicsElement.h"
 
 using namespace mozilla;
@@ -78,8 +83,11 @@ nsDisplaySVGPathGeometry::HitTest(nsDisplayListBuilder* aBuilder, const nsRect& 
   nsSVGPathGeometryFrame *frame = static_cast<nsSVGPathGeometryFrame*>(mFrame);
   nsPoint pointRelativeToReferenceFrame = aRect.Center();
   // ToReferenceFrame() includes frame->GetPosition(), our user space position.
-  nsPoint userSpacePt = pointRelativeToReferenceFrame -
-                          (ToReferenceFrame() - frame->GetPosition());
+  nsPoint userSpacePtInAppUnits = pointRelativeToReferenceFrame -
+                                   (ToReferenceFrame() - frame->GetPosition());
+  gfxPoint userSpacePt =
+    gfxPoint(userSpacePtInAppUnits.x, userSpacePtInAppUnits.y) /
+      frame->PresContext()->AppUnitsPerCSSPixel();
   if (frame->GetFrameForPoint(userSpacePt)) {
     aOutFrames->AppendElement(frame);
   }
@@ -89,15 +97,21 @@ void
 nsDisplaySVGPathGeometry::Paint(nsDisplayListBuilder* aBuilder,
                                 nsRenderingContext* aCtx)
 {
+  uint32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
+
   // ToReferenceFrame includes our mRect offset, but painting takes
   // account of that too. To avoid double counting, we subtract that
   // here.
   nsPoint offset = ToReferenceFrame() - mFrame->GetPosition();
 
-  aCtx->PushState();
-  aCtx->Translate(offset);
-  static_cast<nsSVGPathGeometryFrame*>(mFrame)->PaintSVG(aCtx, nullptr);
-  aCtx->PopState();
+  gfxPoint devPixelOffset =
+    nsLayoutUtils::PointToGfxPoint(offset, appUnitsPerDevPixel);
+
+  aCtx->ThebesContext()->Save();
+  gfxMatrix tm = nsSVGIntegrationUtils::GetCSSPxToDevPxMatrix(mFrame) *
+                   gfxMatrix::Translation(devPixelOffset);
+  static_cast<nsSVGPathGeometryFrame*>(mFrame)->PaintSVG(aCtx, tm);
+  aCtx->ThebesContext()->Restore();
 }
 
 //----------------------------------------------------------------------
@@ -199,29 +213,29 @@ nsSVGPathGeometryFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
 nsresult
 nsSVGPathGeometryFrame::PaintSVG(nsRenderingContext *aContext,
-                                 const nsIntRect *aDirtyRect,
-                                 nsIFrame* aTransformRoot)
+                                 const gfxMatrix& aTransform,
+                                 const nsIntRect* aDirtyRect)
 {
   if (!StyleVisibility()->IsVisible())
     return NS_OK;
 
   uint32_t paintOrder = StyleSVG()->mPaintOrder;
   if (paintOrder == NS_STYLE_PAINT_ORDER_NORMAL) {
-    Render(aContext, eRenderFill | eRenderStroke, aTransformRoot);
-    PaintMarkers(aContext);
+    Render(aContext, eRenderFill | eRenderStroke, aTransform);
+    PaintMarkers(aContext, aTransform);
   } else {
     while (paintOrder) {
       uint32_t component =
         paintOrder & ((1 << NS_STYLE_PAINT_ORDER_BITWIDTH) - 1);
       switch (component) {
         case NS_STYLE_PAINT_ORDER_FILL:
-          Render(aContext, eRenderFill, aTransformRoot);
+          Render(aContext, eRenderFill, aTransform);
           break;
         case NS_STYLE_PAINT_ORDER_STROKE:
-          Render(aContext, eRenderStroke, aTransformRoot);
+          Render(aContext, eRenderStroke, aTransform);
           break;
         case NS_STYLE_PAINT_ORDER_MARKERS:
-          PaintMarkers(aContext);
+          PaintMarkers(aContext, aTransform);
           break;
       }
       paintOrder >>= NS_STYLE_PAINT_ORDER_BITWIDTH;
@@ -232,53 +246,69 @@ nsSVGPathGeometryFrame::PaintSVG(nsRenderingContext *aContext,
 }
 
 nsIFrame*
-nsSVGPathGeometryFrame::GetFrameForPoint(const nsPoint &aPoint)
+nsSVGPathGeometryFrame::GetFrameForPoint(const gfxPoint& aPoint)
 {
-  gfxMatrix canvasTM = GetCanvasTM(FOR_HIT_TESTING);
-  if (canvasTM.IsSingular()) {
-    return nullptr;
-  }
-  uint16_t fillRule, hitTestFlags;
+  FillRule fillRule;
+  uint16_t hitTestFlags;
   if (GetStateBits() & NS_STATE_SVG_CLIPPATH_CHILD) {
     hitTestFlags = SVG_HIT_TEST_FILL;
-    fillRule = StyleSVG()->mClipRule;
+    fillRule = StyleSVG()->mClipRule == NS_STYLE_FILL_RULE_NONZERO
+                 ? FillRule::FILL_WINDING : FillRule::FILL_EVEN_ODD;
   } else {
     hitTestFlags = GetHitTestFlags();
-    // XXX once bug 614732 is fixed, aPoint won't need any conversion in order
-    // to compare it with mRect.
-    nsPoint point =
-      nsSVGUtils::TransformOuterSVGPointToChildFrame(aPoint, canvasTM, PresContext());
-    if (!hitTestFlags || ((hitTestFlags & SVG_HIT_TEST_CHECK_MRECT) &&
-                          !mRect.Contains(point)))
+    if (!hitTestFlags) {
       return nullptr;
-    fillRule = StyleSVG()->mFillRule;
+    }
+    if (hitTestFlags & SVG_HIT_TEST_CHECK_MRECT) {
+      gfxRect rect =
+        nsLayoutUtils::RectToGfxRect(mRect, PresContext()->AppUnitsPerCSSPixel());
+      if (!rect.Contains(aPoint)) {
+        return nullptr;
+      }
+    }
+    fillRule = StyleSVG()->mFillRule == NS_STYLE_FILL_RULE_NONZERO
+                 ? FillRule::FILL_WINDING : FillRule::FILL_EVEN_ODD;
   }
 
   bool isHit = false;
 
-  nsRefPtr<gfxContext> tmpCtx =
-    new gfxContext(gfxPlatform::GetPlatform()->ScreenReferenceSurface());
+  nsSVGPathGeometryElement* content =
+    static_cast<nsSVGPathGeometryElement*>(mContent);
 
-  GeneratePath(tmpCtx, ToMatrix(canvasTM));
-  gfxPoint userSpacePoint =
-    tmpCtx->DeviceToUser(gfxPoint(PresContext()->AppUnitsToGfxUnits(aPoint.x),
-                                  PresContext()->AppUnitsToGfxUnits(aPoint.y)));
+  // Using ScreenReferenceDrawTarget() opens us to Moz2D backend specific hit-
+  // testing bugs. Maybe we should use a BackendType::CAIRO DT for hit-testing
+  // so that we get more consistent/backwards compatible results?
+  RefPtr<DrawTarget> drawTarget =
+    gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
+  RefPtr<PathBuilder> builder =
+    drawTarget->CreatePathBuilder(fillRule);
+  RefPtr<Path> path = content->BuildPath(builder);
+  if (!path) {
+    return nullptr; // no path, so we don't paint anything that can be hit
+  }
 
-  if (fillRule == NS_STYLE_FILL_RULE_EVENODD)
-    tmpCtx->SetFillRule(gfxContext::FILL_RULE_EVEN_ODD);
-  else
-    tmpCtx->SetFillRule(gfxContext::FILL_RULE_WINDING);
-
-  if (hitTestFlags & SVG_HIT_TEST_FILL)
-    isHit = tmpCtx->PointInFill(userSpacePoint);
+  if (hitTestFlags & SVG_HIT_TEST_FILL) {
+    isHit = path->ContainsPoint(ToPoint(aPoint), Matrix());
+  }
   if (!isHit && (hitTestFlags & SVG_HIT_TEST_STROKE)) {
-    nsSVGUtils::SetupCairoStrokeGeometry(this, tmpCtx);
-    // tmpCtx's matrix may have transformed by SetupCairoStrokeGeometry
-    // if there is a non-scaling stroke. We need to transform userSpacePoint
-    // so that everything is using the same co-ordinate system.
-    userSpacePoint =
-      nsSVGUtils::GetStrokeTransform(this).Invert().Transform(userSpacePoint);
-    isHit = tmpCtx->PointInStroke(userSpacePoint);
+    Point point = ToPoint(aPoint);
+    SVGContentUtils::AutoStrokeOptions stroke;
+    SVGContentUtils::GetStrokeOptions(&stroke, content, StyleContext(), nullptr);
+    Matrix nonScalingStrokeMatrix = ToMatrix(nsSVGUtils::GetStrokeTransform(this));
+    if (!nonScalingStrokeMatrix.IsIdentity()) {
+      // We need to transform the path back into the appropriate ancestor
+      // coordinate system in order for non-scaled stroke to be correct.
+      // Naturally we also need to transform the point into the same
+      // coordinate system in order to hit-test against the path.
+      if (!nonScalingStrokeMatrix.Invert()) {
+        return nullptr;
+      }
+      point = nonScalingStrokeMatrix * point;
+      RefPtr<PathBuilder> builder =
+        path->TransformedCopyToBuilder(nonScalingStrokeMatrix, fillRule);
+      path = builder->Finish();
+    }
+    isHit = path->StrokeContainsPoint(stroke, point, Matrix());
   }
 
   if (isHit && nsSVGUtils::HitTestClip(this, aPoint))
@@ -291,7 +321,7 @@ nsRect
 nsSVGPathGeometryFrame::GetCoveredRegion()
 {
   return nsSVGUtils::TransformFrameRectToOuterSVG(
-           mRect, GetCanvasTM(FOR_OUTERSVG_TM), PresContext());
+           mRect, GetCanvasTM(), PresContext());
 }
 
 void
@@ -333,12 +363,12 @@ nsSVGPathGeometryFrame::ReflowSVG()
   // transforms between us and our nsSVGOuterSVGFrame, even though the
   // overwhelming number of SVGs will never have this problem.
   // XXX Will Azure eventually save us from having to do this?
-  gfxSize scaleFactors = GetCanvasTM(FOR_OUTERSVG_TM).ScaleFactors(true);
+  gfxSize scaleFactors = GetCanvasTM().ScaleFactors(true);
   bool applyScaling = fabs(scaleFactors.width) >= 1e-6 &&
                       fabs(scaleFactors.height) >= 1e-6;
   gfx::Matrix scaling;
   if (applyScaling) {
-    scaling.Scale(scaleFactors.width, scaleFactors.height);
+    scaling.PreScale(scaleFactors.width, scaleFactors.height);
   }
   gfxRect extent = GetBBoxContribution(scaling, flags).ToThebesRect();
   if (applyScaling) {
@@ -419,11 +449,24 @@ nsSVGPathGeometryFrame::GetBBoxContribution(const Matrix &aToBBoxUserspace,
     return bbox;
   }
 
-  nsRefPtr<gfxContext> tmpCtx =
-    new gfxContext(gfxPlatform::GetPlatform()->ScreenReferenceSurface());
+  RefPtr<DrawTarget> tmpDT;
+#ifdef XP_WIN
+  // Unfortunately D2D backed DrawTarget produces bounds with rounding errors
+  // when whole number results are expected, even in the case of trivial
+  // calculations. To avoid that and meet the expectations of web content we
+  // have to use a CAIRO DrawTarget. The most efficient way to do that is to
+  // wrap the cached cairo_surface_t from ScreenReferenceSurface():
+  nsRefPtr<gfxASurface> refSurf =
+    gfxPlatform::GetPlatform()->ScreenReferenceSurface();
+  tmpDT = gfxPlatform::GetPlatform()->
+    CreateDrawTargetForSurface(refSurf, IntSize(1, 1));
+#else
+  tmpDT = gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
+#endif
+  nsRefPtr<gfxContext> tmpCtx = new gfxContext(tmpDT);
 
   GeneratePath(tmpCtx, aToBBoxUserspace);
-  tmpCtx->IdentityMatrix();
+  tmpCtx->SetMatrix(gfxMatrix());
 
   // Be careful when replacing the following logic to get the fill and stroke
   // extents independently (instead of computing the stroke extents from the
@@ -509,23 +552,14 @@ nsSVGPathGeometryFrame::GetBBoxContribution(const Matrix &aToBBoxUserspace,
 // nsSVGPathGeometryFrame methods:
 
 gfxMatrix
-nsSVGPathGeometryFrame::GetCanvasTM(uint32_t aFor, nsIFrame* aTransformRoot)
+nsSVGPathGeometryFrame::GetCanvasTM()
 {
-  if (!(GetStateBits() & NS_FRAME_IS_NONDISPLAY) && !aTransformRoot) {
-    if ((aFor == FOR_PAINTING && NS_SVGDisplayListPaintingEnabled()) ||
-        (aFor == FOR_HIT_TESTING && NS_SVGDisplayListHitTestingEnabled())) {
-      return nsSVGIntegrationUtils::GetCSSPxToDevPxMatrix(this);
-    }
-  }
-
   NS_ASSERTION(GetParent(), "null parent");
 
   nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(GetParent());
   dom::SVGGraphicsElement *content = static_cast<dom::SVGGraphicsElement*>(mContent);
 
-  return content->PrependLocalTransformsTo(
-      this == aTransformRoot ? gfxMatrix() :
-                               parent->GetCanvasTM(aFor, aTransformRoot));
+  return content->PrependLocalTransformsTo(parent->GetCanvasTM());
 }
 
 nsSVGPathGeometryFrame::MarkerProperties
@@ -577,7 +611,7 @@ nsSVGPathGeometryFrame::MarkerProperties::GetMarkerEndFrame()
 void
 nsSVGPathGeometryFrame::Render(nsRenderingContext *aContext,
                                uint32_t aRenderComponents,
-                               nsIFrame* aTransformRoot)
+                               const gfxMatrix& aTransform)
 {
   gfxContext *gfx = aContext->ThebesContext();
 
@@ -586,10 +620,10 @@ nsSVGPathGeometryFrame::Render(nsRenderingContext *aContext,
   switch (StyleSVG()->mShapeRendering) {
   case NS_STYLE_SHAPE_RENDERING_OPTIMIZESPEED:
   case NS_STYLE_SHAPE_RENDERING_CRISPEDGES:
-    gfx->SetAntialiasMode(gfxContext::MODE_ALIASED);
+    gfx->SetAntialiasMode(AntialiasMode::NONE);
     break;
   default:
-    gfx->SetAntialiasMode(gfxContext::MODE_COVERAGE);
+    gfx->SetAntialiasMode(AntialiasMode::SUBPIXEL);
     break;
   }
 
@@ -617,7 +651,7 @@ nsSVGPathGeometryFrame::Render(nsRenderingContext *aContext,
       autoSaveRestore.SetContext(gfx);
     //}
 
-    GeneratePath(gfx, ToMatrix(GetCanvasTM(FOR_PAINTING, aTransformRoot)));
+    GeneratePath(gfx, ToMatrix(aTransform));
 
     // We used to call gfx->Restore() here, since for the
     // SVGAutoRenderState::CLIP case it is important to leave the fill rule
@@ -646,10 +680,10 @@ nsSVGPathGeometryFrame::Render(nsRenderingContext *aContext,
 
   gfxContextAutoSaveRestore autoSaveRestore(gfx);
 
-  GeneratePath(gfx, ToMatrix(GetCanvasTM(FOR_PAINTING, aTransformRoot)));
+  GeneratePath(gfx, ToMatrix(aTransform));
 
   gfxTextContextPaint *contextPaint =
-    (gfxTextContextPaint*)aContext->GetUserData(&gfxTextContextPaint::sUserDataKey);
+    (gfxTextContextPaint*)aContext->GetDrawTarget()->GetUserData(&gfxTextContextPaint::sUserDataKey);
 
   if ((aRenderComponents & eRenderFill) &&
       nsSVGUtils::SetupCairoFillPaint(this, gfx, contextPaint)) {
@@ -669,12 +703,14 @@ nsSVGPathGeometryFrame::GeneratePath(gfxContext* aContext,
                                      const Matrix &aTransform)
 {
   if (aTransform.IsSingular()) {
-    aContext->IdentityMatrix();
+    aContext->SetMatrix(gfxMatrix());
     aContext->NewPath();
     return;
   }
 
-  aContext->MultiplyAndNudgeToIntegers(ThebesMatrix(aTransform));
+  aContext->SetMatrix(
+    aContext->CurrentMatrix().PreMultiply(ThebesMatrix(aTransform)).
+                              NudgeToIntegers());
 
   // Hack to let SVGPathData::ConstructPath know if we have square caps:
   const nsStyleSVG* style = StyleSVG();
@@ -687,10 +723,11 @@ nsSVGPathGeometryFrame::GeneratePath(gfxContext* aContext,
 }
 
 void
-nsSVGPathGeometryFrame::PaintMarkers(nsRenderingContext* aContext)
+nsSVGPathGeometryFrame::PaintMarkers(nsRenderingContext* aContext,
+                                     const gfxMatrix& aTransform)
 {
   gfxTextContextPaint *contextPaint =
-    (gfxTextContextPaint*)aContext->GetUserData(&gfxTextContextPaint::sUserDataKey);
+    (gfxTextContextPaint*)aContext->GetDrawTarget()->GetUserData(&gfxTextContextPaint::sUserDataKey);
 
   if (static_cast<nsSVGPathGeometryElement*>(mContent)->IsMarkable()) {
     MarkerProperties properties = GetMarkerProperties(this);
@@ -716,7 +753,7 @@ nsSVGPathGeometryFrame::PaintMarkers(nsRenderingContext* aContext)
           nsSVGMark& mark = marks[i];
           nsSVGMarkerFrame* frame = markerFrames[mark.type];
           if (frame) {
-            frame->PaintMark(aContext, this, &mark, strokeWidth);
+            frame->PaintMark(aContext, aTransform, this, &mark, strokeWidth);
           }
         }
       }

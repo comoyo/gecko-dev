@@ -22,7 +22,7 @@ namespace mozilla {
 class FallbackCameraControl : public CameraControlImpl
 {
 public:
-  FallbackCameraControl(uint32_t aCameraId) : CameraControlImpl(aCameraId) { }
+  explicit FallbackCameraControl(uint32_t aCameraId) : CameraControlImpl(aCameraId) { }
 
   virtual nsresult Set(uint32_t aKey, const nsAString& aValue) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual nsresult Get(uint32_t aKey, nsAString& aValue) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
@@ -32,6 +32,8 @@ public:
   virtual nsresult Get(uint32_t aKey, int32_t& aValue) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual nsresult Set(uint32_t aKey, int64_t aValue) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual nsresult Get(uint32_t aKey, int64_t& aValue) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
+  virtual nsresult Set(uint32_t aKey, bool aValue) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
+  virtual nsresult Get(uint32_t aKey, bool& aValue) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual nsresult Set(uint32_t aKey, const Size& aValue) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual nsresult Get(uint32_t aKey, Size& aValue) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual nsresult Set(uint32_t aKey, const nsTArray<Region>& aRegions) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }

@@ -2,14 +2,16 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from marionette_test import MarionetteTestCase
-from marionette import JavascriptException, MarionetteException
+from marionette_test import MarionetteTestCase, skip_if_b2g
+from errors import JavascriptException, MarionetteException
 
 class TestSpecialPowersContent(MarionetteTestCase):
 
     testpref = "testing.marionette.contentcharpref"
     testvalue = "blabla"
 
+    # fails in b2g's test-container: "Error getting pref", Bug 1060061
+    @skip_if_b2g
     def test_prefs(self):
         result = self.marionette.execute_script("""
         SpecialPowers.setCharPref("%(pref)s", "%(value)s");

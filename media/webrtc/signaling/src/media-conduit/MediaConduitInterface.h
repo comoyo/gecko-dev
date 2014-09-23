@@ -25,9 +25,10 @@ namespace mozilla {
  */
 class TransportInterface
 {
-public:
+protected:
   virtual ~TransportInterface() {}
 
+public:
   /**
    * RTP Transport Function to be implemented by concrete transport implementation
    * @param data : RTP Packet (audio/video) to be transported
@@ -53,7 +54,7 @@ public:
 class ImageHandle
 {
 public:
-  ImageHandle(layers::Image* image) : mImage(image) {}
+  explicit ImageHandle(layers::Image* image) : mImage(image) {}
 
   const RefPtr<layers::Image>& GetImage() const { return mImage; }
 
@@ -71,9 +72,10 @@ private:
  */
 class VideoRenderer
 {
- public:
+protected:
   virtual ~VideoRenderer() {}
 
+public:
   /**
    * Callback Function reportng any change in the video-frame dimensions
    * @param width:  current width of the video @ decoder
@@ -122,10 +124,11 @@ class VideoRenderer
  */
 class MediaSessionConduit
 {
+protected:
+  virtual ~MediaSessionConduit() {}
+
 public:
   enum Type { AUDIO, VIDEO } ;
-
-  virtual ~MediaSessionConduit() {}
 
   virtual Type type() const = 0;
 
@@ -164,6 +167,16 @@ public:
   /**
    * Functions returning stats needed by w3c stats model.
    */
+  virtual bool GetVideoEncoderStats(double* framerateMean,
+                                    double* framerateStdDev,
+                                    double* bitrateMean,
+                                    double* bitrateStdDev,
+                                    uint32_t* droppedFrames) = 0;
+  virtual bool GetVideoDecoderStats(double* framerateMean,
+                                    double* framerateStdDev,
+                                    double* bitrateMean,
+                                    double* bitrateStdDev,
+                                    uint32_t* discardedPackets) = 0;
   virtual bool GetAVStats(int32_t* jitterBufferDelayMs,
                           int32_t* playoutBufferDelayMs,
                           int32_t* avSyncOffsetMs) = 0;
@@ -179,21 +192,31 @@ public:
                                    unsigned int* packetsSent,
                                    uint64_t* bytesSent) = 0;
 
+  virtual uint64_t CodecPluginID() = 0;
+
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaSessionConduit)
 
 };
 
 // Abstract base classes for external encoder/decoder.
-class VideoEncoder
+class CodecPluginID
 {
 public:
-  virtual ~VideoEncoder() {};
+  virtual ~CodecPluginID() {}
+
+  virtual const uint64_t PluginID() = 0;
 };
 
-class VideoDecoder
+class VideoEncoder : public CodecPluginID
 {
 public:
-  virtual ~VideoDecoder() {};
+  virtual ~VideoEncoder() {}
+};
+
+class VideoDecoder : public CodecPluginID
+{
+public:
+  virtual ~VideoDecoder() {}
 };
 
 /**

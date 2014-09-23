@@ -816,11 +816,11 @@ function SupportedLocales(availableLocales, requestedLocales, options) {
 
     // Step 4.
     for (var i = 0; i < subset.length; i++) {
-        _DefineValueProperty(subset, i, subset[i],
-                             ATTR_ENUMERABLE | ATTR_NONCONFIGURABLE | ATTR_NONWRITABLE);
+        _DefineDataProperty(subset, i, subset[i],
+                            ATTR_ENUMERABLE | ATTR_NONCONFIGURABLE | ATTR_NONWRITABLE);
     }
-    _DefineValueProperty(subset, "length", subset.length,
-                         ATTR_NONENUMERABLE | ATTR_NONCONFIGURABLE | ATTR_NONWRITABLE);
+    _DefineDataProperty(subset, "length", subset.length,
+                        ATTR_NONENUMERABLE | ATTR_NONCONFIGURABLE | ATTR_NONWRITABLE);
 
     // Step 5.
     return subset;
@@ -878,7 +878,7 @@ function GetNumberOption(options, property, minimum, maximum, fallback) {
     // Step 2.
     if (value !== undefined) {
         value = ToNumber(value);
-        if (std_isNaN(value) || value < minimum || value > maximum)
+        if (Number_isNaN(value) || value < minimum || value > maximum)
             ThrowError(JSMSG_INVALID_DIGITS_VALUE, value);
         return std_Math_floor(value);
     }
@@ -896,7 +896,7 @@ function GetNumberOption(options, property, minimum, maximum, fallback) {
  * to avoid interference from setters on Object.prototype.
  */
 function defineProperty(o, p, v) {
-    _DefineValueProperty(o, p, v, ATTR_ENUMERABLE | ATTR_CONFIGURABLE | ATTR_WRITABLE);
+    _DefineDataProperty(o, p, v, ATTR_ENUMERABLE | ATTR_CONFIGURABLE | ATTR_WRITABLE);
 }
 
 

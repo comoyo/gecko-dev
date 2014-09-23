@@ -25,11 +25,17 @@ namespace JS {
   class SourceBufferHolder;
 }
 
+namespace mozilla {
+namespace dom {
+class AutoJSAPI;
+}
+}
+
 //////////////////////////////////////////////////////////////
 // Script loader implementation
 //////////////////////////////////////////////////////////////
 
-class nsScriptLoader : public nsIStreamLoaderObserver
+class nsScriptLoader MOZ_FINAL : public nsIStreamLoaderObserver
 {
   class MOZ_STACK_CLASS AutoCurrentScriptUpdater
   {
@@ -54,8 +60,7 @@ class nsScriptLoader : public nsIStreamLoaderObserver
   friend class AutoCurrentScriptUpdater;
 
 public:
-  nsScriptLoader(nsIDocument* aDocument);
-  virtual ~nsScriptLoader();
+  explicit nsScriptLoader(nsIDocument* aDocument);
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSISTREAMLOADEROBSERVER
@@ -165,17 +170,17 @@ public:
    *                     attribute). May be the empty string.
    * @param aDocument    Document which the data is loaded for. Must not be
    *                     null.
-   * @param aBufOut      [out] jschar array allocated by ConvertToUTF16 and
+   * @param aBufOut      [out] char16_t array allocated by ConvertToUTF16 and
    *                     containing data converted to unicode.  Caller must
    *                     js_free() this data when no longer needed.
    * @param aLengthOut   [out] Length of array returned in aBufOut in number
-   *                     of jschars.
+   *                     of char16_t code units.
    */
   static nsresult ConvertToUTF16(nsIChannel* aChannel, const uint8_t* aData,
                                  uint32_t aLength,
                                  const nsAString& aHintCharset,
                                  nsIDocument* aDocument,
-                                 jschar*& aBufOut, size_t& aLengthOut);
+                                 char16_t*& aBufOut, size_t& aLengthOut);
 
   /**
    * Processes any pending requests that are ready for processing.
@@ -245,6 +250,8 @@ public:
                                    void **aOffThreadToken);
 
 private:
+  virtual ~nsScriptLoader();
+
   /**
    * Unblocks the creator parser of the parser-blocking scripts.
    */
@@ -311,7 +318,8 @@ private:
                           void **aOffThreadToken);
 
   already_AddRefed<nsIScriptGlobalObject> GetScriptGlobalObject();
-  void FillCompileOptionsForRequest(nsScriptLoadRequest *aRequest,
+  void FillCompileOptionsForRequest(const mozilla::dom::AutoJSAPI &jsapi,
+                                    nsScriptLoadRequest *aRequest,
                                     JS::Handle<JSObject *> aScopeChain,
                                     JS::CompileOptions *aOptions);
 
@@ -364,7 +372,7 @@ private:
 class nsAutoScriptLoaderDisabler
 {
 public:
-  nsAutoScriptLoaderDisabler(nsIDocument* aDoc)
+  explicit nsAutoScriptLoaderDisabler(nsIDocument* aDoc)
   {
     mLoader = aDoc->ScriptLoader();
     mWasEnabled = mLoader->GetEnabled();

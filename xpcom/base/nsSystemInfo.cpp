@@ -20,6 +20,7 @@
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
+#include "nsIObserverService.h"
 #endif
 
 #ifdef MOZ_WIDGET_GTK
@@ -34,6 +35,7 @@ using namespace mozilla::widget::android;
 #ifdef MOZ_WIDGET_GONK
 #include <sys/system_properties.h>
 #include "mozilla/Preferences.h"
+#include "nsPrintfCString.h"
 #endif
 
 #ifdef ANDROID
@@ -201,7 +203,8 @@ nsSystemInfo::Init()
                          versionDouble >= 6.2);
   NS_ENSURE_SUCCESS(rv, rv);
 #else
-  rv = SetPropertyAsBool(NS_ConvertASCIItoUTF16("hasWindowsTouchInterface"), false);
+  rv = SetPropertyAsBool(NS_ConvertASCIItoUTF16("hasWindowsTouchInterface"),
+                         false);
   NS_ENSURE_SUCCESS(rv, rv);
 #endif
 
@@ -231,15 +234,20 @@ nsSystemInfo::Init()
       return rv;
     }
   }
-  nsAutoCString hddModel, hddRevision;
-  if (NS_SUCCEEDED(GetHDDInfo(NS_APP_USER_PROFILE_50_DIR, hddModel,
-                              hddRevision))) {
-    rv = SetPropertyAsACString(NS_LITERAL_STRING("profileHDDModel"), hddModel);
-    NS_ENSURE_SUCCESS(rv, rv);
-    rv = SetPropertyAsACString(NS_LITERAL_STRING("profileHDDRevision"),
-                               hddRevision);
-    NS_ENSURE_SUCCESS(rv, rv);
+  if (NS_FAILED(GetProfileHDDInfo())) {
+    // We might have been called before profile-do-change. We'll observe that
+    // event so that we can fill this in later.
+    nsCOMPtr<nsIObserverService> obsService =
+      do_GetService(NS_OBSERVERSERVICE_CONTRACTID, &rv);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+    rv = obsService->AddObserver(this, "profile-do-change", false);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
   }
+  nsAutoCString hddModel, hddRevision;
   if (NS_SUCCEEDED(GetHDDInfo(NS_GRE_DIR, hddModel, hddRevision))) {
     rv = SetPropertyAsACString(NS_LITERAL_STRING("binHDDModel"), hddModel);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -258,7 +266,8 @@ nsSystemInfo::Init()
 
 #if defined(MOZ_WIDGET_GTK)
   // This must be done here because NSPR can only separate OS's when compiled, not libraries.
-  char* gtkver = PR_smprintf("GTK %u.%u.%u", gtk_major_version, gtk_minor_version, gtk_micro_version);
+  char* gtkver = PR_smprintf("GTK %u.%u.%u", gtk_major_version,
+                             gtk_minor_version, gtk_micro_version);
   if (gtkver) {
     rv = SetPropertyAsACString(NS_LITERAL_STRING("secondaryLibrary"),
                                nsDependentCString(gtkver));
@@ -312,6 +321,9 @@ nsSystemInfo::Init()
   if (__system_property_get("ro.build.version.sdk", sdk)) {
     android_sdk_version = atoi(sdk);
     SetPropertyAsInt32(NS_LITERAL_STRING("sdk_version"), android_sdk_version);
+
+    SetPropertyAsACString(NS_LITERAL_STRING("secondaryLibrary"),
+                          nsPrintfCString("SDK %u", android_sdk_version));
   }
 
   char characteristics[PROP_VALUE_MAX];
@@ -383,3 +395,45 @@ nsSystemInfo::SetUint64Property(const nsAString& aPropertyName,
     NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Unable to set property");
   }
 }
+
+#if defined(XP_WIN)
+NS_IMETHODIMP
+nsSystemInfo::Observe(nsISupports* aSubject, const char* aTopic,
+                      const char16_t* aData)
+{
+  if (!strcmp(aTopic, "profile-do-change")) {
+    nsresult rv;
+    nsCOMPtr<nsIObserverService> obsService =
+      do_GetService(NS_OBSERVERSERVICE_CONTRACTID, &rv);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    rv = obsService->RemoveObserver(this, "profile-do-change");
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    return GetProfileHDDInfo();
+  }
+  return NS_OK;
+}
+
+nsresult
+nsSystemInfo::GetProfileHDDInfo()
+{
+  nsAutoCString hddModel, hddRevision;
+  nsresult rv = GetHDDInfo(NS_APP_USER_PROFILE_50_DIR, hddModel, hddRevision);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  rv = SetPropertyAsACString(NS_LITERAL_STRING("profileHDDModel"), hddModel);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  rv = SetPropertyAsACString(NS_LITERAL_STRING("profileHDDRevision"),
+                             hddRevision);
+  return rv;
+}
+
+NS_IMPL_ISUPPORTS_INHERITED(nsSystemInfo, nsHashPropertyBag, nsIObserver)
+#endif // defined(XP_WIN)
+

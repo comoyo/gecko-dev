@@ -34,12 +34,14 @@
 #define GMP_PLATFORM_h_
 
 #include "gmp-errors.h"
+#include "gmp-storage.h"
 #include <stdint.h>
 
 /* Platform helper API. */
 
 class GMPTask {
 public:
+  virtual void Destroy() = 0; // Deletes object.
   virtual ~GMPTask() {}
   virtual void Run() = 0;
 };
@@ -48,20 +50,37 @@ class GMPThread {
 public:
   virtual ~GMPThread() {}
   virtual void Post(GMPTask* aTask) = 0;
-  virtual void Join() = 0;
+  virtual void Join() = 0; // Deletes object after join completes.
 };
 
+// A re-entrant monitor; can be locked from the same thread multiple times.
+// Must be unlocked the same number of times it's locked.
 class GMPMutex {
 public:
   virtual ~GMPMutex() {}
   virtual void Acquire() = 0;
   virtual void Release() = 0;
+  virtual void Destroy() = 0; // Deletes object.
 };
+
+// Time is defined as the number of milliseconds since the
+// Epoch (00:00:00 UTC, January 1, 1970).
+typedef int64_t GMPTimestamp;
 
 typedef GMPErr (*GMPCreateThreadPtr)(GMPThread** aThread);
 typedef GMPErr (*GMPRunOnMainThreadPtr)(GMPTask* aTask);
 typedef GMPErr (*GMPSyncRunOnMainThreadPtr)(GMPTask* aTask);
 typedef GMPErr (*GMPCreateMutexPtr)(GMPMutex** aMutex);
+
+// Call on main thread only.
+typedef GMPErr (*GMPCreateRecordPtr)(const char* aRecordName,
+                                     uint32_t aRecordNameSize,
+                                     GMPRecord** aOutRecord,
+                                     GMPRecordClient* aClient);
+
+// Call on main thread only.
+typedef GMPErr (*GMPSetTimerOnMainThreadPtr)(GMPTask* aTask, int64_t aTimeoutMS);
+typedef GMPErr (*GMPGetCurrentTimePtr)(GMPTimestamp* aOutTime);
 
 struct GMPPlatformAPI {
   // Increment the version when things change. Can only add to the struct,
@@ -74,6 +93,9 @@ struct GMPPlatformAPI {
   GMPRunOnMainThreadPtr runonmainthread;
   GMPSyncRunOnMainThreadPtr syncrunonmainthread;
   GMPCreateMutexPtr createmutex;
+  GMPCreateRecordPtr createrecord;
+  GMPSetTimerOnMainThreadPtr settimer;
+  GMPGetCurrentTimePtr getcurrenttime;
 };
 
 #endif // GMP_PLATFORM_h_

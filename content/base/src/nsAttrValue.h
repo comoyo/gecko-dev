@@ -67,7 +67,7 @@ struct ImageValue;
  */
 class nsCheapString : public nsString {
 public:
-  nsCheapString(nsStringBuffer* aBuf)
+  explicit nsCheapString(nsStringBuffer* aBuf)
   {
     if (aBuf)
       aBuf->ToString(aBuf->StorageSize()/sizeof(char16_t) - 1, *this);
@@ -425,13 +425,6 @@ private:
   bool EnsureEmptyAtomArray();
   already_AddRefed<nsStringBuffer>
     GetStringBuffer(const nsAString& aValue) const;
-  // aStrict is set true if stringifying the return value equals with
-  // aValue.
-  int32_t StringToInteger(const nsAString& aValue,
-                          bool* aStrict,
-                          nsresult* aErrorCode,
-                          bool aCanBePercent = false,
-                          bool* aIsPercent = nullptr) const;
   // Given an enum table and a particular entry in that table, return
   // the actual integer value we should store.
   int32_t EnumTableEntryToValue(const EnumTable* aEnumTable,

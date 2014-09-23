@@ -42,13 +42,10 @@ class HTMLFormElement MOZ_FINAL : public nsGenericHTMLElement,
   friend class HTMLFormControlsCollection;
 
 public:
-  HTMLFormElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
-  virtual ~HTMLFormElement();
-
-  nsresult Init();
+  explicit HTMLFormElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   enum {
-    FORM_CONTROL_LIST_HASHTABLE_SIZE = 16
+    FORM_CONTROL_LIST_HASHTABLE_LENGTH = 8
   };
 
   // nsISupports
@@ -119,7 +116,7 @@ public:
    */
   void ForgetCurrentSubmission();
 
-  virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
 
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(HTMLFormElement,
                                                          nsGenericHTMLElement)
@@ -410,6 +407,8 @@ public:
 
   js::ExpandoAndGeneration mExpandoAndGeneration;
 
+  void RequestAutocomplete();
+
 protected:
   virtual JSObject* WrapNode(JSContext* aCx) MOZ_OVERRIDE;
 
@@ -438,7 +437,7 @@ protected:
 
   class RemoveElementRunnable : public nsRunnable {
   public:
-    RemoveElementRunnable(HTMLFormElement* aForm)
+    explicit RemoveElementRunnable(HTMLFormElement* aForm)
       : mForm(aForm)
     {}
 
@@ -628,9 +627,13 @@ protected:
   static bool gFirstFormSubmitted;
   /** Detection of first password input to initialize the password manager */
   static bool gPasswordManagerInitialized;
+
+private:
+  ~HTMLFormElement();
 };
 
 } // namespace dom
+
 } // namespace mozilla
 
 #endif // mozilla_dom_HTMLFormElement_h

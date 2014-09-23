@@ -21,11 +21,12 @@ let test = asyncTest(function*() {
 });
 
 function* testTopLeft(inspector, view) {
+  let selector = "#topleft";
   let {
     rules,
     element,
     elementStyle
-  } = yield assertPseudoElementRulesNumbers("#topleft", inspector, view, {
+  } = yield assertPseudoElementRulesNumbers(selector, inspector, view, {
     elementRulesNb: 4,
     afterRulesNb: 1,
     beforeRulesNb: 2,
@@ -38,24 +39,22 @@ function* testTopLeft(inspector, view) {
 
   // Make sure that clicking on the twisty hides pseudo elements
   let expander = gutters[0].querySelector(".ruleview-expander");
-  ok (view.element.classList.contains("show-pseudo-elements"), "Pseudo Elements are expanded");
+  ok (view.element.firstChild.classList.contains("show-expandable-container"), "Pseudo Elements are expanded");
   expander.click();
-  ok (!view.element.classList.contains("show-pseudo-elements"), "Pseudo Elements are collapsed by twisty");
+  ok (!view.element.firstChild.classList.contains("show-expandable-container"), "Pseudo Elements are collapsed by twisty");
   expander.click();
-  ok (view.element.classList.contains("show-pseudo-elements"), "Pseudo Elements are expanded again");
+  ok (view.element.firstChild.classList.contains("show-expandable-container"), "Pseudo Elements are expanded again");
 
   // Make sure that dblclicking on the header container also toggles the pseudo elements
   EventUtils.synthesizeMouseAtCenter(gutters[0], {clickCount: 2}, inspector.sidebar.getWindowForTab("ruleview"));
-  ok (!view.element.classList.contains("show-pseudo-elements"), "Pseudo Elements are collapsed by dblclicking");
+  ok (!view.element.firstChild.classList.contains("show-expandable-container"), "Pseudo Elements are collapsed by dblclicking");
 
   let defaultView = element.ownerDocument.defaultView;
   let elementRule = rules.elementRules[0];
-  let elementRuleView = [].filter.call(view.element.children, e => {
-    return e._ruleEditor && e._ruleEditor.rule === elementRule;
-  })[0]._ruleEditor;
+  let elementRuleView = getRuleViewRuleEditor(view, 3);
 
   let elementAfterRule = rules.afterRules[0];
-  let elementAfterRuleView = [].filter.call(view.element.children, (e) => {
+  let elementAfterRuleView = [].filter.call(view.element.children[1].children, (e) => {
     return e._ruleEditor && e._ruleEditor.rule === elementAfterRule;
   })[0]._ruleEditor;
 
@@ -68,7 +67,7 @@ function* testTopLeft(inspector, view) {
   );
 
   let elementBeforeRule = rules.beforeRules[0];
-  let elementBeforeRuleView = [].filter.call(view.element.children, (e) => {
+  let elementBeforeRuleView = [].filter.call(view.element.children[1].children, (e) => {
     return e._ruleEditor && e._ruleEditor.rule === elementBeforeRule;
   })[0]._ruleEditor;
 
@@ -89,35 +88,35 @@ function* testTopLeft(inspector, view) {
 
   yield elementAfterRule._applyingModifications;
 
-  is(defaultView.getComputedStyle(element, ":after").getPropertyValue("background-color"),
+  is((yield getComputedStyleProperty(selector, ":after", "background-color")),
     "rgb(0, 255, 0)", "Added property should have been used.");
-  is(defaultView.getComputedStyle(element, ":after").getPropertyValue("padding-top"),
+  is((yield getComputedStyleProperty(selector, ":after", "padding-top")),
     "100px", "Added property should have been used.");
-  is(defaultView.getComputedStyle(element).getPropertyValue("padding-top"),
+  is((yield getComputedStyleProperty(selector, null, "padding-top")),
     "32px", "Added property should not apply to element");
 
   secondProp.setEnabled(false);
   yield elementAfterRule._applyingModifications;
 
-  is(defaultView.getComputedStyle(element, ":after").getPropertyValue("padding-top"), "0px",
+  is((yield getComputedStyleProperty(selector, ":after", "padding-top")), "0px",
     "Disabled property should have been used.");
-  is(defaultView.getComputedStyle(element).getPropertyValue("padding-top"), "32px",
+  is((yield getComputedStyleProperty(selector, null, "padding-top")), "32px",
     "Added property should not apply to element");
 
   secondProp.setEnabled(true);
   yield elementAfterRule._applyingModifications;
 
-  is(defaultView.getComputedStyle(element, ":after").getPropertyValue("padding-top"), "100px",
+  is((yield getComputedStyleProperty(selector, ":after", "padding-top")), "100px",
     "Enabled property should have been used.");
-  is(defaultView.getComputedStyle(element).getPropertyValue("padding-top"), "32px",
+  is((yield getComputedStyleProperty(selector, null, "padding-top")), "32px",
     "Added property should not apply to element");
 
-  let firstProp = elementRuleView.addProperty("background-color", "rgb(0, 0, 255)", "");
+  firstProp = elementRuleView.addProperty("background-color", "rgb(0, 0, 255)", "");
   yield elementRule._applyingModifications;
 
-  is(defaultView.getComputedStyle(element).getPropertyValue("background-color"), "rgb(0, 0, 255)",
+  is((yield getComputedStyleProperty(selector, null, "background-color")), "rgb(0, 0, 255)",
     "Added property should have been used.");
-  is(defaultView.getComputedStyle(element, ":after").getPropertyValue("background-color"), "rgb(0, 255, 0)",
+  is((yield getComputedStyleProperty(selector, ":after", "background-color")), "rgb(0, 255, 0)",
     "Added prop does not apply to pseudo");
 }
 
@@ -138,10 +137,10 @@ function* testTopRight(inspector, view) {
   let gutters = assertGutters(view);
 
   let expander = gutters[0].querySelector(".ruleview-expander");
-  ok (!view.element.classList.contains("show-pseudo-elements"), "Pseudo Elements remain collapsed after switching element");
+  ok (!view.element.firstChild.classList.contains("show-expandable-container"), "Pseudo Elements remain collapsed after switching element");
   expander.scrollIntoView();
   expander.click();
-  ok (view.element.classList.contains("show-pseudo-elements"), "Pseudo Elements are shown again after clicking twisty");
+  ok (view.element.firstChild.classList.contains("show-expandable-container"), "Pseudo Elements are shown again after clicking twisty");
 }
 
 function* testBottomRight(inspector, view) {
@@ -183,7 +182,7 @@ function* testParagraph(inspector, view) {
   let gutters = assertGutters(view);
 
   let elementFirstLineRule = rules.firstLineRules[0];
-  let elementFirstLineRuleView = [].filter.call(view.element.children, (e) => {
+  let elementFirstLineRuleView = [].filter.call(view.element.children[1].children, (e) => {
     return e._ruleEditor && e._ruleEditor.rule === elementFirstLineRule;
   })[0]._ruleEditor;
 
@@ -195,7 +194,7 @@ function* testParagraph(inspector, view) {
   );
 
   let elementFirstLetterRule = rules.firstLetterRules[0];
-  let elementFirstLetterRuleView = [].filter.call(view.element.children, (e) => {
+  let elementFirstLetterRuleView = [].filter.call(view.element.children[1].children, (e) => {
     return e._ruleEditor && e._ruleEditor.rule === elementFirstLetterRule;
   })[0]._ruleEditor;
 
@@ -207,7 +206,7 @@ function* testParagraph(inspector, view) {
   );
 
   let elementSelectionRule = rules.selectionRules[0];
-  let elementSelectionRuleView = [].filter.call(view.element.children, (e) => {
+  let elementSelectionRuleView = [].filter.call(view.element.children[1].children, (e) => {
     return e._ruleEditor && e._ruleEditor.rule === elementSelectionRule;
   })[0]._ruleEditor;
 
@@ -232,7 +231,7 @@ function convertTextPropsToString(textProps) {
 
 function* testNode(selector, inspector, view) {
   let element = getNode(selector);
-  yield selectNode(element, inspector);
+  yield selectNode(selector, inspector);
   let elementStyle = view._elementStyle;
   return {element: element, elementStyle: elementStyle};
 }

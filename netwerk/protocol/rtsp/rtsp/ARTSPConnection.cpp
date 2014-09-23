@@ -56,12 +56,11 @@ ARTSPConnection::ARTSPConnection(bool uidValid, uid_t uid)
       mUID(uid),
       mState(DISCONNECTED),
       mAuthType(NONE),
-      mSocket(nullptr),
       mConnectionID(0),
       mNextCSeq(0),
       mReceiveResponseEventPending(false),
+      mSocket(nullptr),
       mNumSocketPollTimeoutRetries(0) {
-    MakeUserAgent(&mUserAgent);
 }
 
 ARTSPConnection::~ARTSPConnection() {
@@ -198,6 +197,13 @@ bool ARTSPConnection::ParseURL(
     }
 
     return true;
+}
+
+void ARTSPConnection::MakeUserAgent(const char *userAgent) {
+    mUserAgent.clear();
+    mUserAgent.setTo("User-Agent: ");
+    mUserAgent.append(userAgent);
+    mUserAgent.append("\r\n");
 }
 
 static status_t MakeSocketBlocking(PRFileDesc *fd, bool blocking) {
@@ -631,6 +637,9 @@ bool ARTSPConnection::receiveRTSPResponse() {
         return true;
     }
 
+    /*
+     * Status-Line = RTSP-Version SP Status-Code SP Reason-Phrase CRLF
+     */
     sp<ARTSPResponse> response = new ARTSPResponse;
     response->mStatusLine = statusLine;
 
@@ -648,14 +657,16 @@ bool ARTSPConnection::receiveRTSPResponse() {
     bool isRequest = false;
 
     if (!IsRTSPVersion(AString(response->mStatusLine, 0, space1))) {
-        CHECK(IsRTSPVersion(
-                    AString(
-                        response->mStatusLine,
-                        space2 + 1,
-                        response->mStatusLine.size() - space2 - 1)));
+        /*
+         * Request-Line = Method SP Request-URI SP RTSP-Version CRLF
+         */
+        if (!IsRTSPVersion(AString(response->mStatusLine, space2 + 1,
+                                   response->mStatusLine.size() - space2 - 1))) {
+            /* Neither an RTSP response or request */
+            return false;
+        }
 
         isRequest = true;
-
         response->mStatusCode = 0;
     } else {
         AString statusCodeStr(
@@ -1060,21 +1071,6 @@ void ARTSPConnection::addAuthentication(AString *request) {
     fragment.append("\r\n");
 
     request->insert(fragment, i + 2);
-}
-
-// static
-void ARTSPConnection::MakeUserAgent(AString *userAgent) {
-    userAgent->clear();
-    userAgent->setTo("User-Agent: stagefright/1.1 (Linux;Android ");
-
-#if (PROPERTY_VALUE_MAX < 8)
-#error "PROPERTY_VALUE_MAX must be at least 8"
-#endif
-
-    char value[PROPERTY_VALUE_MAX];
-    property_get("ro.build.version.release", value, "Unknown");
-    userAgent->append(value);
-    userAgent->append(")\r\n");
 }
 
 void ARTSPConnection::addUserAgent(AString *request) const {

@@ -28,10 +28,13 @@
 // Remove unsafe builtin functions.
 Object.defineProperty = null; // See bug 988416.
 
-// Cache builtin functions so using them doesn't require cloning the whole object they're 
+// Cache builtin functions so using them doesn't require cloning the whole object they're
 // installed on.
-var std_isFinite = isFinite;
-var std_isNaN = isNaN;
+//
+// WARNING: Do not make std_ references to builtin constructors (like Array and
+// Object) below. Setting `var std_Array = Array;`, for instance, would cause
+// the entire Array constructor, including its prototype and methods, to be
+// cloned into content compartments.
 var std_Array_indexOf = ArrayIndexOf;
 var std_Array_iterator = Array.prototype.iterator;
 var std_Array_join = Array.prototype.join;
@@ -58,6 +61,8 @@ var std_Number_POSITIVE_INFINITY = Number.POSITIVE_INFINITY;
 var std_Object_create = Object.create;
 var std_Object_getOwnPropertyNames = Object.getOwnPropertyNames;
 var std_Object_hasOwnProperty = Object.prototype.hasOwnProperty;
+var std_Object_getPrototypeOf = Object.getPrototypeOf;
+var std_Object_getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 var std_RegExp_test = RegExp.prototype.test;
 var std_String_fromCharCode = String.fromCharCode;
 var std_String_charCodeAt = String.prototype.charCodeAt;
@@ -74,6 +79,8 @@ var std_WeakMap = WeakMap;
 var std_WeakMap_get = WeakMap.prototype.get;
 var std_WeakMap_has = WeakMap.prototype.has;
 var std_WeakMap_set = WeakMap.prototype.set;
+var std_WeakMap_clear = WeakMap.prototype.clear;
+var std_WeakMap_delete = WeakMap.prototype.delete;
 var std_Map_has = Map.prototype.has;
 var std_Set_has = Set.prototype.has;
 var std_iterator = '@@iterator'; // FIXME: Change to be a symbol.
@@ -138,21 +145,21 @@ function CheckObjectCoercible(v) {
         ThrowError(JSMSG_CANT_CONVERT_TO, ToString(v), "object");
 }
 
+// Spec: ECMAScript Draft, 6th edition May 22, 2014, 7.1.15.
+function ToLength(v) {
+    v = ToInteger(v);
 
-/********** Various utility functions **********/
+    if (v <= 0)
+        return 0;
 
-
-/** Returns true iff Type(v) is Object; see ES5 8.6. */
-function IsObject(v) {
-    // Watch out for |typeof null === "object"| as the most obvious pitfall.
-    // But also be careful of SpiderMonkey's objects that emulate undefined
-    // (i.e. |document.all|), which have bogus |typeof| behavior.  Detect
-    // these objects using strict equality, which said bogosity doesn't affect.
-    return (typeof v === "object" && v !== null) ||
-           typeof v === "function" ||
-           (typeof v === "undefined" && v !== undefined);
+    // Math.pow(2, 53) - 1 = 0x1fffffffffffff
+    return v < 0x1fffffffffffff ? v : 0x1fffffffffffff;
 }
 
+// Spec: ECMAScript Draft, 6th edition Aug 24, 2014, 7.2.4.
+function SameValueZero(x, y) {
+    return x === y || (x !== x && y !== y);
+}
 
 /********** Testing code **********/
 
@@ -181,7 +188,6 @@ function ForkJoinMode(mode) {
     return 4;
   }
   ThrowError(JSMSG_PAR_ARRAY_BAD_ARG);
-  return undefined;
 }
 
 #endif

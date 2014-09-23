@@ -25,6 +25,16 @@
 namespace mozilla {
 namespace layers {
 
+// You can enable all the TILING_LOG print statements by
+// changing the 0 to a 1 in the following #define.
+#define ENABLE_TILING_LOG 0
+
+#if ENABLE_TILING_LOG
+#  define TILING_LOG(...) printf_stderr(__VA_ARGS__);
+#else
+#  define TILING_LOG(...)
+#endif
+
 // An abstract implementation of a tile buffer. This code covers the logic of
 // moving and reusing tiles and leaves the validation up to the implementor. To
 // avoid the overhead of virtual dispatch, we employ the curiously recurring
@@ -450,10 +460,13 @@ TiledLayerBuffer<Derived, Tile>::Update(const nsIntRegion& aNewValidRegion,
         int currTileX = floor_div(x - newBufferOrigin.x, scaledTileSize.width);
         int currTileY = floor_div(y - newBufferOrigin.y, scaledTileSize.height);
         int index = currTileX * mRetainedHeight + currTileY;
-        NS_ABORT_IF_FALSE(!newValidRegion.Intersects(tileRect) ||
-                          !IsPlaceholder(newRetainedTiles.
-                                         SafeElementAt(index, AsDerived().GetPlaceholderTile())),
-                          "If we don't draw a tile we shouldn't have a placeholder there.");
+        // If allocating a tile failed we can run into this assertion.
+        // Rendering is going to be glitchy but we don't want to crash.
+        NS_ASSERTION(!newValidRegion.Intersects(tileRect) ||
+                     !IsPlaceholder(newRetainedTiles.
+                                    SafeElementAt(index, AsDerived().GetPlaceholderTile())),
+                     "Unexpected placeholder tile");
+
 #endif
         y += height;
         continue;
@@ -484,7 +497,7 @@ TiledLayerBuffer<Derived, Tile>::Update(const nsIntRegion& aNewValidRegion,
       nsIntPoint tileOrigin(tileStartX, tileStartY);
       newTile = AsDerived().ValidateTile(newTile, nsIntPoint(tileStartX, tileStartY),
                                          tileDrawRegion);
-      NS_ABORT_IF_FALSE(!IsPlaceholder(newTile), "index out of range");
+      NS_ASSERTION(!IsPlaceholder(newTile), "Unexpected placeholder tile - failed to allocate?");
 #ifdef GFX_TILEDLAYER_PREF_WARNINGS
       printf_stderr("Store Validate tile %i, %i -> %i\n", tileStartX, tileStartY, index);
 #endif
@@ -494,6 +507,11 @@ TiledLayerBuffer<Derived, Tile>::Update(const nsIntRegion& aNewValidRegion,
     }
 
     x += width;
+  }
+
+  AsDerived().PostValidate(aPaintRegion);
+  for (unsigned int i = 0; i < newRetainedTiles.Length(); ++i) {
+    AsDerived().UnlockTile(newRetainedTiles[i]);
   }
 
   // At this point, oldTileCount should be zero

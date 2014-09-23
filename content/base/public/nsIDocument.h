@@ -29,7 +29,6 @@
 class imgIRequest;
 class nsAString;
 class nsBindingManager;
-class nsCSSStyleSheet;
 class nsIDocShell;
 class nsDocShell;
 class nsDOMNavigationTiming;
@@ -52,7 +51,6 @@ class nsIDOMDocumentType;
 class nsIDOMElement;
 class nsIDOMNodeFilter;
 class nsIDOMNodeList;
-class nsIDOMXPathExpression;
 class nsIDOMXPathNSResolver;
 class nsIHTMLCollection;
 class nsILayoutHistoryState;
@@ -68,6 +66,7 @@ class nsIStyleRule;
 class nsIStyleSheet;
 class nsIURI;
 class nsIVariant;
+class nsLocation;
 class nsViewManager;
 class nsPresContext;
 class nsRange;
@@ -80,11 +79,13 @@ class nsSmallVoidArray;
 class nsDOMCaretPosition;
 class nsViewportInfo;
 class nsIGlobalObject;
-class nsCSSSelectorList;
+struct nsCSSSelectorList;
 
 namespace mozilla {
+class CSSStyleSheet;
 class ErrorResult;
 class EventStates;
+class SVGAttrAnimationRuleProcessor;
 
 namespace css {
 class Loader;
@@ -122,6 +123,8 @@ class TouchList;
 class TreeWalker;
 class UndoManager;
 class XPathEvaluator;
+class XPathExpression;
+class XPathResult;
 template<typename> class OwningNonNull;
 template<typename> class Sequence;
 
@@ -131,14 +134,15 @@ typedef CallbackObjectHolder<NodeFilter, nsIDOMNodeFilter> NodeFilterHolder;
 } // namespace mozilla
 
 #define NS_IDOCUMENT_IID \
-{ 0x0300e2e0, 0x24c9, 0x4ecf, \
-  { 0x81, 0xec, 0x64, 0x26, 0x9a, 0x4b, 0xef, 0x18 } }
+{ 0x613ea294, 0x0288, 0x48b4, \
+  { 0x9e, 0x7b, 0x0f, 0xe9, 0x3f, 0x8c, 0xf8, 0x95 } }
 
 // Enum for requesting a particular type of document when creating a doc
 enum DocumentFlavor {
   DocumentFlavorLegacyGuess, // compat with old code until made HTML5-compliant
   DocumentFlavorHTML, // HTMLDocument with HTMLness bit set to true
-  DocumentFlavorSVG // SVGDocument
+  DocumentFlavorSVG, // SVGDocument
+  DocumentFlavorPlain, // Just a Document
 };
 
 // Document states
@@ -530,6 +534,38 @@ public:
   }
 
   /**
+   * Get tracking content blocked flag for this document.
+   */
+  bool GetHasTrackingContentBlocked()
+  {
+    return mHasTrackingContentBlocked;
+  }
+
+  /**
+   * Set the tracking content blocked flag for this document.
+   */
+  void SetHasTrackingContentBlocked(bool aHasTrackingContentBlocked)
+  {
+    mHasTrackingContentBlocked = aHasTrackingContentBlocked;
+  }
+
+  /**
+   * Get tracking content loaded flag for this document.
+   */
+  bool GetHasTrackingContentLoaded()
+  {
+    return mHasTrackingContentLoaded;
+  }
+
+  /**
+   * Set the tracking content loaded flag for this document.
+   */
+  void SetHasTrackingContentLoaded(bool aHasTrackingContentLoaded)
+  {
+    mHasTrackingContentLoaded = aHasTrackingContentLoaded;
+  }
+
+  /**
    * Get the sandbox flags for this document.
    * @see nsSandboxFlags.h for the possible flags
    */
@@ -685,7 +721,7 @@ private:
   class SelectorCacheKey
   {
     public:
-      SelectorCacheKey(const nsAString& aString) : mKey(aString)
+      explicit SelectorCacheKey(const nsAString& aString) : mKey(aString)
       {
         MOZ_COUNT_CTOR(SelectorCacheKey);
       }
@@ -778,7 +814,7 @@ public:
    * TODO We can get rid of the whole concept of delayed loading if we fix
    * bug 77999.
    */
-  virtual void EnsureOnDemandBuiltInUASheet(nsCSSStyleSheet* aSheet) = 0;
+  virtual void EnsureOnDemandBuiltInUASheet(mozilla::CSSStyleSheet* aSheet) = 0;
 
   /**
    * Get the number of (document) stylesheets
@@ -849,6 +885,7 @@ public:
   };
 
   virtual nsresult LoadAdditionalStyleSheet(additionalSheetType aType, nsIURI* aSheetURI) = 0;
+  virtual nsresult AddAdditionalStyleSheet(additionalSheetType aType, nsIStyleSheet* aSheet) = 0;
   virtual void RemoveAdditionalStyleSheet(additionalSheetType aType, nsIURI* sheetURI) = 0;
   virtual nsIStyleSheet* FirstAdditionalAuthorSheet() = 0;
 
@@ -887,6 +924,16 @@ public:
    */
   nsHTMLCSSStyleSheet* GetInlineStyleSheet() const {
     return mStyleAttrStyleSheet;
+  }
+
+  /**
+   * Get this document's SVG Animation rule processor.  May return null
+   * if there isn't one.
+   */
+  mozilla::SVGAttrAnimationRuleProcessor*
+  GetSVGAttrAnimationRuleProcessor() const
+  {
+    return mSVGAttrAnimationRuleProcessor;
   }
 
   virtual void SetScriptGlobalObject(nsIScriptGlobalObject* aGlobalObject) = 0;
@@ -1271,6 +1318,18 @@ public:
   }
 
   /**
+   * Get the channel that failed to load and resulted in an error page, if it
+   * exists. This is only relevant to error pages.
+   */
+  virtual nsIChannel* GetFailedChannel() const = 0;
+
+  /**
+   * Set the channel that failed to load and resulted in an error page.
+   * This is only relevant to error pages.
+   */
+  virtual void SetFailedChannel(nsIChannel* aChannel) = 0;
+
+  /**
    * Returns the default namespace ID used for elements created in this
    * document.
    */
@@ -1388,7 +1447,7 @@ public:
    * into a DOM window.  This corresponds to the completion of document load,
    * or to the page's presentation being restored into an existing DOM window.
    * This notification fires applicable DOM events to the content window.  See
-   * nsIDOMPageTransitionEvent.idl for a description of the |aPersisted|
+   * PageTransitionEvent.webidl for a description of the |aPersisted|
    * parameter. If aDispatchStartTarget is null, the pageshow event is
    * dispatched on the ScriptGlobalObject for this document, otherwise it's
    * dispatched on aDispatchStartTarget.
@@ -1403,7 +1462,7 @@ public:
    * into a DOM window.  This corresponds to the unloading of the document, or
    * to the document's presentation being saved but removed from an existing
    * DOM window.  This notification fires applicable DOM events to the content
-   * window.  See nsIDOMPageTransitionEvent.idl for a description of the
+   * window.  See PageTransitionEvent.webidl for a description of the
    * |aPersisted| parameter. If aDispatchStartTarget is null, the pagehide
    * event is dispatched on the ScriptGlobalObject for this document,
    * otherwise it's dispatched on aDispatchStartTarget.
@@ -1684,10 +1743,17 @@ public:
    */
   bool IsActive() const { return mDocumentContainer && !mRemovedFromDocShell; }
 
-  void RegisterFreezableElement(nsIContent* aContent);
-  bool UnregisterFreezableElement(nsIContent* aContent);
-  typedef void (* FreezableElementEnumerator)(nsIContent*, void*);
-  void EnumerateFreezableElements(FreezableElementEnumerator aEnumerator,
+  /**
+   * Register/Unregister the ActivityObserver into mActivityObservers to listen
+   * the document's activity changes such as OnPageHide, visibility, activity.
+   * The ActivityObserver objects can be nsIObjectLoadingContent or
+   * nsIDocumentActivity or HTMLMEdiaElement.
+   */
+  void RegisterActivityObserver(nsISupports* aSupports);
+  bool UnregisterActivityObserver(nsISupports* aSupports);
+  // Enumerate all the observers in mActivityObservers by the aEnumerator.
+  typedef void (* ActivityObserverEnumerator)(nsISupports*, void*);
+  void EnumerateActivityObservers(ActivityObserverEnumerator aEnumerator,
                                   void* aData);
 
   // Indicates whether mAnimationController has been (lazily) initialized.
@@ -1816,7 +1882,7 @@ public:
    * DO NOT USE FOR UNTRUSTED CONTENT.
    */
   virtual nsresult LoadChromeSheetSync(nsIURI* aURI, bool aIsAgentSheet,
-                                       nsCSSStyleSheet** aSheet) = 0;
+                                       mozilla::CSSStyleSheet** aSheet) = 0;
 
   /**
    * Returns true if the locale used for the document specifies a direction of
@@ -1970,6 +2036,7 @@ public:
     eDeprecatedOperationCount
   };
 #undef DEPRECATED_OPERATION
+  bool HasWarnedAbout(DeprecatedOperations aOperation);
   void WarnOnceAbout(DeprecatedOperations aOperation, bool asError = false);
 
   virtual void PostVisibilityUpdateEvent() = 0;
@@ -2086,9 +2153,10 @@ public:
                                     const nsAString& aTypeExtension,
                                     uint32_t aNamespaceID,
                                     mozilla::ErrorResult& rv) = 0;
-  virtual JSObject*
+  virtual void
     RegisterElement(JSContext* aCx, const nsAString& aName,
                     const mozilla::dom::ElementRegistrationOptions& aOptions,
+                    JS::MutableHandle<JSObject*> aRetval,
                     mozilla::ErrorResult& rv) = 0;
 
   /**
@@ -2161,7 +2229,7 @@ public:
                       const nsAString& aQualifiedName,
                       mozilla::ErrorResult& rv);
   void GetInputEncoding(nsAString& aInputEncoding);
-  already_AddRefed<nsIDOMLocation> GetLocation() const;
+  already_AddRefed<nsLocation> GetLocation() const;
   void GetReferrer(nsAString& aReferrer) const;
   void GetLastModified(nsAString& aLastModified) const;
   void GetReadyState(nsAString& aReadyState) const;
@@ -2247,16 +2315,16 @@ public:
                                           const nsAString& aAttrValue);
   Element* GetBindingParent(nsINode& aNode);
   void LoadBindingDocument(const nsAString& aURI, mozilla::ErrorResult& rv);
-  already_AddRefed<nsIDOMXPathExpression>
+  mozilla::dom::XPathExpression*
     CreateExpression(const nsAString& aExpression,
                      nsIDOMXPathNSResolver* aResolver,
                      mozilla::ErrorResult& rv);
   already_AddRefed<nsIDOMXPathNSResolver>
     CreateNSResolver(nsINode* aNodeResolver, mozilla::ErrorResult& rv);
-  already_AddRefed<nsISupports>
-    Evaluate(const nsAString& aExpression, nsINode* aContextNode,
+  already_AddRefed<mozilla::dom::XPathResult>
+    Evaluate(JSContext* aCx, const nsAString& aExpression, nsINode* aContextNode,
              nsIDOMXPathNSResolver* aResolver, uint16_t aType,
-             nsISupports* aResult, mozilla::ErrorResult& rv);
+             JS::Handle<JSObject*> aResult, mozilla::ErrorResult& rv);
   // Touch event handlers already on nsINode
   already_AddRefed<mozilla::dom::Touch>
     CreateTouch(nsIDOMWindow* aView, mozilla::dom::EventTarget* aTarget,
@@ -2292,14 +2360,30 @@ public:
   virtual nsHTMLDocument* AsHTMLDocument() { return nullptr; }
   virtual mozilla::dom::SVGDocument* AsSVGDocument() { return nullptr; }
 
-  virtual JSObject* WrapObject(JSContext *aCx) MOZ_OVERRIDE;
-
   // Each import tree has exactly one master document which is
   // the root of the tree, and owns the browser context.
   virtual already_AddRefed<nsIDocument> MasterDocument() = 0;
   virtual void SetMasterDocument(nsIDocument* master) = 0;
   virtual bool IsMasterDocument() = 0;
   virtual already_AddRefed<mozilla::dom::ImportManager> ImportManager() = 0;
+
+  /*
+   * Given a node, get a weak reference to it and append that reference to
+   * mBlockedTrackingNodes. Can be used later on to look up a node in it.
+   * (e.g., by the UI)
+   */
+  void AddBlockedTrackingNode(nsINode *node)
+  {
+    if (!node) {
+      return;
+    }
+
+    nsWeakPtr weakNode = do_GetWeakReference(node);
+
+    if (weakNode) {
+      mBlockedTrackingNodes.AppendElement(weakNode);
+    }
+  }
 
 private:
   uint64_t mWarnedAbout;
@@ -2370,12 +2454,14 @@ protected:
   nsRefPtr<mozilla::css::ImageLoader> mStyleImageLoader;
   nsRefPtr<nsHTMLStyleSheet> mAttrStyleSheet;
   nsRefPtr<nsHTMLCSSStyleSheet> mStyleAttrStyleSheet;
+  nsRefPtr<mozilla::SVGAttrAnimationRuleProcessor> mSVGAttrAnimationRuleProcessor;
 
-  // The set of all object, embed, applet, video and audio elements for
-  // which this is the owner document. (They might not be in the document.)
+  // The set of all object, embed, applet, video/audio elements or
+  // nsIObjectLoadingContent or nsIDocumentActivity for which this is the
+  // owner document. (They might not be in the document.)
   // These are non-owning pointers, the elements are responsible for removing
   // themselves when they go away.
-  nsAutoPtr<nsTHashtable<nsPtrHashKey<nsIContent> > > mFreezableElements;
+  nsAutoPtr<nsTHashtable<nsPtrHashKey<nsISupports> > > mActivityObservers;
 
   // The set of all links that need their status resolved.  Links must add themselves
   // to this set by calling RegisterPendingLinkUpdate when added to a document and must
@@ -2487,6 +2573,12 @@ protected:
   // True if a document has blocked Mixed Display/Passive Content (see nsMixedContentBlocker.cpp)
   bool mHasMixedDisplayContentBlocked;
 
+  // True if a document has blocked Tracking Content
+  bool mHasTrackingContentBlocked;
+
+  // True if a document has loaded Tracking Content
+  bool mHasTrackingContentLoaded;
+
   // True if DisallowBFCaching has been called on this document.
   bool mBFCacheDisallowed;
 
@@ -2565,6 +2657,10 @@ protected:
   // The document's security info
   nsCOMPtr<nsISupports> mSecurityInfo;
 
+  // The channel that failed to load and resulted in an error page.
+  // This only applies to error pages. Might be null.
+  nsCOMPtr<nsIChannel> mFailedChannel;
+
   // if this document is part of a multipart document,
   // the ID can be used to distinguish it from the other parts.
   uint32_t mPartID;
@@ -2597,6 +2693,13 @@ protected:
    * The current frame request callback handle
    */
   int32_t mFrameRequestCallbackCounter;
+
+  // Array of nodes that have been blocked to prevent user tracking.
+  // They most likely have had their nsIChannel canceled by the URL
+  // classifier. (Safebrowsing)
+  //
+  // Weak nsINode pointers are used to allow nodes to disappear.
+  nsTArray<nsWeakPtr> mBlockedTrackingNodes;
 
   // Weak reference to mScriptGlobalObject QI:d to nsPIDOMWindow,
   // updated on every set of mSecriptGlobalObject.
@@ -2673,7 +2776,7 @@ private:
 class MOZ_STACK_CLASS nsAutoSyncOperation
 {
 public:
-  nsAutoSyncOperation(nsIDocument* aDocument);
+  explicit nsAutoSyncOperation(nsIDocument* aDocument);
   ~nsAutoSyncOperation();
 private:
   nsCOMArray<nsIDocument> mDocuments;
@@ -2685,7 +2788,8 @@ nsresult
 NS_NewHTMLDocument(nsIDocument** aInstancePtrResult, bool aLoadedAsData = false);
 
 nsresult
-NS_NewXMLDocument(nsIDocument** aInstancePtrResult, bool aLoadedAsData = false);
+NS_NewXMLDocument(nsIDocument** aInstancePtrResult, bool aLoadedAsData = false,
+                  bool aIsPlainDocument = false);
 
 nsresult
 NS_NewSVGDocument(nsIDocument** aInstancePtrResult);

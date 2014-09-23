@@ -9,6 +9,7 @@
 #include "gfxPlatform.h"
 #include "gfxUtils.h"
 #include "gfx2DGlue.h"
+#include "mozilla/gfx/2D.h"
 #include "ScopedGLHelpers.h"
 #include "GLUploadHelpers.h"
 
@@ -16,6 +17,8 @@
 #ifdef XP_MACOSX
 #include "TextureImageCGL.h"
 #endif
+
+using namespace mozilla::gfx;
 
 namespace mozilla {
 namespace gl {
@@ -60,17 +63,6 @@ TileGenFunc(GLContext* gl,
     }
 }
 
-already_AddRefed<TextureImage>
-TextureImage::Create(GLContext* gl,
-                     const nsIntSize& size,
-                     TextureImage::ContentType contentType,
-                     GLenum wrapMode,
-                     TextureImage::Flags flags)
-{
-    return Create(gl, size.ToIntSize(), contentType, wrapMode, flags);
-}
-
-// Moz2D equivalent...
 already_AddRefed<TextureImage>
 TextureImage::Create(GLContext* gl,
                      const gfx::IntSize& size,
@@ -514,10 +506,6 @@ TiledTextureImage::EndUpdate()
 
     RefPtr<gfx::SourceSurface> updateSnapshot = mUpdateDrawTarget->Snapshot();
     RefPtr<gfx::DataSourceSurface> updateData = updateSnapshot->GetDataSurface();
-    nsRefPtr<gfxASurface> updateSurface = new gfxImageSurface(updateData->GetData(),
-                                                              gfx::ThebesIntSize(updateData->GetSize()),
-                                                              updateData->Stride(),
-                                                              gfx::SurfaceFormatToImageFormat(updateData->GetFormat()));
 
     // upload tiles from temp surface
     for (unsigned i = 0; i < mImages.Length(); i++) {
@@ -533,11 +521,18 @@ TiledTextureImage::EndUpdate()
         subregion.MoveBy(-xPos, -yPos); // Tile-local space
         // copy tile from temp target
         gfx::DrawTarget* drawTarget = mImages[i]->BeginUpdate(subregion);
-        nsRefPtr<gfxContext> ctx = new gfxContext(drawTarget);
-        gfxUtils::ClipToRegion(ctx, subregion);
-        ctx->SetOperator(gfxContext::OPERATOR_SOURCE);
-        ctx->SetSource(updateSurface, gfxPoint(-xPos, -yPos));
-        ctx->Paint();
+        MOZ_ASSERT(drawTarget->GetBackendType() == BackendType::CAIRO,
+                   "updateSnapshot should not have been converted to data");
+        gfxUtils::ClipToRegion(drawTarget, subregion);
+        Size size(updateData->GetSize().width,
+                  updateData->GetSize().height);
+        drawTarget->DrawSurface(updateData,
+                                Rect(Point(-xPos, -yPos), size),
+                                Rect(Point(0, 0), size),
+                                DrawSurfaceOptions(),
+                                DrawOptions(1.0, CompositionOp::OP_SOURCE,
+                                            AntialiasMode::NONE));
+        drawTarget->PopClip();
         mImages[i]->EndUpdate();
     }
 

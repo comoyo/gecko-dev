@@ -42,14 +42,14 @@ public:
     mGlobal = global;
   }
 
-  BackstagePass(nsIPrincipal *prin) :
+  explicit BackstagePass(nsIPrincipal *prin) :
     mPrincipal(prin)
   {
   }
 
+private:
   virtual ~BackstagePass() { }
 
-private:
   nsCOMPtr<nsIPrincipal> mPrincipal;
   JS::TenuredHeap<JSObject*> mGlobal;
 };

@@ -22,6 +22,7 @@
 #include "nsIFrameInlines.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Likely.h"
+#include "nsISelection.h"
 
 namespace mozilla {
 namespace css {
@@ -29,7 +30,7 @@ namespace css {
 class LazyReferenceRenderingContextGetterFromFrame MOZ_FINAL :
     public gfxFontGroup::LazyReferenceContextGetter {
 public:
-  LazyReferenceRenderingContextGetterFromFrame(nsIFrame* aFrame)
+  explicit LazyReferenceRenderingContextGetterFromFrame(nsIFrame* aFrame)
     : mFrame(aFrame) {}
   virtual already_AddRefed<gfxContext> GetRefContext() MOZ_OVERRIDE
   {
@@ -513,7 +514,7 @@ TextOverflow::ExamineLineFrames(nsLineBox*      aLine,
         if (clippedMarkerEdges.mAssignedLeft &&
             clippedMarkerEdges.mLeft - mContentArea.X() > 0) {
           mLeft.mWidth = clippedMarkerEdges.mLeft - mContentArea.X();
-          NS_ASSERTION(mLeft.mWidth < mLeft.mIntrinsicWidth,
+          NS_ASSERTION(mLeft.mWidth < mLeft.mIntrinsicISize,
                        "clipping a marker should make it strictly smaller");
           clippedLeftMarker = true;
         } else {
@@ -525,7 +526,7 @@ TextOverflow::ExamineLineFrames(nsLineBox*      aLine,
         if (clippedMarkerEdges.mAssignedRight &&
             mContentArea.XMost() - clippedMarkerEdges.mRight > 0) {
           mRight.mWidth = mContentArea.XMost() - clippedMarkerEdges.mRight;
-          NS_ASSERTION(mRight.mWidth < mRight.mIntrinsicWidth,
+          NS_ASSERTION(mRight.mWidth < mRight.mIntrinsicISize,
                        "clipping a marker should make it strictly smaller");
           clippedRightMarker = true;
         } else {
@@ -536,9 +537,9 @@ TextOverflow::ExamineLineFrames(nsLineBox*      aLine,
       // The line simply has no visible content even without markers,
       // so examine the line again without suppressing markers.
       retryEmptyLine = false;
-      mLeft.mWidth = mLeft.mIntrinsicWidth;
+      mLeft.mWidth = mLeft.mIntrinsicISize;
       mLeft.mActive = guessLeft = leftOverflow;
-      mRight.mWidth = mRight.mIntrinsicWidth;
+      mRight.mWidth = mRight.mIntrinsicISize;
       mRight.mActive = guessRight = rightOverflow;
       continue;
     }
@@ -573,8 +574,8 @@ TextOverflow::ProcessLine(const nsDisplayListSet& aLists,
   mLeft.mActive = mLeft.mStyle->mType != NS_STYLE_TEXT_OVERFLOW_CLIP;
   mRight.Reset();
   mRight.mActive = mRight.mStyle->mType != NS_STYLE_TEXT_OVERFLOW_CLIP;
-  
-  FrameHashtable framesToHide(100);
+
+  FrameHashtable framesToHide(64);
   AlignmentEdges alignmentEdges;
   ExamineLineFrames(aLine, &framesToHide, &alignmentEdges);
   bool needLeft = mLeft.IsNeeded();
@@ -672,12 +673,12 @@ TextOverflow::CanHaveTextOverflow(nsDisplayListBuilder* aBuilder,
                                   nsIFrame*             aBlockFrame)
 {
   const nsStyleTextReset* style = aBlockFrame->StyleTextReset();
-  // Nothing to do for text-overflow:clip or if 'overflow-x:visible'
-  // or if we're just building items for event processing.
+  // Nothing to do for text-overflow:clip or if 'overflow-x:visible' or if
+  // we're just building items for event processing or image visibility.
   if ((style->mTextOverflow.mLeft.mType == NS_STYLE_TEXT_OVERFLOW_CLIP &&
        style->mTextOverflow.mRight.mType == NS_STYLE_TEXT_OVERFLOW_CLIP) ||
       IsHorizontalOverflowVisible(aBlockFrame) ||
-      aBuilder->IsForEventDelivery()) {
+      aBuilder->IsForEventDelivery() || aBuilder->IsForImageVisibility()) {
     return false;
   }
 
@@ -689,9 +690,8 @@ TextOverflow::CanHaveTextOverflow(nsDisplayListBuilder* aBuilder,
 
   // Inhibit the markers if a descendant content owns the caret.
   nsRefPtr<nsCaret> caret = aBlockFrame->PresContext()->PresShell()->GetCaret();
-  bool visible = false;
-  if (caret && NS_SUCCEEDED(caret->GetCaretVisible(&visible)) && visible) {
-    nsCOMPtr<nsISelection> domSelection = caret->GetCaretDOMSelection();
+  if (caret && caret->IsVisible()) {
+    nsCOMPtr<nsISelection> domSelection = caret->GetSelection();
     if (domSelection) {
       nsCOMPtr<nsIDOMNode> node;
       domSelection->GetFocusNode(getter_AddRefs(node));
@@ -714,15 +714,16 @@ TextOverflow::CreateMarkers(const nsLineBox* aLine,
   if (aCreateLeft) {
     DisplayListClipState::AutoSaveRestore clipState(mBuilder);
 
-    nsRect markerRect = nsRect(aInsideMarkersArea.x - mLeft.mIntrinsicWidth,
+    //XXX Needs vertical text love
+    nsRect markerRect = nsRect(aInsideMarkersArea.x - mLeft.mIntrinsicISize,
                                aLine->BStart(),
-                               mLeft.mIntrinsicWidth, aLine->BSize());
+                               mLeft.mIntrinsicISize, aLine->BSize());
     markerRect += mBuilder->ToReferenceFrame(mBlock);
     ClipMarker(mContentArea + mBuilder->ToReferenceFrame(mBlock),
                markerRect, clipState);
     nsDisplayItem* marker = new (mBuilder)
       nsDisplayTextOverflowMarker(mBuilder, mBlock, markerRect,
-                                  aLine->GetAscent(), mLeft.mStyle, 0);
+                                  aLine->GetLogicalAscent(), mLeft.mStyle, 0);
     mMarkerList.AppendNewToTop(marker);
   }
 
@@ -731,13 +732,13 @@ TextOverflow::CreateMarkers(const nsLineBox* aLine,
 
     nsRect markerRect = nsRect(aInsideMarkersArea.XMost(),
                                aLine->BStart(),
-                               mRight.mIntrinsicWidth, aLine->BSize());
+                               mRight.mIntrinsicISize, aLine->BSize());
     markerRect += mBuilder->ToReferenceFrame(mBlock);
     ClipMarker(mContentArea + mBuilder->ToReferenceFrame(mBlock),
                markerRect, clipState);
     nsDisplayItem* marker = new (mBuilder)
       nsDisplayTextOverflowMarker(mBuilder, mBlock, markerRect,
-                                  aLine->GetAscent(), mRight.mStyle, 1);
+                                  aLine->GetLogicalAscent(), mRight.mStyle, 1);
     mMarkerList.AppendNewToTop(marker);
   }
 }
@@ -766,7 +767,7 @@ TextOverflow::Marker::SetupString(nsIFrame* aFrame)
     mWidth = nsLayoutUtils::GetStringWidth(aFrame, rc, mStyle->mString.get(),
                                            mStyle->mString.Length());
   }
-  mIntrinsicWidth = mWidth;
+  mIntrinsicISize = mWidth;
   mInitialized = true;
 }
 

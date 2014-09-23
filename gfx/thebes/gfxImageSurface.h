@@ -69,7 +69,7 @@ public:
     gfxImageSurface(const gfxIntSize& aSize, gfxImageFormat aFormat,
                     long aStride, int32_t aMinimalAllocation, bool aClear);
 
-    gfxImageSurface(cairo_surface_t *csurf);
+    explicit gfxImageSurface(cairo_surface_t *csurf);
 
     virtual ~gfxImageSurface();
 
@@ -124,9 +124,6 @@ public:
     virtual already_AddRefed<gfxImageSurface> GetAsImageSurface();
 
     /** See gfxASurface.h. */
-    virtual void MovePixels(const nsIntRect& aSourceRect,
-                            const nsIntPoint& aDestTopLeft) MOZ_OVERRIDE;
-
     static long ComputeStride(const gfxIntSize&, gfxImageFormat);
 
     virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const

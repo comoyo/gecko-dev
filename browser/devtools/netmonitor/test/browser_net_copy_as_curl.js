@@ -16,7 +16,7 @@ function test() {
       "-H 'User-Agent: " + aDebuggee.navigator.userAgent + "'",
       "-H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'",
       "-H 'Accept-Language: " + aDebuggee.navigator.language + "'",
-      "-H 'Accept-Encoding: gzip, deflate'",
+      "--compressed",
       "-H 'X-Custom-Header-1: Custom value'",
       "-H 'X-Custom-Header-2: 8.8.8.8'",
       "-H 'X-Custom-Header-3: Mon, 3 Mar 2014 11:11:11 GMT'",
@@ -31,7 +31,7 @@ function test() {
       '-H "User-Agent: ' + aDebuggee.navigator.userAgent + '"',
       '-H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"',
       '-H "Accept-Language: ' + aDebuggee.navigator.language + '"',
-      '-H "Accept-Encoding: gzip, deflate"',
+      "--compressed",
       '-H "X-Custom-Header-1: Custom value"',
       '-H "X-Custom-Header-2: 8.8.8.8"',
       '-H "X-Custom-Header-3: Mon, 3 Mar 2014 11:11:11 GMT"',
@@ -39,8 +39,9 @@ function test() {
       '-H "Connection: keep-alive"'
     ].join(" ");
 
-    const EXPECTED_RESULT = Services.appinfo.OS == "WINNT" ?
-                            EXPECTED_WIN_RESULT : EXPECTED_POSIX_RESULT;
+    const EXPECTED_RESULT = Services.appinfo.OS == "WINNT"
+      ? EXPECTED_WIN_RESULT
+      : EXPECTED_POSIX_RESULT;
 
     let { NetMonitorView } = aMonitor.panelWin;
     let { RequestsMenu } = NetMonitorView;

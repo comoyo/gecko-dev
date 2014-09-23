@@ -6,7 +6,7 @@
 
 DIRS += ['profile']
 
-PROGRAM = 'xulrunner'
+Program('xulrunner')
 
 SOURCES += [
     'nsXULRunnerApp.cpp',
@@ -16,9 +16,6 @@ DEFINES['XULRUNNER_PROGNAME'] = '"xulrunner"'
 DEFINES['XPCOM_GLUE'] = True
 if CONFIG['DEBUG']:
     DEFINES['DEBUG'] = True
-
-if CONFIG['TARGET_XPCOM_ABI']:
-    DEFINES['TARGET_XPCOM_ABI'] = '"%s"' % CONFIG['TARGET_XPCOM_ABI']
 
 LOCAL_INCLUDES += [
     '/toolkit/profile',
@@ -45,5 +42,19 @@ if CONFIG['OS_ARCH'] == 'WINNT' and not CONFIG['GNU_CC']:
 
 if CONFIG['OS_ARCH'] == 'WINNT':
     RCINCLUDE = 'splash.rc'
+    OS_LIBS += [
+        'comctl32',
+        'comdlg32',
+        'uuid',
+        'shell32',
+        'ole32',
+        'oleaut32',
+        'version',
+        'winspool',
+    ]
+
+USE_LIBS += [
+    'xpcomglue',
+]
 
 DISABLE_STL_WRAPPING = True

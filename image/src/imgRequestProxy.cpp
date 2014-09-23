@@ -4,13 +4,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "ImageLogging.h"
 #include "imgRequestProxy.h"
 #include "imgIOnloadBlocker.h"
 
 #include "Image.h"
 #include "ImageOps.h"
 #include "nsError.h"
-#include "ImageLogging.h"
 #include "nsCRTGlue.h"
 #include "imgINotificationObserver.h"
 #include "nsNetUtil.h"
@@ -513,6 +513,17 @@ NS_IMETHODIMP imgRequestProxy::GetImageStatus(uint32_t *aStatus)
 {
   nsRefPtr<imgStatusTracker> statusTracker = GetStatusTracker();
   *aStatus = statusTracker->GetImageStatus();
+
+  return NS_OK;
+}
+
+/* readonly attribute nresult imageErrorCode; */
+NS_IMETHODIMP imgRequestProxy::GetImageErrorCode(nsresult *aStatus)
+{
+  if (!GetOwner())
+    return NS_ERROR_FAILURE;
+
+  *aStatus = GetOwner()->GetImageErrorCode();
 
   return NS_OK;
 }
@@ -1039,7 +1050,7 @@ imgRequestProxy::GetOwner() const
 class StaticBehaviour : public ProxyBehaviour
 {
 public:
-  StaticBehaviour(mozilla::image::Image* aImage) : mImage(aImage) {}
+  explicit StaticBehaviour(mozilla::image::Image* aImage) : mImage(aImage) {}
 
   virtual already_AddRefed<mozilla::image::Image>
   GetImage() const MOZ_OVERRIDE {

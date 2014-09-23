@@ -47,7 +47,7 @@ nsParentalControlsService::Log(int16_t aEntryType,
 
 NS_IMETHODIMP
 nsParentalControlsService::RequestURIOverride(nsIURI *aTarget,
-                                              nsIInterfaceRequestor *aCocoadowContext,
+                                              nsIInterfaceRequestor *aWindowContext,
                                               bool *_retval)
 {
   return NS_ERROR_NOT_AVAILABLE;
@@ -55,8 +55,16 @@ nsParentalControlsService::RequestURIOverride(nsIURI *aTarget,
 
 NS_IMETHODIMP
 nsParentalControlsService::RequestURIOverrides(nsIArray *aTargets,
-                                               nsIInterfaceRequestor *aCocoadowContext,
+                                               nsIInterfaceRequestor *aWindowContext,
                                                bool *_retval)
+{
+  return NS_ERROR_NOT_AVAILABLE;
+}
+
+NS_IMETHODIMP
+nsParentalControlsService::IsAllowed(int16_t aAction,
+                                     nsIURI *aUri,
+                                     bool *_retval)
 {
   return NS_ERROR_NOT_AVAILABLE;
 }

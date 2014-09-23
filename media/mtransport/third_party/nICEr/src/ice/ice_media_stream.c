@@ -394,10 +394,27 @@ static void nr_ice_media_stream_check_timer_cb(NR_SOCKET s, int h, void *cb_arg)
 /* Start checks for this media stream (aka check list) */
 int nr_ice_media_stream_start_checks(nr_ice_peer_ctx *pctx, nr_ice_media_stream *stream)
   {
-    nr_ice_media_stream_set_state(stream,NR_ICE_MEDIA_STREAM_CHECKS_ACTIVE);
-    nr_ice_media_stream_check_timer_cb(0,0,stream);
+    int r,_status;
 
-    return(0);
+    /* Don't start the check timer if the stream is done (failed/completed) */
+    if (stream->ice_state > NR_ICE_MEDIA_STREAM_CHECKS_ACTIVE) {
+      assert(0);
+      ABORT(R_INTERNAL);
+    }
+
+    if(r=nr_ice_media_stream_set_state(stream,NR_ICE_MEDIA_STREAM_CHECKS_ACTIVE))
+      ABORT(r);
+
+    if (!stream->timer) {
+      r_log(LOG_ICE,LOG_INFO,"ICE-PEER(%s)/ICE-STREAM(%s): Starting check timer for stream.",pctx->label,stream->label);
+      nr_ice_media_stream_check_timer_cb(0,0,stream);
+    }
+
+    nr_ice_peer_ctx_stream_started_checks(pctx, stream);
+
+    _status=0;
+  abort:
+    return(_status);
   }
 
 /* Start checks for this media stream (aka check list) S 5.7 */
@@ -523,7 +540,7 @@ int nr_ice_media_stream_unfreeze_pairs_foundation(nr_ice_media_stream *stream, c
       str=STAILQ_NEXT(str,entry);
     }
 
-//    nr_ice_media_stream_dump_state(stream->pctx,stream,stderr);
+/*    nr_ice_media_stream_dump_state(stream->pctx,stream,stderr); */
 
 
     _status=0;
@@ -536,7 +553,7 @@ int nr_ice_media_stream_dump_state(nr_ice_peer_ctx *pctx, nr_ice_media_stream *s
   {
     nr_ice_cand_pair *pair;
 
-    //r_log(LOG_ICE,LOG_DEBUG,"MEDIA-STREAM(%s): state dump", stream->label);
+    /* r_log(LOG_ICE,LOG_DEBUG,"MEDIA-STREAM(%s): state dump", stream->label); */
     pair=TAILQ_FIRST(&stream->check_list);
     while(pair){
       nr_ice_candidate_pair_dump_state(pair,out);
@@ -857,5 +874,17 @@ int nr_ice_media_stream_disable_component(nr_ice_media_stream *stream, int compo
     _status=0;
  abort:
     return(_status);
+  }
+
+void nr_ice_media_stream_role_change(nr_ice_media_stream *stream)
+  {
+    nr_ice_cand_pair *pair;
+    assert(stream->ice_state != NR_ICE_MEDIA_STREAM_UNPAIRED);
+
+    pair=TAILQ_FIRST(&stream->check_list);
+    while(pair){
+      nr_ice_candidate_pair_role_change(pair);
+      pair=TAILQ_NEXT(pair,entry);
+    }
   }
 

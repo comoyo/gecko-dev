@@ -114,7 +114,6 @@ public:
         mWeight = aWeight;
         mStretch = aStretch;
         mItalic = aItalic;
-        mIsUserFont = true;
         mIsLocalUserFont = true;
         mIsCJK = UNINITIALIZED_VALUE;
     }
@@ -139,7 +138,7 @@ public:
         mWeight = aWeight;
         mStretch = aStretch;
         mItalic = aItalic;
-        mIsUserFont = true;
+        mIsDataUserFont = true;
         mIsCJK = UNINITIALIZED_VALUE;
     }
 
@@ -347,23 +346,26 @@ public:
 
     virtual gfxFontFamily* GetDefaultFont(const gfxFontStyle* aStyle);
 
-    virtual gfxFontEntry* LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                          const nsAString& aFontName);
+    virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
+                                          uint16_t aWeight,
+                                          int16_t aStretch,
+                                          bool aItalic);
 
-    virtual gfxFontEntry* MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                           const uint8_t *aFontData,
+    virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
+                                           uint16_t aWeight,
+                                           int16_t aStretch,
+                                           bool aItalic,
+                                           const uint8_t* aFontData,
                                            uint32_t aLength);
     
-    virtual bool ResolveFontName(const nsAString& aFontName,
-                                   nsAString& aResolvedFontName);
-
     bool GetStandardFamilyName(const nsAString& aFontName,
                                  nsAString& aFamilyName);
 
     IDWriteGdiInterop *GetGDIInterop() { return mGDIInterop; }
     bool UseGDIFontTableAccess() { return mGDIFontTableAccess; }
 
-    virtual gfxFontFamily* FindFamily(const nsAString& aFamily);
+    virtual gfxFontFamily* FindFamily(const nsAString& aFamily,
+                                      bool aUseSystemFonts = false);
 
     virtual void GetFontFamilyList(nsTArray<nsRefPtr<gfxFontFamily> >& aFamilyArray);
 

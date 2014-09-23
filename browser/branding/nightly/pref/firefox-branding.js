@@ -8,7 +8,8 @@ pref("startup.homepage_welcome_url", "https://www.mozilla.org/projects/firefox/%
 pref("app.update.interval", 7200); // 2 hours
 // The time interval between the downloading of mar file chunks in the
 // background (in seconds)
-pref("app.update.download.backgroundInterval", 60);
+// 0 means "download everything at once"
+pref("app.update.download.backgroundInterval", 0);
 // Give the user x seconds to react before showing the big UI. default=12 hours
 pref("app.update.promptWaitTime", 43200);
 // URL user can browse to manually if for some reason all update installation
@@ -29,3 +30,7 @@ pref("browser.search.param.yahoo-fr-ja", "mozff");
 #ifdef MOZ_METRO
 pref("browser.search.param.yahoo-fr-metro", "");
 #endif
+
+// Number of usages of the web console or scratchpad.
+// If this is less than 5, then pasting code into the web console or scratchpad is disabled
+pref("devtools.selfxss.count", 5);

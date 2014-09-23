@@ -34,7 +34,7 @@ namespace mozilla {
 
 static nsTArray<nsCString> *gFeaturesAlreadyReported = nullptr;
 
-class ObserverToDestroyFeaturesAlreadyReported : public nsIObserver
+class ObserverToDestroyFeaturesAlreadyReported MOZ_FINAL : public nsIObserver
 {
 
 public:
@@ -42,6 +42,7 @@ public:
   NS_DECL_NSIOBSERVER
 
   ObserverToDestroyFeaturesAlreadyReported() {}
+private:
   virtual ~ObserverToDestroyFeaturesAlreadyReported() {}
 };
 

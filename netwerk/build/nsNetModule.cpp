@@ -37,7 +37,7 @@
 #include "nsXULAppAPI.h"
 #include "nsCategoryCache.h"
 #include "nsIContentSniffer.h"
-#include "Seer.h"
+#include "Predictor.h"
 #include "nsNetUtil.h"
 #include "nsIThreadPool.h"
 #include "mozilla/net/NeckoChild.h"
@@ -49,8 +49,8 @@
 #endif
 
 typedef nsCategoryCache<nsIContentSniffer> ContentSnifferCache;
-NS_HIDDEN_(ContentSnifferCache*) gNetSniffers = nullptr;
-NS_HIDDEN_(ContentSnifferCache*) gDataSniffers = nullptr;
+ContentSnifferCache* gNetSniffers = nullptr;
+ContentSnifferCache* gDataSniffers = nullptr;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -74,6 +74,10 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsSocketTransportService, Init)
 
 #include "nsServerSocket.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsServerSocket)
+
+#include "TLSServerSocket.h"
+typedef mozilla::net::TLSServerSocket TLSServerSocket;
+NS_GENERIC_FACTORY_CONSTRUCTOR(TLSServerSocket)
 
 #include "nsUDPSocket.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsUDPSocket)
@@ -387,7 +391,14 @@ nsresult NS_NewFTPDirListingConv(nsFTPDirListingConv** result);
 #include "nsHTTPCompressConv.h"
 #include "mozTXTToHTMLConv.h"
 #include "nsUnknownDecoder.h"
+
 #include "nsTXTToHTMLConv.h"
+namespace mozilla {
+namespace net {
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsTXTToHTMLConv, Init)
+} // namespace net
+} // namespace mozilla
+
 #include "nsIndexedToHTML.h"
 #ifdef BUILD_BINHEX_DECODER
 #include "nsBinHexDecoder.h"
@@ -396,7 +407,6 @@ nsresult NS_NewFTPDirListingConv(nsFTPDirListingConv** result);
 nsresult NS_NewMultiMixedConv (nsMultiMixedConv** result);
 nsresult MOZ_NewTXTToHTMLConv (mozTXTToHTMLConv** result);
 nsresult NS_NewHTTPCompressConv  (nsHTTPCompressConv ** result);
-nsresult NS_NewNSTXTToHTMLConv(nsTXTToHTMLConv** result);
 nsresult NS_NewStreamConv(nsStreamConverterService **aStreamConv);
 
 #define FTP_TO_INDEX                 "?from=text/ftp-dir&to=application/http-index-format"
@@ -614,37 +624,6 @@ CreateNewBinaryDetectorFactory(nsISupports *aOuter, REFNSIID aIID, void **aResul
   return rv;
 }
 
-static nsresult
-CreateNewNSTXTToHTMLConvFactory(nsISupports *aOuter, REFNSIID aIID, void **aResult)
-{
-  nsresult rv;
-
-  if (!aResult) {
-    return NS_ERROR_NULL_POINTER;
-  }
-  *aResult = nullptr;
-
-  if (aOuter) {
-    return NS_ERROR_NO_AGGREGATION;
-  }
-
-  nsTXTToHTMLConv *inst;
-  
-  inst = new nsTXTToHTMLConv();
-  if (!inst) return NS_ERROR_OUT_OF_MEMORY;
-
-  NS_ADDREF(inst);
-  rv = inst->Init();
-  if (NS_FAILED(rv)) {
-    delete inst;
-    return rv;
-  }
-  rv = inst->QueryInterface(aIID, aResult);
-  NS_RELEASE(inst);
-
-  return rv;
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // Module implementation for the net library
 
@@ -690,6 +669,7 @@ NS_DEFINE_NAMED_CID(NS_IOSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_STREAMTRANSPORTSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_SOCKETTRANSPORTSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_SERVERSOCKET_CID);
+NS_DEFINE_NAMED_CID(NS_TLSSERVERSOCKET_CID);
 NS_DEFINE_NAMED_CID(NS_UDPSOCKET_CID);
 NS_DEFINE_NAMED_CID(NS_SOCKETPROVIDERSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_DNSSERVICE_CID);
@@ -822,13 +802,14 @@ NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_SERIALIZATION_HELPER_CID);
 NS_DEFINE_NAMED_CID(NS_REDIRECTCHANNELREGISTRAR_CID);
 NS_DEFINE_NAMED_CID(NS_CACHE_STORAGE_SERVICE_CID);
-NS_DEFINE_NAMED_CID(NS_NETWORKSEER_CID);
+NS_DEFINE_NAMED_CID(NS_NETWORKPREDICTOR_CID);
 
 static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_IOSERVICE_CID, false, nullptr, nsIOServiceConstructor },
     { &kNS_STREAMTRANSPORTSERVICE_CID, false, nullptr, nsStreamTransportServiceConstructor },
     { &kNS_SOCKETTRANSPORTSERVICE_CID, false, nullptr, nsSocketTransportServiceConstructor },
     { &kNS_SERVERSOCKET_CID, false, nullptr, nsServerSocketConstructor },
+    { &kNS_TLSSERVERSOCKET_CID, false, nullptr, TLSServerSocketConstructor },
     { &kNS_UDPSOCKET_CID, false, nullptr, nsUDPSocketConstructor },
     { &kNS_SOCKETPROVIDERSERVICE_CID, false, nullptr, nsSocketProviderService::Create },
     { &kNS_DNSSERVICE_CID, false, nullptr, nsIDNSServiceConstructor },
@@ -879,7 +860,7 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_UNKNOWNDECODER_CID, false, nullptr, CreateNewUnknownDecoderFactory },
     { &kNS_BINARYDETECTOR_CID, false, nullptr, CreateNewBinaryDetectorFactory },
     { &kNS_HTTPCOMPRESSCONVERTER_CID, false, nullptr, CreateNewHTTPCompressConvFactory },
-    { &kNS_NSTXTTOHTMLCONVERTER_CID, false, nullptr, CreateNewNSTXTToHTMLConvFactory },
+    { &kNS_NSTXTTOHTMLCONVERTER_CID, false, nullptr, mozilla::net::nsTXTToHTMLConvConstructor },
 #ifdef BUILD_BINHEX_DECODER
     { &kNS_BINHEXDECODER_CID, false, nullptr, nsBinHexDecoderConstructor },
 #endif
@@ -965,7 +946,7 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_SERIALIZATION_HELPER_CID, false, nullptr, nsSerializationHelperConstructor },
     { &kNS_REDIRECTCHANNELREGISTRAR_CID, false, nullptr, RedirectChannelRegistrarConstructor },
     { &kNS_CACHE_STORAGE_SERVICE_CID, false, nullptr, CacheStorageServiceConstructor },
-    { &kNS_NETWORKSEER_CID, false, nullptr, mozilla::net::Seer::Create },
+    { &kNS_NETWORKPREDICTOR_CID, false, nullptr, mozilla::net::Predictor::Create },
     { nullptr }
 };
 
@@ -975,6 +956,7 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_STREAMTRANSPORTSERVICE_CONTRACTID, &kNS_STREAMTRANSPORTSERVICE_CID },
     { NS_SOCKETTRANSPORTSERVICE_CONTRACTID, &kNS_SOCKETTRANSPORTSERVICE_CID },
     { NS_SERVERSOCKET_CONTRACTID, &kNS_SERVERSOCKET_CID },
+    { NS_TLSSERVERSOCKET_CONTRACTID, &kNS_TLSSERVERSOCKET_CID },
     { NS_UDPSOCKET_CONTRACTID, &kNS_UDPSOCKET_CID },
     { NS_SOCKETPROVIDERSERVICE_CONTRACTID, &kNS_SOCKETPROVIDERSERVICE_CID },
     { NS_DNSSERVICE_CONTRACTID, &kNS_DNSSERVICE_CID },
@@ -1111,7 +1093,8 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_SERIALIZATION_HELPER_CONTRACTID, &kNS_SERIALIZATION_HELPER_CID },
     { NS_REDIRECTCHANNELREGISTRAR_CONTRACTID, &kNS_REDIRECTCHANNELREGISTRAR_CID },
     { NS_CACHE_STORAGE_SERVICE_CONTRACTID, &kNS_CACHE_STORAGE_SERVICE_CID },
-    { NS_NETWORKSEER_CONTRACTID, &kNS_NETWORKSEER_CID },
+    { NS_CACHE_STORAGE_SERVICE_CONTRACTID2, &kNS_CACHE_STORAGE_SERVICE_CID },
+    { NS_NETWORKPREDICTOR_CONTRACTID, &kNS_NETWORKPREDICTOR_CID },
     { nullptr }
 };
 

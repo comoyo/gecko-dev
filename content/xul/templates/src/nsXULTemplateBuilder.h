@@ -47,7 +47,6 @@ class nsXULTemplateBuilder : public nsIXULTemplateBuilder,
 
 public:
     nsXULTemplateBuilder();
-    virtual ~nsXULTemplateBuilder();
 
     nsresult InitGlobals();
 
@@ -119,7 +118,7 @@ public:
     void RunnableLoadAndRebuild() {
       Uninit(false);  // Reset results
 
-      nsCOMPtr<nsIDocument> doc = mRoot ? mRoot->GetDocument() : nullptr;
+      nsCOMPtr<nsIDocument> doc = mRoot ? mRoot->GetComposedDoc() : nullptr;
       if (doc) {
         bool shouldDelay;
         LoadDataSources(doc, &shouldDelay);
@@ -334,6 +333,8 @@ public:
                                nsIRDFResource** aResource);
 
 protected:
+    virtual ~nsXULTemplateBuilder();
+
     nsCOMPtr<nsISupports> mDataSource;
     nsCOMPtr<nsIRDFDataSource> mDB;
     nsCOMPtr<nsIRDFCompositeDataSource> mCompDB;

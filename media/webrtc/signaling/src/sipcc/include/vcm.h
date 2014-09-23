@@ -64,6 +64,13 @@
 #define VCM_DSP_ENCODEONLY  1
 #define VCM_DSP_FULLDUPLEX  2
 #define VCM_DSP_IGNORE      3
+#define VCM_DSP_FULLDUPLEX_HW 4 // HW codecs
+#define VCM_DSP_FULLDUPLEX_GMP 5 // GMP-loaded codecs
+
+// Bitmasks for vcmGetH264SupportedPacketizationMode()
+#define VCM_H264_MODE_0     1
+#define VCM_H264_MODE_1     2
+#define VCM_H264_MODE_2     4
 
 #define CC_KFACTOR_STAT_LEN   (256)
 
@@ -592,6 +599,13 @@ int vcmRxStart(cc_mcapid_t mcap_id,
         vcm_mediaAttrs_t *attrs);
 
 
+struct cc_media_remote_track_table_t_;
+typedef struct cc_media_remote_track_table_t_ vcm_media_remote_track_table_t;
+
+void vcmOnRemoteStreamAdded(cc_call_handle_t call_handle,
+                            const char* peer_connection_handle,
+                            vcm_media_remote_track_table_t *media_tracks);
+
 /**
  *  start rx stream
  *  Same concept as vcmRxStart but for ICE/PeerConnection-based flows
@@ -880,11 +894,18 @@ int vcmGetAudioCodecList(int request_type);
 int vcmGetVideoCodecList(int request_type);
 
 /**
- * Get max supported H.264 video packetization mode.
- * @return maximum supported video packetization mode for H.264. Value returned
- * must be 0 or 1. Value 2 is not supported yet.
+ * Get supported H.264 video packetization modes
+ * @return mask of supported video packetization modes for H.264. Value returned
+ * must be 1 to 3 (bit 0 is mode 0, bit 1 is mode 1.
+ * Bit 2 (Mode 2) is not supported yet.
  */
-int vcmGetVideoMaxSupportedPacketizationMode();
+int vcmGetH264SupportedPacketizationModes();
+
+/**
+ * Get supported H.264 profile-level-id
+ * @return supported profile-level-id value
+ */
+uint32_t vcmGetVideoH264ProfileLevelID();
 
 /**
  * Get the rx/tx stream statistics associated with the call.
@@ -1002,12 +1023,14 @@ void vcmSetRtcpDscp(cc_groupid_t group_id, int dscp);
  * @param [in] media_type - codec for which we are negotiating
  * @param [in] sdp_p - opaque SDP pointer to be used via SDP helper APIs
  * @param [in] level - Parameter to be used with SDP helper APIs
+ * @param [in] remote_pt - payload type remote is using for this codec
  * @param [out] rcapptr - variable to return the allocated attrib structure
  *
  * @return cc_boolean - true if attributes are accepted false otherwise
  */
 
-cc_boolean vcmCheckAttribs(cc_uint32_t media_type, void *sdp_p, int level, void **rcapptr);
+cc_boolean vcmCheckAttribs(cc_uint32_t media_type, void *sdp_p, int level,
+                           int remote_pt, void **rcapptr);
 
 /**
  * Add Video attributes in the offer/answer SDP
@@ -1068,9 +1091,12 @@ int vcmOnSdpParseError(const char *peercconnection, const char *message);
  */
 int vcmDisableRtcpComponent(const char *peerconnection, int level);
 
+short vcmGetVideoLevel(uint16_t codec, int32_t *level);
 short vcmGetVideoMaxFs(uint16_t codec, int32_t *max_fs);
-
-short vcmGetVideoMaxFr(uint16_t codec, int32_t *max_fs);
+short vcmGetVideoMaxFr(uint16_t codec, int32_t *max_fr);
+short vcmGetVideoMaxBr(uint16_t codec, int32_t *max_br);
+short vcmGetVideoMaxMbps(uint16_t codec, int32_t *max_mbps);
+short vcmGetVideoPreferredCodec(int32_t *preferred_codec);
 
 //Using C++ for gips. This is the end of extern "C" above.
 #ifdef __cplusplus

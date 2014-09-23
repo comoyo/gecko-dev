@@ -57,6 +57,29 @@ D2D1_BLEND_MODE D2DBlendMode(uint32_t aMode)
     return D2D1_BLEND_MODE_MULTIPLY;
   case BLEND_MODE_SCREEN:
     return D2D1_BLEND_MODE_SCREEN;
+  case BLEND_MODE_OVERLAY:
+    return D2D1_BLEND_MODE_OVERLAY;
+  case BLEND_MODE_COLOR_DODGE:
+    return D2D1_BLEND_MODE_COLOR_DODGE;
+  case BLEND_MODE_COLOR_BURN:
+    return D2D1_BLEND_MODE_COLOR_BURN;
+  case BLEND_MODE_HARD_LIGHT:
+    return D2D1_BLEND_MODE_HARD_LIGHT;
+  case BLEND_MODE_SOFT_LIGHT:
+    return D2D1_BLEND_MODE_SOFT_LIGHT;
+  case BLEND_MODE_DIFFERENCE:
+    return D2D1_BLEND_MODE_DIFFERENCE;
+  case BLEND_MODE_EXCLUSION:
+    return D2D1_BLEND_MODE_EXCLUSION;
+  case BLEND_MODE_HUE:
+    return D2D1_BLEND_MODE_HUE;
+  case BLEND_MODE_SATURATION:
+    return D2D1_BLEND_MODE_SATURATION;
+  case BLEND_MODE_COLOR:
+    return D2D1_BLEND_MODE_COLOR;
+  case BLEND_MODE_LUMINOSITY:
+    return D2D1_BLEND_MODE_LUMINOSITY;
+
   default:
     MOZ_CRASH("Unknown enum value!");
   }
@@ -128,7 +151,11 @@ D2D1_CHANNEL_SELECTOR D2DChannelSelector(uint32_t aMode)
 
 TemporaryRef<ID2D1Image> GetImageForSourceSurface(DrawTarget *aDT, SourceSurface *aSurface)
 {
-  switch (aDT->GetType()) {
+  if (aDT->IsTiledDrawTarget() || aDT->IsDualDrawTarget()) {
+      MOZ_CRASH("Incompatible draw target type!");
+      return nullptr;
+  }
+  switch (aDT->GetBackendType()) {
     case BackendType::DIRECT2D1_1:
       return static_cast<DrawTargetD2D1*>(aDT)->GetImageForSurface(aSurface, ExtendMode::CLAMP);
     case BackendType::DIRECT2D:

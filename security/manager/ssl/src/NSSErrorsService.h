@@ -6,7 +6,6 @@
 #define NSSErrorsService_h
 
 #include "nsINSSErrorsService.h"
-
 #include "mozilla/Attributes.h"
 #include "nsCOMPtr.h"
 #include "nsIStringBundle.h"
@@ -14,12 +13,6 @@
 
 namespace mozilla {
 namespace psm {
-
-enum PSMErrorCodes {
-  PSM_ERROR_KEY_PINNING_FAILURE = (nsINSSErrorsService::PSM_ERROR_BASE + 0)
-};
-
-void RegisterPSMErrorTable();
 
 class NSSErrorsService MOZ_FINAL : public nsINSSErrorsService
 {
@@ -30,6 +23,15 @@ public:
   nsresult Init();
 
 private:
+  // For XPCOM implementations that are not a base class for some other
+  // class, it is good practice to make the destructor non-virtual and
+  // private.  Then the only way to delete the object is via Release.
+#ifdef _MSC_VER
+  // C4265: Class has virtual members but destructor is not virtual
+  __pragma(warning(disable:4265))
+#endif
+  ~NSSErrorsService();
+
   nsCOMPtr<nsIStringBundle> mPIPNSSBundle;
   nsCOMPtr<nsIStringBundle> mNSSErrorsBundle;
 };

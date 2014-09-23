@@ -30,6 +30,7 @@ namespace CSF
         virtual bool setRingerVolume( int ) = 0;
         virtual int getRingerVolume() = 0;
 
-        virtual ~AudioControl(){};
+        protected:
+                virtual ~AudioControl(){};
 	};
 };

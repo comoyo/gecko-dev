@@ -17,7 +17,8 @@ XPCOMUtils.defineLazyServiceGetter(this, "CrashReporter",
 
 XPCOMUtils.defineLazyModuleGetter(this, "Task", "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "sendMessageToJava", "resource://gre/modules/Messaging.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Messaging", "resource://gre/modules/Messaging.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils", "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
 function dump(a) {
   Services.console.logStringMessage(a);
@@ -43,8 +44,15 @@ SessionStore.prototype = {
   _windows: {},
   _lastSaveTime: 0,
   _interval: 10000,
-  _maxTabsUndo: 1,
+  _maxTabsUndo: 5,
   _pendingWrite: 0,
+
+  // The index where the most recently closed tab was in the tabs array
+  // when it was closed.
+  _lastClosedTabIndex: -1,
+
+  // Whether or not to send notifications for changes to the closed tabs.
+  _notifyClosedTabs: false,
 
   init: function ss_init() {
     // Get file references
@@ -75,6 +83,9 @@ SessionStore.prototype = {
         observerService.addObserver(this, "browser:purge-session-history", true);
         observerService.addObserver(this, "Session:Restore", true);
         observerService.addObserver(this, "application-background", true);
+        observerService.addObserver(this, "ClosedTabs:StartNotifications", true);
+        observerService.addObserver(this, "ClosedTabs:StopNotifications", true);
+        observerService.addObserver(this, "last-pb-context-exited", true);
         break;
       case "final-ui-startup":
         observerService.removeObserver(this, "final-ui-startup");
@@ -98,12 +109,17 @@ SessionStore.prototype = {
         for (let [ssid, win] in Iterator(this._windows))
           win.closedTabs = [];
 
+        this._lastClosedTabIndex = -1;
+
         if (this._loadState == STATE_RUNNING) {
           // Save the purged state immediately
           this.saveState();
         }
 
         Services.obs.notifyObservers(null, "sessionstore-state-purge-complete", "");
+        if (this._notifyClosedTabs) {
+          this._sendClosedTabsToJava(Services.wm.getMostRecentWindow("navigator:browser"));
+        }
         break;
       case "timer-callback":
         // Timer call back for delayed saving
@@ -128,7 +144,7 @@ SessionStore.prototype = {
               }
 
               // Let Java know we're done restoring tabs so tabs added after this can be animated
-              sendMessageToJava({
+              Messaging.sendRequest({
                 type: "Session:RestoreEnd"
               });
             }.bind(this)
@@ -151,6 +167,20 @@ SessionStore.prototype = {
         // pending save state to ensure that this data does not get lost.
         this.flushPendingState();
         break;
+      case "ClosedTabs:StartNotifications":
+        this._notifyClosedTabs = true;
+        this._sendClosedTabsToJava(Services.wm.getMostRecentWindow("navigator:browser"));
+        break;
+      case "ClosedTabs:StopNotifications":
+        this._notifyClosedTabs = false;
+        break;
+      case "last-pb-context-exited":
+        // Clear private closed tab data when we leave private browsing.
+        for (let [, window] in Iterator(this._windows)) {
+          window.closedTabs = window.closedTabs.filter(tab => !tab.isPrivate);
+        }
+        this._lastClosedTabIndex = -1;
+        break;
     }
   },
 
@@ -164,7 +194,7 @@ SessionStore.prototype = {
       }
       case "TabClose": {
         let browser = aEvent.target;
-        this.onTabClose(window, browser);
+        this.onTabClose(window, browser, aEvent.detail);
         this.onTabRemove(window, browser);
         break;
       }
@@ -269,7 +299,7 @@ SessionStore.prototype = {
       this.saveStateDelayed();
   },
 
-  onTabClose: function ss_onTabClose(aWindow, aBrowser) {
+  onTabClose: function ss_onTabClose(aWindow, aBrowser, aTabIndex) {
     if (this._maxTabsUndo == 0)
       return;
 
@@ -283,6 +313,12 @@ SessionStore.prototype = {
       let length = this._windows[aWindow.__SSID].closedTabs.length;
       if (length > this._maxTabsUndo)
         this._windows[aWindow.__SSID].closedTabs.splice(this._maxTabsUndo, length - this._maxTabsUndo);
+
+      this._lastClosedTabIndex = aTabIndex;
+
+      if (this._notifyClosedTabs) {
+        this._sendClosedTabsToJava(aWindow);
+      }
     }
   },
 
@@ -341,6 +377,13 @@ SessionStore.prototype = {
 
     this.saveStateDelayed();
     this._updateCrashReportURL(aWindow);
+
+    // If the selected tab has changed while listening for closed tab
+    // notifications, we may have switched between different private browsing
+    // modes.
+    if (this._notifyClosedTabs) {
+      this._sendClosedTabsToJava(aWindow);
+    }
   },
 
   saveStateDelayed: function ss_saveStateDelayed() {
@@ -411,9 +454,9 @@ SessionStore.prototype = {
 
     // If we have private data, send it to Java; otherwise, send null to
     // indicate that there is no private data
-    sendMessageToJava({
+    Messaging.sendRequest({
       type: "PrivateBrowsing:Data",
-      session: (privateData.windows[0].tabs.length > 0) ? JSON.stringify(privateData) : null
+      session: (privateData.windows.length > 0 && privateData.windows[0].tabs.length > 0) ? JSON.stringify(privateData) : null
     });
 
     this._lastSaveTime = Date.now();
@@ -752,14 +795,12 @@ SessionStore.prototype = {
     try {
       state = JSON.parse(aData);
     } catch (e) {
-      Cu.reportError("SessionStore: invalid session JSON");
-      return false;
+      throw "Invalid session JSON: " + aData;
     }
 
     // To do a restore, we must have at least one window with one tab
     if (!state || state.windows.length == 0 || !state.windows[0].tabs || state.windows[0].tabs.length == 0) {
-      Cu.reportError("SessionStore: no tabs to restore");
-      return false;
+      throw "Invalid session JSON: " + aData;
     }
 
     let window = Services.wm.getMostRecentWindow("navigator:browser");
@@ -807,8 +848,6 @@ SessionStore.prototype = {
 
       tab.browser.__SS_extdata = tabData.extData;
     }
-
-    return true;
   },
 
   getClosedTabCount: function ss_getClosedTabCount(aWindow) {
@@ -818,14 +857,14 @@ SessionStore.prototype = {
     return this._windows[aWindow.__SSID].closedTabs.length;
   },
 
-  getClosedTabData: function ss_getClosedTabData(aWindow) {
+  getClosedTabs: function ss_getClosedTabs(aWindow) {
     if (!aWindow.__SSID)
       throw (Components.returnCode = Cr.NS_ERROR_INVALID_ARG);
 
-    return JSON.stringify(this._windows[aWindow.__SSID].closedTabs);
+    return this._windows[aWindow.__SSID].closedTabs;
   },
 
-  undoCloseTab: function ss_undoCloseTab(aWindow, aIndex) {
+  undoCloseTab: function ss_undoCloseTab(aWindow, aCloseTabData) {
     if (!aWindow.__SSID)
       throw (Components.returnCode = Cr.NS_ERROR_INVALID_ARG);
 
@@ -833,21 +872,32 @@ SessionStore.prototype = {
     if (!closedTabs)
       return null;
 
-    // default to the most-recently closed tab
-    aIndex = aIndex || 0;
-    if (!(aIndex in closedTabs))
-      throw (Components.returnCode = Cr.NS_ERROR_INVALID_ARG);
-
-    // fetch the data of closed tab, while removing it from the array
-    let closedTab = closedTabs.splice(aIndex, 1).shift();
+    // If the tab data is in the closedTabs array, remove it.
+    closedTabs.find(function (tabData, i) {
+      if (tabData == aCloseTabData) {
+        closedTabs.splice(i, 1);
+        return true;
+      }
+    });
 
     // create a new tab and bring to front
-    let params = { selected: true };
-    let tab = aWindow.BrowserApp.addTab(closedTab.entries[closedTab.index - 1].url, params);
-    this._restoreHistory(closedTab, tab.browser.sessionHistory);
+    let params = {
+      selected: true,
+      isPrivate: aCloseTabData.isPrivate,
+      desktopMode: aCloseTabData.desktopMode,
+      tabIndex: this._lastClosedTabIndex
+    };
+    let tab = aWindow.BrowserApp.addTab(aCloseTabData.entries[aCloseTabData.index - 1].url, params);
+    this._restoreHistory(aCloseTabData, tab.browser.sessionHistory);
+
+    this._lastClosedTabIndex = -1;
 
     // Put back the extra data
-    tab.browser.__SS_extdata = closedTab.extData;
+    tab.browser.__SS_extdata = aCloseTabData.extData;
+
+    if (this._notifyClosedTabs) {
+      this._sendClosedTabsToJava(aWindow);
+    }
 
     return tab.browser;
   },
@@ -865,6 +915,38 @@ SessionStore.prototype = {
 
     // remove closed tab from the array
     closedTabs.splice(aIndex, 1);
+
+    // Forget the last closed tab index if we're forgetting the last closed tab.
+    if (aIndex == 0) {
+      this._lastClosedTabIndex = -1;
+    }
+    if (this._notifyClosedTabs) {
+      this._sendClosedTabsToJava(aWindow);
+    }
+  },
+
+  _sendClosedTabsToJava: function ss_sendClosedTabsToJava(aWindow) {
+    if (!aWindow.__SSID)
+      throw (Components.returnCode = Cr.NS_ERROR_INVALID_ARG);
+
+    let closedTabs = this._windows[aWindow.__SSID].closedTabs;
+    let isPrivate = PrivateBrowsingUtils.isWindowPrivate(aWindow.BrowserApp.selectedBrowser.contentWindow);
+
+    let tabs = closedTabs
+      .filter(tab => tab.isPrivate == isPrivate)
+      .map(function (tab) {
+        // Get the url and title for the last entry in the session history.
+        let lastEntry = tab.entries[tab.entries.length - 1];
+        return {
+          url: lastEntry.url,
+          title: lastEntry.title || ""
+        };
+      });
+
+    Messaging.sendRequest({
+      type: "ClosedTabs:Data",
+      tabs: tabs
+    });
   },
 
   getTabValue: function ss_getTabValue(aTab, aKey) {
@@ -890,20 +972,8 @@ SessionStore.prototype = {
       throw (Components.returnCode = Cr.NS_ERROR_INVALID_ARG);
   },
 
-  restoreLastSession: function ss_restoreLastSession(aSessionString) {
-    let self = this;
-
-    function restoreWindow(data) {
-      if (!self._restoreWindow(data)) {
-        throw "Could not restore window";
-      }
-
-      notifyObservers();
-    }
-
-    function notifyObservers(aMessage) {
-      Services.obs.notifyObservers(null, "sessionstore-windows-restored", aMessage || "");
-    }
+  restoreLastSession: Task.async(function* (aSessionString) {
+    let notifyMessage = "";
 
     try {
       // Normally, we'll receive the session string from Java, but there are
@@ -911,27 +981,37 @@ SessionStore.prototype = {
       // browser.sessionstore.resume_session_once is true). In these cases, the
       // session will be read from sessionstore.bak (which is also used for
       // "tabs from last time").
-      if (aSessionString == null) {
-        Task.spawn(function() {
-          let bytes = yield OS.File.read(this._sessionFileBackup.path);
-          let data = JSON.parse(new TextDecoder().decode(bytes) || "");
-          restoreWindow(data);
-        }.bind(this)).then(null, function onError(reason) {
-          if (reason instanceof OS.File.Error && reason.becauseNoSuchFile) {
-            Cu.reportError("Session file doesn't exist");
-          } else {
-            Cu.reportError("SessionStore: " + reason.message);
-          }
-          notifyObservers("fail");
-        });
-      } else {
-        restoreWindow(aSessionString);
+      let data = aSessionString;
+
+      if (data == null) {
+        let bytes = yield OS.File.read(this._sessionFileBackup.path);
+        data = JSON.parse(new TextDecoder().decode(bytes) || "");
       }
+
+      this._restoreWindow(data);
     } catch (e) {
-      Cu.reportError("SessionStore: " + e);
-      notifyObservers("fail");
+      if (e instanceof OS.File.Error) {
+        Cu.reportError("SessionStore: " + e.message);
+      } else {
+        Cu.reportError("SessionStore: " + e);
+      }
+
+      notifyMessage = "fail";
     }
+
+    Services.obs.notifyObservers(null, "sessionstore-windows-restored", notifyMessage);
+  }),
+
+  removeWindow: function ss_removeWindow(aWindow) {
+    if (!aWindow || !aWindow.__SSID || !this._windows[aWindow.__SSID])
+      return;
+
+    delete this._windows[aWindow.__SSID];
+    delete aWindow.__SSID;
+
+    this.saveState();
   }
+
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([SessionStore]);

@@ -79,6 +79,66 @@ MacroAssemblerX64::loadConstantFloat32(float f, FloatRegister dest)
     masm.setNextJump(j, prev);
 }
 
+MacroAssemblerX64::SimdData *
+MacroAssemblerX64::getSimdData(const SimdConstant &v)
+{
+    if (!simdMap_.initialized()) {
+        enoughMemory_ &= simdMap_.init();
+        if (!enoughMemory_)
+            return nullptr;
+    }
+
+    size_t index;
+    if (SimdMap::AddPtr p = simdMap_.lookupForAdd(v)) {
+        index = p->value();
+    } else {
+        index = simds_.length();
+        enoughMemory_ &= simds_.append(SimdData(v));
+        enoughMemory_ &= simdMap_.add(p, v, index);
+        if (!enoughMemory_)
+            return nullptr;
+    }
+    return &simds_[index];
+}
+
+void
+MacroAssemblerX64::loadConstantInt32x4(const SimdConstant &v, FloatRegister dest)
+{
+    JS_ASSERT(v.type() == SimdConstant::Int32x4);
+    if (maybeInlineInt32x4(v, dest))
+        return;
+
+    SimdData *val = getSimdData(v);
+    if (!val)
+        return;
+
+    JS_ASSERT(!val->uses.bound());
+    JS_ASSERT(val->type() == SimdConstant::Int32x4);
+
+    JmpSrc j = masm.movdqa_ripr(dest.code());
+    JmpSrc prev = JmpSrc(val->uses.use(j.offset()));
+    masm.setNextJump(j, prev);
+}
+
+void
+MacroAssemblerX64::loadConstantFloat32x4(const SimdConstant&v, FloatRegister dest)
+{
+    JS_ASSERT(v.type() == SimdConstant::Float32x4);
+    if (maybeInlineFloat32x4(v, dest))
+        return;
+
+    SimdData *val = getSimdData(v);
+    if (!val)
+        return;
+
+    JS_ASSERT(!val->uses.bound());
+    JS_ASSERT(val->type() == SimdConstant::Float32x4);
+
+    JmpSrc j = masm.movaps_ripr(dest.code());
+    JmpSrc prev = JmpSrc(val->uses.use(j.offset()));
+    masm.setNextJump(j, prev);
+}
+
 void
 MacroAssemblerX64::finish()
 {
@@ -96,6 +156,19 @@ MacroAssemblerX64::finish()
         Float &flt = floats_[i];
         bind(&flt.uses);
         masm.floatConstant(flt.value);
+    }
+
+    // SIMD memory values must be suitably aligned.
+    if (!simds_.empty())
+        masm.align(SimdStackAlignment);
+    for (size_t i = 0; i < simds_.length(); i++) {
+        SimdData &v = simds_[i];
+        bind(&v.uses);
+        switch(v.type()) {
+          case SimdConstant::Int32x4:   masm.int32x4Constant(v.value.asInt32x4());     break;
+          case SimdConstant::Float32x4: masm.float32x4Constant(v.value.asFloat32x4()); break;
+          default: MOZ_CRASH("unexpected SimdConstant type");
+        }
     }
 
     MacroAssemblerX86Shared::finish();
@@ -127,7 +200,7 @@ MacroAssemblerX64::setupUnalignedABICall(uint32_t args, Register scratch)
     dynamicAlignment_ = true;
 
     movq(rsp, scratch);
-    andq(Imm32(~(StackAlignment - 1)), rsp);
+    andq(Imm32(~(ABIStackAlignment - 1)), rsp);
     push(scratch);
 }
 
@@ -150,7 +223,7 @@ MacroAssemblerX64::passABIArg(const MoveOperand &from, MoveOp::Type type)
             switch (type) {
               case MoveOp::FLOAT32: stackForCall_ += sizeof(float);  break;
               case MoveOp::DOUBLE:  stackForCall_ += sizeof(double); break;
-              default: MOZ_ASSUME_UNREACHABLE("Unexpected float register class argument type");
+              default: MOZ_CRASH("Unexpected float register class argument type");
             }
         }
         break;
@@ -170,7 +243,7 @@ MacroAssemblerX64::passABIArg(const MoveOperand &from, MoveOp::Type type)
         break;
       }
       default:
-        MOZ_ASSUME_UNREACHABLE("Unexpected argument type");
+        MOZ_CRASH("Unexpected argument type");
     }
 
     enoughMemory_ = moveResolver_.addMove(from, to, type);
@@ -197,11 +270,11 @@ MacroAssemblerX64::callWithABIPre(uint32_t *stackAdjust)
     if (dynamicAlignment_) {
         *stackAdjust = stackForCall_
                      + ComputeByteAlignment(stackForCall_ + sizeof(intptr_t),
-                                            StackAlignment);
+                                            ABIStackAlignment);
     } else {
         *stackAdjust = stackForCall_
                      + ComputeByteAlignment(stackForCall_ + framePushed_,
-                                            StackAlignment);
+                                            ABIStackAlignment);
     }
 
     reserveStack(*stackAdjust);
@@ -220,7 +293,7 @@ MacroAssemblerX64::callWithABIPre(uint32_t *stackAdjust)
 #ifdef DEBUG
     {
         Label good;
-        testq(rsp, Imm32(StackAlignment - 1));
+        testq(rsp, Imm32(ABIStackAlignment - 1));
         j(Equal, &good);
         breakpoint();
         bind(&good);
@@ -367,6 +440,45 @@ MacroAssemblerX64::handleFailureWithHandlerTail()
     jmp(Operand(rsp, offsetof(ResumeFromException, target)));
 }
 
+template <typename T>
+void
+MacroAssemblerX64::storeUnboxedValue(ConstantOrRegister value, MIRType valueType, const T &dest,
+                                     MIRType slotType)
+{
+    if (valueType == MIRType_Double) {
+        storeDouble(value.reg().typedReg().fpu(), dest);
+        return;
+    }
+
+    // For known integers and booleans, we can just store the unboxed value if
+    // the slot has the same type.
+    if ((valueType == MIRType_Int32 || valueType == MIRType_Boolean) && slotType == valueType) {
+        if (value.constant()) {
+            Value val = value.value();
+            if (valueType == MIRType_Int32)
+                store32(Imm32(val.toInt32()), dest);
+            else
+                store32(Imm32(val.toBoolean() ? 1 : 0), dest);
+        } else {
+            store32(value.reg().typedReg().gpr(), dest);
+        }
+        return;
+    }
+
+    if (value.constant())
+        storeValue(value.value(), dest);
+    else
+        storeValue(ValueTypeFromMIRType(valueType), value.reg().typedReg().gpr(), dest);
+}
+
+template void
+MacroAssemblerX64::storeUnboxedValue(ConstantOrRegister value, MIRType valueType, const Address &dest,
+                                     MIRType slotType);
+
+template void
+MacroAssemblerX64::storeUnboxedValue(ConstantOrRegister value, MIRType valueType, const BaseIndex &dest,
+                                     MIRType slotType);
+
 #ifdef JSGC_GENERATIONAL
 
 void
@@ -380,7 +492,7 @@ MacroAssemblerX64::branchPtrInNurseryRange(Condition cond, Register ptr, Registe
     movePtr(ImmWord(-ptrdiff_t(nursery.start())), ScratchReg);
     addPtr(ptr, ScratchReg);
     branchPtr(cond == Assembler::Equal ? Assembler::Below : Assembler::AboveOrEqual,
-              ScratchReg, Imm32(Nursery::NurserySize), label);
+              ScratchReg, Imm32(nursery.nurserySize()), label);
 }
 
 void
@@ -396,7 +508,7 @@ MacroAssemblerX64::branchValueIsNurseryObject(Condition cond, ValueOperand value
     movePtr(ImmWord(-ptrdiff_t(start.asRawBits())), ScratchReg);
     addPtr(value.valueReg(), ScratchReg);
     branchPtr(cond == Assembler::Equal ? Assembler::Below : Assembler::AboveOrEqual,
-              ScratchReg, Imm32(Nursery::NurserySize), label);
+              ScratchReg, Imm32(nursery.nurserySize()), label);
 }
 
 #endif

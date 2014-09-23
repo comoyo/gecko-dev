@@ -6,6 +6,30 @@ const {Cc: Cc, Ci: Ci, Cr: Cr, Cu: Cu} = SpecialPowers;
 let Promise = Cu.import("resource://gre/modules/Promise.jsm").Promise;
 
 /**
+ * Push a list of preference settings. Never reject.
+ *
+ * Fulfill params: (none)
+ *
+ * @param aPrefs
+ *        An JS object.  For example:
+ *
+ *          {'set': [['foo.bar', 2], ['magic.pref', 'baz']],
+ *           'clear': [['clear.this'], ['also.this']] };
+ *
+ * @return A deferred promise.
+ */
+function pushPrefEnv(aPrefs) {
+  let deferred = Promise.defer();
+
+  SpecialPowers.pushPrefEnv(aPrefs, function() {
+    ok(true, "preferences pushed: " + JSON.stringify(aPrefs));
+    deferred.resolve();
+  });
+
+  return deferred.promise;
+}
+
+/**
  * Push required permissions and test if |navigator.mozMobileMessage| exists.
  * Resolve if it does, reject otherwise.
  *
@@ -54,16 +78,24 @@ function ensureMobileMessage() {
  *
  * @param aEventName
  *        A string event name.
+ * @param aMatchFunc [optional]
+ *        An additional callback function to match the interested event
+ *        before removing the listener and going to resolve the promise.
  *
  * @return A deferred promise.
  */
-function waitForManagerEvent(aEventName) {
+function waitForManagerEvent(aEventName, aMatchFunc) {
   let deferred = Promise.defer();
 
   manager.addEventListener(aEventName, function onevent(aEvent) {
-    manager.removeEventListener(aEventName, onevent);
+    if (aMatchFunc && !aMatchFunc(aEvent)) {
+      ok(true, "MobileMessageManager event '" + aEventName + "' got" +
+               " but is not interested.");
+      return;
+    }
 
     ok(true, "MobileMessageManager event '" + aEventName + "' got.");
+    manager.removeEventListener(aEventName, onevent);
     deferred.resolve(aEvent);
   });
 
@@ -185,6 +217,24 @@ function sendMmsWithFailure(aMmsParameters, aSendParameters) {
 }
 
 /**
+ * Retrieve message by message id.
+ *
+ * Fulfill params: MozSmsMessage
+ * Reject params:
+ *   event -- a DOMEvent
+ *
+ * @param aId
+ *        A numeric message id.
+ *
+ * @return A deferred promise.
+ */
+function getMessage(aId) {
+  let request = manager.getMessage(aId);
+  return wrapDomRequestAsPromise(request)
+    .then((aEvent) => { return aEvent.target.result; });
+}
+
+/**
  * Retrieve messages from database.
  *
  * Fulfill params:
@@ -193,18 +243,17 @@ function sendMmsWithFailure(aMmsParameters, aSendParameters) {
  * Reject params:
  *   event -- a DOMEvent
  *
- * @param aFilter an optional MozSmsFilter instance.
- * @param aReverse a boolean value indicating whether the order of the messages
- *                 should be reversed.
+ * @param aFilter [optional]
+ *        A MobileMessageFilter object.
+ * @param aReverse [optional]
+ *        A boolean value indicating whether the order of the message should be
+ *        reversed. Default: false.
  *
  * @return A deferred promise.
  */
 function getMessages(aFilter, aReverse) {
   let deferred = Promise.defer();
 
-  if (!aFilter) {
-    aFilter = new MozSmsFilter;
-  }
   let messages = [];
   let cursor = manager.getMessages(aFilter, aReverse || false);
   cursor.onsuccess = function(aEvent) {
@@ -312,9 +361,17 @@ function deleteMessagesById(aMessageIds) {
     return [];
   }
 
+  let promises = [];
+  promises.push(waitForManagerEvent("deleted"));
+
   let request = manager.delete(aMessageIds);
-  return wrapDomRequestAsPromise(request)
-      .then((aEvent) => { return aEvent.target.result; });
+  promises.push(wrapDomRequestAsPromise(request));
+
+  return Promise.all(promises)
+    .then((aResults) => {
+      return { deletedInfo: aResults[0],
+               deletedFlags: aResults[1].target.result };
+    });
 }
 
 /**
@@ -396,11 +453,36 @@ function runEmulatorCmdSafe(aCommand) {
  * Reject params:
  *   result -- an array of emulator response lines.
  *
+ * @param aFrom
+ *        A string-typed from address.
+ * @param aText
+ *        A string-typed message body.
+ *
  * @return A deferred promise.
  */
 function sendTextSmsToEmulator(aFrom, aText) {
   let command = "sms send " + aFrom + " " + aText;
   return runEmulatorCmdSafe(command);
+}
+
+/**
+ * Send simple text SMS to emulator and wait for a received event.
+ *
+ * Fulfill params: MozSmsMessage
+ * Reject params: (none)
+ *
+ * @param aFrom
+ *        A string-typed from address.
+ * @param aText
+ *        A string-typed message body.
+ *
+ * @return A deferred promise.
+ */
+function sendTextSmsToEmulatorAndWait(aFrom, aText) {
+  let promises = [];
+  promises.push(waitForManagerEvent("received"));
+  promises.push(sendTextSmsToEmulator(aFrom, aText));
+  return Promise.all(promises).then(aResults => aResults[0].message);
 }
 
 /**
@@ -465,17 +547,26 @@ function messagesToIds(aMessages) {
 }
 
 /**
- * Flush permission settings and call |finish()|.
+ * Convenient function to compare two SMS messages.
+ */
+function compareSmsMessage(aFrom, aTo) {
+  const FIELDS = ["id", "threadId", "iccId", "body", "delivery",
+                  "deliveryStatus", "read", "receiver", "sender",
+                  "messageClass", "timestamp", "deliveryTimestamp",
+                  "sentTimestamp"];
+
+  for (let field of FIELDS) {
+    is(aFrom[field], aTo[field], "message." + field);
+  }
+}
+
+/**
+ * Wait for pending emulator transactions and call |finish()|.
  */
 function cleanUp() {
-  waitFor(function() {
-    SpecialPowers.flushPermissions(function() {
-      // Use ok here so that we have at least one test run.
-      ok(true, "permissions flushed");
+  ok(true, ":: CLEANING UP ::");
 
-      finish();
-    });
-  }, function() {
+  waitFor(finish, function() {
     return pendingEmulatorCmdCount === 0;
   });
 }

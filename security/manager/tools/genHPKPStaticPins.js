@@ -25,16 +25,15 @@ let { FileUtils } = Cu.import("resource://gre/modules/FileUtils.jsm", {});
 let { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
 
 let gCertDB = Cc["@mozilla.org/security/x509certdb;1"]
-                 .getService(Ci.nsIX509CertDB2);
-gCertDB.QueryInterface(Ci.nsIX509CertDB);
+                .getService(Ci.nsIX509CertDB);
 
 const BUILT_IN_NICK_PREFIX = "Builtin Object Token:";
 const SHA1_PREFIX = "sha1/";
 const SHA256_PREFIX = "sha256/";
 const GOOGLE_PIN_PREFIX = "GOOGLE_PIN_";
 
-// Pins expire in 18 weeks
-const PINNING_MINIMUM_REQUIRED_MAX_AGE = 60 * 60 * 24 * 7 * 18;
+// Pins expire in 14 weeks (6 weeks on Beta + 8 weeks on stable)
+const PINNING_MINIMUM_REQUIRED_MAX_AGE = 60 * 60 * 24 * 7 * 14;
 
 const FILE_HEADER = "/* This Source Code Form is subject to the terms of the Mozilla Public\n" +
 " * License, v. 2.0. If a copy of the MPL was not distributed with this\n" +
@@ -108,8 +107,7 @@ function isBuiltinToken(tokenName) {
 }
 
 function isCertBuiltIn(cert) {
-  let cert3 = cert.QueryInterface(Ci.nsIX509Cert3);
-  let tokenNames = cert3.getAllTokenNames({});
+  let tokenNames = cert.getAllTokenNames({});
   if (!tokenNames) {
     return false;
   }
@@ -319,11 +317,16 @@ function downloadAndParseChromePins(filename,
     }
     let isProductionDomain =
       (cData.production_domains.indexOf(entry.name) != -1);
-    if (entry.pins && chromeImportedPinsets[entry.pins]) {
+    let isProductionPinset =
+      (cData.production_pinsets.indexOf(pinsetName) != -1);
+    let excludeDomain =
+      (cData.exclude_domains.indexOf(entry.name) != -1);
+    let isTestMode = !isProductionPinset && !isProductionDomain;
+    if (entry.pins && !excludeDomain && chromeImportedPinsets[entry.pins]) {
       chromeImportedEntries.push({
         name: entry.name,
         include_subdomains: entry.include_subdomains,
-        test_mode: !isProductionDomain,
+        test_mode: isTestMode,
         is_moz: false,
         pins: pinsetName });
     }
@@ -333,7 +336,7 @@ function downloadAndParseChromePins(filename,
 
 // Returns a pair of maps [certNameToSKD, certSKDToName] between cert
 // nicknames and digests of the SPKInfo for the mozilla trust store
-function loadNSSCertinfo(derTestFile) {
+function loadNSSCertinfo(derTestFile, extraCertificates) {
   let allCerts = gCertDB.getCerts();
   let enumerator = allCerts.getEnumerator();
   let certNameToSKD = {};
@@ -348,6 +351,14 @@ function loadNSSCertinfo(derTestFile) {
     certNameToSKD[name] = SKD;
     certSKDToName[SKD] = name;
   }
+
+  for (let cert of extraCertificates) {
+    let name = cert.commonName;
+    let SKD = cert.sha256SubjectPublicKeyInfoDigest;
+    certNameToSKD[name] = SKD;
+    certSKDToName[SKD] = name;
+  }
+
   {
     // A certificate for *.example.com.
     let der = readFileToString(derTestFile);
@@ -427,8 +438,9 @@ function writeFingerprints(certNameToSKD, certSKDToName, name, hashes, type) {
     writeString("  0\n");
   }
   writeString("};\n");
-  writeString("static const StaticFingerprints " + varPrefix + " = { " +
-          hashes.length + ", " + varPrefix + "_Data };\n\n");
+  writeString("static const StaticFingerprints " + varPrefix + " = {\n  " +
+    "sizeof(" + varPrefix + "_Data) / sizeof(const char*),\n  " + varPrefix +
+    "_Data\n};\n\n");
 }
 
 function writeEntry(entry) {
@@ -479,8 +491,7 @@ function writeDomainList(chromeImportedEntries) {
   }
   writeString("};\n");
 
-  writeString("\nstatic const int kPublicKeyPinningPreloadListLength = " +
-          count + ";\n");
+  writeString("\n// Pinning Preload List Length = " + count + ";\n");
   writeString("\nstatic const int32_t kUnknownId = -1;\n");
 }
 
@@ -542,7 +553,17 @@ function writeFile(certNameToSKD, certSKDToName,
   writeString(genExpirationTime());
 }
 
-let [ certNameToSKD, certSKDToName ] = loadNSSCertinfo(gTestCertFile);
+function loadExtraCertificates(certStringList) {
+  let constructedCerts = [];
+  for (let certString of certStringList) {
+    constructedCerts.push(gCertDB.constructX509FromBase64(certString));
+  }
+  return constructedCerts;
+}
+
+let extraCertificates = loadExtraCertificates(gStaticPins.extra_certificates);
+let [ certNameToSKD, certSKDToName ] = loadNSSCertinfo(gTestCertFile,
+                                                       extraCertificates);
 let [ chromeNameToHash, chromeNameToMozName ] = downloadAndParseChromeCerts(
   gStaticPins.chromium_data.cert_file_url, certSKDToName);
 let [ chromeImportedPinsets, chromeImportedEntries ] =

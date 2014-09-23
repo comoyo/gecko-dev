@@ -12,4 +12,6 @@ correctly handling the case where the system crashes.
    mozfile
    mozprofile
    mozprocess
+   mozrunner
    mozcrash
+   mozdebug

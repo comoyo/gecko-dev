@@ -30,7 +30,7 @@ endif
 RUN_MOCHITEST_B2G_DESKTOP = \
   rm -f ./$@.log && \
   $(PYTHON) _tests/testing/mochitest/runtestsb2g.py --autorun --close-when-done \
-    --console-level=INFO --log-file=./$@.log --file-level=INFO \
+    --console-level=INFO --log-tbpl=./$@.log \
     --desktop --profile ${GAIA_PROFILE_DIR} \
     --failure-file=$(abspath _tests/testing/mochitest/makefailures.json) \
     $(TEST_PATH_ARG) $(EXTRA_TEST_ARGS)
@@ -38,7 +38,7 @@ RUN_MOCHITEST_B2G_DESKTOP = \
 RUN_MOCHITEST = \
   rm -f ./$@.log && \
   $(PYTHON) _tests/testing/mochitest/runtests.py --autorun --close-when-done \
-    --console-level=INFO --log-file=./$@.log --file-level=INFO \
+    --console-level=INFO --log-tbpl=./$@.log \
     --failure-file=$(abspath _tests/testing/mochitest/makefailures.json) \
     --testing-modules-dir=$(abspath _tests/modules) \
     --extra-profile-file=$(DIST)/plugins \
@@ -47,7 +47,7 @@ RUN_MOCHITEST = \
 RERUN_MOCHITEST = \
   rm -f ./$@.log && \
   $(PYTHON) _tests/testing/mochitest/runtests.py --autorun --close-when-done \
-    --console-level=INFO --log-file=./$@.log --file-level=INFO \
+    --console-level=INFO --log-tbpl=./$@.log \
     --run-only-tests=makefailures.json \
     --testing-modules-dir=$(abspath _tests/modules) \
     --extra-profile-file=$(DIST)/plugins \
@@ -56,7 +56,7 @@ RERUN_MOCHITEST = \
 RUN_MOCHITEST_REMOTE = \
   rm -f ./$@.log && \
   $(PYTHON) _tests/testing/mochitest/runtestsremote.py --autorun --close-when-done \
-    --console-level=INFO --log-file=./$@.log --file-level=INFO $(DM_FLAGS) --dm_trans=$(DM_TRANS) \
+    --console-level=INFO --log-tbpl=./$@.log $(DM_FLAGS) --dm_trans=$(DM_TRANS) \
     --app=$(TEST_PACKAGE_NAME) --deviceIP=${TEST_DEVICE} --xre-path=${MOZ_HOST_BIN} \
     --testing-modules-dir=$(abspath _tests/modules) \
     $(SYMBOLS_PATH) $(TEST_PATH_ARG) $(EXTRA_TEST_ARGS)
@@ -67,7 +67,7 @@ RUN_MOCHITEST_ROBOCOP = \
     --robocop-apk=$(DEPTH)/build/mobile/robocop/robocop-debug.apk \
     --robocop-ids=$(DEPTH)/mobile/android/base/fennec_ids.txt \
     --robocop-ini=$(DEPTH)/build/mobile/robocop/robocop.ini \
-    --console-level=INFO --log-file=./$@.log --file-level=INFO $(DM_FLAGS) --dm_trans=$(DM_TRANS) \
+    --console-level=INFO --log-tbpl=./$@.log $(DM_FLAGS) --dm_trans=$(DM_TRANS) \
     --app=$(TEST_PACKAGE_NAME) --deviceIP=${TEST_DEVICE} --xre-path=${MOZ_HOST_BIN} \
     $(SYMBOLS_PATH) $(TEST_PATH_ARG) $(EXTRA_TEST_ARGS)
 
@@ -206,10 +206,10 @@ RUN_REFTEST_B2G = rm -f ./$@.log && $(PYTHON) _tests/reftest/runreftestb2g.py \
 
 ifeq ($(OS_ARCH),WINNT) #{
 # GPU-rendered shadow layers are unsupported here
-OOP_CONTENT = --setpref=browser.tabs.remote=true --setpref=browser.tabs.remote.autostart=true --setpref=layers.acceleration.disabled=true
+OOP_CONTENT = --setpref=layers.async-pan-zoom.enabled=true --setpref=browser.tabs.remote=true --setpref=browser.tabs.remote.autostart=true --setpref=layers.acceleration.disabled=true
 GPU_RENDERING =
 else
-OOP_CONTENT = --setpref=browser.tabs.remote=true --setpref=browser.tabs.remote.autostart=true
+OOP_CONTENT = --setpref=layers.async-pan-zoom.enabled=true --setpref=browser.tabs.remote=true --setpref=browser.tabs.remote.autostart=true
 GPU_RENDERING = --setpref=layers.acceleration.force-enabled=true
 endif #}
 
@@ -379,7 +379,7 @@ cppunittests-remote:
         fi
 
 jetpack-tests:
-	$(PYTHON) $(topsrcdir)/addon-sdk/source/bin/cfx -b $(browser_path) --parseable testpkgs
+	cd $(topsrcdir)/addon-sdk/source && $(PYTHON) bin/cfx -b $(abspath $(browser_path)) --parseable testpkgs
 
 pgo-profile-run:
 	$(PYTHON) $(topsrcdir)/build/pgo/profileserver.py $(EXTRA_TEST_ARGS)
@@ -403,6 +403,7 @@ package-tests: \
   stage-cppunittests \
   stage-jittest \
   stage-steeplechase \
+  stage-web-platform-tests \
   $(NULL)
 else
 # This staging area has been built for us by universal/flight.mk
@@ -415,12 +416,14 @@ ifndef UNIVERSAL_BINARY
 	$(NSINSTALL) -D $(DIST)/$(PKG_PATH)
 endif
 	find $(PKG_STAGE) -name '*.pyc' -exec rm {} \;
+	$(MKDIR) -p $(abspath $(DIST))/$(PKG_PATH) && \
 	cd $(PKG_STAGE) && \
 	  zip -rq9D '$(abspath $(DIST))/$(PKG_PATH)$(TEST_PACKAGE)' \
 	  * -x \*/.mkdir.done
 
 ifeq ($(MOZ_WIDGET_TOOLKIT),android)
 package-tests: stage-android
+package-tests: stage-instrumentation-tests
 endif
 
 ifeq ($(MOZ_WIDGET_TOOLKIT),gonk)
@@ -503,15 +506,18 @@ endif
 ifeq ($(MOZ_WIDGET_TOOLKIT),android)
 	$(NSINSTALL) $(topsrcdir)/testing/android_cppunittest_manifest.txt $(PKG_STAGE)/cppunittests
 endif
+ifeq ($(MOZ_WIDGET_TOOLKIT),gonk)
+	$(NSINSTALL) $(topsrcdir)/testing/b2g_cppunittest_manifest.txt $(PKG_STAGE)/cppunittests
+endif
+ifeq ($(MOZ_DISABLE_STARTUPCACHE),)
 	$(NSINSTALL) $(topsrcdir)/startupcache/test/TestStartupCacheTelemetry.js $(PKG_STAGE)/cppunittests
 	$(NSINSTALL) $(topsrcdir)/startupcache/test/TestStartupCacheTelemetry.manifest $(PKG_STAGE)/cppunittests
+endif
 ifdef STRIP_CPP_TESTS
 	$(OBJCOPY) $(or $(STRIP_FLAGS),--strip-unneeded) $(DIST)/bin/jsapi-tests$(BIN_SUFFIX) $(PKG_STAGE)/cppunittests/jsapi-tests$(BIN_SUFFIX)
 else
 	cp -RL $(DIST)/bin/jsapi-tests$(BIN_SUFFIX) $(PKG_STAGE)/cppunittests
 endif
-
-
 
 stage-jittest: make-stage-dir
 	$(NSINSTALL) -D $(PKG_STAGE)/jit-test/tests
@@ -541,6 +547,13 @@ stage-marionette: make-stage-dir
 
 stage-mozbase: make-stage-dir
 	$(MAKE) -C $(DEPTH)/testing/mozbase stage-package
+
+stage-web-platform-tests: make-stage-dir
+	$(MAKE) -C $(DEPTH)/testing/web-platform stage-package
+
+stage-instrumentation-tests: make-stage-dir
+	$(MAKE) -C $(DEPTH)/testing/instrumentation stage-package
+
 .PHONY: \
   mochitest \
   mochitest-plain \
@@ -567,5 +580,7 @@ stage-mozbase: make-stage-dir
   stage-modules \
   stage-marionette \
   stage-steeplechase \
+  stage-web-platform-tests \
+  stage-instrumentation-tests \
   $(NULL)
 

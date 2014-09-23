@@ -40,7 +40,7 @@ nsPresArena::~nsPresArena()
   PL_FinishArenaPool(&mPool);
 }
 
-NS_HIDDEN_(void*)
+void*
 nsPresArena::Allocate(uint32_t aCode, size_t aSize)
 {
   NS_ABORT_IF_FALSE(aSize > 0, "PresArena cannot allocate zero bytes");
@@ -98,7 +98,7 @@ nsPresArena::Allocate(uint32_t aCode, size_t aSize)
   return result;
 }
 
-NS_HIDDEN_(void)
+void
 nsPresArena::Free(uint32_t aCode, void* aPtr)
 {
   // Try to recycle this entry.
@@ -110,13 +110,6 @@ nsPresArena::Free(uint32_t aCode, void* aPtr)
 
   MOZ_MAKE_MEM_NOACCESS(aPtr, list->mEntrySize);
   list->mEntries.AppendElement(aPtr);
-}
-
-/* static */ size_t
-nsPresArena::SizeOfFreeListEntryExcludingThis(
-  FreeList* aEntry, mozilla::MallocSizeOf aMallocSizeOf, void*)
-{
-  return aEntry->mEntries.SizeOfExcludingThis(aMallocSizeOf);
 }
 
 struct EnumerateData {
@@ -192,8 +185,7 @@ nsPresArena::AddSizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
   // we've not measured explicitly.
 
   size_t mallocSize = PL_SizeOfArenaPoolExcludingPool(&mPool, aMallocSizeOf);
-  mallocSize += mFreeLists.SizeOfExcludingThis(SizeOfFreeListEntryExcludingThis,
-                                               aMallocSizeOf);
+  mallocSize += mFreeLists.SizeOfExcludingThis(aMallocSizeOf);
 
   EnumerateData data = { aArenaStats, 0 };
   mFreeLists.EnumerateEntries(FreeListEnumerator, &data);

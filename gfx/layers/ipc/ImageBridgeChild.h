@@ -11,11 +11,13 @@
 #include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
 #include "mozilla/RefPtr.h"             // for TemporaryRef
 #include "mozilla/ipc/SharedMemory.h"   // for SharedMemory, etc
+#include "mozilla/layers/AsyncTransactionTracker.h" // for AsyncTransactionTrackerHolder
 #include "mozilla/layers/CompositableForwarder.h"
 #include "mozilla/layers/CompositorTypes.h"  // for TextureIdentifier, etc
 #include "mozilla/layers/PImageBridgeChild.h"
 #include "nsDebug.h"                    // for NS_RUNTIMEABORT
 #include "nsRegion.h"                   // for nsIntRegion
+
 class MessageLoop;
 struct nsIntPoint;
 struct nsIntRect;
@@ -37,7 +39,7 @@ class ImageClient;
 class ImageContainer;
 class ImageBridgeParent;
 class CompositableClient;
-class CompositableTransaction;
+struct CompositableTransaction;
 class Image;
 class TextureClient;
 
@@ -99,8 +101,9 @@ bool InImageBridgeChildThread();
  * not used at all (except for the very first transaction that provides the
  * CompositableHost with an AsyncID).
  */
-class ImageBridgeChild : public PImageBridgeChild
-                       , public CompositableForwarder
+class ImageBridgeChild MOZ_FINAL : public PImageBridgeChild
+                                 , public CompositableForwarder
+                                 , public AsyncTransactionTrackersHolder
 {
   friend class ImageContainer;
   typedef InfallibleTArray<AsyncParentMessageData> AsyncParentMessageArray;
@@ -168,7 +171,7 @@ public:
    *
    * Can be called from any thread.
    */
-  MessageLoop * GetMessageLoop() const;
+  virtual MessageLoop * GetMessageLoop() const MOZ_OVERRIDE;
 
   PCompositableChild* AllocPCompositableChild(const TextureInfo& aInfo, uint64_t* aID) MOZ_OVERRIDE;
   bool DeallocPCompositableChild(PCompositableChild* aActor) MOZ_OVERRIDE;
@@ -186,7 +189,7 @@ public:
   DeallocPTextureChild(PTextureChild* actor) MOZ_OVERRIDE;
 
   virtual bool
-  RecvParentAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessages) MOZ_OVERRIDE;
+  RecvParentAsyncMessages(const InfallibleTArray<AsyncParentMessageData>& aMessages) MOZ_OVERRIDE;
 
   TemporaryRef<ImageClient> CreateImageClient(CompositableType aType);
   TemporaryRef<ImageClient> CreateImageClientNow(CompositableType aType);
@@ -221,6 +224,14 @@ public:
   virtual void UseComponentAlphaTextures(CompositableClient* aCompositable,
                                          TextureClient* aClientOnBlack,
                                          TextureClient* aClientOnWhite) MOZ_OVERRIDE;
+#ifdef MOZ_WIDGET_GONK
+  virtual void UseOverlaySource(CompositableClient* aCompositable,
+                                const OverlaySource& aOverlay) MOZ_OVERRIDE;
+#endif
+
+  virtual void SendFenceHandle(AsyncTransactionTracker* aTracker,
+                               PTextureChild* aTexture,
+                               const FenceHandle& aFence) MOZ_OVERRIDE;
 
   virtual void RemoveTextureFromCompositable(CompositableClient* aCompositable,
                                              TextureClient* aTexture) MOZ_OVERRIDE;

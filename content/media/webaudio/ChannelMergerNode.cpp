@@ -17,7 +17,7 @@ NS_IMPL_ISUPPORTS_INHERITED0(ChannelMergerNode, AudioNode)
 class ChannelMergerNodeEngine : public AudioNodeEngine
 {
 public:
-  ChannelMergerNodeEngine(ChannelMergerNode* aNode)
+  explicit ChannelMergerNodeEngine(ChannelMergerNode* aNode)
     : AudioNodeEngine(aNode)
   {
     MOZ_ASSERT(NS_IsMainThread());
@@ -75,6 +75,10 @@ ChannelMergerNode::ChannelMergerNode(AudioContext* aContext,
 {
   mStream = aContext->Graph()->CreateAudioNodeStream(new ChannelMergerNodeEngine(this),
                                                      MediaStreamGraph::INTERNAL_STREAM);
+}
+
+ChannelMergerNode::~ChannelMergerNode()
+{
 }
 
 JSObject*
