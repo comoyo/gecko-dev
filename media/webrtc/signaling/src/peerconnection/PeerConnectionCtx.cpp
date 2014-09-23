@@ -391,17 +391,17 @@ nsresult PeerConnectionCtx::Initialize() {
     codecMask |= VCM_CODEC_RESOURCE_H264;
   }
 #endif
-#else
-  // Outside MOZILLA_INTERNAL_API ensures H.264 available in unit tests
-  codecMask |= VCM_CODEC_RESOURCE_H264;
-#endif
-
   if (Preferences::GetBool("media.peerconnection.video.h261_enabled")) {
     codecMask |= VCM_CODEC_RESOURCE_H261;
   }
   if (Preferences::GetBool("media.peerconnection.video.vp8_enabled")) {
     codecMask |= VCM_CODEC_RESOURCE_VP8;
   }
+#else
+  // Outside MOZILLA_INTERNAL_API ensures H.264 available in unit tests
+  codecMask |= VCM_CODEC_RESOURCE_H264;
+#endif
+
   //codecMask |= VCM_CODEC_RESOURCE_VP8;
   //codecMask |= VCM_CODEC_RESOURCE_I420;
   mCCM->setVideoCodecs(codecMask);
